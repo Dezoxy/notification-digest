@@ -45,7 +45,9 @@ deep links. See PLAN.md for the full plan and current phase status.
   only for bootstrap.
 - Repo: github.com/Dezoxy/notification-digest (private). Container image:
   `ghcr.io/dezoxy/notification-digest`.
-- After opening or updating a PR, wait for the Codex review, then run
+- After opening a PR — and again after every push to it — request a Codex
+  review with `gh pr comment <pr> --body "@codex review"` (Codex does not
+  re-review on its own). Once the review lands, run
   `uv run python scripts/fetch-pr-review-threads.py <pr>` (ported from secmes;
   defaults to unresolved, actionable, Codex-only threads) and address every
   finding it reports — fix or explicitly rebut, never ignore. Only Codex
