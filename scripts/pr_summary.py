@@ -19,7 +19,7 @@ import sys
 from typing import Any
 
 CODEX_LOGINS = {"chatgpt-codex-connector", "chatgpt-codex-connector[bot]"}
-SEVERITY_RE = re.compile(r"\b(P[123])\s+Badge\b", re.IGNORECASE)
+SEVERITY_RE = re.compile(r"\b(P[0123])\s+Badge\b", re.IGNORECASE)
 CLEAN_VERDICT = "didn't find any major issues"
 
 
@@ -77,7 +77,18 @@ def fetch_files(number: int, repo: str | None) -> list[dict[str, Any]]:
 
 
 def fetch_issue_comments(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
-    return gh_json(["api", f"repos/{owner}/{repo}/issues/{number}/comments"])
+    # --paginate alone concatenates each page's JSON array back-to-back, which
+    # is not valid single-document JSON; --slurp wraps the pages into one
+    # outer array (a list of per-page lists), so flatten it here.
+    pages: list[list[dict[str, Any]]] = gh_json(
+        [
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{owner}/{repo}/issues/{number}/comments",
+        ]
+    )
+    return [comment for page in pages for comment in page]
 
 
 def fetch_thread_page(owner: str, repo: str, number: int, after: str | None) -> dict[str, Any]:
@@ -96,7 +107,11 @@ def fetch_thread_page(owner: str, repo: str, number: int, after: str | None) -> 
               isOutdated
               path
               line
-              comments(first: 20) {
+              comments(first: 100) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
                 nodes {
                   id
                   url
@@ -128,6 +143,60 @@ def fetch_thread_page(owner: str, repo: str, number: int, after: str | None) -> 
     return gh_json(command)
 
 
+def fetch_thread_comments_page(
+    thread_id: str, after: str | None
+) -> dict[str, Any]:
+    query = """
+    query($id: ID!, $after: String) {
+      node(id: $id) {
+        ... on PullRequestReviewThread {
+          comments(first: 100, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              url
+              author { login }
+              body
+              createdAt
+            }
+          }
+        }
+      }
+    }
+    """
+    command = [
+        "api",
+        "graphql",
+        "-f",
+        f"query={query}",
+        "-f",
+        f"id={thread_id}",
+    ]
+    if after is not None:
+        command.extend(["-f", f"after={after}"])
+    return gh_json(command)
+
+
+def complete_thread_comments(thread: dict[str, Any]) -> None:
+    """Fetch any comments past the first page for a single review thread.
+
+    ``comments(first: 100)`` covers realistic threads, but this walks any
+    remaining pages via a follow-up node() query so a thread with >100 replies
+    never silently drops comments (which would break latest_human_reply and
+    Codex-thread classification).
+    """
+    comments = thread["comments"]
+    page_info = comments["pageInfo"]
+    while page_info["hasNextPage"]:
+        data = fetch_thread_comments_page(thread["id"], page_info["endCursor"])
+        next_comments = data["data"]["node"]["comments"]
+        comments["nodes"].extend(next_comments["nodes"])
+        page_info = next_comments["pageInfo"]
+
+
 def fetch_threads(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
     threads: list[dict[str, Any]] = []
     after: str | None = None
@@ -139,6 +208,9 @@ def fetch_threads(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
         if not page_info["hasNextPage"]:
             break
         after = page_info["endCursor"]
+    for thread in threads:
+        if thread["comments"]["pageInfo"]["hasNextPage"]:
+            complete_thread_comments(thread)
     return threads
 
 
@@ -197,8 +269,8 @@ def first_line(text: str) -> str:
 
 
 def severity_sort_key(entry: dict[str, Any]) -> tuple[int, str]:
-    order = {"P1": 0, "P2": 1, "P3": 2}
-    return order.get(entry["severity"] or "", 3), entry["thread"]["id"]
+    order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    return order.get(entry["severity"] or "", 4), entry["thread"]["id"]
 
 
 def build_review_findings(

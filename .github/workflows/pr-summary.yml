@@ -56,5 +56,14 @@ jobs:
           git add docs/pr-summaries/pr-"$PR_NUMBER".md
           git diff --staged --quiet || {
             git commit -m "docs: PR #$PR_NUMBER summary"
-            git push
+            attempt=1
+            until git push; do
+              if [ "$attempt" -ge 3 ]; then
+                echo "git push rejected after $attempt attempts" >&2
+                exit 1
+              fi
+              echo "git push rejected (attempt $attempt); rebasing onto origin/main and retrying" >&2
+              git pull --rebase origin main
+              attempt=$((attempt + 1))
+            done
           }
