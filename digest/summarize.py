@@ -849,6 +849,14 @@ def summarize(
     prompt = build_prompt(items, failed_sources)
     output = run_claude(prompt, model, timeout_seconds)
     validate_output(output)
+    # The TL;DR opener is checked SOFTLY, unlike the section headings: a
+    # missing TL;DR degrades one email cosmetically, while raising here
+    # would hold every collected item hostage for a full scheduling cycle
+    # over a nicety (the banner saga proved hard-gating model compliance
+    # loops when the model persistently misbehaves). Structural failures
+    # (missing sections) stay hard; quality misses log and ship.
+    if not output.lstrip().startswith("**TL;DR:"):
+        logger.warning("digest output missing the TL;DR opener — sending anyway")
     output = enforce_link_allowlist(output, allowed_urls={item.url for item in items})
     if failed_sources:
         banner = "".join(

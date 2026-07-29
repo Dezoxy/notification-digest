@@ -1376,3 +1376,45 @@ def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatc
     assert f"[known]({known_item.url})" in result
     assert "https://attacker.example/phish" not in result
     assert "unknown" in result
+
+
+async def test_summarize_missing_tldr_logs_warning_but_still_ships(monkeypatch, caplog):
+    import logging
+
+    from digest import summarize as summarize_mod
+    from digest.state import Item
+
+    valid_no_tldr = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n- nothing\n\n"
+        "## Noise skipped\n- nothing"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: valid_no_tldr)
+    items = [
+        Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
+    ]
+    with caplog.at_level(logging.WARNING):
+        out = summarize_mod.summarize(items, [], "m", 10)
+    assert out == valid_no_tldr
+    assert any("TL;DR opener" in r.message for r in caplog.records)
+
+
+async def test_summarize_with_tldr_no_warning(monkeypatch, caplog):
+    import logging
+
+    from digest import summarize as summarize_mod
+    from digest.state import Item
+
+    with_tldr = (
+        "**TL;DR:** all quiet.\n\n"
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n- nothing\n\n"
+        "## Noise skipped\n- nothing"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: with_tldr)
+    items = [
+        Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
+    ]
+    with caplog.at_level(logging.WARNING):
+        summarize_mod.summarize(items, [], "m", 10)
+    assert not any("TL;DR opener" in r.message for r in caplog.records)
