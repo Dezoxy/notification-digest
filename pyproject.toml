@@ -24,6 +24,11 @@ package = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+filterwarnings = [
+    # js2py (a twikit dependency) triggers a py3.12 co_lnotab deprecation at
+    # import time — third-party noise, silenced so real warnings stay visible.
+    "ignore:co_lnotab is deprecated:DeprecationWarning:js2py_.*",
+]
 
 [tool.ruff]
 line-length = 100
