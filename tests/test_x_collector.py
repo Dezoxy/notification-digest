@@ -355,16 +355,19 @@ async def test_pagination_cursor_bridged_on_first_page_makes_exactly_one_fetch_n
     assert sleeps == []
 
 
-async def test_pagination_page_cap_reached_cursor_set_to_oldest_fetched_preserves_gap(
+async def test_pagination_page_cap_reached_unbridged_cursor_advances_to_newest_and_warns(
     monkeypatch, caplog
 ):
-    """Codex review finding P1-b: an unbridged cap-hit must NOT advance the
-    cursor to the newest tweet/notification seen -- that would skip past the
-    unfetched gap permanently (next run would bridge instantly on page 1).
-    Instead the cursor advances only to the OLDEST timestamp actually
-    fetched this run, preserving the still-unfetched older gap (here: the
-    6th page, timestamp 100, never fetched) for a future run to re-walk
-    into. See `collect`'s docstring, cursor-advancement case 2.
+    """Codex review finding P1-b: an unbridged cap-hit is a deliberate,
+    product-level truncation, not resumable-catch-up machinery -- a digest
+    favors newest content over completeness, not a complete backlog (see
+    `collect`'s docstring, "why no resumable catch-up"). The cursor
+    advances to the newest FETCHED timestamp, exactly like a normal bridge
+    would (the gap below that point -- here: the 6th page, timestamp 100,
+    never fetched -- is deliberately abandoned, not preserved), and the
+    truncation is surfaced loudly via a WARNING naming the old cursor and
+    the oldest timestamp actually fetched, so an operator watching
+    journal/Loki can see it happened.
     """
 
     async def fake_sleep(seconds):
@@ -385,27 +388,31 @@ async def test_pagination_page_cap_reached_cursor_set_to_oldest_fetched_preserve
 
     # Page 6 (timestamp 100) is never fetched -- only 4 `.next()` calls (1->2->3->4->5).
     assert len(next_call_log) == 4
-    # Oldest FETCHED timestamp this run (200, the 5th page) -- not the
-    # newest (600), which is what the old, buggy behavior would have set.
-    assert result.cursor_updates == {("x", "notifications"): "200"}
+    # Cursor advances to the newest FETCHED timestamp (600) -- plain
+    # high-water-mark semantics, same formula as the bridged case. The gap
+    # below 200 (the oldest fetched) is gone for good, on purpose.
+    assert result.cursor_updates == {("x", "notifications"): "600"}
     # Items are unaffected by the cursor-advancement choice: everything
     # fetched and > the (unchanged, true) input cursor(50) is still collected.
     assert [i.source_id for i in result.items] == ["200", "300", "400", "500", "600"]
     assert any(
-        "page cap reached, 5 pages fetched" in record.message for record in caplog.records
+        "backlog exceeded the page cap" in record.message for record in caplog.records
     )
-    assert any("oldest fetched timestamp" in record.message for record in caplog.records)
+    assert any(
+        "between 50 and 200 were deliberately skipped" in record.message
+        for record in caplog.records
+    )
+    assert any("digest favors newest content" in record.message for record in caplog.records)
 
 
-async def test_unbridged_cap_followup_collect_re_walks_and_extends_past_prior_reach(monkeypatch):
-    """P1-b, two-phase: a follow-up collect() call fed the prior run's
-    gap-preserving cursor re-walks the previously-fetched (now
-    already-seen) region for free -- deduplicated downstream via the
-    (source, source_id) UNIQUE constraint, never re-flagged as new here
-    either, since chronology (timestamp > cursor) is what gates items -- and
-    is able to keep paginating deeper/further than an instantly-bridging
-    "cursor = newest" design would have allowed, picking up genuinely new
-    content along the way instead of getting stuck.
+async def test_followup_after_unbridged_cap_collects_only_newer_notifications(monkeypatch):
+    """P1-b: a digest is not an archive (see `collect`'s docstring, "why no
+    resumable catch-up"). After an unbridged cap-hit run truncates and
+    advances the cursor to the newest fetched timestamp, a follow-up run
+    makes NO attempt to reach back into the abandoned gap -- it simply
+    walks from the new (newest-fetched) cursor like any other incremental
+    run, picking up only genuinely newer content and bridging quickly, with
+    no error and no re-walk of the skipped region.
     """
 
     async def fake_sleep(seconds):
@@ -413,7 +420,7 @@ async def test_unbridged_cap_followup_collect_re_walks_and_extends_past_prior_re
 
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
-    # --- Phase 1: same cap-hit setup as the single-phase test above. ---
+    # --- Phase 1: same cap-hit setup as the test above. ---
     phase1_pages = [
         ([FakeNotification(f"n{i}", "m", _tweet(str(i), f"t{i}"), timestamp_ms=i)], f"c{i}")
         for i in (600, 500, 400, 300, 200, 100)
@@ -423,41 +430,58 @@ async def test_unbridged_cap_followup_collect_re_walks_and_extends_past_prior_re
 
     phase1_result = await collect(phase1_client, cursor="50")
 
-    assert phase1_result.cursor_updates == {("x", "notifications"): "200"}
+    # Unbridged cap-hit -> cursor advances to the newest fetched (600), not
+    # the oldest -- see the dedicated cap test above. The gap below 200
+    # (i.e. timestamp 100, on the never-fetched 6th page) is abandoned.
+    assert phase1_result.cursor_updates == {("x", "notifications"): "600"}
     phase2_cursor = phase1_result.cursor_updates[("x", "notifications")]
 
-    # --- Phase 2: a follow-up run, fed phase 1's cursor (200, NOT 600). ---
-    # New content (900, 700) arrived since phase 1; the rest (300, the
-    # already-emitted overlap) and (100, previously out of reach) are
-    # re-walked. Bridges at the notification with timestamp 100 (<= 200).
-    phase2_pages = [
-        ([FakeNotification("n900", "m", _tweet("900", "newest"), timestamp_ms=900)], "d1"),
-        ([FakeNotification("n700", "m", _tweet("700", "newer"), timestamp_ms=700)], "d2"),
-        ([FakeNotification("n300", "m", _tweet("300", "t300"), timestamp_ms=300)], "d3"),
-        # timestamp 100 <= cursor(200): bridges here.
-        ([FakeNotification("n100", "m", _tweet("100", "t100"), timestamp_ms=100)], "d4"),
+    # --- Phase 2: a follow-up run, fed phase 1's cursor (600). ---
+    # New content (900, 700) arrived since phase 1, followed by a
+    # notification at 550 that's already <= the new cursor -- bridges
+    # immediately on page 1. No attempt is made to reach back down to the
+    # abandoned gap (100) or even to re-confirm the rest of phase 1's
+    # fetched region (200-500): the new cursor is 600, so nothing below it
+    # is ever revisited.
+    phase2_notifications = [
+        FakeNotification("n900", "m", _tweet("900", "newest"), timestamp_ms=900),
+        FakeNotification("n700", "m", _tweet("700", "newer"), timestamp_ms=700),
+        # timestamp 550 <= cursor(600): bridges here, on page 1.
+        FakeNotification("n550", "m", _tweet("550", "already-seen boundary"), timestamp_ms=550),
     ]
-    phase2_first_page, phase2_next_call_log = _build_page_chain(phase2_pages)
+    phase2_first_page, phase2_next_call_log = _build_page_chain(
+        [(phase2_notifications, None)]
+    )
     phase2_client = FakeXClient(notifications=phase2_first_page)
 
     phase2_result = await collect(phase2_client, cursor=phase2_cursor)
 
-    # 4 pages fetched (3 `.next()` calls) -- successfully bridged this time,
-    # NOT capped out again: a cursor of 600 (the old, buggy "newest" choice)
-    # would have bridged trivially on page 1 or 2 instead, as soon as it saw
-    # ANY notification <= 600, and would never have re-confirmed 300 or
-    # walked as far as 100.
-    assert len(phase2_next_call_log) == 3
+    # Bridged on page 1 -- no `.next()` calls at all.
+    assert len(phase2_next_call_log) == 0
     assert phase2_result.failed is False
-    # 900 and 700 are genuinely new; 300 is the harmlessly re-walked overlap
-    # from phase 1 (dedup happens downstream via the UNIQUE constraint, not
-    # here); 100 stays excluded (<= cursor).
-    assert [i.source_id for i in phase2_result.items] == ["300", "700", "900"]
+    # Only the genuinely newer notifications (900, 700) become items; 550
+    # is at/below the cursor and excluded, as is everything from the
+    # abandoned gap (which was never fetched at all this run).
+    assert [i.source_id for i in phase2_result.items] == ["700", "900"]
+    assert "100" not in [i.source_id for i in phase2_result.items]
     # Bridged this run -> cursor advances to the newest seen (900).
     assert phase2_result.cursor_updates == {("x", "notifications"): "900"}
 
 
-async def test_pagination_exception_on_second_page_keeps_first_page_items(monkeypatch):
+async def test_pagination_failure_on_second_page_keeps_first_page_items_cursor_not_advanced(
+    monkeypatch,
+):
+    """Codex review finding P1-a (failure case): a pipeline failure while
+    paginating must NOT advance the cursor at all -- not even partially --
+    or the region below whatever was fetched before the failure would be
+    permanently skipped on the next run (its page 1 would already bridge
+    against an advanced cursor). Items gathered before the failure are
+    still emitted -- they were already > the existing cursor -- but the
+    cursor key is not written at all, so the next run re-walks the overlap
+    from the same starting point and relies on the (source, source_id)
+    UNIQUE constraint to dedupe for free.
+    """
+
     async def fake_sleep(seconds):
         pass
 
@@ -477,10 +501,10 @@ async def test_pagination_exception_on_second_page_keeps_first_page_items(monkey
     result = await collect(client, cursor="50")
 
     assert [i.source_id for i in result.items] == ["80", "100"]
-    # A genuine pipeline failure (not a deliberate cap truncation) still
-    # advances to the newest seen, same as a normal bridge -- see
-    # `collect`'s docstring, cursor-advancement case 3.
-    assert result.cursor_updates == {("x", "notifications"): "100"}
+    # FAILURE: the cursor is not advanced at all -- the key isn't even
+    # present in cursor_updates, not just "unchanged in value".
+    assert ("x", "notifications") not in result.cursor_updates
+    assert result.cursor_updates == {}
     assert result.failed is True
     assert len(next_call_log) == 1
 
@@ -602,7 +626,9 @@ async def test_pagination_iterator_raising_mid_page_keeps_prior_page_items(monke
     # extraction raised before it could be merged in -- but page 1's items
     # survive intact.
     assert [i.source_id for i in result.items] == ["300", "400"]
-    assert result.cursor_updates == {("x", "notifications"): "400"}
+    # FAILURE: cursor is not advanced at all (see the dedicated
+    # cursor-not-advanced failure test above for the full rationale).
+    assert result.cursor_updates == {}
     assert result.failed is True
 
 

@@ -364,12 +364,16 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     page fetch is preceded by `asyncio.sleep(_PAGE_FETCH_DELAY_SECONDS)`
     (1.5s) -- gentleness, so a backlog catch-up doesn't burst several
     requests back to back (ban-risk mitigation, PLAN.md §8). If the cap is
-    hit while still not bridged, a warning is logged naming how many pages
-    were fetched: older notifications beyond the cap are skipped for this
-    run (visible truncation, not silent data loss) -- see the cursor
-    advancement rules below for how the cursor is chosen in that case so a
-    future run can still make progress on the skipped region, though a
-    sufficiently large sustained backlog can still outrun the cap.
+    hit while still not bridged (a sustained burst of roughly more than
+    `_MAX_NOTIFICATION_PAGES` * 40 notifications since the last run --
+    with the current 3h schedule, north of ~200 notifications in one
+    window), this module makes a deliberate PRODUCT decision rather than
+    trying to resume later (see "why no resumable catch-up" under cursor
+    advancement below): it accepts the truncation explicitly, advances the
+    cursor past everything fetched this run exactly like a normal bridge
+    would, and logs a WARNING naming the old cursor and the oldest
+    timestamp actually fetched -- the gap between them is gone for good,
+    on purpose, and loudly, not silently.
 
     Cursor axis -- why notification timestamp, not tweet id (Codex review
     findings P1-a/P1-b): an earlier version of this module used the linked
@@ -419,39 +423,69 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       territory), or the page came back empty. This is intentionally
       kind-agnostic and tweet-linkage-agnostic: chronology doesn't care
       what a notification is about.
-    - Cursor advancement, three cases:
-        1. Bridged (including an empty page): cursor := max(newest
-           notification timestamp_ms seen across all pages fetched this
-           run, existing cursor). Mirrors telegram.py's "cursor advances
-           past textless messages too", just scoped to notification
-           timestamps instead of message ids.
-        2. Cap hit while still UNBRIDGED (the deliberate truncation case,
-           not a failure): cursor := the OLDEST notification timestamp_ms
-           fetched in this batch -- NOT the newest. This preserves the gap
-           below the fetched region instead of skipping past it (the P1-b
-           fix): a future run re-walks the just-fetched (now already-seen)
-           region -- harmless, since re-emitted items are deduplicated for
-           free by the `(source, source_id)` UNIQUE constraint downstream
-           -- and, as long as new-arrival volume stays under the cap's
-           capacity, makes forward progress draining the older backlog
-           rather than abandoning it outright. The oldest-fetched
-           timestamp is, BY CONSTRUCTION, always > the existing cursor
-           here: `_page_bridges_cursor` returning False for every page
-           fetched this run means every gathered timestamp (including its
-           minimum) is > cursor_int, or bridging would already have
-           happened. This is asserted at the call site rather than folded
-           into a `max(oldest, cursor)` -- a `max()` would silently paper
-           over a violation of that invariant instead of surfacing it.
-        3. A genuine pipeline-level failure mid-pagination, OR pagination
-           stopping because the API itself ran out of pages (`next_cursor`
-           came back falsy -- twikit's own signal for "no more pages",
-           module docstring) BEFORE the cap was reached, both use the SAME
-           "advance to newest" formula as the bridged case, not the
-           gap-preserving one. Neither is the deliberate, bounded
-           truncation the cap exists for: a pipeline failure's partial
-           results are exactly as trustworthy as a normal bridge, and
-           running out of real pages means there genuinely is no more
-           history below what was fetched -- no gap to preserve.
+    - Cursor advancement -- exactly two outcomes (redesigned per Codex
+      review finding P1-b; an earlier version of this module had a third,
+      gap-preserving outcome for the cap-hit case -- see "why no resumable
+      catch-up" below for why that was removed rather than fixed):
+        1. FAILURE (a genuine pipeline-level exception mid-pagination,
+           `pagination_failed`): the cursor is NOT advanced AT ALL -- left
+           exactly as the caller passed it in, `result.failed` stays
+           `True`, and whatever items were already gathered from pages
+           processed before the failure are still emitted below (they're
+           already > the existing cursor, or they wouldn't have made it
+           into `all_candidates`). An exception-truncated walk cannot
+           support "everything up to here has been seen" -- an unread page
+           might have held real content -- so this module refuses to
+           guess. The next scheduled run starts from the same, unmoved
+           cursor and re-walks the overlap; re-emitted items are
+           deduplicated for free by the `(source, source_id)` UNIQUE
+           constraint downstream (digest/state.py), so nothing already
+           collected is lost, nothing is double-counted, and nothing below
+           the failure point is ever silently skipped. (The pre-fix
+           behavior advanced to "newest seen" even on a later-page
+           failure -- silently and permanently losing whatever lay in the
+           unfetched region below page 1, since the next run's page 1
+           would then already bridge against the advanced cursor.)
+        2. Otherwise -- bridged (including an empty page), naturally
+           exhausted (twikit's own `next_cursor` falsy signal, "no more
+           pages"), OR the deliberate page-cap truncation described above
+           -- cursor := max(newest notification timestamp_ms seen across
+           all pages fetched this run, existing cursor). Plain
+           high-water-mark semantics, the same formula for all three:
+           each of these endings reflects a trustworthy account of "how
+           far this run walked", so the cursor advances past it. Mirrors
+           telegram.py's "cursor advances past textless messages too",
+           just scoped to notification timestamps instead of message ids.
+
+      Why no resumable catch-up (rejecting a "cursor := oldest fetched,
+      preserve the gap for a future run to drain" outcome for the cap-hit
+      case, which is what an earlier version of this module did): a
+      digest is not an archive. The cap is only hit by a sustained burst
+      of roughly `_MAX_NOTIFICATION_PAGES` * 40 notifications since the
+      last run -- with the current 3h schedule (PLAN.md), north of ~200
+      notifications in one window. When that happens, the oldest
+      unfetched tail is the LEAST valuable content in a digest product:
+      it is already hours old, already buried under everything newer by
+      the time a subscriber reads it, and a digest is read for what's new,
+      not consulted as a complete unabridged backlog. Building real
+      resumable catch-up (a persisted "still owe you this range" token,
+      drained across however many future runs it takes) would need to
+      keep working across an unknown number of future scheduled runs on
+      X's cookie-based, unofficial, undocumented-lifetime pagination
+      tokens (`next_cursor` values whose validity window past a single run
+      was never confirmed -- module docstring) -- trading a small amount
+      of guaranteed-stale content for open-ended token-lifetime fragility
+      of unknown blast radius. That trade isn't worth it here. This module
+      instead accepts the truncation explicitly, advances past it exactly
+      like any other run, and makes the loss impossible to miss: a WARNING
+      naming the old cursor and the oldest timestamp actually fetched,
+      which reaches the operator via journal/Loki -- loud, not silent.
+      (This is also why the prior gap-preserving design was removed rather
+      than kept: it bridged on `timestamp_ms <= cursor`, i.e. on equality,
+      so the very next run's page 1 already matched the "preserved" cursor
+      and re-bridged immediately without ever fetching the first
+      unfetched page -- the gap was never actually re-walked in practice,
+      dead machinery that looked correct but didn't work.)
     - First run (cursor is None): fetch a single page (no pagination) and
       seed the cursor from the newest `timestamp_ms` anywhere on it, with
       NO items emitted -- consistent with telegram.py's no-history-backfill
@@ -494,9 +528,10 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       -- are each caught at the point they can occur, mirroring
       telegram.py's partial-results-survive behavior: `failed=True` is set,
       processing stops at that point, and the result is finalized from
-      whatever items/cursor progress were already safely gathered from
-      pages processed before the failure (see cursor-advancement case 3
-      above). None of this ever raises out of `collect` itself --
+      whatever items were already safely gathered from pages processed
+      before the failure -- though, per the FAILURE cursor-advancement rule
+      above, the cursor itself is deliberately left untouched in this case,
+      unlike telegram.py. None of this ever raises out of `collect` itself --
       `_run_x_collector` in digest/main.py also wraps this call in a
       catch-all as a second line of defense, but `collect` does not rely on
       that backstop.
@@ -559,7 +594,6 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     cursor_int = int(cursor)
     pages_fetched = 1
     pagination_failed = False
-    exhausted_naturally = False
     all_timestamps = list(page_timestamps)
     all_candidates = list(candidates)
     bridged = _page_bridges_cursor(raw_count, page_timestamps, cursor_int)
@@ -568,9 +602,9 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
         next_cursor = getattr(page, "next_cursor", None)
         if not next_cursor:
             # twikit's own "no more pages" signal (module docstring) --
-            # genuinely nothing further to fetch, not a cap truncation, so
-            # there's no gap below this point to preserve (case 3 below).
-            exhausted_naturally = True
+            # genuinely nothing further to fetch. Falls into the same
+            # "advance to newest" cursor bucket as a normal bridge (see
+            # this function's docstring) -- no special-casing needed here.
             break
 
         await asyncio.sleep(_PAGE_FETCH_DELAY_SECONDS)
@@ -618,13 +652,15 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
         bridged = _page_bridges_cursor(page_raw_count, page_timestamps, cursor_int)
 
     if not bridged and not pagination_failed and pages_fetched >= _MAX_NOTIFICATION_PAGES:
+        # Deliberate, bounded truncation (see `collect`'s docstring, "why no
+        # resumable catch-up") -- a digest favors newest content over
+        # completeness, so this is surfaced loudly rather than silently
+        # eaten: the operator-facing log line is the whole mitigation.
         oldest_for_log = min(all_timestamps) if all_timestamps else None
         logger.warning(
-            "x notifications: page cap reached, %d pages fetched; older notifications "
-            "beyond the cap are skipped; cursor set to the oldest fetched timestamp "
-            "(%s) rather than the newest, to preserve that gap for a future run instead "
-            "of skipping past it",
-            pages_fetched,
+            "x notifications: backlog exceeded the page cap; older notifications "
+            "between %s and %s were deliberately skipped (digest favors newest content)",
+            cursor_int,
             oldest_for_log,
         )
 
@@ -646,34 +682,26 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
         ]
         result.items = new_items
 
-        if bridged or pagination_failed or exhausted_naturally:
-            # Bridged, a genuine pipeline failure, or a natural end of the
-            # timeline (twikit reporting no further pages) -- none of these
-            # is the deliberate, bounded cap truncation case 2 preserves a
-            # gap for, so the ordinary "advance to newest" formula applies.
+        # Cursor advancement -- exactly two outcomes (see `collect`'s
+        # docstring's "Cursor advancement" section for the full rationale,
+        # including why FAILURE never advances and why the cap-hit case is
+        # a deliberate truncation rather than resumable catch-up):
+        if pagination_failed:
+            # FAILURE: leave the cursor exactly as it was passed in. Do NOT
+            # advance it even partially -- an exception-truncated walk
+            # can't prove "everything up to here has been seen". Items
+            # gathered before the failure are still emitted above (they're
+            # already > cursor); the next run re-walks the overlap for
+            # free, deduplicated downstream via the (source, source_id)
+            # UNIQUE constraint.
+            pass
+        else:
+            # Bridged, naturally exhausted, or a deliberate page-cap
+            # truncation -- all three advance to the newest timestamp seen,
+            # same high-water-mark formula.
             newest_seen = max(all_timestamps, default=None)
             if newest_seen is not None and newest_seen > cursor_int:
                 result.cursor_updates[("x", "notifications")] = str(newest_seen)
-        elif all_timestamps:
-            oldest_seen = min(all_timestamps)
-            # See cursor-advancement case 2 in this function's docstring:
-            # `bridged` is False here, which means every timestamp gathered
-            # this run -- including `oldest_seen`, its minimum -- is > the
-            # existing cursor, or `_page_bridges_cursor` would have already
-            # returned True. Asserted (rather than computed via
-            # `max(oldest_seen, cursor_int)`) so a future violation of that
-            # invariant raises loudly instead of silently discarding this
-            # branch's gap-preserving cursor choice.
-            assert oldest_seen > cursor_int, (
-                "unbridged cap-hit invariant violated: oldest fetched timestamp "
-                f"{oldest_seen} <= existing cursor {cursor_int} (should have bridged)"
-            )
-            result.cursor_updates[("x", "notifications")] = str(oldest_seen)
-        # else: not bridged, not a pagination failure, not naturally
-        # exhausted (i.e. this really is the cap-hit case), and no timestamp
-        # was readable at all across every page fetched this run (every
-        # notification was malformed) -- nothing trustworthy to advance the
-        # cursor from; leave it untouched rather than guess.
     except Exception as exc:
         logger.warning("x notification item construction failed: %s", type(exc).__name__)
         result.failed = True
