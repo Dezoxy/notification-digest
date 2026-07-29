@@ -353,7 +353,7 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
 
     selected_subset = [i for i in full_batch if i.source_id == "2"]
 
-    def fake_select_items_for_prompt(items, failed_sources, max_prompt_chars):
+    def fake_select_items_for_prompt(items, failed_sources, max_prompt_bytes):
         return selected_subset
 
     summarize_received = {}

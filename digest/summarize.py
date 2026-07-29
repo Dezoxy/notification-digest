@@ -37,15 +37,24 @@ _REQUIRED_HEADINGS = ("needs attention", "worth knowing", "noise skipped")
 _MAX_ITEM_TEXT_CHARS = 2000
 _TRUNCATION_MARKER = " …[truncated]"
 
-# Bounds the BUILT prompt's serialized character length, checked by
-# select_items_for_prompt. ~150k tokens at the usual ~4 chars/token -- well
-# inside the model's context window while leaving ample room for the
-# response (the digest markdown output). Per-item text is already capped at
-# _MAX_ITEM_TEXT_CHARS, but _MAX_ITEMS_PER_DIGEST (digest/main.py) items of
-# emoji/CJK-heavy source text can still serialize far larger than a naive
-# sum of text lengths would suggest -- see select_items_for_prompt's
-# docstring for why.
-_MAX_PROMPT_CHARS = 600_000
+# Bounds the BUILT prompt's UTF-8 BYTE length, checked by
+# select_items_for_prompt. Bytes track tokens far better than characters
+# across scripts: ASCII text runs roughly 0.25 tokens/byte (~4 bytes per
+# token), while CJK/emoji-heavy text runs roughly 0.5-0.75 tokens/byte, so
+# 300_000 bytes is <= ~200k tokens even in the worst case and ~75k tokens
+# for a typical ASCII-heavy batch -- deliberately conservative on both ends,
+# since a shrunk prefix here just means the remainder drains on a later run
+# (the 3-hourly timer is the drain loop -- see _MAX_ITEMS_PER_DIGEST in
+# digest/main.py). Per-item text is already capped at _MAX_ITEM_TEXT_CHARS,
+# but _MAX_ITEMS_PER_DIGEST (digest/main.py) items of emoji/CJK-heavy source
+# text can still serialize to far more BYTES than a naive character count
+# would suggest -- measuring characters instead of encoded bytes was exactly
+# the gap that let, e.g., 200 items of 2000 emoji each (only ~432k Python
+# characters, but ~1.6MB of UTF-8) slip past a 600k-CHAR bound while blowing
+# the token budget. See select_items_for_prompt's docstring for why this
+# must be measured on the built prompt's ENCODED bytes, not its character
+# count.
+_MAX_PROMPT_BYTES = 300_000
 
 
 class SummarizeError(Exception):
@@ -131,21 +140,34 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
 
 
 def select_items_for_prompt(
-    items: list[Item], failed_sources: list[str], max_prompt_chars: int
+    items: list[Item], failed_sources: list[str], max_prompt_bytes: int
 ) -> list[Item]:
     """Return the longest OLDEST-first prefix of `items` whose built prompt fits.
 
-    The bound is checked against the BUILT prompt (via build_prompt on the
-    candidate prefix), not the sum of the items' text lengths. Two things
-    inflate the built prompt well beyond what a naive character sum would
-    suggest: json.dumps with ensure_ascii=False still expands JSON's own
-    structural characters and per-item key names (~40+ chars of
+    The bound is checked against the BUILT prompt's UTF-8 BYTE length (via
+    `len(build_prompt(candidate, failed_sources).encode("utf-8"))`), not its
+    Python character count and not the sum of the items' text lengths.
+    Bytes, not characters, are what correlates with the model's token
+    budget: json.dumps(ensure_ascii=False) serializes each item's text as
+    raw UTF-8, and a single non-ASCII character (CJK, emoji) can occupy 2-4
+    bytes while still counting as exactly one Python `str` character --
+    so a character-length check systematically UNDER-counts an
+    emoji/CJK-heavy batch's true size. Concretely: 200 items of 2000 emoji
+    each is only ~432k Python characters (comfortably under a naive
+    600k-CHARACTER bound) but ~1.6MB of UTF-8 -- far beyond the token budget
+    despite "passing" a char-based check. Measuring encoded bytes instead of
+    characters is what closes that gap.
+
+    Two things also inflate the built prompt well beyond what a naive sum
+    of the items' raw text lengths would suggest: json.dumps still adds
+    JSON's own structural characters and per-item key names (~40+ bytes of
     "source"/"chat_id"/"author"/"url"/"fetched_at" scaffolding per item on
     top of the text), and the surrounding prompts/digest.md template adds
     fixed overhead of its own. Summing raw text lengths would systematically
     underestimate the real prompt size and let an oversized batch through
     anyway -- the whole point of this function is to catch that gap by
-    measuring the actual thing that gets handed to the model.
+    measuring the actual thing that gets handed to the model, in the unit
+    (bytes) that actually correlates with tokens.
 
     `items` is assumed already ordered oldest-first (get_unsummarized_items
     returns it that way) -- this function preserves that order and never
@@ -166,10 +188,11 @@ def select_items_for_prompt(
     n <= 200 scale this module operates at (_MAX_ITEMS_PER_DIGEST in
     digest/main.py), a handful of O(log n) builds is cheap.
 
-    The search's fit predicate (`len(build_prompt(items[:n], ...)) <=
-    max_prompt_chars`) is monotone in n: a longer prefix only ever adds
-    JSON/text, never removes it, so built-prompt length is non-decreasing as
-    n grows. That monotonicity is what makes binary search valid here.
+    The search's fit predicate (`len(build_prompt(items[:n], ...).encode(
+    "utf-8")) <= max_prompt_bytes`) is monotone in n: a longer prefix only
+    ever adds JSON/text, never removes it, so built-prompt byte length is
+    non-decreasing as n grows. That monotonicity is what makes binary search
+    valid here.
 
     Stops at a 1-item floor: build_prompt on a single item always fits,
     because per-item text is already truncated to _MAX_ITEM_TEXT_CHARS by
@@ -183,7 +206,7 @@ def select_items_for_prompt(
         return items
 
     n = len(items)
-    if len(build_prompt(items, failed_sources)) <= max_prompt_chars:
+    if len(build_prompt(items, failed_sources).encode("utf-8")) <= max_prompt_bytes:
         return items
 
     if n == 1:
@@ -193,7 +216,7 @@ def select_items_for_prompt(
     while lo < hi:
         mid = (lo + hi + 1) // 2
         candidate = items[:mid]
-        if len(build_prompt(candidate, failed_sources)) <= max_prompt_chars:
+        if len(build_prompt(candidate, failed_sources).encode("utf-8")) <= max_prompt_bytes:
             lo = mid
         else:
             hi = mid - 1
@@ -438,53 +461,106 @@ def validate_output(markdown_text: str) -> None:
 _MARKDOWN_LINK_RE = re.compile(
     r"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(\"[^\"]*\"|'[^']*'))?\s*\)"
 )
-# CommonMark autolink form: `<https://example.com>` -- a bare URL wrapped in
-# angle brackets, with no link text of its own. URI schemes are
-# case-insensitive (RFC 3986) and mail clients linkify `<HTTP://...>` just as
-# readily as `<http://...>`, so this must match regardless of scheme case --
-# otherwise an uppercase-scheme autolink skips this pass entirely and is
-# never recognized as an autolink to defang.
-_AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]+)>", re.IGNORECASE)
+# CommonMark autolink form: `<scheme:destination>` -- a bare URI wrapped in
+# angle brackets, with no link text of its own. Per the CommonMark grammar
+# an autolink's scheme is not limited to http/https: any URI scheme works
+# (`<mailto:attacker@example.com>`, `<ftp://evil.example/x>`, etc.), and mail
+# clients linkify those exactly as readily as an http(s) autolink -- so this
+# must match ANY scheme, not just http/https, or a non-HTTP autolink slips
+# through this pass untouched. URI schemes are themselves case-insensitive
+# (RFC 3986) and mail clients linkify `<HTTP://...>` / `<MAILTO:...>` just as
+# readily as their lowercase forms, so scheme matching is case-insensitive
+# too -- otherwise an uppercase-scheme autolink would skip this pass entirely
+# and never be recognized as an autolink to defang.
+_AUTOLINK_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9+.\-]*:[^\s<>]*)>", re.IGNORECASE)
 # Reference-style link definition line, e.g. `[id]: https://example.com`
 # (optionally indented up to 3 spaces, per CommonMark). This does not match
 # the *usage* site (`[text][id]`) -- only the definition. Deliberately
 # permissive about what follows the URL (title, trailing text) since the
 # only decision made here is whether the URL is allowlisted.
 _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULTILINE)
-# Any remaining bare URL token, run as the final pass over the whole text --
-# catches URLs mail clients would auto-linkify even though they never went
+# Any remaining bare URI token, run as the final pass over the whole text --
+# catches URIs mail clients would auto-linkify even though they never went
 # through a markdown link construct at all (plain prose, or what survives
-# after the passes above run). Stops at whitespace and the same closing
-# delimiters the other patterns exclude (`)`, `]`, `>`, quotes) so it doesn't
-# swallow trailing punctuation from an enclosing markdown/HTML construct. URI
-# schemes are case-insensitive (RFC 3986) and mail clients linkify
-# `HTTPS://...` exactly as readily as `https://...`, so this must match
-# regardless of scheme case -- a lowercase-only pattern lets an uppercase- or
-# mixed-case-scheme URL sail through this final pass untouched.
-_BARE_URL_RE = re.compile(r"https?://[^\s)\]>\"']+", re.IGNORECASE)
+# after the passes above run). Two alternatives: any `scheme://...` token
+# (not just http/https -- `ftp://evil.example/x` is exactly as linkifiable
+# to a mail client as an http(s) URL and must not survive verbatim), and a
+# bare `mailto:...` token, which has no `//` after its scheme and so needs
+# its own alternative. Both stop at whitespace and the same closing
+# delimiters the other patterns exclude (`)`, `]`, `>`, quotes) so neither
+# swallows trailing punctuation from an enclosing markdown/HTML construct.
+# URI schemes are case-insensitive (RFC 3986) and mail clients linkify
+# `HTTPS://...` / `MAILTO:...` exactly as readily as their lowercase forms,
+# so this must match regardless of scheme case -- a lowercase-only pattern
+# lets an uppercase- or mixed-case-scheme URI sail through this final pass
+# untouched.
+#
+# The `\b(?!hxxps?://)` guard on the scheme:// alternative exists because
+# this pass runs AFTER the autolink pass above, which -- for the http/https
+# convention specifically -- defangs by renaming the scheme in place
+# (`https://` -> `hxxps://`) rather than breaking the `://` separator the
+# way the generic-scheme defang does (`ftp://` -> `ftp[:]//`). That
+# convention deliberately keeps `hxxps://` looking URL-shaped (scheme
+# letters directly followed by `://`) for readability, but that same shape
+# would otherwise match this pass's own generic `scheme://` alternative
+# (`hxxps` is a valid-looking scheme name) and get defanged a SECOND time
+# into `hxxps[:]//...`, corrupting output that was already handled
+# correctly. `hxxp`/`hxxps` are never a real scheme this codebase collects
+# or allowlists, so excluding them here is safe. The leading `\b` is load-
+# bearing, not decorative: a negative lookahead only blocks a match from
+# STARTING at that exact position -- without `\b`, the regex engine simply
+# retries one character to the right ("xxps://...", still letters followed
+# by "://") and matches that shifted substring instead, leaving the leading
+# "h" untouched and producing "hxxps[:]//..." anyway. Requiring a word
+# boundary right before the scheme means the only position "hxxps://" could
+# ever start a match is at its own "h" -- which the lookahead already
+# excludes -- so no shifted, one-character-short match is possible either.
+_BARE_URL_RE = re.compile(
+    r"\b(?!hxxps?://)[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)\]>\"']+|\bmailto:[^\s)\]>\"']+",
+    re.IGNORECASE,
+)
 
 
 def _defang(url: str) -> str:
-    """Replace a URL's scheme so mail clients won't auto-linkify it.
+    """Break a URI's scheme separator so mail clients won't auto-linkify it.
 
     ``https://`` -> ``hxxps://``, ``http://`` -> ``hxxp://`` -- the standard
-    security-community defanging convention. This only rewrites the scheme
-    prefix, so the destination stays human-readable (useful for the "someone
-    sent a suspicious link" summary case) while no longer being a live,
-    clickable URL to any client that recognizes the scheme.
+    security-community defanging convention, kept for exactly those two
+    schemes since every URL this codebase ever collects or allowlists is
+    https (see enforce_link_allowlist's allowed_urls), so this is the only
+    pair of schemes where the familiar hxxp/hxxps convention actually
+    applies. This only rewrites the scheme prefix, so the destination stays
+    human-readable (useful for the "someone sent a suspicious link" summary
+    case) while no longer being a live, clickable URL to any client that
+    recognizes the scheme.
 
-    The scheme is detected case-insensitively -- URI schemes are
-    case-insensitive per RFC 3986, and mail clients linkify `HTTPS://` or
-    `hTtPs://` exactly as readily as `https://` -- so a lowercase-only check
-    here would leave an uppercase- or mixed-case-scheme URL live and
-    clickable. The output scheme is always written lowercase
-    (`hxxps://`/`hxxp://`); only the prefix is touched, so the remainder of
-    the URL is preserved exactly, case included.
+    Any OTHER scheme (``ftp://``, a custom scheme, etc.) is defanged
+    generically by breaking the ``:`` scheme separator into ``[:]`` instead
+    of renaming the scheme: ``ftp://host/path`` -> ``ftp[:]//host/path``.
+    ``mailto:`` (which has no ``//``) gets the same treatment:
+    ``mailto:user@host`` -> ``mailto[:]user@host``. Breaking the separator,
+    rather than renaming the scheme the way hxxp/hxxps do, is what kills
+    linkification for an arbitrary scheme -- there is no equivalent
+    "familiar renamed scheme" convention for schemes other than http/https,
+    and renaming an arbitrary scheme risks coincidentally landing on another
+    scheme a mail client DOES recognize.
+
+    The scheme is detected case-insensitively throughout -- URI schemes are
+    case-insensitive per RFC 3986, and mail clients linkify `HTTPS://`,
+    `MAILTO:`, or `FTP://` exactly as readily as their lowercase forms -- so
+    a lowercase-only check here would leave an uppercase- or mixed-case
+    scheme live and clickable. Only the prefix/separator is touched; the
+    remainder of the URL (including its original case) is preserved exactly.
     """
     if url[:8].lower() == "https://":
         return "hxxps://" + url[8:]
     if url[:7].lower() == "http://":
         return "hxxp://" + url[7:]
+    if url[:7].lower() == "mailto:":
+        return "mailto[:]" + url[7:]
+    scheme_end = url.find(":")
+    if scheme_end != -1:
+        return url[:scheme_end] + "[:]" + url[scheme_end + 1 :]
     return url
 
 
@@ -524,33 +600,43 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
        plain text" outcome as the inline case, just achieved by removing the
        definition instead of rewriting each usage site (which may be
        numerous, or precede the definition in document order).
-    3. CommonMark autolinks, `<url>` -- a bare URL with no link text of its
-       own. Unlike the previous implementation, an unknown autolink's `<>`
-       wrapper is stripped *and* its URL is defanged (see below) rather than
-       surviving as bare text.
+    3. CommonMark autolinks, `<scheme:destination>` -- a bare URI with no
+       link text of its own, of ANY URI scheme (not just http/https --
+       `<mailto:attacker@example.com>`, `<ftp://evil.example/x>`, etc. are
+       all valid CommonMark autolinks a mail client will linkify just as
+       readily). Unlike the previous implementation, an unknown autolink's
+       `<>` wrapper is stripped *and* its URI is defanged (see below) rather
+       than surviving as bare text.
 
     Finally, a fourth pass runs over the *entire* result: every remaining
-    bare URL token (anything matching `https?://[^\\s)\\]>"']+`, whether it
-    was already bare in the model's prose or is what's left after the passes
-    above ran) is defanged unless it is an exact member of ``allowed_urls``.
-    This pass must run last, after the markdown-link and reference-definition
-    passes, so that an allowed URL still embedded in a surviving markdown
-    link -- which is necessarily also in ``allowed_urls`` -- is spared by the
-    membership check rather than mangled.
+    bare URI token -- any `scheme://...` token (not just http/https) plus
+    bare `mailto:...` tokens, whether already bare in the model's prose or
+    left behind by the passes above -- is defanged unless it is an exact
+    member of ``allowed_urls``. This pass must run last, after the
+    markdown-link and reference-definition passes, so that an allowed URL
+    still embedded in a surviving markdown link -- which is necessarily also
+    in ``allowed_urls`` -- is spared by the membership check rather than
+    mangled.
 
-    Defanging (`https://` -> `hxxps://`, `http://` -> `hxxp://`) exists
-    because this function's output is used verbatim as the digest email's
-    text/plain MIME part (see send_digest in digest/emailer.py), and mail
-    clients auto-linkify bare URLs in plain text on their own -- there is no
-    HTML anchor layer in that part for allowlist enforcement to intercept.
-    Repairing a markdown link construct (dropping it to plain text, or
-    deleting the reference definition) is enough to stop python-markdown
-    from turning it into an `<a href>` in the HTML part, but it does nothing
-    for the plain-text part: the URL text itself is still there, and
-    `<https://attacker.example/phish>` or a bare `https://attacker.example/...`
-    in prose is exactly as clickable to a mail client as a real link. Only
-    defanging the scheme (not just deleting the URL) closes that gap while
-    keeping the destination readable.
+    Defanging exists because this function's output is used verbatim as the
+    digest email's text/plain MIME part (see send_digest in
+    digest/emailer.py), and mail clients auto-linkify bare URIs of ANY
+    scheme in plain text on their own -- there is no HTML anchor layer in
+    that part for allowlist enforcement to intercept, and no scheme
+    allowlist either (unlike nh3.clean's http/https-only HTML anchor check
+    on the rendered part -- see above). Repairing a markdown link construct
+    (dropping it to plain text, or deleting the reference definition) is
+    enough to stop python-markdown from turning it into an `<a href>` in the
+    HTML part, but it does nothing for the plain-text part: the URI text
+    itself is still there, and `<mailto:attacker@example.com>`,
+    `<https://attacker.example/phish>`, a bare `ftp://evil.example/x`, or a
+    bare `https://attacker.example/...` in prose is exactly as clickable to
+    a mail client as a real link. Only defanging the scheme separator (not
+    just deleting the URI) closes that gap while keeping the destination
+    readable. `https://` -> `hxxps://` and `http://` -> `hxxp://` follow the
+    familiar security-community convention; every other scheme (including
+    `mailto:`) is defanged by breaking its `:` separator into `[:]` instead
+    -- see _defang's docstring for why that's the right generalization.
 
     This repairs rather than rejects: the digest still goes out with
     unknown links neutralized, rather than raising and discarding the

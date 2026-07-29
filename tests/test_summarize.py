@@ -173,10 +173,11 @@ def test_select_items_for_prompt_finds_the_longest_fitting_prefix_not_a_halved_u
     # behavior is to keep searching until it finds that len - 1 is in fact
     # the longest fitting prefix.
     items = [dataclasses.replace(_item(str(i)), text="x" * 100) for i in range(200)]
-    max_prompt_chars = len(build_prompt(items[:199], []))
-    assert len(build_prompt(items, [])) > max_prompt_chars  # full list does not fit
+    max_prompt_bytes = len(build_prompt(items[:199], []).encode("utf-8"))
+    # full list does not fit
+    assert len(build_prompt(items, []).encode("utf-8")) > max_prompt_bytes
 
-    selected = select_items_for_prompt(items, [], max_prompt_chars)
+    selected = select_items_for_prompt(items, [], max_prompt_bytes)
 
     assert len(selected) == 199
     assert selected == items[:199]
@@ -184,7 +185,7 @@ def test_select_items_for_prompt_finds_the_longest_fitting_prefix_not_a_halved_u
 
 def test_select_items_for_prompt_binary_searches_to_the_exact_longest_fit():
     # Each item carries a large text so the full batch's built prompt blows
-    # past a deliberately small max_prompt_chars. The function must binary
+    # past a deliberately small max_prompt_bytes. The function must binary
     # search for the exact longest fitting prefix, not stop at the first
     # (possibly much shorter) prefix that happens to fit.
     items = [dataclasses.replace(_item(str(i)), text="x" * 4000) for i in range(5)]
@@ -192,14 +193,14 @@ def test_select_items_for_prompt_binary_searches_to_the_exact_longest_fit():
     # Pick a cap that admits exactly 2 items but not 3, so the correct
     # answer is unambiguous and distinguishable from an under-filling
     # halving result.
-    two_item_len = len(build_prompt(items[:2], []))
-    three_item_len = len(build_prompt(items[:3], []))
+    two_item_len = len(build_prompt(items[:2], []).encode("utf-8"))
+    three_item_len = len(build_prompt(items[:3], []).encode("utf-8"))
     assert two_item_len < three_item_len
-    max_prompt_chars = two_item_len
+    max_prompt_bytes = two_item_len
 
-    selected = select_items_for_prompt(items, [], max_prompt_chars)
+    selected = select_items_for_prompt(items, [], max_prompt_bytes)
 
-    assert len(build_prompt(selected, [])) <= max_prompt_chars
+    assert len(build_prompt(selected, []).encode("utf-8")) <= max_prompt_bytes
     assert len(selected) == 2
     # Oldest-first prefix: whatever subset survives must be a prefix
     # starting at item "0", not an arbitrary or reordered subset.
@@ -211,10 +212,11 @@ def test_select_items_for_prompt_binary_searches_to_the_exact_longest_fit():
 
 def test_select_items_for_prompt_keeps_oldest_prefix_when_shrinking():
     items = [dataclasses.replace(_item(str(i)), text="y" * 3000) for i in range(8)]
-    max_prompt_chars = len(build_prompt(items[:2], [])) + 10
-    assert len(build_prompt(items[:3], [])) > max_prompt_chars  # 3 items must not fit
+    max_prompt_bytes = len(build_prompt(items[:2], []).encode("utf-8")) + 10
+    # 3 items must not fit
+    assert len(build_prompt(items[:3], []).encode("utf-8")) > max_prompt_bytes
 
-    selected = select_items_for_prompt(items, [], max_prompt_chars)
+    selected = select_items_for_prompt(items, [], max_prompt_bytes)
 
     assert len(selected) == 2
     assert [item.source_id for item in selected] == ["0", "1"]
@@ -230,7 +232,7 @@ def test_select_items_for_prompt_single_item_floor_always_returned():
     # list or raising.
     items = [dataclasses.replace(_item("only"), text="z" * 100_000)]
 
-    selected = select_items_for_prompt(items, [], max_prompt_chars=1)
+    selected = select_items_for_prompt(items, [], max_prompt_bytes=1)
 
     assert len(selected) == 1
     assert selected[0].source_id == "only"
@@ -239,13 +241,13 @@ def test_select_items_for_prompt_single_item_floor_always_returned():
 def test_select_items_for_prompt_returns_all_items_when_already_within_bound():
     items = [_item("1"), _item("2"), _item("3")]
 
-    selected = select_items_for_prompt(items, [], max_prompt_chars=summarize_mod._MAX_PROMPT_CHARS)
+    selected = select_items_for_prompt(items, [], max_prompt_bytes=summarize_mod._MAX_PROMPT_BYTES)
 
     assert selected == items
 
 
 def test_select_items_for_prompt_empty_items_returns_empty():
-    assert select_items_for_prompt([], [], max_prompt_chars=1000) == []
+    assert select_items_for_prompt([], [], max_prompt_bytes=1000) == []
 
 
 def test_select_items_for_prompt_accounts_for_failed_sources_in_the_built_prompt():
@@ -254,11 +256,43 @@ def test_select_items_for_prompt_accounts_for_failed_sources_in_the_built_prompt
     # not an empty list -- since the collector-status banner text also
     # contributes to the built prompt's length.
     items = [dataclasses.replace(_item(str(i)), text="w" * 3000) for i in range(4)]
-    max_prompt_chars = len(build_prompt(items[:1], ["telegram"])) + 5
+    max_prompt_bytes = len(build_prompt(items[:1], ["telegram"]).encode("utf-8")) + 5
 
-    selected = select_items_for_prompt(items, ["telegram"], max_prompt_chars)
+    selected = select_items_for_prompt(items, ["telegram"], max_prompt_bytes)
 
-    assert len(build_prompt(selected, ["telegram"])) <= max_prompt_chars
+    assert len(build_prompt(selected, ["telegram"]).encode("utf-8")) <= max_prompt_bytes
+
+
+def test_select_items_for_prompt_emoji_heavy_text_shrinks_though_char_count_would_pass():
+    # Finding A (P1): the bound must be measured in UTF-8 BYTES, not Python
+    # characters. An emoji is one Python `str` character but four UTF-8
+    # bytes, so enough emoji-heavy items can pass a character-length check
+    # while still wildly exceeding the true (byte-measured, token-correlated)
+    # prompt size -- e.g. 200 items of 2000 emoji each is only ~432k Python
+    # characters but ~1.6MB of UTF-8. This is a small-scale version of that
+    # exact gap: items of pure emoji text (4 bytes/char), sized so the built
+    # prompt's CHARACTER length would fit comfortably under a bound a
+    # char-based check would have used, while its BYTE length -- what
+    # select_items_for_prompt actually measures -- does not, so the
+    # byte-based check must shrink the prefix where a char-based one would
+    # not have.
+    items = [dataclasses.replace(_item(str(i)), text="\U0001f600" * 300) for i in range(5)]
+
+    full_prompt = build_prompt(items, [])
+    char_len = len(full_prompt)
+    byte_len = len(full_prompt.encode("utf-8"))
+    assert byte_len > char_len  # emoji inflate bytes far past characters
+
+    # A bound strictly between the char length and the byte length: a
+    # char-based check (char_len <= bound) would let the full list through
+    # unshrunk, but the byte length (bound < byte_len) does not fit.
+    max_prompt_bytes = (char_len + byte_len) // 2
+    assert char_len <= max_prompt_bytes < byte_len
+
+    selected = select_items_for_prompt(items, [], max_prompt_bytes)
+
+    assert len(selected) < len(items)  # the byte-based check actually shrinks it
+    assert len(build_prompt(selected, []).encode("utf-8")) <= max_prompt_bytes
 
 
 # --- run_claude ---
@@ -1001,6 +1035,42 @@ def test_enforce_link_allowlist_mixed_case_scheme_is_defanged():
 
     assert "hxxps://attacker.example/y" in result
     assert re.search(r"https://attacker\.example", result, re.IGNORECASE) is None
+
+
+def test_enforce_link_allowlist_bare_ftp_url_is_defanged():
+    # Finding B (P2): a non-HTTP scheme (ftp) bare in prose must not survive
+    # verbatim -- mail clients linkify ftp:// just as readily as https://.
+    # The generic scheme[:]//... convention applies here (not hxxp/hxxps,
+    # which is reserved for http/https specifically).
+    text = "Careful, this looks off: ftp://evil.example/x was posted in the chat."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "ftp://evil.example/x" not in result
+    assert "ftp[:]//evil.example/x" in result
+
+
+def test_enforce_link_allowlist_mailto_autolink_is_defanged():
+    # Finding B (P2): a mailto: CommonMark autolink matches neither the old
+    # https?-only _AUTOLINK_RE nor _BARE_URL_RE and must now be recognized
+    # and defanged via the generalized any-scheme autolink pattern.
+    text = "Contact: <mailto:attacker@example.com> if you have questions."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "<mailto:attacker@example.com>" not in result
+    assert "mailto[:]attacker@example.com" in result
+
+
+def test_enforce_link_allowlist_bare_mailto_in_prose_is_defanged():
+    # Finding B (P2): a bare mailto: token (no angle brackets, no //) in
+    # plain prose must also be caught by the final bare-URI pass.
+    text = "Email mailto:attacker@example.com for more details."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "mailto:attacker@example.com" not in result
+    assert "mailto[:]attacker@example.com" in result
 
 
 # --- enforce_link_allowlist: render-through against the real renderer
