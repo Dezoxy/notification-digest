@@ -16,12 +16,22 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from digest.collectors.telegram import is_basic_group
+# Running a script inside scripts/ puts scripts/ on sys.path -- NOT the repo
+# root -- and `[tool.uv] package = false` (pyproject.toml) means `digest` is
+# never installed into the venv either. pytest only imports `digest` because
+# it sets `pythonpath = ["."]`; a directly-run script gets no such help, so
+# `uv run python scripts/telegram_login.py` fails at the import below without
+# this. Add the repo root explicitly rather than requiring callers to
+# remember PYTHONPATH=.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from digest.collectors.telegram import is_basic_group  # noqa: E402
 
 
 def _get_api_id() -> int:
