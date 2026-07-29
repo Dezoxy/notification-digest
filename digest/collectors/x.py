@@ -223,11 +223,14 @@ def _is_engagement_notification(notification: Any) -> bool:
 
 def _extract_candidates(
     notifications: Any,
-) -> tuple[list[int], list[tuple[int, int, str, str]], int, int, int, int, int]:
+) -> tuple[
+    list[int], list[tuple[int, int, str, str]], int, int, int, int, int, int, int
+]:
     """Per-page chronology + item candidates from one page of notifications.
 
     Returns (page_timestamps, content_candidates, raw_count, skipped_no_tweet,
-    skipped_no_screen_name, skipped_malformed, skipped_engagement).
+    skipped_no_screen_name, skipped_malformed, skipped_engagement,
+    tweet_linked_failed, tweet_linked_succeeded).
 
     ``page_timestamps`` is the notification ``timestamp_ms`` of EVERY
     notification on this page whose timestamp could be read -- collected
@@ -273,6 +276,24 @@ def _extract_candidates(
     surprise, and is left to propagate to `collect`'s own try/except around
     each page's extraction, which sets `failed=True` while keeping whatever
     prior pages (or prior candidates on this page) were already gathered.
+
+    ``tweet_linked_failed`` / ``tweet_linked_succeeded`` (Codex review
+    finding A -- systemic vs. isolated parsing failure): counts scoped to
+    notifications that DO carry a linked tweet and passed the screen_name
+    check -- i.e. notifications for which this function actually attempted
+    to read the tweet's required fields (`tweet.id`, `tweet.full_text`) and
+    classify its kind. ``tweet_linked_failed`` increments in the same
+    except clause that increments ``skipped_malformed`` for this block (it
+    can only be reached once `tweet is not None` and `screen_name` is
+    truthy, so it's guaranteed to be a tweet-linked attempt);
+    ``tweet_linked_succeeded`` increments when that attempt does NOT raise,
+    regardless of whether the notification goes on to become an item or is
+    filtered out as engagement. `collect` sums these across every page
+    fetched this run: failures > 0 with zero successes means EVERY
+    tweet-linked notification this run saw failed to normalize -- a signal
+    of a systemic parsing break (e.g. a GraphQL/twikit shape change), not
+    isolated per-notification malformation (which has some successes
+    alongside the failures) -- see `collect`'s docstring for the full rule.
     """
     page_timestamps: list[int] = []
     content_candidates: list[tuple[int, int, str, str]] = []
@@ -281,6 +302,8 @@ def _extract_candidates(
     skipped_no_screen_name = 0
     skipped_malformed = 0
     skipped_engagement = 0
+    tweet_linked_failed = 0
+    tweet_linked_succeeded = 0
     for notification in notifications:
         raw_count += 1
         try:
@@ -309,7 +332,9 @@ def _extract_candidates(
                 "x notifications: skipped malformed notification: %s", type(exc).__name__
             )
             skipped_malformed += 1
+            tweet_linked_failed += 1
             continue
+        tweet_linked_succeeded += 1
 
         if is_engagement:
             skipped_engagement += 1
@@ -324,6 +349,8 @@ def _extract_candidates(
         skipped_no_screen_name,
         skipped_malformed,
         skipped_engagement,
+        tweet_linked_failed,
+        tweet_linked_succeeded,
     )
 
 
@@ -332,22 +359,33 @@ def _page_bridges_cursor(
     page_timestamps: list[int],
     cursor_int: int,
 ) -> bool:
-    """True once this page reaches (or passes) the cursor -- pagination can stop.
+    """True once this page walks unambiguously past the cursor -- pagination can stop.
 
     Bridged when either: this page contains a notification whose
-    `timestamp_ms` is <= cursor (everything from that notification onward,
-    in newest-first order, is already-seen ground), or the page came back
-    with zero raw notifications (nothing left to page through). This check
-    is deliberately kind-agnostic and tweet-linkage-agnostic -- it runs
-    over `page_timestamps` (every notification's timestamp, see
+    `timestamp_ms` is STRICTLY LESS THAN cursor (everything from that
+    notification onward, in newest-first order, is unambiguously
+    already-seen ground), or the page came back with zero raw
+    notifications (nothing left to page through). This check is
+    deliberately kind-agnostic and tweet-linkage-agnostic -- it runs over
+    `page_timestamps` (every notification's timestamp, see
     `_extract_candidates`), not over `content_candidates` (only the subset
     eligible to become items). See `collect`'s docstring for why: bridging
     is about NOTIFICATION chronology, not about what any given notification
     happens to be about.
+
+    Deliberately STRICT `<`, not `<=` (Codex review finding B): a tie
+    (`timestamp_ms == cursor_int`) alone must NOT bridge. Millisecond
+    timestamps can collide, and equality can't distinguish "this is the
+    same notification we already saw last run" from "this is a genuinely
+    new, unseen notification that happens to share a millisecond with the
+    cursor". If a tie bridged, pagination could stop one page too early and
+    permanently miss an unseen tied notification sitting on a later page
+    (see `collect`'s docstring for the paired item-selection half of this
+    fix and why overlap+dedup is preferred over composite cursor state).
     """
     if page_notification_count == 0:
         return True
-    return any(timestamp_ms <= cursor_int for timestamp_ms in page_timestamps)
+    return any(timestamp_ms < cursor_int for timestamp_ms in page_timestamps)
 
 
 async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
@@ -410,19 +448,49 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     - Item selection: a CONTENT (non-engagement, see
       `_is_engagement_notification` / Codex review finding B) notification
       with a linked tweet becomes an item iff its own `timestamp_ms` is
-      strictly greater than the cursor. A like/repost on a tweet the owner
-      posted after the cursor is still excluded here by KIND, independent
-      of this timestamp check -- excluding it from items but not from
-      chronology (next bullet) is deliberate. An old tweet freshly
-      mentioned/quoted is a NEW notification with a NEW timestamp linking a
-      NEW tweet -- correctly included via this same check, no special
-      casing needed.
+      greater than OR EQUAL TO the cursor (Codex review finding B --
+      millisecond-resolution ties, see "Equal-timestamp boundary" below for
+      the full rationale). A like/repost on a tweet the owner posted after
+      the cursor is still excluded here by KIND, independent of this
+      timestamp check -- excluding it from items but not from chronology
+      (next bullet) is deliberate. An old tweet freshly mentioned/quoted is
+      a NEW notification with a NEW timestamp linking a NEW tweet --
+      correctly included via this same check, no special casing needed.
     - Bridge condition (pagination can stop): the current page contains ANY
       notification -- content or engagement, tweet-linked or not -- whose
-      `timestamp_ms` is <= cursor (we've walked back into already-seen
-      territory), or the page came back empty. This is intentionally
-      kind-agnostic and tweet-linkage-agnostic: chronology doesn't care
-      what a notification is about.
+      `timestamp_ms` is STRICTLY LESS THAN cursor (we've unambiguously
+      walked back into already-seen territory), or the page came back
+      empty. A tie alone (`timestamp_ms == cursor`) does NOT bridge (Codex
+      review finding B -- see below). This is intentionally kind-agnostic
+      and tweet-linkage-agnostic: chronology doesn't care what a
+      notification is about.
+
+    Equal-timestamp boundary -- why overlap+dedup instead of composite
+    cursor state (Codex review finding B): a notification's `timestamp_ms`
+    is only millisecond-resolution, so two DIFFERENT notifications can
+    legitimately tie. Given a tie at exactly the cursor value, a strict `>`
+    item-selection check would silently exclude a genuinely unseen
+    notification that happens to share the cursor's millisecond, and a `<=`
+    bridge check would let that same tie stop pagination one page too
+    early -- both failure modes lose an unseen item with no trace. Telling
+    "the same notification as last run" apart from "a different, unseen
+    notification with the same millisecond" would need a composite cursor
+    (timestamp plus e.g. the set of notification/tweet ids already seen AT
+    that exact timestamp, persisted across runs) -- real, ongoing state for
+    an edge case expected to be rare. Instead, this module resolves the tie
+    by re-fetching and re-emitting: item selection is INCLUSIVE (`>=`, see
+    above) and bridging requires STRICT `<` (see above), so a tied-but-
+    unseen notification is always reached and always emitted, at the cost
+    of also re-emitting the previously-seen tied notification(s). That
+    repeat is absorbed for free downstream by the `(source, source_id)`
+    UNIQUE constraint (digest/state.py, same INSERT..DO NOTHING dedup
+    `collect`'s FAILURE-outcome overlap already relies on) -- a no-op for
+    an already-seen id. The cost of this design is bounded and cheap:
+    re-fetching/re-emitting at most one boundary tick's worth of
+    notifications per run, versus the alternative's open-ended persisted
+    state for a collision that millisecond resolution makes genuinely
+    uncommon. Simplest mechanism that cannot lose a tied item.
+
     - Cursor advancement -- exactly two outcomes (redesigned per Codex
       review finding P1-b; an earlier version of this module had a third,
       gap-preserving outcome for the cap-hit case -- see "why no resumable
@@ -503,6 +571,29 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       timestamp still counts fully for cursor/bridging chronology -- see
       the kind-agnostic bridge condition above.
 
+    Systemic vs. isolated per-notification parsing failure (Codex review
+    finding A): `_extract_candidates` counts, per page, how many
+    tweet-linked notifications (`tweet is not None`, screen_name present)
+    failed to have their required fields (`tweet.id`, `tweet.full_text`)
+    read (`tweet_linked_failed`) versus how many succeeded
+    (`tweet_linked_succeeded`) -- summed across every page fetched this
+    run. If a GraphQL/twikit shape change breaks a required field on EVERY
+    tweet-linked notification, each one individually looks like an isolated
+    malformed item (its own except clause fires, its timestamp still counts
+    for chronology, the page doesn't fail) -- but treating a run where
+    `tweet_linked_failed > 0` and `tweet_linked_succeeded == 0` as "just a
+    pile of isolated malformations" would still advance the cursor past the
+    entire lost batch, silently erasing it. This module instead treats
+    "failures with zero successes" as a hard failure of its own, checked
+    once after pagination completes (and skipped when `pagination_failed`
+    is already `True`, since that outcome already refuses to advance):
+    `result.failed = True`, no items (there are none to emit anyway --
+    `content_candidates` only gains entries on success), no cursor
+    advancement, and a WARNING naming the malformed count so an
+    endpoint/shape change surfaces loudly. Isolated malformation --
+    `tweet_linked_succeeded > 0` alongside some failures -- is unaffected
+    and keeps the existing skip-and-count-but-still-advance behavior.
+
     Error handling (PLAN.md §4.3; Codex review finding A): auth/cookie
     failures (`Unauthorized`, `Forbidden`, `AccountLocked`,
     `AccountSuspended`) and rate limiting (`TooManyRequests`) on the FIRST
@@ -572,6 +663,8 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             skipped_no_screen_name,
             skipped_malformed,
             skipped_engagement,
+            tweet_linked_failed,
+            tweet_linked_succeeded,
         ) = _extract_candidates(page)
     except Exception as exc:
         logger.warning(
@@ -596,6 +689,12 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     pagination_failed = False
     all_timestamps = list(page_timestamps)
     all_candidates = list(candidates)
+    # Codex review finding A: run-wide totals, not per-page -- a systemic
+    # parsing break must be detected across every page fetched this run,
+    # not just page 1 (see the "Systemic vs. isolated" section of this
+    # function's docstring).
+    total_tweet_linked_failed = tweet_linked_failed
+    total_tweet_linked_succeeded = tweet_linked_succeeded
     bridged = _page_bridges_cursor(raw_count, page_timestamps, cursor_int)
 
     while not bridged and pages_fetched < _MAX_NOTIFICATION_PAGES:
@@ -630,6 +729,8 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
                 page_skipped_no_screen_name,
                 page_skipped_malformed,
                 page_skipped_engagement,
+                page_tweet_linked_failed,
+                page_tweet_linked_succeeded,
             ) = _extract_candidates(page)
         except Exception as exc:
             logger.warning(
@@ -643,6 +744,8 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
 
         all_timestamps.extend(page_timestamps)
         all_candidates.extend(page_candidates)
+        total_tweet_linked_failed += page_tweet_linked_failed
+        total_tweet_linked_succeeded += page_tweet_linked_succeeded
         _log_skip_counts(
             page_skipped_no_tweet,
             page_skipped_no_screen_name,
@@ -650,6 +753,30 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             page_skipped_engagement,
         )
         bridged = _page_bridges_cursor(page_raw_count, page_timestamps, cursor_int)
+
+    # Codex review finding A: a systemic parsing failure (every tweet-linked
+    # notification fetched this run failed required-field normalization,
+    # none succeeded) is treated as a hard failure of its own -- see the
+    # "Systemic vs. isolated" section of this function's docstring. Skipped
+    # when `pagination_failed` is already True: that outcome already
+    # refuses to advance the cursor, so there's nothing more to decide
+    # here. This check runs (and, if it fires, returns) before the page-cap
+    # warning below -- a systemic parsing break is a more fundamental
+    # problem than the cap truncation and takes priority in the log output.
+    if (
+        not pagination_failed
+        and total_tweet_linked_failed > 0
+        and total_tweet_linked_succeeded == 0
+    ):
+        logger.warning(
+            "x notifications: %d tweet-linked notification(s) all failed to normalize "
+            "this run and zero succeeded -- possible endpoint/shape change; "
+            "cursor not advanced",
+            total_tweet_linked_failed,
+        )
+        result.failed = True
+        result.items = []
+        return result
 
     if not bridged and not pagination_failed and pages_fetched >= _MAX_NOTIFICATION_PAGES:
         # Deliberate, bounded truncation (see `collect`'s docstring, "why no
@@ -678,7 +805,15 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             for timestamp_ms, tweet_id, text, screen_name in sorted(
                 all_candidates, key=lambda c: c[0]
             )
-            if timestamp_ms > cursor_int
+            # Codex review finding B: INCLUSIVE (>=), not strict (>) --
+            # millisecond-resolution ties can't be told apart from the
+            # timestamp alone, so a candidate exactly at the cursor is
+            # re-emitted rather than risk silently dropping a genuinely
+            # unseen tied notification. Absorbed for free downstream by the
+            # (source, source_id) UNIQUE constraint (digest/state.py) if
+            # it's actually a repeat -- see `collect`'s docstring,
+            # "Equal-timestamp boundary".
+            if timestamp_ms >= cursor_int
         ]
         result.items = new_items
 

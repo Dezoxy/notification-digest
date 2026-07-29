@@ -560,6 +560,45 @@ async def test_incremental_tweet_missing_full_text_is_skipped_others_collected()
     assert result.failed is False
 
 
+async def test_all_tweet_linked_notifications_malformed_is_systemic_failure_no_cursor_advance(
+    caplog,
+):
+    """Codex review finding A: when EVERY tweet-linked notification fetched
+    this run fails required-field normalization and NONE succeed, this is a
+    systemic parsing break (e.g. a GraphQL/twikit shape change breaking
+    `full_text` on every notification), not a pile of isolated
+    malformations -- advancing the cursor past the entire lost batch would
+    silently erase it. Contrast with
+    test_incremental_tweet_missing_full_text_is_skipped_others_collected
+    above, where one notification succeeds alongside the failure and the
+    existing skip-and-still-advance behavior is preserved unchanged.
+    """
+    notifications = [
+        FakeNotification(
+            "n2", "m", _TweetMissingFullText("200", FakeUser("alice")), timestamp_ms=200
+        ),
+        FakeNotification(
+            "n1", "m", _TweetMissingFullText("100", FakeUser("bob")), timestamp_ms=100
+        ),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursor="0")
+
+    assert result.items == []
+    assert result.failed is True
+    # Systemic failure: the cursor key isn't written at all, not just left
+    # unchanged in value -- same "no cursor_updates entry" contract as the
+    # pipeline-level FAILURE outcome.
+    assert result.cursor_updates == {}
+    assert any(
+        "2 tweet-linked notification(s) all failed to normalize" in record.message
+        for record in caplog.records
+    )
+    assert any("possible endpoint/shape change" in record.message for record in caplog.records)
+
+
 # --- Codex review finding A: pipeline-level surprises set failed=True but
 # keep whatever was safely gathered before the surprise ---
 
@@ -827,6 +866,85 @@ async def test_old_tweet_fresh_like_on_page1_does_not_falsely_bridge_past_page2_
     assert [i.source_id for i in result.items] == ["3000"]
     assert result.cursor_updates == {("x", "notifications"): "2100"}
     assert result.failed is False
+
+
+# --- Codex review finding B: equal-timestamp boundary -- a tie between a
+# notification's timestamp_ms and the cursor cannot distinguish "already
+# seen" from "genuinely unseen, coincidentally same millisecond", so item
+# selection is inclusive (>=) and bridging requires strictly-older (<),
+# never a bare tie. The overlap this creates is absorbed downstream by the
+# (source, source_id) UNIQUE constraint. ---
+
+
+async def test_unseen_notification_tied_with_cursor_timestamp_is_emitted_as_item():
+    """An item candidate whose timestamp_ms exactly equals the cursor is
+    included, not excluded -- equality alone can't tell an unseen
+    notification apart from an already-seen one sharing the cursor's exact
+    millisecond, so this module resolves the tie by re-emitting rather than
+    risk silently dropping a genuinely new item.
+    """
+    notifications = [
+        FakeNotification("n1", "m", _tweet("100", "tied"), timestamp_ms=1000),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="1000")
+
+    assert [i.source_id for i in result.items] == ["100"]
+    # Item selection is inclusive, but cursor advancement is unaffected:
+    # 1000 is not > 1000, so the high-water-mark doesn't move (matches
+    # test_incremental_no_new_timestamps_leaves_cursor_untouched's pattern).
+    assert result.cursor_updates == {}
+    assert result.failed is False
+
+
+async def test_tied_notification_on_later_page_is_still_reached_and_emitted(monkeypatch):
+    """A tie alone must not bridge, or a still-unseen notification sharing
+    the cursor's exact timestamp on a LATER page would never be reached --
+    pagination would have already stopped one page too early on the first
+    tied item. Page 1 ties with the cursor (1000 == cursor) and must NOT
+    bridge, so pagination continues to page 2, where a second notification
+    also tied at 1000 is reached and emitted, before a strictly-older
+    notification (900 < 1000) finally bridges.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page1_notifications = [
+        FakeNotification("n1", "m", _tweet("100", "tied-page1"), timestamp_ms=1000),
+    ]
+    page2_notifications = [
+        FakeNotification("n2", "m", _tweet("200", "tied-page2"), timestamp_ms=1000),
+        # strictly older than the cursor: bridges here.
+        FakeNotification("n3", "m", _tweet("300", "stale"), timestamp_ms=900),
+    ]
+    first_page, next_call_log = _build_page_chain(
+        [(page1_notifications, "c1"), (page2_notifications, "c2")]
+    )
+    client = FakeXClient(notifications=first_page)
+
+    result = await collect(client, cursor="1000")
+
+    # Pagination continued past page 1 -- the tie alone did not bridge.
+    assert len(next_call_log) == 1
+    assert [i.source_id for i in result.items] == ["100", "200"]
+    assert result.failed is False
+
+
+def test_page_bridges_cursor_requires_strictly_older_not_equal():
+    """Direct unit coverage of `_page_bridges_cursor`'s boundary: a tie
+    (timestamp_ms == cursor) must NOT bridge -- only a STRICTLY older
+    notification, or an empty page, does. (No pre-existing higher-level
+    bridge fixture happened to assert equality-bridging -- they all used
+    strictly-older timestamps already -- so this is new coverage, not a
+    behavior-changing regression update to an existing test.)
+    """
+    assert x_module._page_bridges_cursor(1, [1000], 1000) is False
+    assert x_module._page_bridges_cursor(1, [999], 1000) is True
+    assert x_module._page_bridges_cursor(0, [], 1000) is True
 
 
 # --- errors: auth/cookie failures never retry ---
