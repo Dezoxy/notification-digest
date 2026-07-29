@@ -108,9 +108,17 @@ def send_digest(
 ) -> None:
     """Send the digest as a multipart (plain + HTML) email over SMTP with STARTTLS.
 
-    Raises on any failure -- the caller is responsible for leaving the
-    digest row unsent (email_sent=0) so the next run retries the send
-    without re-summarizing (PLAN.md §4.1).
+    Message acceptance -- send_message() returning without raising -- is the
+    success criterion: at that point the server has taken the mail for
+    delivery. Failures up to and including send_message() raise, and the
+    caller is responsible for leaving the digest row unsent (email_sent=0)
+    so the next run retries the send without re-summarizing (PLAN.md §4.1).
+
+    SMTP teardown (quit()) is best-effort and happens after that success
+    criterion is met, so a non-221 QUIT response or other teardown error is
+    logged and swallowed rather than raised -- otherwise a caller would see
+    an exception for an already-sent digest, mark it unsent, and re-send a
+    duplicate on the next run.
     """
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -119,7 +127,8 @@ def send_digest(
     msg.attach(MIMEText(body_md, "plain"))
     msg.attach(MIMEText(render_html(body_md), "html"))
 
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
+    smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=_SMTP_TIMEOUT_SECONDS)
+    try:
         # An explicit default context enforces certificate-chain and
         # hostname verification. Without it, starttls() falls back to
         # Python's unverified compatibility SSL context, which would let an
@@ -127,6 +136,14 @@ def send_digest(
         smtp.starttls(context=ssl.create_default_context())
         smtp.login(smtp_user, smtp_password)
         smtp.send_message(msg)
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            logger.warning(
+                "SMTP teardown failed after send_message; message acceptance is unaffected",
+                exc_info=True,
+            )
 
 
 def archive(body_md: str, archive_dir: str, digest_id: int) -> None:

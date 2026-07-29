@@ -1,3 +1,4 @@
+import smtplib
 import ssl
 from pathlib import Path
 
@@ -69,7 +70,10 @@ def test_render_html_still_renders_legit_link_with_safe_rel():
 
 
 class FakeSMTP:
-    """Records call order and constructor args; supports the `with` protocol."""
+    """Records call order and constructor args; constructed directly (not as
+    a context manager) since send_digest drives starttls/login/send_message/
+    quit explicitly rather than via `with smtplib.SMTP(...) as smtp:`.
+    """
 
     instances: list["FakeSMTP"] = []
 
@@ -79,13 +83,9 @@ class FakeSMTP:
         self.timeout = timeout
         self.calls: list[str] = []
         self.sent_message = None
+        self.send_message_error: Exception | None = None
+        self.quit_error: Exception | None = None
         FakeSMTP.instances.append(self)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc_info):
-        return False
 
     def starttls(self, context=None):
         self.calls.append("starttls")
@@ -98,7 +98,31 @@ class FakeSMTP:
 
     def send_message(self, msg):
         self.calls.append("send_message")
+        if self.send_message_error is not None:
+            raise self.send_message_error
         self.sent_message = msg
+
+    def quit(self):
+        self.calls.append("quit")
+        if self.quit_error is not None:
+            raise self.quit_error
+
+
+def _fake_smtp_cls(*, send_message_error=None, quit_error=None):
+    """Build a FakeSMTP subclass that injects errors on construction.
+
+    send_digest constructs smtplib.SMTP(...) itself, so error injection
+    can't happen on an already-built instance -- the monkeypatched class
+    has to bake the error in via __init__.
+    """
+
+    class _ConfiguredFakeSMTP(FakeSMTP):
+        def __init__(self, host, port, timeout=None):
+            super().__init__(host, port, timeout)
+            self.send_message_error = send_message_error
+            self.quit_error = quit_error
+
+    return _ConfiguredFakeSMTP
 
 
 @pytest.fixture(autouse=True)
@@ -127,7 +151,7 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
     assert smtp.host == "smtp.mail.me.com"
     assert smtp.port == 587
     assert smtp.timeout == emailer_mod._SMTP_TIMEOUT_SECONDS
-    assert smtp.calls == ["starttls", "login", "send_message"]
+    assert smtp.calls == ["starttls", "login", "send_message", "quit"]
     assert smtp.login_user == "user@example.com"
     assert smtp.login_password == "app-specific-password"
 
@@ -145,6 +169,64 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
     content_types = {part.get_content_type() for part in msg.walk()}
     assert "text/plain" in content_types
     assert "text/html" in content_types
+
+
+def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, caplog):
+    # A non-221 QUIT response (or any teardown error) must not surface as an
+    # exception once send_message() has already succeeded -- the mail is
+    # queued server-side, and raising here would make the caller leave the
+    # digest email_sent=0 and re-send a duplicate on the next run.
+    quit_error = smtplib.SMTPResponseException(421, b"timeout")
+    monkeypatch.setattr(
+        emailer_mod.smtplib, "SMTP", _fake_smtp_cls(quit_error=quit_error)
+    )
+
+    with caplog.at_level("WARNING"):
+        send_digest(
+            "smtp.mail.me.com",
+            587,
+            "user@example.com",
+            "app-specific-password",
+            "digest@4rgus.com",
+            "me@toomhorvath.com",
+            "subject",
+            "body",
+        )  # must not raise
+
+    assert len(FakeSMTP.instances) == 1
+    smtp = FakeSMTP.instances[0]
+    assert smtp.calls == ["starttls", "login", "send_message", "quit"]
+    assert smtp.sent_message is not None
+    assert any("teardown" in record.message.lower() for record in caplog.records)
+
+
+def test_send_digest_raises_send_message_error_even_if_quit_also_fails(monkeypatch):
+    # send_message failing means the mail was never accepted, so the caller
+    # must see the error and leave the digest pending for retry. A quit()
+    # error on the same teardown must not mask the original failure.
+    send_error = smtplib.SMTPRecipientsRefused({"me@toomhorvath.com": (550, b"nope")})
+    quit_error = smtplib.SMTPResponseException(421, b"timeout")
+    monkeypatch.setattr(
+        emailer_mod.smtplib,
+        "SMTP",
+        _fake_smtp_cls(send_message_error=send_error, quit_error=quit_error),
+    )
+
+    with pytest.raises(smtplib.SMTPRecipientsRefused):
+        send_digest(
+            "smtp.mail.me.com",
+            587,
+            "user@example.com",
+            "app-specific-password",
+            "digest@4rgus.com",
+            "me@toomhorvath.com",
+            "subject",
+            "body",
+        )
+
+    assert len(FakeSMTP.instances) == 1
+    smtp = FakeSMTP.instances[0]
+    assert smtp.calls == ["starttls", "login", "send_message", "quit"]
 
 
 def test_send_digest_never_opens_a_real_socket(monkeypatch):
