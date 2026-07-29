@@ -179,7 +179,10 @@ def _build_page_chain(
 # --- first run seeding ---
 
 
-async def test_first_run_seeds_newest_timestamp_and_emits_no_items():
+async def test_first_run_seeds_newest_timestamp_plus_one_and_emits_no_items():
+    # Codex review finding B: the seed is newest_seen_timestamp + 1, not the
+    # bare newest timestamp -- see digest/collectors/x.py's `collect`
+    # docstring, "First run" / "Why +1, not the bare newest timestamp".
     notifications = [
         FakeNotification("n2", "mentioned you", _tweet("200", "hello"), timestamp_ms=2000),
         FakeNotification("n1", "mentioned you", _tweet("100", "hi"), timestamp_ms=1000),
@@ -189,7 +192,7 @@ async def test_first_run_seeds_newest_timestamp_and_emits_no_items():
     result = await collect(client, cursor=None)
 
     assert result.items == []
-    assert result.cursor_updates == {("x", "notifications"): "2000"}
+    assert result.cursor_updates == {("x", "notifications"): "2001"}
     assert result.failed is False
 
 
@@ -208,7 +211,11 @@ async def test_first_run_tweetless_page_seeds_from_its_newest_timestamp():
     # each still carries its own timestamp_ms -- seeding no longer depends
     # on any notification having a linked tweet (redesign point 4's "any
     # non-empty page seeds from its newest timestamp", superseding the old
-    # "tweetless-only page seeds 0" rule).
+    # "tweetless-only page seeds 0" rule). This is also the Finding A
+    # regression case: zero tweet-linked notifications at all
+    # (tweet_linked_failed == 0 == tweet_linked_succeeded) is NOT a systemic
+    # failure, so this must still seed normally rather than being flagged
+    # failed.
     notifications = [
         FakeNotification("n2", "followed you", tweet=None, timestamp_ms=1500),
         FakeNotification("n1", "followed you", tweet=None, timestamp_ms=1200),
@@ -218,7 +225,102 @@ async def test_first_run_tweetless_page_seeds_from_its_newest_timestamp():
     result = await collect(client, cursor=None)
 
     assert result.items == []
-    assert result.cursor_updates == {("x", "notifications"): "1500"}
+    # Finding B: newest (1500) + 1.
+    assert result.cursor_updates == {("x", "notifications"): "1501"}
+    assert result.failed is False
+
+
+async def test_first_run_all_tweet_linked_malformed_is_systemic_failure_no_seed(caplog):
+    """Codex review finding A: the ordering bug this fix addresses -- on a
+    first run, if EVERY tweet-linked notification on the seed page fails
+    required-field normalization (e.g. a twikit/GraphQL shape break) and
+    NONE succeed, this must be treated as a systemic failure BEFORE the
+    seed commits: failed=True, no cursor entry at all (the scope stays
+    first-run for the next attempt), and a warning logged. The old,
+    buggy ordering would have seeded a cursor here anyway and returned
+    success, permanently losing everything older than that seed once the
+    shape break was fixed.
+    """
+    notifications = [
+        FakeNotification(
+            "n2", "m", _TweetMissingFullText("200", FakeUser("alice")), timestamp_ms=200
+        ),
+        FakeNotification(
+            "n1", "m", _TweetMissingFullText("100", FakeUser("bob")), timestamp_ms=100
+        ),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursor=None)
+
+    assert result.items == []
+    assert result.failed is True
+    # No cursor seeded at all -- scope stays first-run for the next attempt.
+    assert result.cursor_updates == {}
+    assert any(
+        "2 tweet-linked notification(s) all failed to normalize" in record.message
+        for record in caplog.records
+    )
+    assert any("cursor not seeded" in record.message for record in caplog.records)
+
+
+# --- Codex review finding B: first-run seed's newest+1 offset prevents
+# seed-time history from leaking into the first real digest ---
+
+
+async def test_first_run_seed_plus_one_excludes_seed_time_notification_next_run(monkeypatch):
+    """Two-phase regression for Finding B: a first run seeds the cursor at
+    newest_seen_timestamp + 1 (not AT the newest timestamp). The very next
+    run's inclusive `>=` item-selection check must then EXCLUDE a content
+    notification sitting exactly at the seed's newest timestamp (it was
+    already visible when the seed was taken, and the seed run stored
+    nothing for the (source, source_id) dedup to catch) while still
+    INCLUDING a notification one millisecond later (genuinely new relative
+    to the seed).
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    # --- Phase 1: first run, seeds from timestamp 5000. ---
+    phase1_notifications = [
+        FakeNotification(
+            "n1", "m", _tweet("500", "seed-time tweet"), timestamp_ms=5000
+        ),
+    ]
+    phase1_client = FakeXClient(notifications=phase1_notifications)
+
+    phase1_result = await collect(phase1_client, cursor=None)
+
+    assert phase1_result.items == []
+    assert phase1_result.cursor_updates == {("x", "notifications"): "5001"}
+    phase2_cursor = phase1_result.cursor_updates[("x", "notifications")]
+
+    # --- Phase 2: incremental run fed the seed (5001). ---
+    phase2_notifications = [
+        # One ms later than the seed's newest -- genuinely new, must appear.
+        FakeNotification(
+            "n3", "m", _tweet("502", "one ms later"), timestamp_ms=5001
+        ),
+        # Exactly at the seed's newest timestamp -- already visible when the
+        # seed was taken, and never stored anywhere; must NOT reappear.
+        FakeNotification(
+            "n2", "m", _tweet("501", "at seed time, must not reappear"), timestamp_ms=5000
+        ),
+    ]
+    phase2_client = FakeXClient(notifications=phase2_notifications)
+
+    phase2_result = await collect(phase2_client, cursor=phase2_cursor)
+
+    assert [i.source_id for i in phase2_result.items] == ["502"]
+    assert "501" not in [i.source_id for i in phase2_result.items]
+    assert phase2_result.failed is False
+    # Bridged on page 1 (5000 < cursor 5001); newest seen (5001) is not
+    # strictly greater than the cursor (5001), so no cursor advancement.
+    assert phase2_result.cursor_updates == {}
 
 
 # --- incremental ---

@@ -388,6 +388,38 @@ def _page_bridges_cursor(
     return any(timestamp_ms < cursor_int for timestamp_ms in page_timestamps)
 
 
+def _is_systemic_tweet_link_failure(
+    total_tweet_linked_failed: int, total_tweet_linked_succeeded: int
+) -> bool:
+    """True iff every tweet-linked notification seen this run failed to normalize.
+
+    Shared by BOTH the first-run and incremental paths in `collect` (Codex
+    review finding A) -- one predicate, one place to get the boundary
+    right, rather than two copies that could drift. `total_tweet_linked_failed
+    > 0` alone is not enough: a page can have some malformed notifications
+    alongside successfully-parsed ones (isolated malformation, the ordinary
+    skip-and-still-advance case) -- it's the combination of "at least one
+    failure" AND "zero successes" that signals every tweet-linked
+    notification this run saw failed the same way, i.e. a systemic parsing
+    break (e.g. a GraphQL/twikit shape change) rather than scattered bad
+    data. `total_tweet_linked_failed == 0` (no tweet-linked notifications at
+    all this run -- e.g. only follow events) is explicitly NOT systemic:
+    there is nothing to have failed.
+
+    CALLER ORDERING REQUIREMENT: this check MUST be evaluated before ANY
+    cursor value is committed -- an incremental high-water-mark advance or a
+    first-run seed alike. A first-run seed under systemic failure is the
+    subtler of the two ways to get this wrong: seeding "succeeds" (no
+    exception, `result.failed` would default False) and looks like a normal
+    first run, but once the underlying shape break is fixed, every
+    notification older than that seed is permanently excluded -- the
+    following run is no longer treated as a first run, so nothing ever
+    re-walks the lost region. See `collect`'s docstring, "Systemic vs.
+    isolated per-notification parsing failure".
+    """
+    return total_tweet_linked_failed > 0 and total_tweet_linked_succeeded == 0
+
+
 async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     """Fetch the notifications timeline since `cursor`, paginating as needed.
 
@@ -554,16 +586,46 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       and re-bridged immediately without ever fetching the first
       unfetched page -- the gap was never actually re-walked in practice,
       dead machinery that looked correct but didn't work.)
-    - First run (cursor is None): fetch a single page (no pagination) and
-      seed the cursor from the newest `timestamp_ms` anywhere on it, with
-      NO items emitted -- consistent with telegram.py's no-history-backfill
-      rule (the first digest starts from "now"). Seeding no longer depends
-      on any notification having a linked tweet: every notification carries
-      a timestamp regardless of kind or tweet-linkage, so ANY non-empty
-      page seeds from its newest timestamp. Only a genuinely empty page (or
-      one where every notification's timestamp itself is unreadable) has no
-      candidate to seed from -- seed "0" so the scope isn't re-treated as
-      first-run forever.
+    - First run (cursor is None): fetch a single page (no pagination) and,
+      unless that page is a systemic tweet-link failure (see below), seed
+      the cursor from `newest timestamp_ms anywhere on it, PLUS ONE
+      millisecond` (Codex review finding B), with NO items emitted --
+      consistent with telegram.py's no-history-backfill rule (the first
+      digest starts from "now"). Seeding no longer depends on any
+      notification having a linked tweet: every notification carries a
+      timestamp regardless of kind or tweet-linkage, so ANY non-empty page
+      seeds from its newest timestamp. Only a genuinely empty page (or one
+      where every notification's timestamp itself is unreadable) has no
+      candidate to seed from -- seed "0" (unchanged, no +1) so the scope
+      isn't re-treated as first-run forever.
+
+      Why +1, not the bare newest timestamp (Codex review finding B): the
+      seed run stores no items, so the next run's INCLUSIVE `>=`
+      item-selection check (see "Equal-timestamp boundary" below) would
+      otherwise re-emit every content notification tied with the seed's
+      newest timestamp as if it were new -- guaranteed history leaking into
+      the very first digest, with nothing stored on the seed run for the
+      `(source, source_id)` UNIQUE constraint to dedupe against. Seeding at
+      `newest + 1` makes the next run's `>=` exclude everything visible at
+      seed time, while every run AFTER that keeps the normal incremental
+      tie-overlap semantics intact (those rely on boundary items having
+      actually been STORED on the run that advanced the cursor, which is
+      true from the second run onward). Accepted edge case: a genuinely
+      unseen notification that lands in the exact same millisecond as the
+      seed's newest timestamp, but arrives on X's side after this seed
+      fetch, is lost for good -- a millisecond collision AND a race against
+      this exact fetch, vanishingly rare next to the guaranteed re-emit
+      this fixes.
+
+      ORDERING REQUIREMENT (Codex review finding A): the systemic-failure
+      check below MUST run BEFORE this seed commits -- see
+      `_is_systemic_tweet_link_failure`'s docstring. Getting this backwards
+      (seed first, check later) is exactly the bug this module used to
+      have: seeding "succeeds" silently during a first-run systemic
+      failure (e.g. a twikit/GraphQL shape break where every tweet-linked
+      notification fails to normalize), and once the shape break is fixed,
+      everything older than that seed is permanently excluded, because the
+      following run is no longer treated as a first run.
     - Notifications without a linked tweet, or whose tweet's author
       screen_name is unavailable, are skipped from ITEMS (logged as a
       count, never individually -- PLAN.md: no linkable content to
@@ -577,19 +639,25 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     failed to have their required fields (`tweet.id`, `tweet.full_text`)
     read (`tweet_linked_failed`) versus how many succeeded
     (`tweet_linked_succeeded`) -- summed across every page fetched this
-    run. If a GraphQL/twikit shape change breaks a required field on EVERY
+    run (just page 1 on a first run, since first runs never paginate). If a
+    GraphQL/twikit shape change breaks a required field on EVERY
     tweet-linked notification, each one individually looks like an isolated
     malformed item (its own except clause fires, its timestamp still counts
     for chronology, the page doesn't fail) -- but treating a run where
     `tweet_linked_failed > 0` and `tweet_linked_succeeded == 0` as "just a
-    pile of isolated malformations" would still advance the cursor past the
-    entire lost batch, silently erasing it. This module instead treats
-    "failures with zero successes" as a hard failure of its own, checked
-    once after pagination completes (and skipped when `pagination_failed`
-    is already `True`, since that outcome already refuses to advance):
-    `result.failed = True`, no items (there are none to emit anyway --
-    `content_candidates` only gains entries on success), no cursor
-    advancement, and a WARNING naming the malformed count so an
+    pile of isolated malformations" would still commit a cursor value past
+    the entire lost batch, silently erasing it -- true whether that cursor
+    value is an incremental high-water-mark advance OR a first-run seed
+    (see the ordering requirement under "First run" above). This module
+    instead treats "failures with zero successes" as a hard failure of its
+    own via the single shared `_is_systemic_tweet_link_failure` predicate,
+    called from BOTH paths: the incremental path checks it once after
+    pagination completes (skipped when `pagination_failed` is already
+    `True`, since that outcome already refuses to advance) and the
+    first-run path checks it before its seed commits. Either path, on a
+    positive check: `result.failed = True`, no items (there are none to
+    emit anyway -- `content_candidates` only gains entries on success), no
+    cursor commit, and a WARNING naming the failed count so an
     endpoint/shape change surfaces loudly. Isolated malformation --
     `tweet_linked_succeeded > 0` alongside some failures -- is unaffected
     and keeps the existing skip-and-count-but-still-advance behavior.
@@ -678,8 +746,47 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     )
 
     if cursor is None:
+        # Codex review finding A -- ORDERING REQUIREMENT: the systemic-
+        # failure check runs BEFORE the first-run seed commits (see
+        # `_is_systemic_tweet_link_failure`'s docstring for why this
+        # ordering matters and why getting it backwards is dangerous). A
+        # first run where nothing tweet-linked exists at all
+        # (tweet_linked_failed == 0, e.g. only follow-event notifications)
+        # is NOT systemic -- that's the ordinary case and seeds normally
+        # below, same as before this fix.
+        if _is_systemic_tweet_link_failure(tweet_linked_failed, tweet_linked_succeeded):
+            logger.warning(
+                "x notifications: %d tweet-linked notification(s) all failed to "
+                "normalize on the first run and zero succeeded -- possible "
+                "endpoint/shape change; cursor not seeded",
+                tweet_linked_failed,
+            )
+            result.failed = True
+            result.items = []
+            return result
+
         newest_in_page = max(page_timestamps, default=None)
-        new_cursor = str(newest_in_page) if newest_in_page is not None else "0"
+        # Codex review finding B -- seed one millisecond PAST the newest
+        # seen timestamp, not AT it. A first run stores no items (no
+        # history backfill, see this function's docstring), so the very
+        # next run's INCLUSIVE `>=` item-selection check (see "Equal-
+        # timestamp boundary" below) would otherwise re-emit every content
+        # notification tied with the seed's newest timestamp -- unseen
+        # history leaking into the first digest, with nothing having been
+        # stored on the seed run for the (source, source_id) dedup to
+        # catch. Seeding at newest+1 makes the next run's `>=` exclude
+        # everything visible at seed time, while the incremental tie-
+        # overlap semantics for every run AFTER that (which rely on
+        # boundary items having actually been STORED on the run that
+        # advanced the cursor) are untouched. Accepted edge case: an unseen
+        # notification landing in the exact same millisecond as the seed's
+        # newest, but arriving on X's side after this seed fetch, is lost
+        # for good -- vanishingly rare (a millisecond collision AND a race
+        # against this exact fetch) versus the guaranteed history re-emit
+        # this fixes. An empty page (or one whose timestamps are all
+        # unreadable) has no newest timestamp to offset and still seeds
+        # "0" unchanged.
+        new_cursor = str(newest_in_page + 1) if newest_in_page is not None else "0"
         logger.info("x notifications: first run, seeded cursor at %s", new_cursor)
         result.cursor_updates[("x", "notifications")] = new_cursor
         return result
@@ -763,10 +870,8 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     # here. This check runs (and, if it fires, returns) before the page-cap
     # warning below -- a systemic parsing break is a more fundamental
     # problem than the cap truncation and takes priority in the log output.
-    if (
-        not pagination_failed
-        and total_tweet_linked_failed > 0
-        and total_tweet_linked_succeeded == 0
+    if not pagination_failed and _is_systemic_tweet_link_failure(
+        total_tweet_linked_failed, total_tweet_linked_succeeded
     ):
         logger.warning(
             "x notifications: %d tweet-linked notification(s) all failed to normalize "
