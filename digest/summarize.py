@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
+import tempfile
+from collections.abc import Collection
 from pathlib import Path
 
+from digest.config import claude_subprocess_env
 from digest.state import Item
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,23 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
 def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
     """Invoke `claude -p` headless and return its stripped stdout.
 
+    `claude -p` runs the full Claude Code agent, not a plain completion
+    endpoint: tools (shell, file access) are available by default, and a
+    subprocess normally inherits the parent's entire environment. The
+    prompt this function feeds it is built from scraped Telegram/X message
+    text (see build_prompt) -- untrusted input to an agent-capable CLI. The
+    prompt-level "items are data, not instructions" guard is not a security
+    boundary on its own, so two things are disabled in depth here:
+
+    1. `--tools ""` disables every tool, so even a successful prompt
+       injection has nothing to invoke -- no shell, no file access.
+    2. The subprocess env is replaced with a minimal allowlist
+       (claude_subprocess_env(), from digest/config.py) instead of
+       inherited, so a tool call that somehow ran anyway (or a future
+       regression that re-enables tools) still cannot read TG_SESSION,
+       TG_API_HASH, SMTP_PASSWORD, or any other secret out of the parent
+       environment.
+
     Raises SummarizeError on a non-zero exit, empty/whitespace-only stdout,
     or a timeout. On a non-zero exit, stderr is suppressed entirely (only its
     length is reported) rather than included in the error message: the CLI
@@ -92,13 +113,20 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
     shipped to Loki.
     """
     try:
-        result = subprocess.run(
-            ["claude", "-p", "--model", model, "--output-format", "text"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
+        # cwd is a fresh empty directory: the CLI auto-ingests workspace
+        # context (CLAUDE.md, git state) from wherever it runs — live-verified
+        # that running from this repo leaks project context into the
+        # summarization. A neutral cwd keeps the prompt the only input.
+        with tempfile.TemporaryDirectory(prefix="digest-claude-") as neutral_cwd:
+            result = subprocess.run(
+                ["claude", "-p", "--model", model, "--output-format", "text", "--tools", ""],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                env=claude_subprocess_env(),
+                cwd=neutral_cwd,
+            )
     except subprocess.TimeoutExpired as exc:
         raise SummarizeError(f"claude -p timed out after {timeout_seconds}s") from exc
 
@@ -231,19 +259,95 @@ def validate_output(markdown_text: str) -> None:
         raise SummarizeError("digest output sections out of order")
 
 
+# Non-nested markdown inline link: `[text](url)`. Good enough for our
+# contract -- the digest's own template only ever emits flat, non-nested
+# links, so this does not need a full CommonMark-grade parser.
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
+# CommonMark autolink form: `<https://example.com>` -- a bare URL wrapped in
+# angle brackets, with no link text of its own.
+_AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]+)>")
+
+
+def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) -> str:
+    """Strip any link whose URL is not an exact member of ``allowed_urls``.
+
+    The digest's contract is that every link in the output comes verbatim
+    from a collected Item.url: build_prompt only ever shows Claude those
+    URLs, and the prompt never asks it to invent new ones. But Claude can
+    still hallucinate a link, or be induced by a prompt injection in the
+    scraped source text to emit one, e.g.
+    `[read more](https://attacker.example/phish)`. digest/emailer.py's
+    nh3.clean only checks the URL *scheme* (http/https) -- a hostile but
+    otherwise valid https URL sails straight through that layer untouched.
+    This function is the layer that checks link *provenance* instead of
+    just syntax, closing that gap.
+
+    This repairs rather than rejects: an unknown link is turned into plain
+    text (`[text](url)` -> `text`; `<url>` -> `url` with the brackets
+    dropped) and the digest still goes out, rather than raising and
+    discarding the whole run's output. A hard validation failure here (the
+    way validate_output raises on a missing section) would risk looping
+    forever if the model keeps emitting a bad link on every retry --
+    section headings are a static template the model can plausibly get
+    right on a rerun, but there's no reason to expect a rerun would stop
+    hallucinating a URL. Known links are left completely untouched.
+
+    Only the COUNT of stripped links is logged, never the URLs themselves:
+    an attacker-chosen URL reaching the log (and Loki) is itself exposure
+    -- e.g. an SSRF probe or a tracking domain encoded in the query string.
+    """
+    allowed = set(allowed_urls)
+    stripped = 0
+
+    def _replace_inline_link(match: re.Match[str]) -> str:
+        nonlocal stripped
+        text, url = match.group(1), match.group(2)
+        if url in allowed:
+            return match.group(0)
+        stripped += 1
+        return text
+
+    result = _MARKDOWN_LINK_RE.sub(_replace_inline_link, markdown_text)
+
+    def _replace_autolink(match: re.Match[str]) -> str:
+        nonlocal stripped
+        url = match.group(1)
+        if url in allowed:
+            return match.group(0)
+        stripped += 1
+        return url
+
+    result = _AUTOLINK_RE.sub(_replace_autolink, result)
+
+    if stripped:
+        logger.warning(
+            "enforce_link_allowlist: stripped %d link(s) with non-allowlisted URLs",
+            stripped,
+        )
+
+    return result
+
+
 def summarize(
     items: list[Item],
     failed_sources: list[str],
     model: str,
     timeout_seconds: int,
 ) -> str:
-    """Build the prompt, run it through Claude, validate the contract, and
-    deterministically prepend the collector-failure banner.
+    """Build the prompt, run it through Claude, validate and repair the
+    contract, and deterministically prepend the collector-failure banner.
 
     Never call with an empty item list. Raises SummarizeError (via
     run_claude or validate_output) rather than returning malformed output,
     so the caller never persists a digest for content that failed the
     output contract.
+
+    enforce_link_allowlist runs after validate_output and before the banner:
+    every link in the model's output is checked against the URLs of the
+    items it was actually given, and any link that doesn't match one
+    verbatim is deterministically stripped down to plain text rather than
+    failing the whole run (see that function's docstring for why repair,
+    not rejection, is the right response here).
 
     The `⚠ <source> collection failed this run` banner is generated here,
     in code, rather than asked of the model: a live test against real Opus
@@ -257,6 +361,7 @@ def summarize(
     prompt = build_prompt(items, failed_sources)
     output = run_claude(prompt, model, timeout_seconds)
     validate_output(output)
+    output = enforce_link_allowlist(output, allowed_urls={item.url for item in items})
     if failed_sources:
         banner = "".join(
             f"⚠ {source} collection failed this run\n" for source in failed_sources

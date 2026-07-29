@@ -7,7 +7,14 @@ import pytest
 
 import digest.summarize as summarize_mod
 from digest.state import Item
-from digest.summarize import SummarizeError, build_prompt, run_claude, summarize, validate_output
+from digest.summarize import (
+    SummarizeError,
+    build_prompt,
+    enforce_link_allowlist,
+    run_claude,
+    summarize,
+    validate_output,
+)
 
 
 def _item(source_id: str = "1") -> Item:
@@ -130,11 +137,59 @@ def test_run_claude_success_returns_stripped_stdout(monkeypatch):
         "claude-opus-5",
         "--output-format",
         "text",
+        "--tools",
+        "",
     ]
     assert captured["kwargs"]["input"] == "the prompt"
     assert captured["kwargs"]["timeout"] == 300
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["text"] is True
+
+
+def test_run_claude_disables_all_tools_via_argv(monkeypatch):
+    # Finding A (P1): `claude -p` runs the full agent with tools available
+    # by default. `--tools ""` must be present so a prompt injection in
+    # scraped message text has no tool to invoke.
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _fake_completed()
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+
+    cmd = captured["cmd"]
+    assert "--tools" in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+
+
+def test_run_claude_env_is_scrubbed_of_secrets(monkeypatch):
+    # Finding A (P1): the subprocess must not inherit the parent env --
+    # TG_SESSION, TG_API_HASH, SMTP_PASSWORD, and any X_* creds must never
+    # reach the summarizer subprocess, even though they're set in the
+    # parent process running this test.
+    monkeypatch.setenv("TG_SESSION", "super-secret-session-string")
+    monkeypatch.setenv("TG_API_HASH", "super-secret-api-hash")
+    monkeypatch.setenv("SMTP_PASSWORD", "super-secret-smtp-password")
+    monkeypatch.setenv("X_API_KEY", "super-secret-x-key")
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return _fake_completed()
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+
+    assert "env" in captured["kwargs"]
+    env = captured["kwargs"]["env"]
+    assert env is not None
+    leaked = [k for k in env if k.startswith(("TG_", "SMTP_", "X_"))]
+    assert leaked == []
 
 
 def test_run_claude_nonzero_exit_raises_summarize_error_without_stderr_content(monkeypatch):
@@ -570,3 +625,88 @@ def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
 
     with pytest.raises(SummarizeError, match="missing required section"):
         summarize([_item()], [], "claude-opus-5", 300)
+
+
+# --- enforce_link_allowlist (Finding B) ---
+
+
+def test_enforce_link_allowlist_unknown_link_becomes_plain_text():
+    text = "See [this update](https://attacker.example/phish) for details."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "https://attacker.example/phish" not in result
+    assert "See this update for details." == result
+
+
+def test_enforce_link_allowlist_known_item_url_is_preserved_as_a_link():
+    url = "https://t.me/c/123/1"
+    text = f"See [this update]({url}) for details."
+
+    result = enforce_link_allowlist(text, allowed_urls={url})
+
+    assert result == text
+
+
+def test_enforce_link_allowlist_mixed_links_strips_only_unknown_ones_and_logs_once(caplog):
+    known_url = "https://t.me/c/123/1"
+    text = (
+        f"- [known]({known_url})\n"
+        "- [unknown one](https://attacker.example/a)\n"
+        "- [unknown two](https://attacker.example/b)\n"
+    )
+
+    with caplog.at_level("WARNING", logger=summarize_mod.logger.name):
+        result = enforce_link_allowlist(text, allowed_urls={known_url})
+
+    assert f"[known]({known_url})" in result
+    assert "https://attacker.example/a" not in result
+    assert "https://attacker.example/b" not in result
+    assert "unknown one" in result
+    assert "unknown two" in result
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "2" in warnings[0].message
+    # the stripped URLs themselves must never be logged
+    assert "attacker.example" not in warnings[0].message
+
+
+def test_enforce_link_allowlist_unknown_autolink_is_neutralized():
+    text = "Reference: <https://attacker.example/x> for more."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "<https://attacker.example/x>" not in result
+    assert "https://attacker.example/x" in result  # url survives as plain text
+
+
+def test_enforce_link_allowlist_known_autolink_is_preserved():
+    url = "https://t.me/c/123/1"
+    text = f"Reference: <{url}> for more."
+
+    result = enforce_link_allowlist(text, allowed_urls={url})
+
+    assert result == text
+
+
+def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatch):
+    known_item = _item("1")
+    model_output = (
+        "## Needs attention\n"
+        f"- [known]({known_item.url})\n"
+        "- [unknown](https://attacker.example/phish)\n\n"
+        "## Worth knowing\n- nothing\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
+    monkeypatch.setattr(
+        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: model_output
+    )
+
+    result = summarize([known_item], [], "claude-opus-5", 300)
+
+    assert f"[known]({known_item.url})" in result
+    assert "https://attacker.example/phish" not in result
+    assert "unknown" in result

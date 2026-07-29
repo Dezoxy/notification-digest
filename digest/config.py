@@ -115,3 +115,24 @@ def _optional_int(name: str, *, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} must be an integer") from exc
+
+
+def claude_subprocess_env() -> dict[str, str]:
+    """Build a minimal environment ALLOWLIST for the `claude -p` subprocess.
+
+    This reads os.environ, but it is not configuration reading -- it exists
+    so digest/summarize.py's run_claude() does not hand its child process the
+    full parent environment (which holds TG_SESSION, TG_API_HASH,
+    SMTP_PASSWORD, and friends). `claude -p` runs the full Claude Code agent
+    over scraped, untrusted Telegram/X text; a successful prompt injection
+    that induces a tool call would otherwise be able to read those secrets
+    straight out of its own environment. Only PATH and HOME (needed for the
+    CLI binary and its on-disk config to resolve) and CLAUDE_CONFIG_DIR (the
+    CLI's own auth/config directory override, if the caller set one) are
+    passed through -- everything else, all secrets included, is deliberately
+    withheld. USER is included because the CLI's macOS Keychain-backed auth
+    fails ("Not logged in") without it -- found by live-testing the scrubbed
+    env against the real CLI.
+    """
+    allowed = ("PATH", "HOME", "USER", "CLAUDE_CONFIG_DIR")
+    return {k: os.environ[k] for k in allowed if k in os.environ}
