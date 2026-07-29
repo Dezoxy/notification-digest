@@ -7,7 +7,7 @@ import pytest
 import digest.main as main_mod
 from digest.collectors.telegram import CollectResult
 from digest.config import Config
-from digest.main import _client_ready, _deliver, _send_and_finalize
+from digest.main import _client_ready, _deliver, _run_x_collector, _send_and_finalize
 from digest.state import (
     Item,
     commit_new_items,
@@ -595,3 +595,76 @@ def test_run_failed_sources_reflects_exactly_the_failing_collectors(
 
     assert captured["failed_sources"] == expected_failed_sources
     assert ok == (not expected_failed_sources)
+
+
+# --- Codex review finding A: an unexpected x_collector.collect() crash must
+# never take down the whole run (telegram's already-collected items still
+# need to reach commit_new_items).
+
+
+def test_run_x_collector_crash_is_caught_returns_failed_result(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(),
+        state_db_path=str(tmp_path / "state.db"),
+        x_enabled=True,
+        x_cookies_path="/tmp/x-cookies.json",
+    )
+    conn = connect(cfg.state_db_path)
+    init_db(conn)
+
+    def fake_build_client(cookies_path, cookies_inline):
+        return object()
+
+    async def boom_collect(client, cursor):
+        raise RuntimeError("twikit graphql shape changed")
+
+    monkeypatch.setattr(main_mod.x_collector, "build_client", fake_build_client)
+    monkeypatch.setattr(main_mod.x_collector, "collect", boom_collect)
+
+    result = asyncio.run(_run_x_collector(conn, cfg))
+
+    assert result.failed is True
+    assert result.items == []
+    assert result.cursor_updates == {}
+    conn.close()
+
+
+def test_run_x_collector_crash_does_not_prevent_telegram_items_from_committing(
+    monkeypatch, tmp_path
+):
+    cfg = replace(
+        _cfg(),
+        state_db_path=str(tmp_path / "state.db"),
+        x_enabled=True,
+        x_cookies_path="/tmp/x-cookies.json",
+    )
+
+    tg_item = _item("1")
+    _patch_telegram_client(
+        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
+    )
+
+    def fake_build_client(cookies_path, cookies_inline):
+        return object()
+
+    async def boom_collect(client, cursor):
+        raise RuntimeError("twikit graphql shape changed")
+
+    monkeypatch.setattr(main_mod.x_collector, "build_client", fake_build_client)
+    monkeypatch.setattr(main_mod.x_collector, "collect", boom_collect)
+
+    captured = {}
+
+    def fake_commit_new_items(conn, items, cursor_updates):
+        captured["items"] = items
+        captured["cursor_updates"] = cursor_updates
+        return len(items)
+
+    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is False
+    assert captured["items"] == [tg_item]
+    assert captured["cursor_updates"] == {("telegram", "123"): "1"}

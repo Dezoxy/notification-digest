@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -41,11 +42,18 @@ class FakeTweet:
 
 
 class FakeNotification:
-    def __init__(self, id: str, message: str, tweet: FakeTweet | None):
+    def __init__(
+        self,
+        id: str,
+        message: str,
+        tweet: FakeTweet | None,
+        icon: dict | None = None,
+    ):
         self.id = id
         self.message = message
         self.tweet = tweet
         self.from_user = tweet.user if tweet is not None else None
+        self.icon = icon
 
 
 class FakeXClient:
@@ -367,6 +375,209 @@ async def test_pagination_exception_on_second_page_keeps_first_page_items(monkey
     assert result.cursor_updates == {("x", "notifications"): "100"}
     assert result.failed is True
     assert len(next_call_log) == 1
+
+
+# --- Codex review finding A: per-notification malformation is gentle, never
+# fails the page (contrast with the pipeline-level tests further below) ---
+
+
+class _TweetMissingFullText:
+    """A tweet-shaped object with no `.full_text` -- triggers AttributeError."""
+
+    def __init__(self, id: str, user: FakeUser):
+        self.id = id
+        self.user = user
+
+
+async def test_incremental_nonnumeric_tweet_id_is_skipped_others_collected(caplog):
+    notifications = [
+        FakeNotification("n2", "m", _tweet("not-a-number", "bad id")),
+        FakeNotification("n1", "m", _tweet("100", "good")),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    with caplog.at_level("INFO", logger="digest.collectors.x"):
+        result = await collect(client, cursor="0")
+
+    assert [i.source_id for i in result.items] == ["100"]
+    assert result.cursor_updates == {("x", "notifications"): "100"}
+    assert result.failed is False
+    assert any(
+        "skipped 1 malformed notification" in record.message for record in caplog.records
+    )
+
+
+async def test_incremental_tweet_missing_full_text_is_skipped_others_collected():
+    notifications = [
+        FakeNotification("n2", "m", _TweetMissingFullText("200", FakeUser("alice"))),
+        FakeNotification("n1", "m", _tweet("100", "good")),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="0")
+
+    assert [i.source_id for i in result.items] == ["100"]
+    assert result.cursor_updates == {("x", "notifications"): "100"}
+    assert result.failed is False
+
+
+# --- Codex review finding A: pipeline-level surprises set failed=True but
+# keep whatever was safely gathered before the surprise ---
+
+
+class _RaisingNotificationsPage:
+    """A page whose notification iterator raises partway through iteration.
+
+    Simulates a bug in the underlying iterable itself (as opposed to one
+    malformed notification) -- collect() must treat this as a pipeline-level
+    surprise: failed=True, but items/candidates already gathered from PRIOR
+    pages are preserved rather than discarded.
+    """
+
+    def __init__(
+        self, notifications_before_raise: list[FakeNotification], error: Exception
+    ):
+        self._notifications_before_raise = notifications_before_raise
+        self._error = error
+        self.next_cursor = None
+
+    def __iter__(self):
+        yield from self._notifications_before_raise
+        raise self._error
+
+
+class _FirstPageWithRaisingNext:
+    """First page: normal iteration, `.next()` hands back a raising page."""
+
+    def __init__(self, notifications: list[FakeNotification], next_page: Any):
+        self._notifications = notifications
+        self.next_cursor = "c1"
+        self._next_page = next_page
+
+    def __iter__(self):
+        return iter(self._notifications)
+
+    def __len__(self):
+        return len(self._notifications)
+
+    async def next(self):
+        return self._next_page
+
+
+async def test_pagination_iterator_raising_mid_page_keeps_prior_page_items(monkeypatch):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page2 = _RaisingNotificationsPage(
+        [FakeNotification("n2", "m", _tweet("200", "lost to the raise"))],
+        RuntimeError("notification iterator exploded"),
+    )
+    page1_notifications = [
+        FakeNotification("n4", "m", _tweet("400", "fourth")),
+        FakeNotification("n3", "m", _tweet("300", "third")),
+    ]
+    first_page = _FirstPageWithRaisingNext(page1_notifications, page2)
+    client = FakeXClient(notifications=first_page)
+
+    result = await collect(client, cursor="150")
+
+    # Page 2's notification ("200") never makes it in -- the whole page 2
+    # extraction raised before it could be merged in -- but page 1's items
+    # survive intact.
+    assert [i.source_id for i in result.items] == ["300", "400"]
+    assert result.cursor_updates == {("x", "notifications"): "400"}
+    assert result.failed is True
+
+
+# --- Codex review finding B: engagement notifications (likes, reposts) are
+# never emitted as items -- the notification KIND is the discriminator, not
+# tweet age, since a like/repost on a post-cursor tweet is the OWNER's own
+# content, not incoming content. ---
+
+
+async def test_like_notification_on_post_cursor_tweet_skipped_as_item_but_advances_cursor():
+    notifications = [
+        FakeNotification(
+            "n1", "liked your Tweet", _tweet("999", "owner's own tweet"), icon={"id": "heart_icon"}
+        ),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="500")
+
+    assert result.items == []
+    assert result.cursor_updates == {("x", "notifications"): "999"}
+    assert result.failed is False
+
+
+async def test_repost_notification_on_post_cursor_tweet_skipped_as_item():
+    notifications = [
+        FakeNotification(
+            "n1", "reposted your Tweet", _tweet("999", "owner's own tweet"),
+            icon={"id": "retweet_icon"},
+        ),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="500")
+
+    assert result.items == []
+    assert result.cursor_updates == {("x", "notifications"): "999"}
+
+
+async def test_mention_and_reply_kind_notifications_are_included():
+    notifications = [
+        FakeNotification(
+            "n2", "mentioned you", _tweet("300", "hey @you"), icon={"id": "at_icon"}
+        ),
+        FakeNotification(
+            "n1", "replied to you", _tweet("200", "a reply"), icon={"id": "reply_icon"}
+        ),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="0")
+
+    assert [i.source_id for i in result.items] == ["200", "300"]
+
+
+async def test_unrecognized_icon_kind_fails_open_and_is_included():
+    notifications = [
+        FakeNotification(
+            "n1", "something new", _tweet("100", "quote maybe?"),
+            icon={"id": "some_future_icon_id"},
+        ),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="0")
+
+    assert [i.source_id for i in result.items] == ["100"]
+
+
+async def test_missing_icon_fails_open_and_is_included():
+    notifications = [
+        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), icon=None),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="0")
+
+    assert [i.source_id for i in result.items] == ["100"]
+
+
+async def test_follow_notification_no_tweet_unaffected_by_icon_kind():
+    notifications = [
+        FakeNotification("n2", "followed you", tweet=None, icon={"id": "user_icon"}),
+        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), icon={"id": "at_icon"}),
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="0")
+
+    assert [i.source_id for i in result.items] == ["100"]
 
 
 # --- errors: auth/cookie failures never retry ---

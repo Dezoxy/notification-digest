@@ -219,6 +219,14 @@ async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResu
     run. This mirrors telegram.py's `_client_ready`-then-collect split,
     where a client that can't even be constructed/authorized is just
     another shape of collector failure.
+
+    `x_collector.collect` is already exception-proof internally (Codex
+    review finding A -- see its docstring), but the call is wrapped in a
+    catch-all here too as a second line of defense: this mirrors how
+    `_run`'s telegram path can never raise past `_collect_one_chat`/
+    `_client_ready` either, so a not-yet-anticipated bug in the collector
+    still can't take down the whole run (and Telegram's already-collected
+    items) before `commit_new_items` gets a chance to persist them.
     """
     if not cfg.x_enabled:
         return CollectResult()
@@ -230,7 +238,11 @@ async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResu
         logger.warning("x client setup failed: %s", type(exc).__name__)
         return CollectResult(failed=True)
 
-    return await x_collector.collect(client, x_cursors.get("notifications"))
+    try:
+        return await x_collector.collect(client, x_cursors.get("notifications"))
+    except Exception as exc:
+        logger.warning("x collection crashed unexpectedly: %s", type(exc).__name__)
+        return CollectResult(failed=True)
 
 
 async def _run(cfg: Config) -> bool:

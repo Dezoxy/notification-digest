@@ -36,7 +36,29 @@ source (.venv/lib/python3.12/site-packages/twikit/), not from memory:
   "no more pages".
 - ``Notification`` (notification.py) has ``.id`` (str), ``.message`` (str),
   ``.tweet`` (``Tweet | None`` -- ``None`` for notifications with no linked
-  tweet, e.g. a pure follow event), and ``.from_user`` (``User | None``).
+  tweet, e.g. a pure follow event), ``.from_user`` (``User | None``), and
+  ``.icon`` (``dict``, built directly from the raw API response's
+  ``data['icon']`` -- notification.py does NO further parsing or typing of
+  it beyond "it's a dict"; twikit defines no vocabulary for its contents).
+- Kind mapping (Codex review finding B -- distinguishing engagement
+  notifications, e.g. likes/reposts on the owner's OWN tweets, from
+  notifications that carry genuine incoming content, e.g. mentions/
+  replies/quotes): since twikit itself attaches no meaning to ``.icon``'s
+  contents, the id strings below are grounded in X's own (undocumented)
+  notification-icon vocabulary observed in the wild, NOT in twikit source
+  -- this module treats them as best-effort, not guaranteed-stable:
+    - ``heart_icon`` -- like
+    - ``retweet_icon`` -- repost/retweet
+  Only these two ids are classified as "engagement" (see
+  ``_is_engagement_notification``). Everything else -- a mention's or
+  reply's icon id, an icon id this module has never seen, or a
+  missing/non-dict ``.icon`` -- is treated as content and fails OPEN
+  (included as an item): an occasional own-tweet leaking through is more
+  recoverable than a silently dropped mention. ``.message`` (free-text,
+  locale-dependent) was deliberately NOT used as a secondary kind signal
+  here -- parsing human-readable notification text is brittle across
+  languages/wording changes, whereas ``.icon``'s id is a stable-ish
+  machine token; not worth the fragility for a fail-open-anyway path.
 - ``Tweet`` (tweet.py) has ``.id`` (str, a snowflake id -- ``rest_id`` off
   the raw API payload), ``.full_text`` (the untruncated tweet text, unlike
   ``.text`` which can be clipped for "Note Tweets" over the legacy length
@@ -148,29 +170,89 @@ def _tweet_and_screen_name(notification: Any) -> tuple[Any, str | None]:
     return tweet, screen_name
 
 
-def _extract_candidates(notifications: Any) -> tuple[list[tuple[int, Any, str]], int, int]:
-    """(tweet_id, tweet, screen_name) candidates from one page, plus skip counts.
+# Only icon ids confirmed to mean "pure engagement, no readable content" --
+# see the module docstring's "Kind mapping" facts for provenance and the
+# fail-open rationale.
+_ENGAGEMENT_ICON_IDS = frozenset({"heart_icon", "retweet_icon"})
+
+
+def _is_engagement_notification(notification: Any) -> bool:
+    """True only for like/repost notifications (Codex review finding B).
+
+    These are excluded from digest items -- a like/retweet on a tweet the
+    owner posted AFTER the cursor would otherwise pass the `tweet_id >
+    cursor` check and leak the owner's own tweet text into the digest as
+    if it were incoming content. Tweet age is the wrong discriminator for
+    that; the notification kind is (see `.icon`, module docstring).
+
+    Fails OPEN: a notification with no `.icon` dict, or an icon id this
+    module doesn't recognize, is treated as content (returns False here)
+    rather than silently dropped -- an occasional own-tweet leaking
+    through (false positive) is more recoverable than a missed mention
+    (false negative).
+    """
+    icon = getattr(notification, "icon", None)
+    if not isinstance(icon, dict):
+        return False
+    return icon.get("id") in _ENGAGEMENT_ICON_IDS
+
+
+def _extract_candidates(
+    notifications: Any,
+) -> tuple[list[tuple[int, str, str, bool]], int, int, int, int]:
+    """(tweet_id, text, screen_name, is_engagement) candidates from one page.
+
+    Returns (candidates, raw_count, skipped_no_tweet, skipped_no_screen_name,
+    skipped_malformed). `raw_count` is every notification the iterator
+    actually yielded on this page (used by `_page_bridges_cursor`), which
+    can be larger than `len(candidates)` since malformed/tweetless/authorless
+    notifications are counted but not included as candidates.
 
     Split out of `collect` so the same filtering runs identically for every
     page fetched during pagination, not just the first.
+
+    Per-notification malformation (a non-numeric tweet id, a tweet missing
+    `.full_text`, or any other single-notification data problem) is caught
+    HERE and skipped with a counted log -- gentle, never fails the page
+    (Codex review finding A). By contrast, the surrounding `for` loop
+    itself raising (e.g. a broken custom iterator failing mid-page) is
+    deliberately NOT caught here: that's a pipeline-level surprise, and is
+    left to propagate to `collect`'s own try/except around each page's
+    extraction, which sets `failed=True` while keeping whatever prior pages
+    (or prior candidates on this page) were already gathered.
     """
-    candidates: list[tuple[int, Any, str]] = []
+    candidates: list[tuple[int, str, str, bool]] = []
+    raw_count = 0
     skipped_no_tweet = 0
     skipped_no_screen_name = 0
+    skipped_malformed = 0
     for notification in notifications:
-        tweet, screen_name = _tweet_and_screen_name(notification)
-        if tweet is None:
-            skipped_no_tweet += 1
+        raw_count += 1
+        try:
+            tweet, screen_name = _tweet_and_screen_name(notification)
+            if tweet is None:
+                skipped_no_tweet += 1
+                continue
+            if not screen_name:
+                skipped_no_screen_name += 1
+                continue
+            tweet_id = int(tweet.id)
+            text = tweet.full_text
+            is_engagement = _is_engagement_notification(notification)
+        except Exception as exc:
+            logger.info(
+                "x notifications: skipped malformed notification: %s", type(exc).__name__
+            )
+            skipped_malformed += 1
             continue
-        if not screen_name:
-            skipped_no_screen_name += 1
-            continue
-        candidates.append((int(tweet.id), tweet, screen_name))
-    return candidates, skipped_no_tweet, skipped_no_screen_name
+        candidates.append((tweet_id, text, screen_name, is_engagement))
+    return candidates, raw_count, skipped_no_tweet, skipped_no_screen_name, skipped_malformed
 
 
 def _page_bridges_cursor(
-    page_notification_count: int, page_candidates: list[tuple[int, Any, str]], cursor_int: int
+    page_notification_count: int,
+    page_candidates: list[tuple[int, str, str, bool]],
+    cursor_int: int,
 ) -> bool:
     """True once this page reaches (or passes) the cursor -- pagination can stop.
 
@@ -181,7 +263,7 @@ def _page_bridges_cursor(
     """
     if page_notification_count == 0:
         return True
-    return any(tweet_id <= cursor_int for tweet_id, _, _ in page_candidates)
+    return any(tweet_id <= cursor_int for tweet_id, _, _, _ in page_candidates)
 
 
 async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
@@ -220,35 +302,62 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       "now"). If the page is empty, or every notification in it lacks a
       linked tweet, there is no candidate id to seed from -- seed "0" so
       the scope isn't re-treated as first-run forever.
-    - Otherwise: emit items for every notification (across all pages
+    - Otherwise: emit items for every CONTENT notification (across all pages
       fetched) whose linked tweet id is > cursor, oldest-first (ascending by
       tweet id) to match the item ordering convention used elsewhere in
-      this codebase. The cursor advances to the newest tweet id SEEN across
-      all pages fetched (not just the ones that became items) as long as
-      it's actually newer than the current cursor -- mirrors telegram.py's
-      "cursor advances past textless messages too" behavior, just for
-      tweetless notifications instead of textless messages.
+      this codebase. "Content" excludes engagement notifications (likes,
+      reposts -- see `_is_engagement_notification` / Codex review finding
+      B): a like or retweet on a tweet the owner posted after the cursor
+      still has a linked tweet id > cursor, but that tweet is the OWNER's
+      own content, not incoming content, so it must not become an item.
+      Engagement notifications still count toward cursor candidacy exactly
+      like content ones (see next bullet) -- excluding them from items but
+      not from the cursor is deliberate: skipping their (genuinely newer)
+      tweet ids for cursor purposes would be wrong, since the max()
+      semantics below already ensure an engagement notification about an
+      OLD tweet can never regress the cursor.
+    - The cursor advances to the newest tweet id SEEN across all pages
+      fetched (not just the ones that became items -- this includes
+      engagement notifications' tweet ids too) as long as it's actually
+      newer than the current cursor -- mirrors telegram.py's "cursor
+      advances past textless messages too" behavior, just for
+      tweetless/engagement notifications instead of textless messages.
     - Notifications without a linked tweet, or whose tweet's author
       screen_name is unavailable, are skipped from BOTH items and cursor
       candidacy -- logged as a count, never individually (PLAN.md: no
       linkable content to include, and a url cannot be built without a
       screen_name).
 
-    Error handling (PLAN.md §4.3): auth/cookie failures (`Unauthorized`,
-    `Forbidden`, `AccountLocked`, `AccountSuspended`) and rate limiting
-    (`TooManyRequests`) on the FIRST page both set `failed=True` and return
-    immediately -- NO retry, NO re-login attempt; a silent retry on an
-    unofficial, cookie-based API risks tripping X's automation detection
-    further, and the next scheduled run (3h later) is the retry. Any other
-    exception on the first page (e.g. a GraphQL/endpoint shape change) is
-    caught the same way so a twikit break never crashes the whole digest run
-    -- only the type name is logged, never exception details that might
-    embed cookie/session material. An exception while fetching page 2+
-    (during pagination) is caught the same way, but -- mirroring
-    telegram.py's partial-results-survive behavior -- does NOT discard items
-    or cursor progress already gathered from the pages fetched before it:
-    `failed=True` is set, pagination simply stops there, and the result is
-    finalized from whatever was collected so far.
+    Error handling (PLAN.md §4.3; Codex review finding A): auth/cookie
+    failures (`Unauthorized`, `Forbidden`, `AccountLocked`,
+    `AccountSuspended`) and rate limiting (`TooManyRequests`) on the FIRST
+    page both set `failed=True` and return immediately -- NO retry, NO
+    re-login attempt; a silent retry on an unofficial, cookie-based API
+    risks tripping X's automation detection further, and the next scheduled
+    run (3h later) is the retry. Any other exception fetching the first page
+    (e.g. a GraphQL/endpoint shape change) is caught the same way so a
+    twikit break never crashes the whole digest run -- only the type name is
+    logged, never exception details that might embed cookie/session
+    material.
+
+    Beyond the fetch itself, this function is exception-proof end to end, at
+    two distinct granularities:
+
+    - Per-notification malformation (a non-numeric tweet id, a tweet missing
+      `.full_text`, or any other single-notification data problem) is
+      caught inside `_extract_candidates` and skipped with a counted log --
+      gentle, never fails the page.
+    - Pipeline-level surprises -- extracting a page's candidates raising
+      (e.g. a broken custom notification iterator failing mid-page),
+      fetching page 2+ raising, or the final item-construction step raising
+      -- are each caught at the point they can occur, mirroring
+      telegram.py's partial-results-survive behavior: `failed=True` is set,
+      processing stops at that point, and the result is finalized from
+      whatever items/cursor progress were already safely gathered from
+      pages processed before the failure. None of this ever raises out of
+      `collect` itself -- `_run_x_collector` in digest/main.py also wraps
+      this call in a catch-all as a second line of defense, but `collect`
+      does not rely on that backstop.
     """
     from twikit.errors import (
         AccountLocked,
@@ -277,8 +386,25 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
 
     fetched_at = datetime.now(UTC).isoformat()
 
-    page_notifications = list(page)
-    candidates, skipped_no_tweet, skipped_no_screen_name = _extract_candidates(page_notifications)
+    try:
+        candidates, raw_count, skipped_no_tweet, skipped_no_screen_name, skipped_malformed = (
+            _extract_candidates(page)
+        )
+    except Exception as exc:
+        logger.warning(
+            "x notification page processing failed on page 1: %s", type(exc).__name__
+        )
+        result.failed = True
+        return result
+
+    if skipped_no_tweet:
+        logger.info("x notifications: skipped %d with no linkable tweet", skipped_no_tweet)
+    if skipped_no_screen_name:
+        logger.info(
+            "x notifications: skipped %d with no author screen_name", skipped_no_screen_name
+        )
+    if skipped_malformed:
+        logger.info("x notifications: skipped %d malformed notification(s)", skipped_malformed)
 
     if cursor is None:
         newest_in_page = max((c[0] for c in candidates), default=None)
@@ -290,7 +416,7 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     cursor_int = int(cursor)
     pages_fetched = 1
     pagination_failed = False
-    bridged = _page_bridges_cursor(len(page_notifications), candidates, cursor_int)
+    bridged = _page_bridges_cursor(raw_count, candidates, cursor_int)
 
     while not bridged and pages_fetched < _MAX_NOTIFICATION_PAGES:
         next_cursor = getattr(page, "next_cursor", None)
@@ -311,14 +437,39 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             break
 
         pages_fetched += 1
-        page_notifications = list(page)
-        page_candidates, page_skipped_no_tweet, page_skipped_no_screen_name = (
-            _extract_candidates(page_notifications)
-        )
+        try:
+            (
+                page_candidates,
+                page_raw_count,
+                page_skipped_no_tweet,
+                page_skipped_no_screen_name,
+                page_skipped_malformed,
+            ) = _extract_candidates(page)
+        except Exception as exc:
+            logger.warning(
+                "x notification page processing failed on page %d: %s",
+                pages_fetched,
+                type(exc).__name__,
+            )
+            result.failed = True
+            pagination_failed = True
+            break
+
         candidates.extend(page_candidates)
-        skipped_no_tweet += page_skipped_no_tweet
-        skipped_no_screen_name += page_skipped_no_screen_name
-        bridged = _page_bridges_cursor(len(page_notifications), page_candidates, cursor_int)
+        if page_skipped_no_tweet:
+            logger.info(
+                "x notifications: skipped %d with no linkable tweet", page_skipped_no_tweet
+            )
+        if page_skipped_no_screen_name:
+            logger.info(
+                "x notifications: skipped %d with no author screen_name",
+                page_skipped_no_screen_name,
+            )
+        if page_skipped_malformed:
+            logger.info(
+                "x notifications: skipped %d malformed notification(s)", page_skipped_malformed
+            )
+        bridged = _page_bridges_cursor(page_raw_count, page_candidates, cursor_int)
 
     if not bridged and not pagination_failed and pages_fetched >= _MAX_NOTIFICATION_PAGES:
         logger.warning(
@@ -327,31 +478,39 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             pages_fetched,
         )
 
-    if skipped_no_tweet:
-        logger.info("x notifications: skipped %d with no linkable tweet", skipped_no_tweet)
-    if skipped_no_screen_name:
-        logger.info(
-            "x notifications: skipped %d with no author screen_name", skipped_no_screen_name
-        )
+    try:
+        newest_seen = max((c[0] for c in candidates), default=None)
+        new_candidates = sorted((c for c in candidates if c[0] > cursor_int), key=lambda c: c[0])
 
-    newest_seen = max((c[0] for c in candidates), default=None)
-    new_candidates = sorted((c for c in candidates if c[0] > cursor_int), key=lambda c: c[0])
-
-    for tweet_id, tweet, screen_name in new_candidates:
-        result.items.append(
-            Item(
-                source="x",
-                source_id=str(tweet_id),
-                chat_id=None,
-                author=screen_name,
-                text=tweet.full_text,
-                url=f"https://x.com/{screen_name}/status/{tweet_id}",
-                fetched_at=fetched_at,
+        skipped_engagement = 0
+        for tweet_id, text, screen_name, is_engagement in new_candidates:
+            if is_engagement:
+                skipped_engagement += 1
+                continue
+            result.items.append(
+                Item(
+                    source="x",
+                    source_id=str(tweet_id),
+                    chat_id=None,
+                    author=screen_name,
+                    text=text,
+                    url=f"https://x.com/{screen_name}/status/{tweet_id}",
+                    fetched_at=fetched_at,
+                )
             )
-        )
+        if skipped_engagement:
+            logger.info(
+                "x notifications: skipped %d engagement notification(s) as items "
+                "(cursor still credits their tweet ids)",
+                skipped_engagement,
+            )
 
-    if newest_seen is not None and newest_seen > cursor_int:
-        result.cursor_updates[("x", "notifications")] = str(newest_seen)
+        if newest_seen is not None and newest_seen > cursor_int:
+            result.cursor_updates[("x", "notifications")] = str(newest_seen)
+    except Exception as exc:
+        logger.warning("x notification item construction failed: %s", type(exc).__name__)
+        result.failed = True
+        return result
 
     logger.info(
         "x notifications: collected %d items across %d page(s), cursor -> %s",
