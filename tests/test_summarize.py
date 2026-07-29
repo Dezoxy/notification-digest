@@ -65,6 +65,38 @@ def test_build_prompt_status_line_names_the_failed_source_only_when_failures_giv
     assert "do not write one yourself" in normalized
 
 
+def test_build_prompt_truncates_long_item_text_with_marker():
+    # P1 finding: an unbounded item text can blow out the prompt just as
+    # easily as an unbounded item count. Text over _MAX_ITEM_TEXT_CHARS
+    # (2000) must be cut to exactly that length in the JSON payload, with a
+    # trailing truncation marker -- the stored Item itself is untouched.
+    long_text = "a" * 3000
+    item = dataclasses.replace(_item(), text=long_text)
+
+    prompt = build_prompt([item], failed_sources=[])
+
+    fence_start = prompt.index("```json\n") + len("```json\n")
+    fence_end = prompt.index("\n```", fence_start)
+    payload = json.loads(prompt[fence_start:fence_end])
+
+    assert payload[0]["text"] == "a" * 2000 + " …[truncated]"
+    assert item.text == long_text  # the original Item is never mutated
+
+
+def test_build_prompt_leaves_exactly_2000_char_text_untouched():
+    exact_text = "b" * 2000
+    item = dataclasses.replace(_item(), text=exact_text)
+
+    prompt = build_prompt([item], failed_sources=[])
+
+    fence_start = prompt.index("```json\n") + len("```json\n")
+    fence_end = prompt.index("\n```", fence_start)
+    payload = json.loads(prompt[fence_start:fence_end])
+
+    assert payload[0]["text"] == exact_text
+    assert "truncated" not in payload[0]["text"]
+
+
 def test_build_prompt_empty_items_still_produces_valid_json_array():
     prompt = build_prompt([], failed_sources=[])
     assert "[]" in prompt

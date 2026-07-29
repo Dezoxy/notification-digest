@@ -28,6 +28,15 @@ _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "digest.md"
 # validate_output, which parses actual heading lines rather than substrings.
 _REQUIRED_HEADINGS = ("needs attention", "worth knowing", "noise skipped")
 
+# Bounds each item's text as it's embedded in the prompt payload. Telegram
+# messages can reach 4096 chars; at up to _MAX_ITEMS_PER_DIGEST (200) items
+# per run (digest/main.py), 200 x 2000 chars keeps the prompt comfortably
+# inside the model's context window. Truncation happens only in the prompt
+# payload built here -- the stored item text in the database stays
+# full-length, untouched.
+_MAX_ITEM_TEXT_CHARS = 2000
+_TRUNCATION_MARKER = " …[truncated]"
+
 
 class SummarizeError(Exception):
     """Raised when the Claude CLI fails to produce a usable digest.
@@ -35,6 +44,20 @@ class SummarizeError(Exception):
     Messages must stay short and must never include the prompt (which
     contains scraped Telegram/X message content).
     """
+
+
+def _truncate_item_text(text: str) -> str:
+    """Truncate a single item's text to _MAX_ITEM_TEXT_CHARS for the prompt payload.
+
+    Text at or under the limit is returned unchanged; anything longer is cut
+    to exactly _MAX_ITEM_TEXT_CHARS characters with a trailing marker
+    appended, so the reader can tell the item was clipped. This bounds the
+    prompt only -- see _MAX_ITEM_TEXT_CHARS's docstring comment for why, and
+    note stored items are never touched by this function.
+    """
+    if len(text) <= _MAX_ITEM_TEXT_CHARS:
+        return text
+    return text[:_MAX_ITEM_TEXT_CHARS] + _TRUNCATION_MARKER
 
 
 def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
@@ -46,7 +69,7 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
             "source": item.source,
             "chat_id": item.chat_id,
             "author": item.author,
-            "text": item.text,
+            "text": _truncate_item_text(item.text),
             "url": item.url,
             "fetched_at": item.fetched_at,
         }

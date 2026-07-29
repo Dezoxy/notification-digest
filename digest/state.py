@@ -171,16 +171,29 @@ def commit_new_items(
         raise
 
 
-def get_unsummarized_items(conn: sqlite3.Connection) -> list[Item]:
-    """Return items not yet attached to a digest, ordered by fetched_at ascending."""
-    rows = conn.execute(
-        """
+def get_unsummarized_items(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[Item]:
+    """Return items not yet attached to a digest, ordered by fetched_at ascending.
+
+    `limit`, when given, caps the number of rows returned to the `limit`
+    OLDEST unsummarized items (fetched_at ASC is unaffected -- the bound is
+    applied via `LIMIT ?` after ordering, not by changing the order). This
+    lets a caller drain a large backlog in bounded batches across multiple
+    runs instead of loading everything at once (see digest/main.py's
+    _MAX_ITEMS_PER_DIGEST).
+    """
+    query = """
         SELECT source, source_id, chat_id, author, text, url, fetched_at
         FROM items
         WHERE digest_id IS NULL
         ORDER BY fetched_at ASC
         """
-    ).fetchall()
+    params: tuple[int, ...] = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        params = (limit,)
+    rows = conn.execute(query, params).fetchall()
     return [
         Item(
             source=row[0],
@@ -193,6 +206,13 @@ def get_unsummarized_items(conn: sqlite3.Connection) -> list[Item]:
         )
         for row in rows
     ]
+
+
+def count_unsummarized_items(conn: sqlite3.Connection) -> int:
+    """Return the total number of items not yet attached to a digest."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM items WHERE digest_id IS NULL"
+    ).fetchone()[0]
 
 
 def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item]) -> int:

@@ -24,6 +24,7 @@ from digest.emailer import archive, send_digest
 from digest.state import (
     commit_new_items,
     connect,
+    count_unsummarized_items,
     create_digest,
     get_cursors,
     get_pending_digest,
@@ -39,6 +40,16 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+# Bounds how many unsummarized items a single Claude call is given. Each
+# allowlisted chat can contribute up to 500 messages per run, and a failed
+# summarize call carries the backlog forward plus new items on top -- with
+# no cap, the prompt for an accumulated backlog can exceed the model's
+# context window, and an oversized prompt then fails every subsequent run
+# forever (no items ever get stamped). The remainder ships in later runs:
+# the 3-hourly timer is the drain loop for a large backlog, at
+# _MAX_ITEMS_PER_DIGEST items per digest.
+_MAX_ITEMS_PER_DIGEST = 200
 
 
 async def _client_ready(client: TelegramClient) -> bool:
@@ -101,7 +112,7 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
         # collection still gets summarized and sent, instead of discarding
         # this run's failed_sources state.
 
-    items = get_unsummarized_items(conn)
+    items = get_unsummarized_items(conn, limit=_MAX_ITEMS_PER_DIGEST)
     if not items:
         logger.info("no unsummarized items, nothing to send")
         return True
@@ -114,7 +125,16 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
         return False
 
     digest_id = create_digest(conn, body_md, items)
-    return _send_and_finalize(conn, cfg, digest_id, body_md, len(items))
+    if not _send_and_finalize(conn, cfg, digest_id, body_md, len(items)):
+        return False
+
+    # One Opus call per run keeps cost and runtime bounded -- do NOT loop
+    # summarize here even if a remainder is left; the 3-hourly timer is the
+    # drain loop that picks up the rest on its next invocation.
+    remaining = count_unsummarized_items(conn)
+    if remaining:
+        logger.info("%d unsummarized items remain, will ship in the next digest", remaining)
+    return True
 
 
 def _send_and_finalize(

@@ -10,6 +10,7 @@ from digest.state import (
     Item,
     commit_new_items,
     connect,
+    count_unsummarized_items,
     create_digest,
     get_pending_digest,
     get_unsummarized_items,
@@ -85,7 +86,7 @@ def _cfg() -> Config:
     )
 
 
-def _item(source_id: str = "1") -> Item:
+def _item(source_id: str = "1", fetched_at: str = "2026-07-29T10:00:00+00:00") -> Item:
     return Item(
         source="telegram",
         source_id=source_id,
@@ -93,7 +94,7 @@ def _item(source_id: str = "1") -> Item:
         author="alice",
         text="hello",
         url=f"https://t.me/c/123/{source_id}",
-        fetched_at="2026-07-29T10:00:00+00:00",
+        fetched_at=fetched_at,
     )
 
 
@@ -288,3 +289,42 @@ def test_deliver_pending_digest_send_fails_no_summarize_and_returns_false(conn, 
     assert ok is False
     pending = get_pending_digest(conn)
     assert pending is not None  # still unsent, left for the next run's retry
+
+
+def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummarized(
+    conn, monkeypatch
+):
+    # P1 finding: an unbounded backlog can exceed the model context and wedge
+    # the pipeline forever. With more unsummarized items than the per-run
+    # cap, _deliver must hand summarize exactly the cap-sized OLDEST batch,
+    # send it successfully, and leave the remainder unsummarized for the
+    # next run -- never looping summarize within a single run.
+    monkeypatch.setattr(main_mod, "_MAX_ITEMS_PER_DIGEST", 2)
+
+    commit_new_items(
+        conn,
+        [
+            _item("1", fetched_at="2026-07-29T10:00:00+00:00"),
+            _item("2", fetched_at="2026-07-29T11:00:00+00:00"),
+            _item("3", fetched_at="2026-07-29T12:00:00+00:00"),
+        ],
+        {("telegram", "123"): "3"},
+    )
+
+    summarize_calls = []
+
+    def fake_summarize(items, failed_sources, model, timeout_seconds):
+        summarize_calls.append(items)
+        return "## Needs attention\n...batch..."
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), CollectResult())
+
+    assert ok is True
+    assert len(summarize_calls) == 1  # exactly one Opus call this run
+    assert [i.source_id for i in summarize_calls[0]] == ["1", "2"]  # oldest batch, size-bounded
+    assert count_unsummarized_items(conn) == 1  # item "3" left for the next run
+    assert [i.source_id for i in get_unsummarized_items(conn)] == ["3"]

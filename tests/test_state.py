@@ -7,6 +7,7 @@ from digest.state import (
     Item,
     commit_new_items,
     connect,
+    count_unsummarized_items,
     create_digest,
     get_cursors,
     get_pending_digest,
@@ -157,6 +158,58 @@ def test_get_unsummarized_items_orders_by_fetched_at(conn):
 
     items = get_unsummarized_items(conn)
     assert [i.source_id for i in items] == ["1", "2"]
+
+
+def test_get_unsummarized_items_limit_returns_n_oldest_by_fetched_at(conn):
+    # P1 finding: an unbounded backlog can exceed the model context. `limit`
+    # must cap the batch to the N OLDEST items, not just any N -- ordering
+    # is unaffected by the cap.
+    commit_new_items(
+        conn,
+        [
+            _item("3", fetched_at="2026-07-29T12:00:00+00:00"),
+            _item("1", fetched_at="2026-07-29T10:00:00+00:00"),
+            _item("4", fetched_at="2026-07-29T13:00:00+00:00"),
+            _item("2", fetched_at="2026-07-29T11:00:00+00:00"),
+        ],
+        {},
+    )
+
+    items = get_unsummarized_items(conn, limit=2)
+
+    assert [i.source_id for i in items] == ["1", "2"]
+
+
+def test_get_unsummarized_items_limit_none_returns_all(conn):
+    commit_new_items(
+        conn,
+        [_item("1", fetched_at="2026-07-29T10:00:00+00:00"),
+         _item("2", fetched_at="2026-07-29T11:00:00+00:00")],
+        {},
+    )
+
+    items = get_unsummarized_items(conn, limit=None)
+
+    assert [i.source_id for i in items] == ["1", "2"]
+
+
+def test_count_unsummarized_items_matches_unstamped_row_count(conn):
+    commit_new_items(
+        conn,
+        [
+            _item("1", fetched_at="2026-07-29T10:00:00+00:00"),
+            _item("2", fetched_at="2026-07-29T11:00:00+00:00"),
+            _item("3", fetched_at="2026-07-29T12:00:00+00:00"),
+        ],
+        {},
+    )
+    assert count_unsummarized_items(conn) == 3
+
+    batch = get_unsummarized_items(conn, limit=2)
+    digest_id = create_digest(conn, "## Needs attention\n...", batch)
+    assert digest_id  # sanity
+
+    assert count_unsummarized_items(conn) == 1
 
 
 # --- digest bookkeeping (Phase 2) ---
