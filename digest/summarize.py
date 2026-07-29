@@ -49,6 +49,16 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
         for item in items
     ]
     items_json = json.dumps(payload, indent=2)
+    # The prompt's consumer is an LLM, not a strict CommonMark parser: a
+    # literal ``` inside an item's text can make the model perceive the
+    # ```json data block as closed early, presenting whatever follows (in
+    # the same item, or the rest of the JSON array) as text outside the
+    # advertised data boundary -- i.e. as instructions rather than data.
+    # Escaping every backtick to its JSON unicode escape is safe globally:
+    # a backtick can only occur inside a JSON string value (never in JSON
+    # structural syntax), and ` round-trips through json.loads to the
+    # original backtick character, so the payload is unaffected.
+    items_json = items_json.replace("`", "\\u0060")
 
     if failed_sources:
         collector_status = "Collector status: " + ", ".join(
@@ -57,8 +67,17 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
     else:
         collector_status = "Collector status: all collectors succeeded this run."
 
-    return template.replace("{{ITEMS_JSON}}", items_json).replace(
-        "{{COLLECTOR_STATUS}}", collector_status
+    # Substitute {{COLLECTOR_STATUS}} before {{ITEMS_JSON}}, and always
+    # substitute {{ITEMS_JSON}} last: str.replace scans its input left to
+    # right looking for the placeholder, and that scan does not distinguish
+    # template text from text just inserted by an earlier .replace() call.
+    # If ITEMS_JSON went first and an item's text happened to contain the
+    # literal "{{COLLECTOR_STATUS}}", the second .replace() would find that
+    # match INSIDE the just-inserted JSON and silently rewrite collected
+    # message content. Doing ITEMS_JSON last means no subsequent .replace()
+    # ever rescans data it inserted.
+    return template.replace("{{COLLECTOR_STATUS}}", collector_status).replace(
+        "{{ITEMS_JSON}}", items_json
     )
 
 
