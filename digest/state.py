@@ -199,14 +199,28 @@ def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item])
     """Durably record a digest and stamp its items, in one transaction.
 
     Inserts a `digests` row (created_at = now UTC, item_count = len(items),
-    email_sent = 0, body_md) and stamps every currently-unsummarized item
-    (digest_id IS NULL) with the new digest's id. This must happen BEFORE
-    the email send attempt (PLAN.md §4.1): if the process crashes after this
-    commits but before the send confirms, the next run finds a pending
-    unsent digest and retries the send instead of re-summarizing (avoids
-    double-billing the Claude call). On any failure the whole transaction is
-    rolled back so a digest row never exists without its items stamped, and
-    vice versa.
+    email_sent = 0, body_md) and stamps exactly the given `items` snapshot
+    with the new digest's id — one `UPDATE ... WHERE source = ? AND
+    source_id = ? AND digest_id IS NULL` per item. We deliberately do NOT use
+    an unqualified `WHERE digest_id IS NULL` update: `items` is a snapshot
+    taken by an earlier call to get_unsummarized_items(), and if a new item
+    is inserted between that snapshot and this transaction, an unqualified
+    update would silently attach it to this digest even though the digest's
+    body (already summarized before this call) never mentions it — the item
+    is then permanently skipped by future summarization, and item_count would
+    no longer match the number of items actually stamped. Scoping each
+    update to the snapshot's own (source, source_id) guarantees only those
+    items are touched. We sum the affected rowcounts and require the total to
+    equal len(items); a mismatch means the snapshot is stale (an item was
+    already stamped/deleted out from under us) or contains a duplicate, and
+    we raise so the whole transaction rolls back rather than persisting a
+    digest whose item_count disagrees with what got stamped. This must
+    happen BEFORE the email send attempt (PLAN.md §4.1): if the process
+    crashes after this commits but before the send confirms, the next run
+    finds a pending unsent digest and retries the send instead of
+    re-summarizing (avoids double-billing the Claude call). On any failure
+    the whole transaction is rolled back so a digest row never exists
+    without its items stamped, and vice versa.
     """
     now = datetime.now(UTC).isoformat()
     try:
@@ -220,10 +234,20 @@ def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item])
             (now, len(items), body_md),
         )
         digest_id = cur.lastrowid
-        cur.execute(
-            "UPDATE items SET digest_id = ? WHERE digest_id IS NULL",
-            (digest_id,),
-        )
+        stamped = 0
+        for item in items:
+            cur.execute(
+                """
+                UPDATE items SET digest_id = ?
+                WHERE source = ? AND source_id = ? AND digest_id IS NULL
+                """,
+                (digest_id, item.source, item.source_id),
+            )
+            stamped += cur.rowcount
+        if stamped != len(items):
+            raise ValueError(
+                f"digest stamping affected {stamped} of {len(items)} items"
+            )
         conn.commit()
         return digest_id
     except Exception:

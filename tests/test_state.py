@@ -263,3 +263,42 @@ def test_create_digest_rollback_on_failure_leaves_items_unstamped(conn):
 
     assert conn.execute("SELECT COUNT(*) FROM digests").fetchone()[0] == 0
     assert get_unsummarized_items(conn) == items
+
+
+def test_create_digest_does_not_stamp_items_inserted_after_snapshot(conn):
+    # Regression for the P2 finding: create_digest must stamp exactly the
+    # `items` snapshot passed in, not everything with digest_id IS NULL at
+    # transaction time. An item committed between the snapshot and the
+    # create_digest call must be left untouched.
+    commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
+    snapshot = get_unsummarized_items(conn)
+    assert [i.source_id for i in snapshot] == ["1", "2"]
+
+    # Simulate a new item arriving after the snapshot was taken but before
+    # create_digest's stamping transaction runs.
+    commit_new_items(conn, [_item("3")], {("telegram", "123"): "3"})
+
+    digest_id = create_digest(conn, "## digest body\n...", snapshot)
+
+    remaining = get_unsummarized_items(conn)
+    assert [i.source_id for i in remaining] == ["3"]
+
+    digest_row = conn.execute(
+        "SELECT item_count FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert digest_row == (2,)
+
+
+def test_create_digest_raises_and_rolls_back_on_snapshot_mismatch(conn):
+    # A snapshot item that doesn't match any unstamped row (stale or
+    # duplicated) must abort the whole transaction: no digest row, no
+    # existing items stamped.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    real_item = get_unsummarized_items(conn)[0]
+    bogus_item = _item("does-not-exist")
+
+    with pytest.raises(ValueError, match="digest stamping affected"):
+        create_digest(conn, "## digest body\n...", [real_item, bogus_item])
+
+    assert conn.execute("SELECT COUNT(*) FROM digests").fetchone()[0] == 0
+    assert get_unsummarized_items(conn) == [real_item]
