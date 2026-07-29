@@ -301,6 +301,29 @@ _AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]+)>")
 # permissive about what follows the URL (title, trailing text) since the
 # only decision made here is whether the URL is allowlisted.
 _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULTILINE)
+# Any remaining bare URL token, run as the final pass over the whole text --
+# catches URLs mail clients would auto-linkify even though they never went
+# through a markdown link construct at all (plain prose, or what survives
+# after the passes above run). Stops at whitespace and the same closing
+# delimiters the other patterns exclude (`)`, `]`, `>`, quotes) so it doesn't
+# swallow trailing punctuation from an enclosing markdown/HTML construct.
+_BARE_URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
+
+
+def _defang(url: str) -> str:
+    """Replace a URL's scheme so mail clients won't auto-linkify it.
+
+    ``https://`` -> ``hxxps://``, ``http://`` -> ``hxxp://`` -- the standard
+    security-community defanging convention. This only rewrites the scheme
+    prefix, so the destination stays human-readable (useful for the "someone
+    sent a suspicious link" summary case) while no longer being a live,
+    clickable URL to any client that recognizes the scheme.
+    """
+    if url.startswith("https://"):
+        return "hxxps://" + url[len("https://") :]
+    if url.startswith("http://"):
+        return "hxxp://" + url[len("http://") :]
+    return url
 
 
 def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) -> str:
@@ -340,7 +363,32 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
        definition instead of rewriting each usage site (which may be
        numerous, or precede the definition in document order).
     3. CommonMark autolinks, `<url>` -- a bare URL with no link text of its
-       own, unchanged from the previous implementation.
+       own. Unlike the previous implementation, an unknown autolink's `<>`
+       wrapper is stripped *and* its URL is defanged (see below) rather than
+       surviving as bare text.
+
+    Finally, a fourth pass runs over the *entire* result: every remaining
+    bare URL token (anything matching `https?://[^\\s)\\]>"']+`, whether it
+    was already bare in the model's prose or is what's left after the passes
+    above ran) is defanged unless it is an exact member of ``allowed_urls``.
+    This pass must run last, after the markdown-link and reference-definition
+    passes, so that an allowed URL still embedded in a surviving markdown
+    link -- which is necessarily also in ``allowed_urls`` -- is spared by the
+    membership check rather than mangled.
+
+    Defanging (`https://` -> `hxxps://`, `http://` -> `hxxp://`) exists
+    because this function's output is used verbatim as the digest email's
+    text/plain MIME part (see send_digest in digest/emailer.py), and mail
+    clients auto-linkify bare URLs in plain text on their own -- there is no
+    HTML anchor layer in that part for allowlist enforcement to intercept.
+    Repairing a markdown link construct (dropping it to plain text, or
+    deleting the reference definition) is enough to stop python-markdown
+    from turning it into an `<a href>` in the HTML part, but it does nothing
+    for the plain-text part: the URL text itself is still there, and
+    `<https://attacker.example/phish>` or a bare `https://attacker.example/...`
+    in prose is exactly as clickable to a mail client as a real link. Only
+    defanging the scheme (not just deleting the URL) closes that gap while
+    keeping the destination readable.
 
     This repairs rather than rejects: the digest still goes out with
     unknown links neutralized, rather than raising and discarding the
@@ -352,12 +400,14 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
     hallucinating a URL. Known links (and known reference definitions) are
     left completely untouched.
 
-    Only the COUNT of stripped links is logged, never the URLs themselves:
-    an attacker-chosen URL reaching the log (and Loki) is itself exposure
-    -- e.g. an SSRF probe or a tracking domain encoded in the query string.
+    Only the COUNTS of stripped/defanged links are logged, never the URLs
+    themselves: an attacker-chosen URL reaching the log (and Loki) is itself
+    exposure -- e.g. an SSRF probe or a tracking domain encoded in the query
+    string.
     """
     allowed = set(allowed_urls)
     stripped = 0
+    defanged = 0
 
     def _replace_inline_link(match: re.Match[str]) -> str:
         nonlocal stripped
@@ -370,12 +420,12 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
     result = _MARKDOWN_LINK_RE.sub(_replace_inline_link, markdown_text)
 
     def _replace_autolink(match: re.Match[str]) -> str:
-        nonlocal stripped
+        nonlocal defanged
         url = match.group(1)
         if url in allowed:
             return match.group(0)
-        stripped += 1
-        return url
+        defanged += 1
+        return _defang(url)
 
     result = _AUTOLINK_RE.sub(_replace_autolink, result)
 
@@ -389,10 +439,26 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
 
     result = _REFERENCE_DEFINITION_RE.sub(_replace_reference_definition, result)
 
-    if stripped:
+    # Final pass: defang every remaining bare URL not in the allowlist. Runs
+    # last so allowed URLs still sitting inside a surviving markdown link
+    # (necessarily in `allowed`) are spared by the membership check instead
+    # of being mangled by this text-wide regex.
+    def _replace_bare_url(match: re.Match[str]) -> str:
+        nonlocal defanged
+        url = match.group(0)
+        if url in allowed:
+            return url
+        defanged += 1
+        return _defang(url)
+
+    result = _BARE_URL_RE.sub(_replace_bare_url, result)
+
+    if stripped or defanged:
         logger.warning(
-            "enforce_link_allowlist: stripped %d link(s) with non-allowlisted URLs",
+            "enforce_link_allowlist: stripped %d link(s) and defanged %d bare "
+            "URL(s) with non-allowlisted URLs",
             stripped,
+            defanged,
         )
 
     return result

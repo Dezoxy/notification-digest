@@ -706,17 +706,46 @@ def test_enforce_link_allowlist_mixed_links_strips_only_unknown_ones_and_logs_on
 
 
 def test_enforce_link_allowlist_unknown_autolink_is_neutralized():
-    text = "Reference: <https://attacker.example/x> for more."
+    text = "Reference: <https://attacker.example/phish> for more."
 
     result = enforce_link_allowlist(text, allowed_urls=set())
 
-    assert "<https://attacker.example/x>" not in result
-    assert "https://attacker.example/x" in result  # url survives as plain text
+    assert "<https://attacker.example/phish>" not in result
+    assert "https://attacker.example" not in result
+    assert "hxxps://attacker.example/phish" in result  # defanged, not dropped
 
 
 def test_enforce_link_allowlist_known_autolink_is_preserved():
     url = "https://t.me/c/123/1"
     text = f"Reference: <{url}> for more."
+
+    result = enforce_link_allowlist(text, allowed_urls={url})
+
+    assert result == text
+
+
+def test_enforce_link_allowlist_bare_unknown_url_in_prose_is_defanged():
+    text = "Heads up, someone posted https://attacker.example/phish in the chat."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "https://attacker.example" not in result
+    assert "hxxps://attacker.example/phish" in result
+
+
+def test_enforce_link_allowlist_allowed_url_in_markdown_link_is_untouched():
+    url = "https://t.me/c/123/1"
+    text = f"See [this update]({url}) for details."
+
+    result = enforce_link_allowlist(text, allowed_urls={url})
+
+    assert result == text
+    assert "https://" in result
+
+
+def test_enforce_link_allowlist_allowed_url_bare_in_prose_is_untouched():
+    url = "https://t.me/c/123/1"
+    text = f"Original post: {url} for context."
 
     result = enforce_link_allowlist(text, allowed_urls={url})
 
