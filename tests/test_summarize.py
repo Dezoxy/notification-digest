@@ -259,6 +259,38 @@ def test_validate_output_sections_out_of_order_raises():
         validate_output(markdown_text)
 
 
+def test_validate_output_fenced_refusal_raises_missing_all_three():
+    # A refusal that dumps the required headings inside a fenced code block
+    # (e.g. "here's the template you asked about") must not validate: those
+    # are not real heading lines, just quoted example text.
+    refusal = (
+        "I can't do this. Here's the template you asked about:\n"
+        "```\n## Needs attention\n## Worth knowing\n## Noise skipped\n```"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_fenced_block_quoting_heading_does_not_double_count():
+    # Three real headings plus a fenced block that happens to quote one of
+    # the heading strings verbatim must still pass -- the fenced occurrence
+    # is not a real heading line and must not trigger a duplicate error.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "```\n## Needs attention\n```\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
 def test_validate_output_duplicate_heading_raises_naming_it():
     markdown_text = (
         "## Needs attention\n- nothing\n\n"

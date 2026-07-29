@@ -267,3 +267,33 @@ def test_archive_with_unwritable_dir_logs_warning_and_does_not_raise(tmp_path, c
         archive("body", bad_archive_dir, digest_id=1)  # must not raise
 
     assert any("archive" in record.message.lower() for record in caplog.records)
+
+
+def test_archive_writes_utf8_and_survives_a_roundtrip(tmp_path: Path):
+    # Non-ASCII content (e.g. the digest's warning banner) must be written
+    # as UTF-8 explicitly rather than relying on the locale-preferred
+    # encoding, which can be ASCII/code-page and unable to represent it.
+    body_md = "## Needs attention\n\n- ⚠ one collector failed this run\n"
+
+    archive(body_md, str(tmp_path / "archive"), digest_id=7)
+
+    files = list((tmp_path / "archive").glob("digest-7-*.md"))
+    assert len(files) == 1
+    assert files[0].read_text(encoding="utf-8") == body_md
+    assert "⚠" in files[0].read_text(encoding="utf-8")
+
+
+def test_archive_swallows_unicode_encode_error_and_logs_warning(tmp_path, caplog, monkeypatch):
+    # write_text() using a non-UTF-8 locale encoding can raise
+    # UnicodeEncodeError on non-ASCII digest text -- a ValueError, not an
+    # OSError. archive()'s contract is "never raises," so this must be
+    # caught too, not just OSError.
+    def _boom(self, data, *args, **kwargs):
+        raise UnicodeEncodeError("ascii", "⚠", 0, 1, "ordinal not in range(128)")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+
+    with caplog.at_level("WARNING"):
+        archive("## Needs attention\n⚠", str(tmp_path / "archive"), digest_id=9)  # must not raise
+
+    assert any("archive" in record.message.lower() for record in caplog.records)

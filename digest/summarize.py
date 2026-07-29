@@ -147,10 +147,25 @@ def validate_output(markdown_text: str) -> None:
     Links are deliberately NOT validated here: a window with nothing but
     noise legitimately produces zero `[text](url)` links in "Worth
     knowing", and that is correct output, not a contract violation.
+
+    Fenced code blocks are also excluded from heading detection: a refusal
+    can legitimately quote the required heading text inside a ``` block
+    (e.g. "here's the template you asked about:\n```\n## Needs attention\n...")
+    and that is not a real section -- it is example text sitting inside a
+    code fence. A stripped line starting with three or more backticks
+    toggles an in-fence flag; while the flag is set, "## " lines are not
+    counted as headings, and the fence delimiter lines themselves are never
+    counted as headings either.
     """
     heading_lines = []
+    in_fence = False
     for line in markdown_text.splitlines():
         stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         if stripped.startswith("## "):
             heading_lines.append(stripped[3:].strip().lower())
 

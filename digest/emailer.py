@@ -157,6 +157,16 @@ def archive(body_md: str, archive_dir: str, digest_id: int) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         path = directory / f"digest-{digest_id}-{timestamp}.md"
-        path.write_text(body_md)
-    except OSError:
+        # Encoding must be explicit: without it, write_text falls back to
+        # locale.getpreferredencoding(), and on an ASCII/code-page locale a
+        # digest containing non-ASCII text (e.g. the ⚠ collector-failure
+        # banner) raises UnicodeEncodeError -- a ValueError, not an OSError.
+        path.write_text(body_md, encoding="utf-8")
+    except Exception:
+        # Broad on purpose: this function's contract is "never raises" --
+        # the digest has already been sent (and, once this returns, gets
+        # marked sent) by the time archive() runs, so ANY failure here
+        # (OSError from disk/permissions, UnicodeEncodeError from encoding
+        # issues, or anything else) must degrade to a logged warning rather
+        # than escape and fail an otherwise-successful run.
         logger.warning("failed to archive digest %d to %s", digest_id, archive_dir, exc_info=True)
