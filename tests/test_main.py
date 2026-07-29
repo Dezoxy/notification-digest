@@ -1,3 +1,5 @@
+import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -128,7 +130,7 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
     monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
     monkeypatch.setattr(main_mod, "archive", fake_archive)
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert sent["body_md"] == "## Needs attention\n..."
@@ -145,7 +147,7 @@ def test_deliver_zero_unsummarized_items_sends_nothing(conn, monkeypatch):
     monkeypatch.setattr(main_mod, "send_digest", boom)
     monkeypatch.setattr(main_mod, "archive", boom)
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert get_pending_digest(conn) is None
@@ -163,7 +165,7 @@ def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
     monkeypatch.setattr(main_mod, "send_digest", failing_send)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: archived.__setitem__("called", True))
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is False
     pending = get_pending_digest(conn)
@@ -191,7 +193,7 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
         main_mod, "archive", lambda body_md, archive_dir, digest_id: archived.update(id=digest_id)
     )
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert sent["body_md"] == "## Needs attention\n..."
@@ -230,7 +232,7 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
         main_mod, "archive", lambda body_md, archive_dir, digest_id: archived.append(digest_id)
     )
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert len(sends) == 2
@@ -262,7 +264,7 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
     monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
-    ok = _deliver(conn, _cfg(), CollectResult(failed=True))
+    ok = _deliver(conn, _cfg(), ["telegram"])
 
     assert ok is True
     assert summarize_calls == [["telegram"]]
@@ -286,7 +288,7 @@ def test_deliver_pending_digest_send_fails_no_summarize_and_returns_false(conn, 
     monkeypatch.setattr(main_mod, "send_digest", failing_send)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is False
     pending = get_pending_digest(conn)
@@ -323,7 +325,7 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
     monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert len(summarize_calls) == 1  # exactly one Opus call this run
@@ -367,7 +369,7 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
-    ok = _deliver(conn, _cfg(), CollectResult())
+    ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert summarize_received["items"] == selected_subset
@@ -441,3 +443,155 @@ def test_send_and_finalize_recovers_urls_for_a_pending_resend_from_a_prior_run(
 
     assert ok is True
     assert captured["allowed_urls"] == {"https://t.me/c/123/1"}
+
+
+# --- _run: Phase 3 collector orchestration (Telegram + X merge, failed_sources) ---
+#
+# These patch main_mod.TelegramClient / main_mod.StringSession (real Telethon
+# construction needs a real session string and would otherwise raise) and
+# main_mod.telegram_collector.collect / main_mod.x_collector.build_client /
+# main_mod.x_collector.collect (the actual collector entry points _run calls),
+# then run the real `_run` coroutine end to end against a tmp-path SQLite db.
+
+
+class FakeTelegramClient:
+    """Stands in for TelegramClient(...) inside _run -- never touches the network."""
+
+    def __init__(self, *args, **kwargs):
+        self._connected = False
+
+    async def connect(self) -> None:
+        self._connected = True
+
+    async def is_user_authorized(self) -> bool:
+        return True
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def disconnect(self) -> None:
+        self._connected = False
+
+
+def _patch_telegram_client(monkeypatch, tg_result: CollectResult) -> None:
+    monkeypatch.setattr(main_mod, "StringSession", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "TelegramClient", lambda *a, **k: FakeTelegramClient())
+
+    async def fake_collect(client, chat_ids, cursors):
+        return tg_result
+
+    monkeypatch.setattr(main_mod.telegram_collector, "collect", fake_collect)
+
+
+def _patch_x_client(monkeypatch, x_result: CollectResult, *, build_client_raises: bool = False):
+    def fake_build_client(cookies_path, cookies_inline):
+        if build_client_raises:
+            raise AssertionError("x_collector.build_client must not be called")
+        return object()
+
+    async def fake_collect(client, cursor):
+        return x_result
+
+    monkeypatch.setattr(main_mod.x_collector, "build_client", fake_build_client)
+    monkeypatch.setattr(main_mod.x_collector, "collect", fake_collect)
+
+
+def test_run_x_disabled_never_calls_x_collector(monkeypatch, tmp_path):
+    cfg = replace(_cfg(), state_db_path=str(tmp_path / "state.db"), x_enabled=False)
+
+    _patch_telegram_client(monkeypatch, CollectResult())
+
+    def boom_build_client(*a, **k):
+        raise AssertionError("build_client must not be called when X_ENABLED=false")
+
+    async def boom_collect(*a, **k):
+        raise AssertionError("x collect must not be called when X_ENABLED=false")
+
+    monkeypatch.setattr(main_mod.x_collector, "build_client", boom_build_client)
+    monkeypatch.setattr(main_mod.x_collector, "collect", boom_collect)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+
+
+def test_run_merges_telegram_and_x_items_into_one_commit(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(),
+        state_db_path=str(tmp_path / "state.db"),
+        x_enabled=True,
+        x_cookies_path="/tmp/x-cookies.json",
+    )
+
+    tg_item = _item("1")
+    x_item = Item(
+        source="x",
+        source_id="999",
+        chat_id=None,
+        author="bob",
+        text="hey",
+        url="https://x.com/bob/status/999",
+        fetched_at="2026-07-29T10:00:00+00:00",
+    )
+
+    _patch_telegram_client(
+        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
+    )
+    _patch_x_client(
+        monkeypatch, CollectResult(items=[x_item], cursor_updates={("x", "notifications"): "999"})
+    )
+
+    captured = {}
+
+    def fake_commit_new_items(conn, items, cursor_updates):
+        captured["items"] = items
+        captured["cursor_updates"] = cursor_updates
+        return len(items)
+
+    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+    assert captured["items"] == [tg_item, x_item]
+    assert captured["cursor_updates"] == {
+        ("telegram", "123"): "1",
+        ("x", "notifications"): "999",
+    }
+
+
+@pytest.mark.parametrize(
+    "tg_failed,x_failed,expected_failed_sources",
+    [
+        (True, False, ["telegram"]),
+        (False, True, ["x"]),
+        (True, True, ["telegram", "x"]),
+        (False, False, []),
+    ],
+)
+def test_run_failed_sources_reflects_exactly_the_failing_collectors(
+    monkeypatch, tmp_path, tg_failed, x_failed, expected_failed_sources
+):
+    cfg = replace(
+        _cfg(),
+        state_db_path=str(tmp_path / "state.db"),
+        x_enabled=True,
+        x_cookies_path="/tmp/x-cookies.json",
+    )
+
+    _patch_telegram_client(monkeypatch, CollectResult(failed=tg_failed))
+    _patch_x_client(monkeypatch, CollectResult(failed=x_failed))
+
+    captured = {}
+
+    def fake_deliver(conn, cfg, failed_sources):
+        captured["failed_sources"] = failed_sources
+        return True
+
+    monkeypatch.setattr(main_mod, "_deliver", fake_deliver)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert captured["failed_sources"] == expected_failed_sources
+    assert ok == (not expected_failed_sources)

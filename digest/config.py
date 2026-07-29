@@ -32,6 +32,8 @@ class Config:
     digest_to: str
     state_db_path: str = "./state.db"
     x_enabled: bool = False
+    x_cookies_path: str | None = None
+    x_cookies: str | None = None
     anthropic_model: str = "claude-opus-5"
     archive_dir: str = "./archive"
     claude_timeout_seconds: int = 300
@@ -52,6 +54,10 @@ class Config:
 
         state_db_path = os.environ.get("STATE_DB_PATH", "./state.db")
         x_enabled = _parse_bool(os.environ.get("X_ENABLED", "false"))
+        x_cookies_path: str | None = None
+        x_cookies: str | None = None
+        if x_enabled:
+            x_cookies_path, x_cookies = _require_exactly_one_x_cookie_source()
         anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
         archive_dir = os.environ.get("ARCHIVE_DIR", "./archive")
         claude_timeout_seconds = _optional_positive_int(
@@ -71,6 +77,8 @@ class Config:
             digest_to=digest_to,
             state_db_path=state_db_path,
             x_enabled=x_enabled,
+            x_cookies_path=x_cookies_path,
+            x_cookies=x_cookies,
             anthropic_model=anthropic_model,
             archive_dir=archive_dir,
             claude_timeout_seconds=claude_timeout_seconds,
@@ -126,6 +134,30 @@ def _require_int_tuple(name: str) -> tuple[int, ...]:
 
 def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in ("true", "1")
+
+
+def _require_exactly_one_x_cookie_source() -> tuple[str | None, str | None]:
+    """When X_ENABLED=true, require exactly one of X_COOKIES_PATH / X_COOKIES.
+
+    twikit is cookie-only in this codebase -- never a fresh username/password
+    login on a scheduled run (PLAN.md §4.3) -- so one of these two must
+    supply the session. Both set is ambiguous about which one wins; neither
+    set leaves the X collector unable to authenticate at all. Either case is
+    a ConfigError naming the offending vars, never their values (some of
+    these are secrets).
+    """
+    path = os.environ.get("X_COOKIES_PATH")
+    inline = os.environ.get("X_COOKIES")
+    path = path if path and path.strip() else None
+    inline = inline if inline and inline.strip() else None
+
+    if path is None and inline is None:
+        raise ConfigError(
+            "exactly one of X_COOKIES_PATH or X_COOKIES is required when X_ENABLED=true"
+        )
+    if path is not None and inline is not None:
+        raise ConfigError("only one of X_COOKIES_PATH or X_COOKIES may be set, not both")
+    return path, inline
 
 
 def _optional_positive_int(name: str, *, default: int) -> int:

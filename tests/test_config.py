@@ -92,3 +92,67 @@ def test_smtp_port_valid_positive_value_is_used(monkeypatch):
     config = Config.from_env()
 
     assert config.smtp_port == 587
+
+
+# --- X_ENABLED / X_COOKIES_PATH / X_COOKIES (Phase 3) ---
+
+
+def test_x_enabled_false_does_not_require_cookie_vars(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("X_ENABLED", "false")
+    monkeypatch.delenv("X_COOKIES_PATH", raising=False)
+    monkeypatch.delenv("X_COOKIES", raising=False)
+
+    config = Config.from_env()
+
+    assert config.x_enabled is False
+    assert config.x_cookies_path is None
+    assert config.x_cookies is None
+
+
+def test_x_enabled_true_with_neither_cookie_var_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("X_ENABLED", "true")
+    monkeypatch.delenv("X_COOKIES_PATH", raising=False)
+    monkeypatch.delenv("X_COOKIES", raising=False)
+
+    with pytest.raises(
+        ConfigError, match="exactly one of X_COOKIES_PATH or X_COOKIES is required"
+    ):
+        Config.from_env()
+
+
+def test_x_enabled_true_with_both_cookie_vars_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("X_ENABLED", "true")
+    monkeypatch.setenv("X_COOKIES_PATH", "/tmp/x-cookies.json")
+    monkeypatch.setenv("X_COOKIES", '{"ct0": "abc"}')
+
+    with pytest.raises(ConfigError, match="only one of X_COOKIES_PATH or X_COOKIES"):
+        Config.from_env()
+
+
+def test_x_enabled_true_with_only_cookies_path_is_ok(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("X_ENABLED", "true")
+    monkeypatch.setenv("X_COOKIES_PATH", "/tmp/x-cookies.json")
+    monkeypatch.delenv("X_COOKIES", raising=False)
+
+    config = Config.from_env()
+
+    assert config.x_enabled is True
+    assert config.x_cookies_path == "/tmp/x-cookies.json"
+    assert config.x_cookies is None
+
+
+def test_x_enabled_true_with_only_inline_cookies_is_ok(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("X_ENABLED", "true")
+    monkeypatch.delenv("X_COOKIES_PATH", raising=False)
+    monkeypatch.setenv("X_COOKIES", '{"ct0": "abc", "auth_token": "def"}')
+
+    config = Config.from_env()
+
+    assert config.x_enabled is True
+    assert config.x_cookies_path is None
+    assert config.x_cookies == '{"ct0": "abc", "auth_token": "def"}'
