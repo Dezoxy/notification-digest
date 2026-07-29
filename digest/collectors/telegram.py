@@ -22,6 +22,8 @@ from telethon.errors import (
     UserDeactivatedBanError,
     UserDeactivatedError,
 )
+from telethon.tl.types import PeerChat
+from telethon.utils import resolve_id
 
 from digest.state import Item
 
@@ -29,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 _MAX_MESSAGES_PER_CHAT = 500
 _FLOOD_WAIT_AUTO_RETRY_THRESHOLD_SECONDS = 60
+
+# Telethon's "marked id" scheme (see telethon.utils.get_peer_id /
+# resolve_id): channel/supergroup marked ids are encoded as
+# -(10**12 + channel_id) with channel_id >= 1, i.e. always < -10**12.
+# A negative id >= -10**12 (down to -1) is a legacy basic group (PeerChat).
+# Positive ids are users.
+_CHANNEL_ID_OFFSET = 10**12
 
 _AUTH_ERRORS: tuple[type[Exception], ...] = (
     AuthKeyUnregisteredError,
@@ -63,15 +72,28 @@ class CollectResult:
 
 
 def is_basic_group(chat_id: int) -> bool:
-    """True for legacy "basic group" chat ids: negative, but not -100-prefixed.
+    """True for legacy "basic group" chat ids.
 
-    Telethon/Telegram distinguishes supergroups/channels (ids prefixed with
-    -100) from legacy basic groups (plain negative ids). t.me/c/ deep links
-    only address supergroups/channels, so basic groups have no working
-    message link and must be filtered out before we ever try to collect or
-    link to them.
+    Telegram's marked-id scheme (see module-level `_CHANNEL_ID_OFFSET`):
+    channel/supergroup marked ids are `-(10**12 + channel_id)` with
+    channel_id >= 1, so any marked id < -10**12 is a channel/supergroup.
+    A negative id >= -10**12 (i.e. -1 down to -10**12) is a legacy basic
+    group. A naive string-prefix check (e.g. "starts with -100")
+    misclassifies basic groups whose decimal digits happen to start with
+    100 (e.g. -10012345, a basic group, not a supergroup) — this must use
+    the numeric range instead.
+
+    Implemented via telethon.utils.resolve_id so classification matches
+    Telethon's own peer resolution exactly: resolve_id returns PeerChat
+    for legacy basic groups and PeerChannel for supergroups/channels.
+
+    t.me/c/ deep links only address supergroups/channels, so basic groups
+    have no working message link and must be filtered out before we ever
+    try to collect or link to them.
     """
-    return chat_id < 0 and not str(chat_id).startswith("-100")
+    if chat_id >= 0:
+        return False
+    return resolve_id(chat_id)[1] is PeerChat
 
 
 def build_message_url(chat_id: int, username: str | None, msg_id: int) -> str:
@@ -79,27 +101,28 @@ def build_message_url(chat_id: int, username: str | None, msg_id: int) -> str:
 
     Public chats (username set) -> https://t.me/<username>/<msg_id>
     Private supergroup/channel chats -> https://t.me/c/<internal_id>/<msg_id>,
-    where internal_id strips the -100 prefix Telethon puts on
-    supergroup/channel ids (e.g. -1001234567 -> 1234567).
+    where internal_id is computed arithmetically from Telegram's marked-id
+    scheme: internal_id = -chat_id - 10**12 (e.g. -1001234567890 ->
+    1234567890). See `is_basic_group` for the full range explanation.
 
-    Legacy basic groups (negative id, no -100 prefix) raise ValueError:
-    t.me/c/ links only address supergroups/channels, so there is no valid
-    link to build. This is defense in depth — `collect()` already filters
-    basic groups out via `is_basic_group` before a message url is ever
-    built for one.
+    Legacy basic groups (negative id, >= -10**12) raise ValueError: t.me/c/
+    links only address supergroups/channels, so there is no valid link to
+    build. This is defense in depth — `collect()` already filters basic
+    groups out via `is_basic_group` before a message url is ever built for
+    one.
     """
     if username:
         return f"https://t.me/{username}/{msg_id}"
 
-    internal_id = str(chat_id)
-    if internal_id.startswith("-100"):
-        return f"https://t.me/c/{internal_id[4:]}/{msg_id}"
+    if chat_id < -_CHANNEL_ID_OFFSET:
+        internal_id = -chat_id - _CHANNEL_ID_OFFSET
+        return f"https://t.me/c/{internal_id}/{msg_id}"
     if is_basic_group(chat_id):
         raise ValueError(
             f"cannot build a t.me message link for legacy basic group chat_id={chat_id}: "
             "t.me/c/ links only support supergroups/channels"
         )
-    return f"https://t.me/c/{internal_id}/{msg_id}"
+    return f"https://t.me/c/{chat_id}/{msg_id}"
 
 
 def _author_name(msg: Any) -> str | None:
@@ -228,6 +251,45 @@ async def _collect_one_chat(
         return [], None, False, True
 
 
+async def _prefetch_dialogs(client: TelegramClientLike, *, retried_flood: bool = False) -> bool:
+    """Populate the entity cache via get_dialogs(). Returns True if the caller should abort.
+
+    Mirrors `_collect_one_chat`'s FloodWait policy rather than treating
+    FloodWaitError as an ordinary cache-population failure: without the
+    dialog cache, numeric chat ids are generally unresolvable, so silently
+    swallowing a FloodWait here would fail the whole run chat-by-chat
+    anyway, just less clearly. A short wait (<= the auto-retry threshold)
+    is awaited once and retried; a long wait (or one hit after already
+    retrying) aborts immediately, like an auth error. Any other exception
+    is logged and ignored, since `get_entity` may still succeed for
+    cached/public entities and per-chat error handling covers the rest.
+    """
+    try:
+        await client.get_dialogs()
+        return False
+    except _AUTH_ERRORS as exc:
+        logger.warning("telegram auth error populating dialog cache: %s", type(exc).__name__)
+        return True
+    except FloodWaitError as exc:
+        wait_seconds = getattr(exc, "seconds", None)
+        short_wait = (
+            wait_seconds is not None and wait_seconds <= _FLOOD_WAIT_AUTO_RETRY_THRESHOLD_SECONDS
+        )
+        if short_wait and not retried_flood:
+            logger.warning(
+                "telegram flood wait %ss populating dialog cache, retrying once", wait_seconds
+            )
+            await asyncio.sleep(wait_seconds)
+            return await _prefetch_dialogs(client, retried_flood=True)
+        logger.warning(
+            "telegram flood wait %ss populating dialog cache, aborting run", wait_seconds
+        )
+        return True
+    except Exception:
+        logger.warning("telegram get_dialogs failed, continuing anyway", exc_info=True)
+        return False
+
+
 async def collect(
     client: TelegramClientLike,
     chat_ids: Sequence[int],
@@ -247,11 +309,11 @@ async def collect(
     long FloodWaits abort remaining chats (but keep what was already
     collected). A short FloodWait (<= 60s) is awaited once and retried.
 
-    Legacy basic groups (negative chat id, no -100 prefix — see
-    `is_basic_group`) are skipped entirely before any network call: t.me/c/
-    links only address supergroups/channels, so a basic group has no valid
-    message link to build. The chat is logged as a warning, `failed=True` is
-    set, and neither its cursor nor any items are touched.
+    Legacy basic groups (negative chat id, >= -10**12 — see `is_basic_group`)
+    are skipped entirely before any network call: t.me/c/ links only address
+    supergroups/channels, so a basic group has no valid message link to
+    build. The chat is logged as a warning, `failed=True` is set, and
+    neither its cursor nor any items are touched.
 
     Before the per-chat loop, `get_dialogs()` is called once to populate the
     client's entity cache. This matters because in production the client is
@@ -259,20 +321,18 @@ async def collect(
     `get_entity` on a numeric chat id then fails since Telethon lacks its
     access hash unless the entity was seen this session (e.g. via dialogs).
     If populating the cache hits an auth error, nothing is reachable without
-    auth, so the run aborts immediately. Any other exception is logged and
-    ignored: `get_entity` may still succeed for cached/public entities, and
-    per-chat error handling covers whatever doesn't.
+    auth, so the run aborts immediately. A FloodWait during this prefetch
+    gets the same policy as a per-chat FloodWait (see `_prefetch_dialogs`):
+    a short wait is retried once, a long wait aborts the run. Any other
+    exception is logged and ignored: `get_entity` may still succeed for
+    cached/public entities, and per-chat error handling covers whatever
+    doesn't.
     """
     result = CollectResult()
 
-    try:
-        await client.get_dialogs()
-    except _AUTH_ERRORS as exc:
-        logger.warning("telegram auth error populating dialog cache: %s", type(exc).__name__)
+    if await _prefetch_dialogs(client):
         result.failed = True
         return result
-    except Exception:
-        logger.warning("telegram get_dialogs failed, continuing anyway", exc_info=True)
 
     for chat_id in chat_ids:
         scope = str(chat_id)
