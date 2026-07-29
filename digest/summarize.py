@@ -87,6 +87,7 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
         {
             "source": item.source,
             "chat_id": item.chat_id,
+            "chat_title": item.chat_title,
             "author": item.author,
             "text": _truncate_item_text(item.text),
             "url": item.url,
@@ -555,6 +556,42 @@ _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULT
 # match is possible either.
 _BARE_URL_RE = re.compile(
     r"\b(?!hxxps?://)[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)\]>\"']+"
+    # The generic non-// branch's payload is intentionally broad (any run of
+    # 2+ non-delimiter chars) so real delimiter-led URIs still match:
+    # `mailto:?to=x@y.z` (payload starts with `?`), `tel:*67` (a real
+    # vertical-service-code URI, payload starts with `*`), `geo:47.5,...`,
+    # `mailto:__attacker@example.com` (payload starts with `__`), etc. An
+    # earlier, tighter version of this branch restricted the FIRST payload
+    # char to a URI-plausible class (letter/digit/+/~/%/_), which broke
+    # exactly those delimiter-led forms (`?`/`*` aren't in that class) — a P2
+    # regression.
+    #
+    # A later attempt fixed that by excluding payloads that merely START with
+    # `**`/`__` (a regex lookahead can only anchor at the match's start
+    # position), to stop the digest's own mandated "**TL;DR:**" opener from
+    # being misread as `scheme=DR, payload=** ...` and mangled into
+    # "TL;DR[:]**". But a lookahead anchored at the start can't see the
+    # REST of the payload either -- so `(?!\*\*|__)` excluded not just that
+    # emphasis artifact but also every legitimate URI whose payload happens
+    # to start with `**`/`__`, e.g. the bare autolink-shaped
+    # `mailto:__attacker@example.com`, which would then never match this
+    # regex at all and survive linkifiable in the text/plain part.
+    #
+    # The real discriminator is a property of the WHOLE payload, not just
+    # its first two characters: is the payload's entire content markdown
+    # emphasis punctuation (only `*`/`_`) and nothing else? That can't be
+    # expressed as a regex lookahead anchored at the match start, so this
+    # branch stays maximally broad here and the actual whole-payload check
+    # happens in code, in _replace_bare_url below, once the full match
+    # (and thus the full payload) is known.
+    # No trailing lookahead here (an earlier revision had one to stop this
+    # branch biting into a following URL's scheme): nested/adjacent cases —
+    # `**TL;DR:**https://...` (emphasis-glued) and `custom:abchttps://...`
+    # (URI whose payload tail is itself scheme-shaped) — are instead handled
+    # by running the whole substitution TO FIXPOINT in enforce_link_allowlist:
+    # pass 1 defangs the outer colon, which exposes the inner `scheme://`
+    # token for pass 2. A single-pass lookahead can protect only one of the
+    # two colons, whichever way it is written.
     r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}",
     re.IGNORECASE,
 )
@@ -754,10 +791,37 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
         url = match.group(0)
         if url in allowed:
             return url
+        # Markdown-emphasis discrimination lives here, in code, rather than
+        # in _BARE_URL_RE's regex: a lookahead can only anchor at the
+        # match's START position, so it can rule out a payload that
+        # *starts* with `**`/`__` but not one whose whole payload consists
+        # of nothing else -- and the two are different sets (see
+        # _BARE_URL_RE's comment). `scheme:payload` where `payload` is
+        # composed entirely of `*`/`_` characters is markdown emphasis
+        # punctuation the model emitted right after a colon (e.g. the
+        # `DR:**` token inside "**TL;DR:** text"), not a URI, and must be
+        # left untouched. Only the non-`//` form needs this check -- a
+        # `scheme://...` match's payload starts with `//`, which is never
+        # all `*`/`_`, so it can't accidentally trip this.
+        scheme_end = url.find(":")
+        if scheme_end != -1 and not url[scheme_end + 1 :].startswith("//"):
+            payload = url[scheme_end + 1 :]
+            if payload and all(ch in "*_" for ch in payload):
+                return url
         defanged += 1
         return _defang(url)
 
-    result = _BARE_URL_RE.sub(_replace_bare_url, result)
+    # Run the bare-URL pass TO FIXPOINT (bounded): a nested construct like
+    # `custom:abchttps://attacker.example/x` or emphasis-glued
+    # `**TL;DR:**https://...` needs one pass to break the OUTER colon and a
+    # second to defang the inner `scheme://` token it exposes. Defanged
+    # output never rematches (idempotence is tested), so the loop terminates
+    # in practice after <=2 passes; the bound is a pure safety rail.
+    for _ in range(5):
+        next_result = _BARE_URL_RE.sub(_replace_bare_url, result)
+        if next_result == result:
+            break
+        result = next_result
 
     if stripped or defanged:
         logger.warning(
@@ -803,6 +867,14 @@ def summarize(
     prompt = build_prompt(items, failed_sources)
     output = run_claude(prompt, model, timeout_seconds)
     validate_output(output)
+    # The TL;DR opener is checked SOFTLY, unlike the section headings: a
+    # missing TL;DR degrades one email cosmetically, while raising here
+    # would hold every collected item hostage for a full scheduling cycle
+    # over a nicety (the banner saga proved hard-gating model compliance
+    # loops when the model persistently misbehaves). Structural failures
+    # (missing sections) stay hard; quality misses log and ship.
+    if not output.lstrip().startswith("**TL;DR:"):
+        logger.warning("digest output missing the TL;DR opener — sending anyway")
     output = enforce_link_allowlist(output, allowed_urls={item.url for item in items})
     if failed_sources:
         banner = "".join(

@@ -40,8 +40,40 @@ _HTML_TEMPLATE = """\
     padding: 1em;
     line-height: 1.5;
     color: #1a1a1a;
+    background-color: #ffffff;
   }}
   a {{ color: #0a58ca; }}
+  h2 {{
+    border-bottom: 1px solid #d0d7de;
+    padding-bottom: 0.3em;
+    margin-top: 1.5em;
+  }}
+  /* "## Noise skipped" is deliberately NOT muted here: the only pure-CSS
+     way to target just that section's content (e.g. `h2:last-of-type + ul`)
+     depends on it always being the last h2/ul pair in the document, which
+     is fragile -- an extra unknown h2 the model emits, or a future section,
+     would silently break the selector or mute the wrong content in an
+     email client's often-partial CSS support. Not worth that fragility for
+     a cosmetic dimming effect, so this section keeps the same styling as
+     the others. -- see prompts/digest.md upgrade notes.
+  */
+  /* Clients that support prefers-color-scheme (Apple/iOS Mail and others)
+     apply this automatically; clients that don't simply ignore the whole
+     block and keep the light-mode rules above. */
+  @media (prefers-color-scheme: dark) {{
+    body {{ background-color: #1a1a1a !important; color: #e8e8e8 !important; }}
+    a {{ color: #6ea8fe !important; }}
+    h2 {{ border-bottom-color: #3a3a3a !important; }}
+    /* The TL;DR and banner callouts below set an explicit light-mode
+       foreground inline (readable regardless of mode in clients that strip
+       <style>, e.g. Outlook desktop). For clients that DO honor a <style>
+       block, override to a dark-mode-appropriate palette instead of
+       inheriting the dark `body` foreground on top of an unchanged light
+       inline background -- #e8e8e8 on #f0f0f0 (TL;DR's light background) is
+       ~1:1 contrast, effectively invisible. */
+    .tldr {{ background:#2b2b2b !important; color:#e8e8e8 !important; }}
+    .banner {{ background:#4d3800 !important; color:#ffe69c !important; }}
+  }}
 </style>
 </head>
 <body>
@@ -118,6 +150,156 @@ def _enforce_anchor_provenance(sanitized_html: str, allowed_urls: Collection[str
     return result
 
 
+# Matches a single `<h3>...</h3>` subgroup heading in nh3-sanitized output.
+# prompts/digest.md's "grouped by Telegram group / X topic" instruction
+# always renders a subgroup heading as either the bare source name
+# ("Telegram", "X") or the source name followed by " -- <group/topic name>"
+# (e.g. "Telegram -- Homelab Hungary"), so matching the whole heading and
+# inspecting its text is enough to recognize both forms.
+_H3_HEADING_RE = re.compile(r"<h3>(.*?)</h3>")
+
+# Inline-styled chip spans injected in place of the literal "Telegram"/"X"
+# prefix inside a recognized h3 (see _inject_source_badges below). Colors
+# are the platforms' own brand colors so the source is recognizable at a
+# glance without an image.
+_TELEGRAM_CHIP_HTML = (
+    '<span style="background-color:#229ED9;color:#ffffff;'
+    "border-radius:4px;padding:1px 6px;margin-right:6px;"
+    'font-size:0.75em;font-variant:small-caps;letter-spacing:0.02em;">'
+    "Telegram</span>"
+)
+_X_CHIP_HTML = (
+    '<span style="background-color:#000000;color:#ffffff;'
+    "border-radius:4px;padding:1px 6px;margin-right:6px;"
+    'font-size:0.75em;font-weight:bold;">𝕏</span>'
+)
+
+
+def _inject_source_badges(sanitized_html: str) -> str:
+    """Turn a "Telegram"/"X" h3 subgroup heading prefix into a colored chip.
+
+    This MUST run on nh3's OUTPUT, never before sanitization: nh3's tag
+    allowlist (_ALLOWED_TAGS above) does not include `span`, so a `<span>`
+    written into the markdown before nh3.clean would simply be stripped as
+    an unrecognized tag. Running here instead is the same safety argument
+    as _enforce_anchor_provenance above: this function only ever injects
+    OUR OWN constant markup (the two chip templates above) around text nh3
+    already sanitized -- it never re-parses or re-emits anything
+    attacker-controlled, so there is nothing here for hostile input to
+    subvert.
+
+    Only an h3 whose text starts with exactly "Telegram" or "X" -- the
+    literal source name, followed by either nothing or a non-word character
+    (a space before " -- Group Name", for instance) -- gets a chip. This is
+    a `\\b` word-boundary check specifically so "Telegram" doesn't also
+    match some hypothetical "Telegramish" heading, and "X" doesn't match
+    "XAI" or similar: both would share the literal prefix but are a
+    different word, not this source. Any other h3 (a heading the model
+    invented, or one of the required `## `-level sections misrendered as
+    h3, though that shouldn't happen per the prompt contract) is returned
+    unchanged.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        if re.match(r"^Telegram\b", inner):
+            return f"<h3>{_TELEGRAM_CHIP_HTML}{inner[len('Telegram') :]}</h3>"
+        if re.match(r"^X\b", inner):
+            return f"<h3>{_X_CHIP_HTML}{inner[len('X') :]}</h3>"
+        return match.group(0)
+
+    return _H3_HEADING_RE.sub(_replace, sanitized_html)
+
+
+# Matches the leading `<p>` paragraph if (and only if) it starts with the
+# ⚠ collector-failure banner text summarize.summarize() deterministically
+# prepends (see that function's docstring -- the banner is code-generated,
+# never model-written). count=1 in the caller below means only this FIRST
+# paragraph is ever considered, so nothing downstream in "Worth knowing" or
+# elsewhere that happens to start a line with ⚠ (e.g. quoted hostile
+# message text) gets caught by this.
+_BANNER_PARAGRAPH_RE = re.compile(r"<p>(⚠[\s\S]*?)</p>")
+
+
+def _wrap_banner_paragraph(sanitized_html: str) -> str:
+    """Style the leading collector-failure banner paragraph as a warning callout.
+
+    One or more `⚠ <source> collection failed this run` lines (one per
+    failed source) render as a single `<p>` with the lines joined by a
+    literal newline -- python-markdown does not insert `<br>` between
+    consecutive lines of the same paragraph by default. Those embedded
+    newlines are converted to `<br>` here so multiple banner lines still
+    read as separate lines instead of running together with only
+    whitespace between them.
+
+    A no-op (returns the input unchanged) when there is no such paragraph,
+    which is the common case (no failed collectors that run).
+
+    The inline style already sets an explicit foreground (#664d03 on
+    #fff3cd) that stays readable in any client, dark-mode or not -- audited
+    alongside the TL;DR contrast fix (see _highlight_tldr_paragraph) and
+    left as-is. The `class="banner"` attribute added here exists only so
+    clients that DO honor the document's <style> block (rather than just
+    inheriting this inline style) get a dark-mode-appropriate override too
+    -- see the `.banner` rule in _HTML_TEMPLATE's dark-mode media query.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        content = match.group(1).replace("\n", "<br>")
+        return (
+            '<p class="banner" style="background-color:#fff3cd;color:#664d03;'
+            'padding:0.75em 1em;border-radius:6px;margin:0 0 1em 0;">'
+            f"{content}</p>"
+        )
+
+    return _BANNER_PARAGRAPH_RE.sub(_replace, sanitized_html, count=1)
+
+
+# Matches the first `<p>` whose content starts with the literal
+# `<strong>TL;DR` prefix python-markdown produces from the prompt
+# contract's `**TL;DR:** ...` paragraph (prompts/digest.md). Matching this
+# literal, post-nh3 prefix -- rather than trying to recognize "the first
+# paragraph" positionally -- means this is unaffected by whether a banner
+# paragraph precedes it: the banner's content never starts with this
+# prefix, so the regex naturally skips past it to find the real TL;DR
+# paragraph (or finds nothing, if the model omitted TL;DR entirely, which
+# is a content-quality issue for the prompt to police, not something this
+# rendering step raises an error over).
+_TLDR_PARAGRAPH_RE = re.compile(r"<p>(<strong>TL;DR[\s\S]*?)</p>")
+
+
+def _highlight_tldr_paragraph(sanitized_html: str) -> str:
+    """Give the TL;DR paragraph a subtle highlight so it stands out at a glance.
+
+    A no-op (returns the input unchanged) when there is no such paragraph --
+    e.g. a digest that predates this prompt change, or a rerun of stored
+    archive markdown -- so absence is fine, never an error.
+
+    P2 fix: the original inline style set only `background-color:#f0f0f0`
+    with no explicit foreground, so this paragraph inherited whatever
+    foreground was in scope -- in a client that honors
+    `@media (prefers-color-scheme: dark)`, that's the dark-mode `body`
+    foreground (#e8e8e8) from _HTML_TEMPLATE, landing #e8e8e8 text on an
+    unchanged light #f0f0f0 background: roughly 1:1 contrast, effectively
+    unreadable. `color:#1a1a1a` is now set explicitly inline so this
+    paragraph reads correctly in ANY mode, including clients that strip
+    `<style>` blocks entirely (inline styles survive those). The
+    `class="tldr"` attribute is added on top for clients that DO honor the
+    document's `<style>` block: see the `.tldr` dark-mode override in
+    _HTML_TEMPLATE, which swaps to a dark-appropriate background/foreground
+    pair instead of relying on the light-mode inline style everywhere.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        return (
+            '<p class="tldr" style="background-color:#f0f0f0;color:#1a1a1a;'
+            'padding:0.75em 1em;border-radius:6px;margin:0 0 1em 0;">'
+            f"{match.group(1)}</p>"
+        )
+
+    return _TLDR_PARAGRAPH_RE.sub(_replace, sanitized_html, count=1)
+
+
 def render_html(body_md: str, allowed_urls: Collection[str]) -> str:
     """Convert digest markdown to a self-contained HTML document.
 
@@ -154,6 +336,18 @@ def render_html(body_md: str, allowed_urls: Collection[str]) -> str:
        see at all: the text/plain MIME part, where a raw URL in message
        text gets auto-linkified by the recipient's mail client with no
        renderer in between for this layer to inspect.
+
+    After the security-critical passes above, three purely cosmetic passes
+    run over the same nh3-sanitized HTML: _inject_source_badges (Telegram/X
+    chips on subgroup h3 headings), _wrap_banner_paragraph (styles the
+    collector-failure banner, if present), and _highlight_tldr_paragraph
+    (styles the TL;DR paragraph, if present). All three follow the same
+    safety pattern as _enforce_anchor_provenance -- they only ever inject
+    this module's own constant markup around text nh3 already sanitized,
+    never re-parse or re-emit attacker-controlled HTML -- and each is a
+    no-op when its target isn't present, so none of them can raise or
+    change behavior for a digest that doesn't happen to contain a banner,
+    a TL;DR paragraph, or a Telegram/X subgroup heading.
     """
     escaped = body_md.replace("&", "&amp;").replace("<", "&lt;")
     body_html = markdown.markdown(escaped)
@@ -165,6 +359,9 @@ def render_html(body_md: str, allowed_urls: Collection[str]) -> str:
         link_rel="noopener noreferrer",
     )
     sanitized = _enforce_anchor_provenance(sanitized, allowed_urls)
+    sanitized = _inject_source_badges(sanitized)
+    sanitized = _wrap_banner_paragraph(sanitized)
+    sanitized = _highlight_tldr_paragraph(sanitized)
     return _HTML_TEMPLATE.format(body=sanitized)
 
 

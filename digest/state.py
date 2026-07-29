@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS items (
     source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
     source_id   TEXT NOT NULL,
     chat_id     TEXT,
+    chat_title  TEXT,
     author      TEXT,
     text        TEXT,
     url         TEXT NOT NULL,
@@ -57,6 +58,12 @@ class Item:
     text: str
     url: str
     fetched_at: str  # ISO8601 UTC
+    # Human-readable chat/group name (Telegram entity.title), when known.
+    # Nullable and LAST with a default so every existing keyword-based
+    # Item(...) construction across the codebase (collectors, tests) keeps
+    # working unchanged. None for chats where the entity carries no title
+    # (e.g. a DM) and for rows collected before this field existed.
+    chat_title: str | None = None
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -74,6 +81,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
     conn.commit()
     _migrate_add_body_md_column(conn)
+    _migrate_add_chat_title_column(conn)
 
 
 def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
@@ -89,6 +97,23 @@ def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
     if "body_md" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN body_md TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+
+
+def _migrate_add_chat_title_column(conn: sqlite3.Connection) -> None:
+    """Backfill `items.chat_title` on databases created before this column existed.
+
+    `CREATE TABLE IF NOT EXISTS` in _SCHEMA never alters an existing table,
+    so an upgraded pre-chat_title database would otherwise be missing this
+    column and every insert/select touching it would crash with
+    "sqlite3.OperationalError: no such column: chat_title". This migration is
+    idempotent: it only runs the ALTER TABLE when the column isn't present.
+    Nullable, no non-empty default: chat_title is genuinely unknown for rows
+    collected before this column existed.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if "chat_title" not in columns:
+        conn.execute("ALTER TABLE items ADD COLUMN chat_title TEXT")
         conn.commit()
 
 
@@ -136,14 +161,15 @@ def commit_new_items(
             cur.execute(
                 """
                 INSERT INTO items
-                    (source, source_id, chat_id, author, text, url, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (source, source_id, chat_id, chat_title, author, text, url, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (source, source_id) DO NOTHING
                 """,
                 (
                     item.source,
                     item.source_id,
                     item.chat_id,
+                    item.chat_title,
                     item.author,
                     item.text,
                     item.url,
@@ -184,7 +210,7 @@ def get_unsummarized_items(
     _MAX_ITEMS_PER_DIGEST).
     """
     query = """
-        SELECT source, source_id, chat_id, author, text, url, fetched_at
+        SELECT source, source_id, chat_id, chat_title, author, text, url, fetched_at
         FROM items
         WHERE digest_id IS NULL
         ORDER BY fetched_at ASC
@@ -199,10 +225,11 @@ def get_unsummarized_items(
             source=row[0],
             source_id=row[1],
             chat_id=row[2],
-            author=row[3],
-            text=row[4],
-            url=row[5],
-            fetched_at=row[6],
+            chat_title=row[3],
+            author=row[4],
+            text=row[5],
+            url=row[6],
+            fetched_at=row[7],
         )
         for row in rows
     ]

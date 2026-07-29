@@ -144,6 +144,17 @@ def _entity_username(entity: Any) -> str | None:
     return getattr(entity, "username", None)
 
 
+def _entity_title(entity: Any) -> str | None:
+    """Best-effort human-readable chat/group name.
+
+    Groups/channels/supergroups carry a `.title`; other entity kinds (e.g. a
+    plain user, in the unlikely case one is ever passed here) do not, and
+    `getattr(..., None)` avoids an AttributeError in that case rather than
+    assuming every entity has this attribute.
+    """
+    return getattr(entity, "title", None)
+
+
 async def _fetch_first_run_cursor(client: TelegramClientLike, entity: Any) -> int | None:
     """No cursor yet: seed from the single latest message, emit no items.
 
@@ -168,8 +179,14 @@ async def _fetch_incremental(
     ids with reverse=True, so no manual sort is needed. Textless messages are
     skipped from the item list but still count toward the new cursor (their
     ids advance the "seen" watermark).
+
+    The chat's title (`entity.title`, via `_entity_title`) is read once here
+    and stamped onto every Item built for this chat, so the digest prompt
+    can render a real group name instead of a numeric chat_id -- see
+    prompts/digest.md's "### Telegram — <chat_title>" subgroup contract.
     """
     username = _entity_username(entity)
+    chat_title = _entity_title(entity)
     fetched_at = datetime.now(UTC).isoformat()
 
     raw_msgs = []
@@ -197,6 +214,7 @@ async def _fetch_incremental(
                 text=text,
                 url=build_message_url(chat_id, username, msg.id),
                 fetched_at=fetched_at,
+                chat_title=chat_title,
             )
         )
     return items, newest_id
