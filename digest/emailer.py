@@ -17,6 +17,11 @@ import markdown
 
 logger = logging.getLogger(__name__)
 
+# Without an explicit timeout, smtplib.SMTP() uses the global default socket
+# timeout (effectively none), so a hung SMTP endpoint would wedge the
+# one-shot run forever instead of failing into the pending-digest retry path.
+_SMTP_TIMEOUT_SECONDS = 30
+
 _HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html>
@@ -81,7 +86,7 @@ def send_digest(
     msg.attach(MIMEText(body_md, "plain"))
     msg.attach(MIMEText(render_html(body_md), "html"))
 
-    with smtplib.SMTP(smtp_host, smtp_port) as smtp:
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
         smtp.starttls()
         smtp.login(smtp_user, smtp_password)
         smtp.send_message(msg)

@@ -199,6 +199,59 @@ def test_get_pending_digest_returns_newest_unsent_then_none_after_marked_sent(co
     assert get_pending_digest(conn) is None
 
 
+def test_init_db_migrates_pre_phase2_digests_table_missing_body_md(tmp_path: Path):
+    # Simulate a database created by Phase 1 (merged to main), whose digests
+    # table predates the body_md column added in Phase 2.
+    old_conn = connect(str(tmp_path / "legacy.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+        """
+    )
+    old_conn.commit()
+
+    # Must not raise sqlite3.OperationalError: no such column: body_md
+    init_db(old_conn)
+
+    # get_pending_digest works against the migrated (empty) table
+    assert get_pending_digest(old_conn) is None
+
+    # create_digest + reading back a pending digest round-trips post-migration
+    commit_new_items(old_conn, [_item("1")], {("telegram", "123"): "1"})
+    items = get_unsummarized_items(old_conn)
+    digest_id = create_digest(old_conn, "migrated digest body", items)
+
+    assert get_pending_digest(old_conn) == (digest_id, "migrated digest body")
+
+    old_conn.close()
+
+
 def test_create_digest_rollback_on_failure_leaves_items_unstamped(conn):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     items = get_unsummarized_items(conn)

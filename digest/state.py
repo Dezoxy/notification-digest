@@ -73,6 +73,23 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Create the schema if it doesn't already exist. Safe to call repeatedly."""
     conn.executescript(_SCHEMA)
     conn.commit()
+    _migrate_add_body_md_column(conn)
+
+
+def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.body_md` on databases created before Phase 2.
+
+    Phase 1 (pre-summarizer) created `digests` without `body_md`.
+    `CREATE TABLE IF NOT EXISTS` in _SCHEMA never alters an existing table,
+    so an upgraded Phase-1 database would otherwise be missing this column
+    and every run would crash in get_pending_digest() with
+    "sqlite3.OperationalError: no such column: body_md". This migration is
+    idempotent: it only runs the ALTER TABLE when the column isn't present.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "body_md" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN body_md TEXT NOT NULL DEFAULT ''")
+        conn.commit()
 
 
 def get_cursors(conn: sqlite3.Connection, source: str) -> dict[str, str]:

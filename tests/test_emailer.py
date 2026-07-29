@@ -46,9 +46,10 @@ class FakeSMTP:
 
     instances: list["FakeSMTP"] = []
 
-    def __init__(self, host, port):
+    def __init__(self, host, port, timeout=None):
         self.host = host
         self.port = port
+        self.timeout = timeout
         self.calls: list[str] = []
         self.sent_message = None
         FakeSMTP.instances.append(self)
@@ -97,6 +98,7 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
     smtp = FakeSMTP.instances[0]
     assert smtp.host == "smtp.mail.me.com"
     assert smtp.port == 587
+    assert smtp.timeout == emailer_mod._SMTP_TIMEOUT_SECONDS
     assert smtp.calls == ["starttls", "login", "send_message"]
     assert smtp.login_user == "user@example.com"
     assert smtp.login_password == "app-specific-password"
