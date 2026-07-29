@@ -48,6 +48,8 @@ class TelegramClientLike(Protocol):
 
     async def get_entity(self, chat_id: int) -> Any: ...
 
+    async def get_dialogs(self) -> Any: ...
+
     def iter_messages(
         self, entity: Any, *, limit: int | None = None, min_id: int = 0, reverse: bool = False
     ) -> Any: ...
@@ -99,7 +101,11 @@ def _entity_username(entity: Any) -> str | None:
 
 
 async def _fetch_first_run_cursor(client: TelegramClientLike, entity: Any) -> int | None:
-    """No cursor yet: seed from the single latest message, emit no items."""
+    """No cursor yet: seed from the single latest message, emit no items.
+
+    Returns None when the chat has zero messages; the caller seeds a "0"
+    cursor in that case so the chat isn't treated as first-run forever.
+    """
     async for msg in client.iter_messages(entity, limit=1):
         return msg.id
     return None
@@ -168,7 +174,7 @@ async def _collect_one_chat(
         if cursor is None:
             latest_id = await _fetch_first_run_cursor(client, entity)
             logger.info("telegram chat %s: first run, seeded cursor at %s", chat_id, latest_id)
-            new_cursor = str(latest_id) if latest_id is not None else None
+            new_cursor = str(latest_id) if latest_id is not None else "0"
             return [], new_cursor, False, False
 
         items, newest_id = await _fetch_incremental(client, entity, chat_id, int(cursor))
@@ -209,15 +215,37 @@ async def collect(
     """Fetch new messages from each allowlisted chat since its cursor.
 
     First run for a chat (no cursor row): seed the cursor from the latest
-    message and emit no items (never a history backfill). Otherwise fetch
-    messages with id > cursor, up to 500 per chat per run.
+    message and emit no items (never a history backfill). A chat with zero
+    messages seeds cursor "0" instead of being skipped, so it isn't
+    re-treated as first-run (and its eventual first message permanently
+    dropped as the seed) on every subsequent run. Otherwise fetch messages
+    with id > cursor, up to 500 per chat per run.
 
     One bad chat never aborts the others: unexpected per-chat exceptions are
     logged and skipped, with `failed=True` set on the result. Auth errors and
     long FloodWaits abort remaining chats (but keep what was already
     collected). A short FloodWait (<= 60s) is awaited once and retried.
+
+    Before the per-chat loop, `get_dialogs()` is called once to populate the
+    client's entity cache. This matters because in production the client is
+    reconstructed from a StringSession, which persists no entity cache:
+    `get_entity` on a numeric chat id then fails since Telethon lacks its
+    access hash unless the entity was seen this session (e.g. via dialogs).
+    If populating the cache hits an auth error, nothing is reachable without
+    auth, so the run aborts immediately. Any other exception is logged and
+    ignored: `get_entity` may still succeed for cached/public entities, and
+    per-chat error handling covers whatever doesn't.
     """
     result = CollectResult()
+
+    try:
+        await client.get_dialogs()
+    except _AUTH_ERRORS as exc:
+        logger.warning("telegram auth error populating dialog cache: %s", type(exc).__name__)
+        result.failed = True
+        return result
+    except Exception:
+        logger.warning("telegram get_dialogs failed, continuing anyway", exc_info=True)
 
     for chat_id in chat_ids:
         scope = str(chat_id)

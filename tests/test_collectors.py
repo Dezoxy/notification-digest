@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 
 from telethon.errors import AuthKeyUnregisteredError
 
@@ -28,14 +29,25 @@ class FakeClient:
         messages: dict[int, list[FakeMessage]],
         get_entity_errors: dict[int, Exception] | None = None,
         iter_messages_errors: dict[int, Exception] | None = None,
+        get_dialogs_error: Exception | None = None,
     ):
         self.entities = entities
         self.messages = messages
         self.get_entity_errors = get_entity_errors or {}
         self.iter_messages_errors = iter_messages_errors or {}
+        self.get_dialogs_error = get_dialogs_error
+        self.get_dialogs_calls = 0
+        self.get_entity_calls = 0
         self.iter_messages_calls: list[tuple[int, int | None, int, bool]] = []
 
+    async def get_dialogs(self) -> list[Any]:
+        self.get_dialogs_calls += 1
+        if self.get_dialogs_error is not None:
+            raise self.get_dialogs_error
+        return []
+
     async def get_entity(self, chat_id: int) -> FakeEntity:
+        self.get_entity_calls += 1
         if chat_id in self.get_entity_errors:
             raise self.get_entity_errors[chat_id]
         return self.entities[chat_id]
@@ -94,8 +106,30 @@ async def test_first_run_seeds_cursor_and_emits_no_items():
     assert result.items == []
     assert result.cursor_updates == {("telegram", str(chat_id)): "10"}
     assert result.failed is False
+    # entity cache must be populated once before any per-chat work
+    assert client.get_dialogs_calls == 1
     # first run must only ask for the single latest message
     assert client.iter_messages_calls == [(chat_id, 1, 0, False)]
+
+
+async def test_first_run_empty_chat_seeds_zero_cursor_then_next_run_emits_new_message():
+    chat_id = -1001112
+
+    client = FakeClient(
+        entities={chat_id: FakeEntity(chat_id)},
+        messages={chat_id: []},
+    )
+    result = await collect(client, [chat_id], cursors={})
+
+    assert result.items == []
+    assert result.cursor_updates == {("telegram", str(chat_id)): "0"}
+    assert result.failed is False
+
+    client.messages[chat_id] = [FakeMessage(1, "first ever message")]
+    result2 = await collect(client, [chat_id], cursors={str(chat_id): "0"})
+
+    assert [i.source_id for i in result2.items] == [f"{chat_id}:1"]
+    assert result2.cursor_updates == {("telegram", str(chat_id)): "1"}
 
 
 # --- incremental run ---
@@ -173,6 +207,22 @@ async def test_auth_error_flags_failed_and_keeps_partial_results():
 
     assert result.failed is True
     assert [i.source_id for i in result.items] == [f"{good_chat}:3"]
+
+
+async def test_get_dialogs_auth_error_aborts_before_any_chat_is_touched():
+    chat_id = -1005556
+    client = FakeClient(
+        entities={chat_id: FakeEntity(chat_id)},
+        messages={chat_id: [FakeMessage(1, "hi")]},
+        get_dialogs_error=AuthKeyUnregisteredError(request=None),
+    )
+
+    result = await collect(client, [chat_id], cursors={})
+
+    assert result.failed is True
+    assert result.items == []
+    assert result.cursor_updates == {}
+    assert client.get_entity_calls == 0
 
 
 def test_collect_result_defaults():

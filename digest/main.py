@@ -26,6 +26,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _client_ready(client: TelegramClient) -> bool:
+    """Connect without triggering Telethon's interactive login prompt.
+
+    `async with client` calls `start()`, which prompts for phone/code on an
+    invalid session -- fatal in a headless one-shot container. This instead
+    connects and checks authorization explicitly, so an invalid session is
+    reported as "not ready" rather than blocking on stdin or raising before
+    `collect`'s error handling is in scope.
+    """
+    try:
+        await client.connect()
+        return await client.is_user_authorized()
+    except Exception as exc:
+        logger.warning("telegram connect failed: %s", type(exc).__name__)
+        return False
+
+
 async def _run(cfg: Config) -> bool:
     """Run one collection cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
@@ -35,8 +52,15 @@ async def _run(cfg: Config) -> bool:
         cursors = get_cursors(conn, "telegram")
 
         client = TelegramClient(StringSession(cfg.tg_session), cfg.tg_api_id, cfg.tg_api_hash)
-        async with client:
-            result = await telegram_collector.collect(client, cfg.tg_chat_allowlist, cursors)
+        try:
+            if not await _client_ready(client):
+                logger.warning("telegram session not authorized / connect failed")
+                result = telegram_collector.CollectResult(failed=True)
+            else:
+                result = await telegram_collector.collect(client, cfg.tg_chat_allowlist, cursors)
+        finally:
+            if client.is_connected():
+                await client.disconnect()
 
         inserted = commit_new_items(conn, result.items, result.cursor_updates)
         logger.info(
