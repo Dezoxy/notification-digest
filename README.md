@@ -59,3 +59,4 @@ Ansible role `myapps`, secrets wiring via Azure Key Vault) happens from there.
 ## Status
 
 Pre-implementation. See PLAN.md for the phased plan and current progress.
+`docs/pr-summaries/` is auto-generated on merge (see `.github/workflows/pr-summary.yml`) — don't hand-edit it.

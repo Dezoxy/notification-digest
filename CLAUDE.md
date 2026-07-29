@@ -50,6 +50,18 @@ deep links. See PLAN.md for the full plan and current phase status.
   defaults to unresolved, actionable, Codex-only threads) and address every
   finding it reports — fix or explicitly rebut, never ignore. Only Codex
   findings gate PRs; other reviewers' threads are informational.
+- After merging a PR, `/pr-summary <n>` (or
+  `uv run python scripts/pr_summary.py <n>`) produces the post-merge run-over
+  summary. A markdown copy also lands automatically at
+  `docs/pr-summaries/pr-<n>.md` on merge (CI: `.github/workflows/pr-summary.yml`,
+  `scripts/pr_summary.py <n> --markdown`) — the skill/script above remain the
+  way to get the narrative, human-synthesized version on demand.
+- Whenever a session is involved in a merge (it drove the PR, or the owner
+  reports merging one), it must run /pr-summary for that PR and deliver the
+  four-section narrative to the owner in its reply. The CI file stays
+  data-only; the narrative lives in the conversation unless the owner asks to
+  persist it, in which case prepend it to `docs/pr-summaries/pr-<n>.md` via a
+  small docs PR (direct pushes to main stay hook-blocked).
 
 ## Verification
 
