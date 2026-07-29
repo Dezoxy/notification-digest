@@ -17,7 +17,7 @@ def test_render_html_escapes_hostile_raw_html_from_item_text():
         "[see it](https://t.me/c/123/1)\n"
     )
 
-    html = render_html(body_md)
+    html = render_html(body_md, allowed_urls={"https://t.me/c/123/1"})
 
     assert "<img" not in html
     assert "onerror" in html  # content survives, just neutralized
@@ -27,14 +27,14 @@ def test_render_html_escapes_hostile_raw_html_from_item_text():
 def test_render_html_still_renders_legit_headers_and_links():
     body_md = "## Needs attention\n\n- [ping from Bob](https://t.me/c/123/42): reply needed\n"
 
-    html = render_html(body_md)
+    html = render_html(body_md, allowed_urls={"https://t.me/c/123/42"})
 
     assert "<h2>Needs attention</h2>" in html
     assert '<a href="https://t.me/c/123/42" rel="noopener noreferrer">ping from Bob</a>' in html
 
 
 def test_render_html_wraps_in_full_document_with_readable_style():
-    html = render_html("hello")
+    html = render_html("hello", allowed_urls=set())
 
     assert "<html>" in html
     assert "max-width: 42em" in html
@@ -45,7 +45,7 @@ def test_render_html_strips_img_from_markdown_image_syntax():
     # message text verbatim, so this must not become a tracking-pixel <img>.
     body_md = "## Worth knowing\n\n![status](https://attacker.example/pixel.png)\n"
 
-    html = render_html(body_md)
+    html = render_html(body_md, allowed_urls=set())
 
     assert "<img" not in html
 
@@ -53,7 +53,7 @@ def test_render_html_strips_img_from_markdown_image_syntax():
 def test_render_html_strips_javascript_scheme_from_markdown_link():
     body_md = "[click](javascript:alert(1))\n"
 
-    html = render_html(body_md)
+    html = render_html(body_md, allowed_urls=set())
 
     assert "javascript:" not in html
 
@@ -61,9 +61,59 @@ def test_render_html_strips_javascript_scheme_from_markdown_link():
 def test_render_html_still_renders_legit_link_with_safe_rel():
     body_md = "[see it](https://t.me/c/123/45)\n"
 
-    html = render_html(body_md)
+    html = render_html(body_md, allowed_urls={"https://t.me/c/123/45"})
 
     assert '<a href="https://t.me/c/123/45" rel="noopener noreferrer">see it</a>' in html
+
+
+# --- render_html: HTML-level anchor-provenance (P1 fix) ---
+
+
+def test_render_html_unwraps_anchor_with_nested_bracket_label_markdown_regex_would_miss():
+    # P1 finding: `[review [urgent]](https://attacker.example/phish)` has
+    # balanced nested brackets in its label. CommonMark's link-label grammar
+    # (which python-markdown implements) renders this as a real anchor, but
+    # a markdown-level regex like `\[([^\]]*)\]\(...\)` (see
+    # summarize.enforce_link_allowlist's _MARKDOWN_LINK_RE) stops at the
+    # FIRST `]` and never recognizes this as a link at all -- the attacker
+    # URL would sail through untouched at that layer. Feeding this straight
+    # into render_html as raw markdown (bypassing enforce_link_allowlist
+    # entirely) simulates exactly that miss: the HTML-level anchor-
+    # provenance check must still catch it, because it inspects what the
+    # renderer actually produced rather than re-deriving its grammar.
+    body_md = "[review [urgent]](https://attacker.example/phish)\n"
+
+    html = render_html(body_md, allowed_urls=set())
+
+    assert "attacker.example" not in html
+    assert "<a " not in html
+    # The label text survives, just unwrapped from the anchor.
+    assert "review" in html
+    assert "urgent" in html
+
+
+def test_render_html_keeps_allowlisted_anchor_intact():
+    body_md = "[see it](https://t.me/c/123/99)\n"
+
+    html = render_html(body_md, allowed_urls={"https://t.me/c/123/99"})
+
+    assert '<a href="https://t.me/c/123/99" rel="noopener noreferrer">see it</a>' in html
+
+
+def test_render_html_keeps_allowlisted_url_containing_ampersand_after_entity_roundtrip():
+    # nh3 entity-escapes hrefs (`&` becomes `&amp;` in the sanitized HTML).
+    # The anchor-provenance check must html.unescape() the href before
+    # comparing against the allowlist (which holds the raw, unescaped URL),
+    # or a legitimate allowlisted link containing `&` would be wrongly
+    # unwrapped as if its URL were unknown.
+    url = "https://t.me/c/1/2?a=1&b=2"
+    body_md = f"[see it]({url})\n"
+
+    html = render_html(body_md, allowed_urls={url})
+
+    assert 'href="https://t.me/c/1/2?a=1&amp;b=2"' in html
+    assert "<a " in html
+    assert "see it</a>" in html
 
 
 # --- send_digest ---
@@ -144,6 +194,7 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
         "me@toomhorvath.com",
         "digest: 3 items · 2026-07-29 10:00",
         "## Needs attention\n\n- nothing much\n",
+        set(),
     )
 
     assert len(FakeSMTP.instances) == 1
@@ -191,6 +242,7 @@ def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, capl
             "me@toomhorvath.com",
             "subject",
             "body",
+            set(),
         )  # must not raise
 
     assert len(FakeSMTP.instances) == 1
@@ -222,6 +274,7 @@ def test_send_digest_raises_send_message_error_even_if_quit_also_fails(monkeypat
             "me@toomhorvath.com",
             "subject",
             "body",
+            set(),
         )
 
     assert len(FakeSMTP.instances) == 1
@@ -240,7 +293,7 @@ def test_send_digest_never_opens_a_real_socket(monkeypatch):
 
     with pytest.raises(AssertionError):
         send_digest(
-            "smtp.mail.me.com", 587, "u", "p", "from@x.com", "to@x.com", "subject", "body"
+            "smtp.mail.me.com", 587, "u", "p", "from@x.com", "to@x.com", "subject", "body", set()
         )
 
 

@@ -275,6 +275,24 @@ def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item])
         raise
 
 
+def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
+    """Return the set of item URLs stamped to the given digest.
+
+    This is how the HTML link-provenance allowlist (digest/emailer.py's
+    render_html) is recovered for a PENDING resend: on a resend, the
+    original Item objects from the run that summarized and stamped this
+    digest are long gone (that run already returned), but the URLs survive
+    in the `items` table via the `digest_id` foreign key stamped by
+    create_digest at digest-creation time -- before send_digest is ever
+    called, on both the fresh-digest and pending-resend paths. So this
+    query works identically for both.
+    """
+    rows = conn.execute(
+        "SELECT url FROM items WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def get_pending_digest(conn: sqlite3.Connection) -> tuple[int, str] | None:
     """Return (id, body_md) of the newest unsent digest, or None if none is pending."""
     row = conn.execute(

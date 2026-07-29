@@ -27,6 +27,7 @@ from digest.state import (
     count_unsummarized_items,
     create_digest,
     get_cursors,
+    get_digest_item_urls,
     get_pending_digest,
     get_unsummarized_items,
     init_db,
@@ -146,9 +147,19 @@ def _send_and_finalize(
     next run's `get_pending_digest` branch retries the send (PLAN.md §4.1).
     Email subject time is rendered in Europe/Budapest per CLAUDE.md (storage
     stays UTC; only render/email time converts).
+
+    The HTML link-provenance allowlist passed to send_digest is fetched
+    fresh from the digest's own stamped items (get_digest_item_urls), not
+    threaded through from an in-memory Item list -- that's what makes this
+    work identically for both callers of _send_and_finalize: the
+    fresh-digest path (create_digest just stamped these items in this same
+    call to _deliver) and the pending-resend path (the items were stamped
+    by create_digest in a PREVIOUS run; this run never built an Item list
+    at all, only read digest_id/body_md back off the `digests` table).
     """
     now_local = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest"))
     subject = f"digest: {item_count} items · {now_local:%Y-%m-%d %H:%M}"
+    allowed_urls = get_digest_item_urls(conn, digest_id)
     try:
         send_digest(
             cfg.smtp_host,
@@ -159,6 +170,7 @@ def _send_and_finalize(
             cfg.digest_to,
             subject,
             body_md,
+            allowed_urls,
         )
     except Exception as exc:
         logger.error("email send failed for digest %d: %s", digest_id, type(exc).__name__)

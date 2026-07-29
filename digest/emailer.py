@@ -6,9 +6,12 @@ templating framework needed for a handful of emails a day.
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 import smtplib
 import ssl
+from collections.abc import Collection
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -59,11 +62,66 @@ _ALLOWED_TAGS = {
 _ALLOWED_ATTRIBUTES = {"a": {"href"}}
 _ALLOWED_URL_SCHEMES = {"http", "https"}
 
+# Matches a single well-formed anchor in nh3-sanitized output: `<a ...
+# href="URL" ...>inner</a>`. This is deliberately non-greedy on the inner
+# content and is SAFE ONLY because it runs on nh3.clean's output, never on
+# raw/untrusted input: nh3 normalizes its output to well-formed HTML with
+# quoted attributes and no nested `<a>` tags, so there is no adversarial
+# grammar here to evade (unlike markdown source, where regexes chasing
+# CommonMark's link-label grammar can be beaten by balanced nested
+# brackets -- see enforce_link_allowlist in digest/summarize.py). href is
+# always the first attribute nh3 emits, matching `\bhref="..."` immediately
+# after the tag name/whitespace.
+_ANCHOR_RE = re.compile(r'<a\b[^>]*\bhref="([^"]*)"[^>]*>(.*?)</a>', re.DOTALL)
 
-def render_html(body_md: str) -> str:
+
+def _enforce_anchor_provenance(sanitized_html: str, allowed_urls: Collection[str]) -> str:
+    """Unwrap every anchor in sanitized HTML whose href isn't an allowlisted URL.
+
+    This is the authoritative link-provenance layer: it runs on the HTML the
+    renderer actually produced (post markdown-conversion, post nh3.clean),
+    so it can't be evaded by a markdown form that a source-level regex
+    fails to recognize as a link (e.g. `[review [urgent]](https://attacker
+    .example/phish)` -- CommonMark's balanced-nested-bracket label grammar
+    renders this as a real anchor, but a naive `[^\\]]*` label regex stops
+    at the first `]` and never sees it as a link at all). Inspecting the
+    rendered anchor instead of re-deriving the renderer's grammar makes this
+    check renderer-grammar-proof.
+
+    nh3 entity-escapes hrefs (e.g. `&` becomes `&amp;`), so the captured
+    href is html.unescape()'d before comparing against ``allowed_urls``,
+    which holds the raw, unescaped URLs. An anchor whose (unescaped) href is
+    not an exact member of ``allowed_urls`` is replaced by just its inner
+    content -- the link disappears, the visible text survives.
+
+    Only the COUNT of unwrapped anchors is logged, never the URLs
+    themselves, for the same reason enforce_link_allowlist only logs a
+    count: a logged attacker-chosen URL is itself exposure.
+    """
+    allowed = set(allowed_urls)
+    unwrapped = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal unwrapped
+        href, inner = match.group(1), match.group(2)
+        if html.unescape(href) in allowed:
+            return match.group(0)
+        unwrapped += 1
+        return inner
+
+    result = _ANCHOR_RE.sub(_replace, sanitized_html)
+    if unwrapped:
+        logger.warning(
+            "render_html: unwrapped %d anchor(s) with non-allowlisted hrefs",
+            unwrapped,
+        )
+    return result
+
+
+def render_html(body_md: str, allowed_urls: Collection[str]) -> str:
     """Convert digest markdown to a self-contained HTML document.
 
-    Two distinct threats are neutralized here, in two different layers:
+    Three distinct threats are neutralized here, in three different layers:
 
     1. Raw HTML smuggled verbatim in message text (e.g. a hostile chat
        message containing `<img onerror=...>` that Claude echoes into the
@@ -80,9 +138,22 @@ def render_html(body_md: str) -> str:
        source text has no `<`. After conversion, `nh3.clean` sanitizes the
        generated HTML against an allowlist of tags/attributes the digest
        contract can legitimately produce, dropping anything else (including
-       `<img>` and non-http(s) URL schemes) -- this is the authority for
-       markdown-generated content, with the pre-escape acting as defense in
-       depth for raw HTML.
+       `<img>` and non-http(s) URL schemes).
+
+    3. Link *provenance*, regardless of markdown form. `digest/summarize
+       .py`'s `enforce_link_allowlist` tries to catch this at the markdown
+       source level, but it's a losing game: chasing CommonMark's link-label
+       grammar with regexes can always be beaten by some valid-but-unmatched
+       form (nested balanced brackets in the label being one concrete
+       example). `_enforce_anchor_provenance`, run here after markdown
+       conversion AND nh3 sanitization, is the authoritative layer for this
+       -- it inspects what the renderer actually produced, so it is
+       renderer-grammar-proof by construction rather than by enumerating
+       cases. `enforce_link_allowlist` stays in place as defense-in-depth,
+       and it remains necessary for a threat this HTML-level pass cannot
+       see at all: the text/plain MIME part, where a raw URL in message
+       text gets auto-linkified by the recipient's mail client with no
+       renderer in between for this layer to inspect.
     """
     escaped = body_md.replace("&", "&amp;").replace("<", "&lt;")
     body_html = markdown.markdown(escaped)
@@ -93,6 +164,7 @@ def render_html(body_md: str) -> str:
         url_schemes=_ALLOWED_URL_SCHEMES,
         link_rel="noopener noreferrer",
     )
+    sanitized = _enforce_anchor_provenance(sanitized, allowed_urls)
     return _HTML_TEMPLATE.format(body=sanitized)
 
 
@@ -105,8 +177,16 @@ def send_digest(
     digest_to: str,
     subject: str,
     body_md: str,
+    allowed_urls: Collection[str],
 ) -> None:
     """Send the digest as a multipart (plain + HTML) email over SMTP with STARTTLS.
+
+    ``allowed_urls`` is the set of URLs the HTML part's links are allowed to
+    point at -- the digest's stamped item URLs -- and is passed straight
+    through to render_html's anchor-provenance check (see its docstring).
+    The text/plain part is unaffected: it carries body_md verbatim, relying
+    on enforce_link_allowlist (digest/summarize.py) having already run at
+    the markdown-source level for that MIME part's protection.
 
     Message acceptance -- send_message() returning without raising -- is the
     success criterion: at that point the server has taken the mail for
@@ -125,7 +205,7 @@ def send_digest(
     msg["From"] = digest_from
     msg["To"] = digest_to
     msg.attach(MIMEText(body_md, "plain"))
-    msg.attach(MIMEText(render_html(body_md), "html"))
+    msg.attach(MIMEText(render_html(body_md, allowed_urls), "html"))
 
     smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=_SMTP_TIMEOUT_SECONDS)
     try:

@@ -5,7 +5,7 @@ import pytest
 import digest.main as main_mod
 from digest.collectors.telegram import CollectResult
 from digest.config import Config
-from digest.main import _client_ready, _deliver
+from digest.main import _client_ready, _deliver, _send_and_finalize
 from digest.state import (
     Item,
     commit_new_items,
@@ -115,9 +115,9 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
 
     sent = {}
 
-    def fake_send_digest(host, port, user, password, from_, to, subject, body_md):
+    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
         sent["body_md"] = body_md
-        sent["subject"] = subject
+        sent["allowed_urls"] = allowed_urls
 
     archived = {}
 
@@ -132,6 +132,7 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
 
     assert ok is True
     assert sent["body_md"] == "## Needs attention\n..."
+    assert sent["allowed_urls"] == {"https://t.me/c/123/1"}
     assert archived["digest_id"] == digest_id
     assert get_pending_digest(conn) is None  # marked sent
 
@@ -181,8 +182,8 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     monkeypatch.setattr(
         main_mod,
         "send_digest",
-        lambda host, port, user, pw, from_, to, subject, body_md: sent.update(
-            subject=subject, body_md=body_md
+        lambda host, port, user, pw, from_, to, subject, body_md, allowed_urls: sent.update(
+            subject=subject, body_md=body_md, allowed_urls=allowed_urls
         ),
     )
     archived = {}
@@ -195,6 +196,7 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert ok is True
     assert sent["body_md"] == "## Needs attention\n..."
     assert "2 items" in sent["subject"]
+    assert sent["allowed_urls"] == {"https://t.me/c/123/1", "https://t.me/c/123/2"}
     assert get_pending_digest(conn) is None
     assert archived["id"] == 1
 
@@ -218,7 +220,7 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
 
     sends = []
 
-    def fake_send_digest(host, port, user, password, from_, to, subject, body_md):
+    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
         sends.append(body_md)
 
     archived = []
@@ -328,3 +330,67 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
     assert [i.source_id for i in summarize_calls[0]] == ["1", "2"]  # oldest batch, size-bounded
     assert count_unsummarized_items(conn) == 1  # item "3" left for the next run
     assert [i.source_id for i in get_unsummarized_items(conn)] == ["3"]
+
+
+# --- _send_and_finalize (link-provenance allowlist wiring, P1 fix) ---
+
+
+def test_send_and_finalize_passes_the_digests_stamped_item_urls_to_send_digest(
+    conn, monkeypatch
+):
+    # P1 fix: send_digest's HTML link-provenance allowlist must come from
+    # the digest's own stamped items (get_digest_item_urls), fetched fresh
+    # off the `items` table rather than threaded through from an in-memory
+    # Item list -- that's what makes the same code path work for a fresh
+    # digest and a later pending resend alike (see get_digest_item_urls's
+    # docstring in digest/state.py). Seeded against a real tmp DB so the
+    # stamping performed by create_digest is exercised for real, not faked.
+    commit_new_items(
+        conn,
+        [_item("1"), _item("2")],
+        {("telegram", "123"): "2"},
+    )
+    items = get_unsummarized_items(conn)
+    digest_id = create_digest(conn, "## Needs attention\n...", items)
+
+    captured = {}
+
+    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
+        captured["allowed_urls"] = allowed_urls
+
+    monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _send_and_finalize(conn, _cfg(), digest_id, "## Needs attention\n...", len(items))
+
+    assert ok is True
+    assert captured["allowed_urls"] == {"https://t.me/c/123/1", "https://t.me/c/123/2"}
+
+
+def test_send_and_finalize_recovers_urls_for_a_pending_resend_from_a_prior_run(
+    conn, monkeypatch
+):
+    # Simulates the pending-resend path: this call has no in-memory Item
+    # list at all (unlike the fresh-digest path) -- it only has digest_id
+    # and body_md read back off the `digests` table, exactly like
+    # get_pending_digest returns in _deliver. The allowlist must still be
+    # recoverable purely from the digest_id, via the items already stamped
+    # by a create_digest call that ran in a "previous run" (here, earlier
+    # in this test, but nothing about _send_and_finalize depends on that).
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(
+        conn, "## Needs attention\n...pending...", get_unsummarized_items(conn)
+    )
+
+    captured = {}
+
+    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
+        captured["allowed_urls"] = allowed_urls
+
+    monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _send_and_finalize(conn, _cfg(), digest_id, "## Needs attention\n...pending...", 1)
+
+    assert ok is True
+    assert captured["allowed_urls"] == {"https://t.me/c/123/1"}
