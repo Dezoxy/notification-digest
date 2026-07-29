@@ -33,7 +33,7 @@ from digest.state import (
     init_db,
     mark_digest_sent,
 )
-from digest.summarize import SummarizeError, summarize
+from digest.summarize import _MAX_PROMPT_CHARS, SummarizeError, select_items_for_prompt, summarize
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,6 +119,21 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
         return True
 
     failed_sources = ["telegram"] if result.failed else []
+
+    # Shrink to whatever actually fits in one prompt BEFORE both summarize()
+    # and create_digest(): the item-count cap above (_MAX_ITEMS_PER_DIGEST)
+    # bounds source characters, but json.dumps(ensure_ascii=False) still lets
+    # an emoji/CJK-heavy batch serialize far larger than that count implies,
+    # and select_items_for_prompt is what catches that. The shrink has to
+    # happen HERE, not inside summarize(), because create_digest stamps
+    # whatever list it's given as "handled" -- if summarize() only saw a
+    # trimmed subset internally while create_digest stamped the full
+    # pre-shrink `items`, the untrimmed remainder would be marked summarized
+    # without ever actually being sent to the model. Keeping the shrink in
+    # _deliver and passing its result to both calls keeps the summarized set
+    # and the stamped set identical by construction.
+    items = select_items_for_prompt(items, failed_sources, _MAX_PROMPT_CHARS)
+
     try:
         body_md = summarize(items, failed_sources, cfg.anthropic_model, cfg.claude_timeout_seconds)
     except SummarizeError as exc:

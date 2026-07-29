@@ -14,6 +14,7 @@ from digest.summarize import (
     build_prompt,
     enforce_link_allowlist,
     run_claude,
+    select_items_for_prompt,
     summarize,
     validate_output,
 )
@@ -98,6 +99,24 @@ def test_build_prompt_leaves_exactly_2000_char_text_untouched():
     assert "truncated" not in payload[0]["text"]
 
 
+def test_build_prompt_serializes_non_ascii_raw_instead_of_escaping():
+    # P1 finding: json.dumps defaults to ensure_ascii=True, which blows up
+    # every non-ASCII character into a 6-char \uXXXX escape (12 for a
+    # supplementary-plane emoji via a surrogate pair) -- pure serialization
+    # inflation. build_prompt must pass ensure_ascii=False so an
+    # emoji/CJK-heavy item serializes at (roughly) its true UTF-8 size
+    # instead of ballooning several-fold.
+    item = dataclasses.replace(_item(), text="hello \U0001f600 world 你好")
+
+    prompt = build_prompt([item], failed_sources=[])
+
+    assert "\U0001f600" in prompt
+    assert "你好" in prompt
+    assert "\\ud83d\\ude00" not in prompt  # surrogate-pair escape for the emoji
+    assert "\\u4f60" not in prompt
+    assert "\\u597d" not in prompt
+
+
 def test_build_prompt_empty_items_still_produces_valid_json_array():
     prompt = build_prompt([], failed_sources=[])
     assert "[]" in prompt
@@ -144,6 +163,84 @@ def test_build_prompt_item_text_with_placeholder_literal_is_not_rescanned():
     assert "Collector status: telegram collection failed this run" in prompt
 
 
+# --- select_items_for_prompt (P1 fix: bound the BUILT prompt, not source chars) ---
+
+
+def test_select_items_for_prompt_halves_until_the_built_prompt_fits():
+    # Each item carries a large text so the full batch's built prompt blows
+    # past a deliberately small max_prompt_chars. The function must shrink
+    # by halving (5 -> 2 -> 1) until the built prompt for the candidate
+    # prefix fits, rather than failing or looping item-by-item.
+    items = [dataclasses.replace(_item(str(i)), text="x" * 4000) for i in range(5)]
+
+    # Single item: len(build_prompt([items[0]], [])) is the floor; pick a
+    # cap comfortably above that but well below what 5, 4, 3, or 2 items
+    # would produce, so only the 1-item (or 2-item) prefix can fit.
+    one_item_len = len(build_prompt([items[0]], []))
+    max_prompt_chars = one_item_len + 500
+
+    selected = select_items_for_prompt(items, [], max_prompt_chars)
+
+    assert len(build_prompt(selected, [])) <= max_prompt_chars
+    # Oldest-first prefix: whatever subset survives must be a prefix
+    # starting at item "0", not an arbitrary or reordered subset.
+    assert [item.source_id for item in selected] == [
+        item.source_id for item in items[: len(selected)]
+    ]
+    assert selected[0].source_id == "0"
+
+
+def test_select_items_for_prompt_keeps_oldest_prefix_when_shrinking():
+    items = [dataclasses.replace(_item(str(i)), text="y" * 3000) for i in range(8)]
+    max_prompt_chars = len(build_prompt(items[:2], [])) + 10
+
+    selected = select_items_for_prompt(items, [], max_prompt_chars)
+
+    assert len(selected) < len(items)
+    assert [item.source_id for item in selected] == ["0", "1"][: len(selected)]
+    # Never picks from the middle or end -- always the oldest contiguous prefix.
+    assert selected == items[: len(selected)]
+
+
+def test_select_items_for_prompt_single_item_floor_always_returned():
+    # A single item is guaranteed to fit: build_prompt truncates any one
+    # item's text to _MAX_ITEM_TEXT_CHARS, bounding its contribution
+    # regardless of the original text length. Even with an absurdly small
+    # cap, the loop must still return the 1-item prefix rather than an empty
+    # list or raising.
+    items = [dataclasses.replace(_item("only"), text="z" * 100_000)]
+
+    selected = select_items_for_prompt(items, [], max_prompt_chars=1)
+
+    assert len(selected) == 1
+    assert selected[0].source_id == "only"
+
+
+def test_select_items_for_prompt_returns_all_items_when_already_within_bound():
+    items = [_item("1"), _item("2"), _item("3")]
+
+    selected = select_items_for_prompt(items, [], max_prompt_chars=summarize_mod._MAX_PROMPT_CHARS)
+
+    assert selected == items
+
+
+def test_select_items_for_prompt_empty_items_returns_empty():
+    assert select_items_for_prompt([], [], max_prompt_chars=1000) == []
+
+
+def test_select_items_for_prompt_accounts_for_failed_sources_in_the_built_prompt():
+    # The bound is checked against build_prompt(candidate, failed_sources) --
+    # the same failed_sources the caller will actually use for summarize(),
+    # not an empty list -- since the collector-status banner text also
+    # contributes to the built prompt's length.
+    items = [dataclasses.replace(_item(str(i)), text="w" * 3000) for i in range(4)]
+    max_prompt_chars = len(build_prompt(items[:1], ["telegram"])) + 5
+
+    selected = select_items_for_prompt(items, ["telegram"], max_prompt_chars)
+
+    assert len(build_prompt(selected, ["telegram"])) <= max_prompt_chars
+
+
 # --- run_claude ---
 
 
@@ -178,6 +275,27 @@ def test_run_claude_success_returns_stripped_stdout(monkeypatch):
     assert captured["kwargs"]["timeout"] == 300
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["text"] is True
+
+
+def test_run_claude_passes_explicit_utf8_encoding(monkeypatch):
+    # P1 finding: build_prompt now serializes with ensure_ascii=False, so the
+    # prompt can contain raw non-ASCII UTF-8 text. text=True alone lets
+    # subprocess fall back to locale.getpreferredencoding(), and
+    # claude_subprocess_env()'s scrubbed env carries no LANG/LC_ALL -- so
+    # without an explicit encoding, writing a non-ASCII prompt to stdin could
+    # raise UnicodeEncodeError depending on the ambient locale. encoding must
+    # be pinned to "utf-8" explicitly, independent of any locale.
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return _fake_completed()
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+
+    assert captured["kwargs"]["encoding"] == "utf-8"
 
 
 def test_run_claude_disables_all_tools_via_argv(monkeypatch):

@@ -332,6 +332,53 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
     assert [i.source_id for i in get_unsummarized_items(conn)] == ["3"]
 
 
+def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
+    conn, monkeypatch
+):
+    # P1 fix: select_items_for_prompt must run BEFORE both summarize() and
+    # create_digest(), and both must receive its output -- not the
+    # pre-shrink batch -- so the summarized set and the stamped set never
+    # diverge. Monkeypatching select_items_for_prompt to a known,
+    # deliberately different subset (just item "2", dropping item "1")
+    # proves this: if create_digest were still called with the full
+    # pre-shrink batch, item "1" would show up stamped despite never having
+    # been sent to summarize.
+    commit_new_items(
+        conn,
+        [_item("1"), _item("2")],
+        {("telegram", "123"): "2"},
+    )
+    full_batch = get_unsummarized_items(conn)
+    assert [i.source_id for i in full_batch] == ["1", "2"]
+
+    selected_subset = [i for i in full_batch if i.source_id == "2"]
+
+    def fake_select_items_for_prompt(items, failed_sources, max_prompt_chars):
+        return selected_subset
+
+    summarize_received = {}
+
+    def fake_summarize(items, failed_sources, model, timeout_seconds):
+        summarize_received["items"] = items
+        return "## Needs attention\n...selected..."
+
+    monkeypatch.setattr(main_mod, "select_items_for_prompt", fake_select_items_for_prompt)
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), CollectResult())
+
+    assert ok is True
+    assert summarize_received["items"] == selected_subset
+
+    # create_digest stamped only the selected subset -- item "1" must remain
+    # unsummarized, not silently marked handled despite never being
+    # summarized.
+    assert count_unsummarized_items(conn) == 1
+    assert [i.source_id for i in get_unsummarized_items(conn)] == ["1"]
+
+
 # --- _send_and_finalize (link-provenance allowlist wiring, P1 fix) ---
 
 

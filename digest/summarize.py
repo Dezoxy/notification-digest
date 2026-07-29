@@ -37,6 +37,16 @@ _REQUIRED_HEADINGS = ("needs attention", "worth knowing", "noise skipped")
 _MAX_ITEM_TEXT_CHARS = 2000
 _TRUNCATION_MARKER = " …[truncated]"
 
+# Bounds the BUILT prompt's serialized character length, checked by
+# select_items_for_prompt. ~150k tokens at the usual ~4 chars/token -- well
+# inside the model's context window while leaving ample room for the
+# response (the digest markdown output). Per-item text is already capped at
+# _MAX_ITEM_TEXT_CHARS, but _MAX_ITEMS_PER_DIGEST (digest/main.py) items of
+# emoji/CJK-heavy source text can still serialize far larger than a naive
+# sum of text lengths would suggest -- see select_items_for_prompt's
+# docstring for why.
+_MAX_PROMPT_CHARS = 600_000
+
 
 class SummarizeError(Exception):
     """Raised when the Claude CLI fails to produce a usable digest.
@@ -75,7 +85,19 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
         }
         for item in items
     ]
-    items_json = json.dumps(payload, indent=2)
+    # ensure_ascii=False: the default (True) escapes every non-ASCII
+    # character to a 6-char \uXXXX sequence (12 chars for a supplementary-
+    # plane emoji, via a surrogate pair) -- pure serialization inflation with
+    # no content benefit, since the payload is written straight to a UTF-8
+    # subprocess stdin (see run_claude's encoding="utf-8"), never through
+    # anything that only tolerates ASCII. For an emoji/CJK-heavy Telegram
+    # batch this inflation alone can multiply prompt size several-fold,
+    # which is exactly the gap select_items_for_prompt's size check below
+    # closes -- but only if the size it measures is the true serialized
+    # size, not one artificially inflated by this flag. The backtick-escape
+    # pass just below is unaffected: it runs on the resulting string either
+    # way and a literal backtick is ASCII, so it's untouched by this flag.
+    items_json = json.dumps(payload, indent=2, ensure_ascii=False)
     # The prompt's consumer is an LLM, not a strict CommonMark parser: a
     # literal ``` inside an item's text can make the model perceive the
     # ```json data block as closed early, presenting whatever follows (in
@@ -106,6 +128,53 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
     return template.replace("{{COLLECTOR_STATUS}}", collector_status).replace(
         "{{ITEMS_JSON}}", items_json
     )
+
+
+def select_items_for_prompt(
+    items: list[Item], failed_sources: list[str], max_prompt_chars: int
+) -> list[Item]:
+    """Return the longest OLDEST-first prefix of `items` whose built prompt fits.
+
+    The bound is checked against the BUILT prompt (via build_prompt on the
+    candidate prefix), not the sum of the items' text lengths. Two things
+    inflate the built prompt well beyond what a naive character sum would
+    suggest: json.dumps with ensure_ascii=False still expands JSON's own
+    structural characters and per-item key names (~40+ chars of
+    "source"/"chat_id"/"author"/"url"/"fetched_at" scaffolding per item on
+    top of the text), and the surrounding prompts/digest.md template adds
+    fixed overhead of its own. Summing raw text lengths would systematically
+    underestimate the real prompt size and let an oversized batch through
+    anyway -- the whole point of this function is to catch that gap by
+    measuring the actual thing that gets handed to the model.
+
+    `items` is assumed already ordered oldest-first (get_unsummarized_items
+    returns it that way) -- this function preserves that order and never
+    reorders or drops from the middle, it only shrinks from the end.
+
+    Halves the candidate count on each miss (`n = max(1, n // 2)`) rather
+    than decrementing one at a time: a single oversized item (or a batch
+    saturated with multi-byte text) could otherwise take hundreds of
+    build_prompt calls -- each one re-serializing the whole candidate slice
+    -- to converge. Halving reaches a fit in O(log n) builds.
+
+    Stops at a 1-item floor: build_prompt on a single item always fits,
+    because per-item text is already truncated to _MAX_ITEM_TEXT_CHARS by
+    build_prompt itself, bounding one item's contribution regardless of its
+    original length. The loop still explicitly returns the 1-item prefix
+    once n reaches 1, rather than trusting the size check to naturally pass,
+    so a pathological template/overhead blowup can't spin this into an
+    infinite loop.
+    """
+    if not items:
+        return items
+
+    n = len(items)
+    while True:
+        candidate = items[:n]
+        prompt = build_prompt(candidate, failed_sources)
+        if len(prompt) <= max_prompt_chars or n <= 1:
+            return candidate
+        n = max(1, n // 2)
 
 
 def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
@@ -146,6 +215,18 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
                 input=prompt,
                 capture_output=True,
                 text=True,
+                # Explicit encoding="utf-8": build_prompt now serializes with
+                # ensure_ascii=False, so the prompt can contain raw non-ASCII
+                # (emoji, CJK, etc.) UTF-8 text instead of \uXXXX escapes.
+                # text=True alone would pick subprocess's default text
+                # encoding, which falls back to locale.getpreferredencoding()
+                # -- and claude_subprocess_env() is a scrubbed minimal
+                # allowlist that carries no LANG/LC_ALL, so that fallback can
+                # land on a non-UTF-8 (even ASCII-only) locale encoding and
+                # raise UnicodeEncodeError writing the prompt to stdin. Pinning
+                # utf-8 explicitly makes this independent of the parent
+                # process's or subprocess's locale entirely.
+                encoding="utf-8",
                 timeout=timeout_seconds,
                 env=claude_subprocess_env(),
                 cwd=neutral_cwd,
