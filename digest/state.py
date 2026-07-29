@@ -88,20 +88,25 @@ def commit_new_items(
 ) -> int:
     """Insert new items and advance cursors in a single transaction.
 
-    Items are inserted with INSERT OR IGNORE, deduping on (source, source_id).
-    Every (source, scope) -> last_seen_id in cursor_updates is upserted with
-    updated_at set to now (UTC). On any failure the whole transaction is
-    rolled back — the cursor must never advance without the items that
-    justify it (idempotency contract, PLAN.md §4.1).
+    Items are inserted with INSERT ... ON CONFLICT (source, source_id) DO
+    NOTHING, deduping on that UNIQUE constraint. Every (source, scope) ->
+    last_seen_id in cursor_updates is upserted with updated_at set to now
+    (UTC). On any failure the whole transaction is rolled back — the cursor
+    must never advance without the items that justify it (idempotency
+    contract, PLAN.md §4.1).
 
     Returns the number of item rows actually inserted.
 
-    Note: INSERT OR IGNORE also silently swallows CHECK/NOT NULL constraint
-    violations (not just the UNIQUE dedup conflict it's meant for), so a
-    malformed item would otherwise vanish without ever raising. We validate
-    the schema's NOT NULL/CHECK invariants in Python first so a bad item
-    surfaces as a real exception and triggers the rollback below, instead of
-    being silently dropped.
+    Note: we deliberately use `INSERT ... ON CONFLICT (source, source_id) DO
+    NOTHING` instead of `INSERT OR IGNORE`. INSERT OR IGNORE swallows *any*
+    constraint violation on the row — including NOT NULL and CHECK failures
+    that have nothing to do with dedup — so a malformed item (e.g. a missing
+    source_id or fetched_at) would silently vanish instead of raising, while
+    the cursor update still commits: permanent, undetected data loss.
+    Scoping the "ignore" to the specific (source, source_id) conflict target
+    means only the intended dedup case is swallowed; NOT NULL/CHECK
+    violations still raise sqlite3.IntegrityError, which is caught below and
+    triggers the rollback like any other failure.
     """
     now = datetime.now(UTC).isoformat()
     try:
@@ -109,15 +114,12 @@ def commit_new_items(
         cur.execute("BEGIN")
         inserted = 0
         for item in items:
-            if item.source not in ("telegram", "x"):
-                raise ValueError(f"invalid item.source: {item.source!r}")
-            if not item.url:
-                raise ValueError("item.url must be non-empty (NOT NULL)")
             cur.execute(
                 """
-                INSERT OR IGNORE INTO items
+                INSERT INTO items
                     (source, source_id, chat_id, author, text, url, fetched_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (source, source_id) DO NOTHING
                 """,
                 (
                     item.source,

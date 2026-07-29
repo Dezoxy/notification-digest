@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from digest.collectors.telegram import is_basic_group
+
 
 def _get_api_id() -> int:
     raw = os.environ.get("TG_API_ID") or input("TG_API_ID (from my.telegram.org): ").strip()
@@ -53,7 +55,10 @@ def main() -> None:
         print("-" * 60)
         for dialog in client.iter_dialogs():
             if dialog.is_group or dialog.is_channel:
-                print(f"{dialog.id:>16}  {dialog.name}")
+                title = dialog.name
+                if is_basic_group(dialog.id):
+                    title += " (basic group — unsupported; convert to supergroup)"
+                print(f"{dialog.id:>16}  {title}")
 
 
 if __name__ == "__main__":

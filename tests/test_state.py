@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -84,7 +85,47 @@ def test_atomicity_rolls_back_items_and_cursors_on_failure(conn):
     good_item = _item("1")
     bad_item = _item("2", source="not-a-real-source")  # violates CHECK(source IN (...))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(sqlite3.IntegrityError):
+        commit_new_items(conn, [good_item, bad_item], {("telegram", "123"): "2"})
+
+    item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    assert item_count == 0
+    assert get_cursors(conn, "telegram") == {}
+
+
+def test_atomicity_rolls_back_on_null_source_id(conn):
+    good_item = _item("1")
+    bad_item = Item(
+        source="telegram",
+        source_id=None,  # violates NOT NULL on source_id
+        chat_id="123",
+        author="alice",
+        text="hello",
+        url="https://t.me/c/123/2",
+        fetched_at="2026-07-29T10:00:00+00:00",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        commit_new_items(conn, [good_item, bad_item], {("telegram", "123"): "2"})
+
+    item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    assert item_count == 0
+    assert get_cursors(conn, "telegram") == {}
+
+
+def test_atomicity_rolls_back_on_null_fetched_at(conn):
+    good_item = _item("1")
+    bad_item = Item(
+        source="telegram",
+        source_id="2",
+        chat_id="123",
+        author="alice",
+        text="hello",
+        url="https://t.me/c/123/2",
+        fetched_at=None,  # violates NOT NULL on fetched_at
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
         commit_new_items(conn, [good_item, bad_item], {("telegram", "123"): "2"})
 
     item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]

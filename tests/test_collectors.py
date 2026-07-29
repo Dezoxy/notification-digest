@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from telethon.errors import AuthKeyUnregisteredError
 
 import digest.collectors.telegram as telegram_collector
@@ -87,8 +88,11 @@ def test_build_message_url_private_supergroup_strips_minus100():
 
 
 def test_build_message_url_private_basic_group():
-    # plain (non-super) group ids are just negative, no -100 prefix
-    assert build_message_url(-1234567, None, 42) == "https://t.me/c/1234567/42"
+    # plain (non-super) group ids are just negative, no -100 prefix; t.me/c/
+    # links only address supergroups/channels, so there's no valid link to
+    # build for a legacy basic group.
+    with pytest.raises(ValueError):
+        build_message_url(-1234567, None, 42)
 
 
 # --- first run seeding ---
@@ -169,6 +173,33 @@ async def test_incremental_run_respects_min_id_orders_ascending_and_skips_textle
     assert client.iter_messages_calls == [
         (chat_id, telegram_collector._MAX_MESSAGES_PER_CHAT, 9, True)
     ]
+
+
+# --- legacy basic group filtering ---
+
+
+async def test_collect_skips_legacy_basic_group_but_processes_supergroup():
+    basic_group_id, supergroup_id = -1234567, -1009999999
+    client = FakeClient(
+        entities={
+            basic_group_id: FakeEntity(basic_group_id),
+            supergroup_id: FakeEntity(supergroup_id),
+        },
+        messages={supergroup_id: [FakeMessage(5, "hello")]},
+    )
+
+    result = await collect(
+        client,
+        [basic_group_id, supergroup_id],
+        cursors={str(basic_group_id): "1", str(supergroup_id): "1"},
+    )
+
+    assert result.failed is True
+    # basic group is never touched: no get_entity call, no cursor update, no items
+    assert ("telegram", str(basic_group_id)) not in result.cursor_updates
+    assert [i.source_id for i in result.items] == [f"{supergroup_id}:5"]
+    assert ("telegram", str(supergroup_id)) in result.cursor_updates
+    assert client.get_entity_calls == 1
 
 
 # --- per-chat crash isolation ---

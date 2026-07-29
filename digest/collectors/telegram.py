@@ -62,22 +62,43 @@ class CollectResult:
     failed: bool = False
 
 
+def is_basic_group(chat_id: int) -> bool:
+    """True for legacy "basic group" chat ids: negative, but not -100-prefixed.
+
+    Telethon/Telegram distinguishes supergroups/channels (ids prefixed with
+    -100) from legacy basic groups (plain negative ids). t.me/c/ deep links
+    only address supergroups/channels, so basic groups have no working
+    message link and must be filtered out before we ever try to collect or
+    link to them.
+    """
+    return chat_id < 0 and not str(chat_id).startswith("-100")
+
+
 def build_message_url(chat_id: int, username: str | None, msg_id: int) -> str:
     """Build a t.me deep link for a message.
 
     Public chats (username set) -> https://t.me/<username>/<msg_id>
-    Private/supergroup chats -> https://t.me/c/<internal_id>/<msg_id>, where
-    internal_id strips the -100 prefix Telethon puts on supergroup/channel
-    ids (e.g. -1001234567 -> 1234567).
+    Private supergroup/channel chats -> https://t.me/c/<internal_id>/<msg_id>,
+    where internal_id strips the -100 prefix Telethon puts on
+    supergroup/channel ids (e.g. -1001234567 -> 1234567).
+
+    Legacy basic groups (negative id, no -100 prefix) raise ValueError:
+    t.me/c/ links only address supergroups/channels, so there is no valid
+    link to build. This is defense in depth — `collect()` already filters
+    basic groups out via `is_basic_group` before a message url is ever
+    built for one.
     """
     if username:
         return f"https://t.me/{username}/{msg_id}"
 
     internal_id = str(chat_id)
     if internal_id.startswith("-100"):
-        internal_id = internal_id[4:]
-    elif internal_id.startswith("-"):
-        internal_id = internal_id[1:]
+        return f"https://t.me/c/{internal_id[4:]}/{msg_id}"
+    if is_basic_group(chat_id):
+        raise ValueError(
+            f"cannot build a t.me message link for legacy basic group chat_id={chat_id}: "
+            "t.me/c/ links only support supergroups/channels"
+        )
     return f"https://t.me/c/{internal_id}/{msg_id}"
 
 
@@ -226,6 +247,12 @@ async def collect(
     long FloodWaits abort remaining chats (but keep what was already
     collected). A short FloodWait (<= 60s) is awaited once and retried.
 
+    Legacy basic groups (negative chat id, no -100 prefix — see
+    `is_basic_group`) are skipped entirely before any network call: t.me/c/
+    links only address supergroups/channels, so a basic group has no valid
+    message link to build. The chat is logged as a warning, `failed=True` is
+    set, and neither its cursor nor any items are touched.
+
     Before the per-chat loop, `get_dialogs()` is called once to populate the
     client's entity cache. This matters because in production the client is
     reconstructed from a StringSession, which persists no entity cache:
@@ -249,6 +276,16 @@ async def collect(
 
     for chat_id in chat_ids:
         scope = str(chat_id)
+
+        if is_basic_group(chat_id):
+            logger.warning(
+                "telegram chat %s is a legacy basic group — unsupported (no t.me message "
+                "links); convert it to a supergroup or remove it from TG_CHAT_ALLOWLIST",
+                chat_id,
+            )
+            result.failed = True
+            continue
+
         items, new_cursor, abort, failure = await _collect_one_chat(
             client, chat_id, cursors.get(scope)
         )
