@@ -196,3 +196,95 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert "2 items" in sent["subject"]
     assert get_pending_digest(conn) is None
     assert archived["id"] == 1
+
+
+def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monkeypatch):
+    # A pending digest from a previous run plus freshly collected items that
+    # are still unsummarized: the pending resend must not swallow this run's
+    # own items -- both must go out, as two separate sends.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    pending_digest_id = create_digest(
+        conn, "## Needs attention\n...pending...", get_unsummarized_items(conn)
+    )
+
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+
+    summarize_calls = []
+
+    def fake_summarize(items, failed_sources, model, timeout_seconds):
+        summarize_calls.append((items, failed_sources))
+        return "## Needs attention\n...new..."
+
+    sends = []
+
+    def fake_send_digest(host, port, user, password, from_, to, subject, body_md):
+        sends.append(body_md)
+
+    archived = []
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
+    monkeypatch.setattr(
+        main_mod, "archive", lambda body_md, archive_dir, digest_id: archived.append(digest_id)
+    )
+
+    ok = _deliver(conn, _cfg(), CollectResult())
+
+    assert ok is True
+    assert len(sends) == 2
+    assert sends[0] == "## Needs attention\n...pending..."
+    assert sends[1] == "## Needs attention\n...new..."
+    assert len(summarize_calls) == 1  # only for the new items, never the pending digest
+    assert get_pending_digest(conn) is None
+    assert pending_digest_id in archived
+
+
+def test_deliver_pending_digest_sent_then_current_collection_failed_passes_failed_sources(
+    conn, monkeypatch
+):
+    # The pending resend succeeds, but THIS run's own collection failed --
+    # the new digest created for this run's items must carry this run's own
+    # failed_sources, not an empty list.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    create_digest(conn, "## Needs attention\n...pending...", get_unsummarized_items(conn))
+
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+
+    summarize_calls = []
+
+    def fake_summarize(items, failed_sources, model, timeout_seconds):
+        summarize_calls.append(failed_sources)
+        return "## Needs attention\n...new..."
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), CollectResult(failed=True))
+
+    assert ok is True
+    assert summarize_calls == [["telegram"]]
+
+
+def test_deliver_pending_digest_send_fails_no_summarize_and_returns_false(conn, monkeypatch):
+    # If the pending resend itself fails, we must not attempt to summarize
+    # or send a second email on what's evidently a broken SMTP path.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    create_digest(conn, "## Needs attention\n...pending...", get_unsummarized_items(conn))
+
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+
+    def boom_summarize(*args, **kwargs):
+        raise AssertionError("summarize must not be called when the pending resend fails")
+
+    def failing_send(*args, **kwargs):
+        raise OSError("smtp connection refused")
+
+    monkeypatch.setattr(main_mod, "summarize", boom_summarize)
+    monkeypatch.setattr(main_mod, "send_digest", failing_send)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), CollectResult())
+
+    assert ok is False
+    pending = get_pending_digest(conn)
+    assert pending is not None  # still unsent, left for the next run's retry

@@ -160,6 +160,16 @@ def validate_output(markdown_text: str) -> None:
     flag is set, "## " lines are not counted as headings, and the fence
     delimiter lines themselves are never counted either.
 
+    CommonMark also requires the closing fence to be AT LEAST as long as
+    the opening fence, and to contain nothing but the delimiter run plus
+    trailing whitespace -- no info string is allowed on a closer (unlike
+    the opener, which may carry one, e.g. ```json). So a 4-backtick opener
+    is not closed by a 3-backtick line (that line is just fence content),
+    and a line like "``` python" or "```extra" never closes a fence at all,
+    regardless of run length, because it has non-whitespace after the
+    delimiter run. This module tracks both the delimiter character and the
+    opening run length to enforce this.
+
     Indented lines are excluded from heading and fence-delimiter detection,
     before any stripping happens: per CommonMark, an ATX heading (or a
     fence delimiter) may be indented at most 3 spaces -- a line starting
@@ -171,6 +181,7 @@ def validate_output(markdown_text: str) -> None:
     heading_lines = []
     in_fence = False
     fence_char = None
+    fence_len = 0
     for line in markdown_text.splitlines():
         # CommonMark: 4+ leading spaces or a leading tab makes this an
         # indented code block -- neither a heading nor a fence delimiter
@@ -179,21 +190,26 @@ def validate_output(markdown_text: str) -> None:
             continue
         stripped = line.strip()
         if in_fence:
-            # A fence only closes on a line starting with three-or-more of
-            # the SAME delimiter character that opened it -- content using
-            # the other fence character is just fence content, not a
-            # closer (CommonMark fence-matching rule).
-            if stripped.startswith(fence_char * 3):
+            # CommonMark fence-closing rule: a closer must (1) start with a
+            # run of the SAME delimiter character that opened the fence,
+            # (2) that run must be AT LEAST as long as the opening run, and
+            # (3) nothing but whitespace may follow the run -- unlike an
+            # opener, a closer may not carry an info string. A ``` line
+            # inside a ~~~ fence never matches (wrong character); a 3-tick
+            # line inside a 4-tick fence matches too short a run and is just
+            # content; "``` python" has trailing non-whitespace and is also
+            # just content, not a closer.
+            run_len = len(stripped) - len(stripped.lstrip(fence_char))
+            remainder = stripped[run_len:]
+            if run_len >= fence_len and remainder.strip() == "":
                 in_fence = False
                 fence_char = None
+                fence_len = 0
             continue
-        if stripped.startswith("```"):
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence_char = stripped[0]
+            fence_len = len(stripped) - len(stripped.lstrip(fence_char))
             in_fence = True
-            fence_char = "`"
-            continue
-        if stripped.startswith("~~~"):
-            in_fence = True
-            fence_char = "~"
             continue
         if stripped.startswith("## "):
             heading_lines.append(stripped[3:].strip().lower())

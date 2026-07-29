@@ -59,15 +59,27 @@ async def _client_ready(client: TelegramClient) -> bool:
 
 
 def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bool:
-    """Post-collection delivery: retry any pending send, else summarize+send new items.
+    """Post-collection delivery: retry any pending send, then summarize+send new items.
 
     (a) A pending unsent digest (crash/SMTP failure on a previous run) is
         resent as-is -- summarize is never called twice for the same items.
-    (b) No unsummarized items -- nothing to send, this is a normal empty-
-        window run.
-    (c) Otherwise: summarize, durably record the digest (BEFORE sending, so
-        a crash after this point retries the send next run instead of
-        re-summarizing), send, mark sent, archive.
+        If that resend FAILS, we return False immediately without touching
+        this run's own items: there is no point attempting a second send on
+        a broken SMTP path, and the freshly collected items remain
+        unsummarized for a later run to pick up. If it SUCCEEDS, we do NOT
+        return -- we fall through to the normal path below so this run's
+        own collection (and its own `result.failed` state) still gets
+        summarized and sent as a second email in the same run. Without this
+        fallthrough, this run's items would sit unsummarized until a later
+        run summarizes them with a fresh (possibly healthy) failed_sources,
+        silently dropping the partial-collection warning this run should
+        have carried.
+    (b) No unsummarized items -- nothing left to send, this is a normal
+        empty-window run (or the pending resend already covered everything).
+    (c) Otherwise: summarize with the CURRENT run's failed_sources, durably
+        record the digest (BEFORE sending, so a crash after this point
+        retries the send next run instead of re-summarizing), send, mark
+        sent, archive.
 
     Returns True if delivery succeeded or wasn't needed. Deliberately does
     NOT factor in `result.failed` -- the caller combines this with the
@@ -83,7 +95,11 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
         item_count = conn.execute(
             "SELECT item_count FROM digests WHERE id = ?", (digest_id,)
         ).fetchone()[0]
-        return _send_and_finalize(conn, cfg, digest_id, body_md, item_count)
+        if not _send_and_finalize(conn, cfg, digest_id, body_md, item_count):
+            return False
+        # Pending resend succeeded -- fall through so this run's own
+        # collection still gets summarized and sent, instead of discarding
+        # this run's failed_sources state.
 
     items = get_unsummarized_items(conn)
     if not items:

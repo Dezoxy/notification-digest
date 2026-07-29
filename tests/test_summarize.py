@@ -409,6 +409,89 @@ def test_validate_output_backtick_fences_still_work_unchanged():
     validate_output(markdown_text)  # must not raise
 
 
+# --- validate_output: closing-fence length/bareness (Finding B) ---
+
+
+def test_validate_output_four_backtick_fence_not_closed_by_three_backtick_line():
+    # CommonMark: the closer must be AT LEAST as long as the opener. A
+    # 3-backtick line inside a 4-backtick-opened fence is just content, not
+    # a closer -- the fence (and thus all three headings below it) never
+    # actually closes, so all three headings stay missing.
+    markdown_text = (
+        "````\n"
+        "```\n"
+        "## Needs attention\n"
+        "## Worth knowing\n"
+        "## Noise skipped\n"
+        "````\n"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(markdown_text)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_four_backtick_fence_closed_by_four_backtick_line():
+    # A closer at least as long as the opener does close the fence --
+    # headings after it are real.
+    markdown_text = (
+        "````\nsome example\n````\n\n"
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n- nothing\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
+def test_validate_output_closing_length_rule_applies_to_tildes_too():
+    # Same closing-length rule for tilde fences: a 3-tilde line inside a
+    # 4-tilde-opened fence is content, not a closer.
+    markdown_text = (
+        "~~~~\n"
+        "~~~\n"
+        "## Needs attention\n"
+        "## Worth knowing\n"
+        "## Noise skipped\n"
+        "~~~~\n"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(markdown_text)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_closer_with_trailing_text_does_not_close_fence():
+    # Per CommonMark, an opener may carry an info string (```json) but a
+    # CLOSER may not -- a line with trailing non-whitespace after the
+    # delimiter run is just fence content, not a closer, even though its
+    # run length matches the opener.
+    markdown_text = (
+        "```\n"
+        "```extra\n"
+        "## Needs attention\n"
+        "## Worth knowing\n"
+        "## Noise skipped\n"
+        "```\n"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(markdown_text)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
 # --- summarize (composition) ---
 
 
