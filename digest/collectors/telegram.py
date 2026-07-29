@@ -48,7 +48,9 @@ class TelegramClientLike(Protocol):
 
     async def get_entity(self, chat_id: int) -> Any: ...
 
-    def iter_messages(self, entity: Any, *, limit: int | None = None, min_id: int = 0) -> Any: ...
+    def iter_messages(
+        self, entity: Any, *, limit: int | None = None, min_id: int = 0, reverse: bool = False
+    ) -> Any: ...
 
 
 @dataclass
@@ -108,21 +110,27 @@ async def _fetch_incremental(
 ) -> tuple[list[Item], int | None]:
     """Fetch messages newer than min_id, capped at _MAX_MESSAGES_PER_CHAT.
 
-    Telethon yields newest-first; we collect then sort ascending. Textless
-    messages are skipped from the item list but still count toward the new
-    cursor (their ids advance the "seen" watermark).
+    Iterates oldest-first (reverse=True) so that when a backlog exceeds the
+    cap, the fetched batch is the OLDEST pending messages rather than the
+    newest. The cursor then advances only to the newest id actually fetched,
+    so the next run resumes right after the gap instead of permanently
+    skipping whatever fell outside the cap. Telethon already yields ascending
+    ids with reverse=True, so no manual sort is needed. Textless messages are
+    skipped from the item list but still count toward the new cursor (their
+    ids advance the "seen" watermark).
     """
     username = _entity_username(entity)
     fetched_at = datetime.now(UTC).isoformat()
 
     raw_msgs = []
-    async for msg in client.iter_messages(entity, min_id=min_id, limit=_MAX_MESSAGES_PER_CHAT):
+    async for msg in client.iter_messages(
+        entity, min_id=min_id, limit=_MAX_MESSAGES_PER_CHAT, reverse=True
+    ):
         raw_msgs.append(msg)
 
     if not raw_msgs:
         return [], None
 
-    raw_msgs.sort(key=lambda m: m.id)
     newest_id = raw_msgs[-1].id
 
     items: list[Item] = []
@@ -133,7 +141,7 @@ async def _fetch_incremental(
         items.append(
             Item(
                 source="telegram",
-                source_id=str(msg.id),
+                source_id=f"{chat_id}:{msg.id}",
                 chat_id=str(chat_id),
                 author=_author_name(msg),
                 text=text,

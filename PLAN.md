@@ -97,7 +97,7 @@ x_and_telegram-scrape/
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
-    source_id   TEXT NOT NULL,              -- message id / tweet id, unique within source
+    source_id   TEXT NOT NULL,              -- telegram: "{chat_id}:{msg_id}" (msg ids repeat across chats); x: tweet id
     chat_id     TEXT,                       -- telegram chat/thread id; NULL for X
     author      TEXT,
     text        TEXT,

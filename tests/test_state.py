@@ -56,6 +56,22 @@ def test_commit_new_items_dedups_on_source_and_source_id(conn):
     assert count == 2
 
 
+def test_commit_new_items_same_msg_id_in_different_chats_both_survive(conn):
+    # Telegram message ids are only unique per chat; source_id must be
+    # chat-scoped (e.g. "{chat_id}:{msg_id}") so that message 42 in two
+    # different chats doesn't collide under the (source, source_id) UNIQUE
+    # constraint and get silently dropped by INSERT OR IGNORE.
+    items = [
+        _item("111:42", chat_id="111"),
+        _item("222:42", chat_id="222"),
+    ]
+    inserted = commit_new_items(conn, items, {("telegram", "111"): "42", ("telegram", "222"): "42"})
+    assert inserted == 2
+
+    count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    assert count == 2
+
+
 def test_cursor_upsert_overwrites(conn):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     assert get_cursors(conn, "telegram") == {"123": "1"}

@@ -47,6 +47,8 @@ CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 @dataclass(frozen=True)
 class Item:
     source: str  # "telegram" | "x"
+    # telegram: "{chat_id}:{msg_id}" (chat-scoped composite — msg ids repeat across chats);
+    # x: bare tweet id (globally unique)
     source_id: str
     chat_id: str | None
     author: str | None
