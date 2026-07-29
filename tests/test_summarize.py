@@ -1095,6 +1095,24 @@ def test_enforce_link_allowlist_bare_mailto_in_prose_is_defanged():
     assert "mailto[:]attacker@example.com" in result
 
 
+def test_enforce_link_allowlist_bare_mailto_with_double_underscore_payload_is_defanged():
+    # Codex P2: an earlier fix excluded any payload merely STARTING with
+    # `**`/`__` via a regex lookahead, to stop the markdown-emphasis
+    # artifact in "**TL;DR:**" from being misread as a URI. But that
+    # lookahead can only anchor at the match's start, so it also excluded
+    # every legitimate URI whose payload happens to start with `__` --
+    # e.g. this valid bare mailto: URI -- letting it survive linkifiable
+    # in the text/plain part. The fix must discriminate on the WHOLE
+    # payload (in code), not just its first two characters, so this must
+    # still be defanged.
+    text = "Reply to mailto:__attacker@example.com if you have concerns."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "mailto:__attacker@example.com" not in result
+    assert "mailto[:]__attacker@example.com" in result
+
+
 # --- enforce_link_allowlist: bare non-`//` scheme tokens beyond mailto:
 # (Codex P2) ---
 #
@@ -1185,6 +1203,18 @@ def test_enforce_link_allowlist_tldr_bold_opener_survives_untouched():
     assert result == text
     assert "TL;DR[:]" not in result
     assert "[:]" not in result
+
+
+def test_enforce_link_allowlist_emphasis_only_payload_token_is_untouched():
+    # Codex P2: the whole-payload emphasis check, not just a "starts with
+    # **/__" check. A token whose payload is composed ENTIRELY of `*`/`_`
+    # characters (and nothing else) is markdown emphasis punctuation, not
+    # a URI, regardless of what the scheme-like prefix looks like.
+    text = "Some prose weird:__** trailing text."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert result == text
 
 
 def test_enforce_link_allowlist_bare_time_is_untouched():

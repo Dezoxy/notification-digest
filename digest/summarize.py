@@ -560,17 +560,31 @@ _BARE_URL_RE = re.compile(
     # 2+ non-delimiter chars) so real delimiter-led URIs still match:
     # `mailto:?to=x@y.z` (payload starts with `?`), `tel:*67` (a real
     # vertical-service-code URI, payload starts with `*`), `geo:47.5,...`,
-    # etc. An earlier, tighter version of this branch restricted the FIRST
-    # payload char to a URI-plausible class (letter/digit/+/~/%/_), which
-    # broke exactly those delimiter-led forms (`?`/`*` aren't in that class)
-    # — a P2 regression. The only thing that actually needs excluding is
-    # markdown's own double-emphasis marker immediately after the colon:
-    # without the `(?!\*\*|__)` guard, the digest's own mandated
-    # "**TL;DR:**" opener gets misread as `scheme=DR, payload=** ...` and
-    # mangled into "TL;DR[:]**" (found by live test). The guard only blocks
-    # a payload that starts with `**` or `__` — a single asterisk/underscore
-    # (as in `tel:*67`) is unaffected.
-    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)(?!\*\*|__)[^\s:)\]>\"']{2,}",
+    # `mailto:__attacker@example.com` (payload starts with `__`), etc. An
+    # earlier, tighter version of this branch restricted the FIRST payload
+    # char to a URI-plausible class (letter/digit/+/~/%/_), which broke
+    # exactly those delimiter-led forms (`?`/`*` aren't in that class) — a P2
+    # regression.
+    #
+    # A later attempt fixed that by excluding payloads that merely START with
+    # `**`/`__` (a regex lookahead can only anchor at the match's start
+    # position), to stop the digest's own mandated "**TL;DR:**" opener from
+    # being misread as `scheme=DR, payload=** ...` and mangled into
+    # "TL;DR[:]**". But a lookahead anchored at the start can't see the
+    # REST of the payload either -- so `(?!\*\*|__)` excluded not just that
+    # emphasis artifact but also every legitimate URI whose payload happens
+    # to start with `**`/`__`, e.g. the bare autolink-shaped
+    # `mailto:__attacker@example.com`, which would then never match this
+    # regex at all and survive linkifiable in the text/plain part.
+    #
+    # The real discriminator is a property of the WHOLE payload, not just
+    # its first two characters: is the payload's entire content markdown
+    # emphasis punctuation (only `*`/`_`) and nothing else? That can't be
+    # expressed as a regex lookahead anchored at the match start, so this
+    # branch stays maximally broad here and the actual whole-payload check
+    # happens in code, in _replace_bare_url below, once the full match
+    # (and thus the full payload) is known.
+    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}",
     re.IGNORECASE,
 )
 
@@ -769,6 +783,23 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
         url = match.group(0)
         if url in allowed:
             return url
+        # Markdown-emphasis discrimination lives here, in code, rather than
+        # in _BARE_URL_RE's regex: a lookahead can only anchor at the
+        # match's START position, so it can rule out a payload that
+        # *starts* with `**`/`__` but not one whose whole payload consists
+        # of nothing else -- and the two are different sets (see
+        # _BARE_URL_RE's comment). `scheme:payload` where `payload` is
+        # composed entirely of `*`/`_` characters is markdown emphasis
+        # punctuation the model emitted right after a colon (e.g. the
+        # `DR:**` token inside "**TL;DR:** text"), not a URI, and must be
+        # left untouched. Only the non-`//` form needs this check -- a
+        # `scheme://...` match's payload starts with `//`, which is never
+        # all `*`/`_`, so it can't accidentally trip this.
+        scheme_end = url.find(":")
+        if scheme_end != -1 and not url[scheme_end + 1 :].startswith("//"):
+            payload = url[scheme_end + 1 :]
+            if payload and all(ch in "*_" for ch in payload):
+                return url
         defanged += 1
         return _defang(url)
 
