@@ -1,0 +1,38 @@
+# LOCAL DEV ONLY.
+#
+# The production compose service for the VM (01-myapps-vm, Ansible `myapps`
+# role) lives in the separate ~/developer/homelab repo — it pulls the pinned
+# ghcr.io/dezoxy/notification-digest image tag and is never built from this
+# repo. See PLAN.md §6.
+#
+# One-shot run, no scheduling here (the systemd timer on the VM owns that):
+#   docker compose build
+#   docker compose run --rm digest
+#
+# Uses a named volume (digest-data), not a bind mount. On first run, Docker
+# initializes a named volume's contents from the image's /data directory —
+# including its uid-1000 (digest) ownership — so the container's non-root
+# process can always write to it. A `./local-data:/data` bind mount would
+# instead have Docker auto-create the host directory as root, which shadows
+# the image's chown and leaves /data unwritable by the uid-1000 process.
+# See README.md § Container for how to inspect/reset this volume.
+
+services:
+  digest:
+    build: .
+    env_file: .env
+    environment:
+      # All persisted state lives under one volume so it covers the SQLite
+      # db, the markdown archive, and the Claude CLI's config/credentials dir.
+      STATE_DB_PATH: /data/state.db
+      ARCHIVE_DIR: /data/archive
+      CLAUDE_CONFIG_DIR: /data/claude-home
+    volumes:
+      - digest-data:/data
+
+volumes:
+  digest-data:
+    # Explicit name: without it Compose project-scopes the volume
+    # (<project>_digest-data), and the README's `docker run -v digest-data:...`
+    # inspection/copy commands would silently open a different, empty volume.
+    name: digest-data
