@@ -228,6 +228,7 @@ def complete_thread_comments(thread: dict[str, Any]) -> None:
         next_comments = data["data"]["node"]["comments"]
         comments["nodes"].extend(next_comments["nodes"])
         page_info = next_comments["pageInfo"]
+    comments["pageInfo"] = page_info
 
 
 def fetch_threads(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
@@ -266,7 +267,7 @@ def is_codex(login: str | None) -> bool:
 
 def first_codex_comment(thread: dict[str, Any]) -> dict[str, Any] | None:
     for comment in thread["comments"]["nodes"]:
-        if is_codex(comment.get("author", {}).get("login")):
+        if is_codex((comment.get("author") or {}).get("login")):
             return comment
     return None
 
@@ -286,7 +287,7 @@ def latest_human_reply(thread: dict[str, Any]) -> dict[str, Any] | None:
         return None
     codex_index = comments.index(codex_comment)
     for comment in reversed(comments[codex_index + 1 :]):
-        if not is_codex(comment.get("author", {}).get("login")):
+        if not is_codex((comment.get("author") or {}).get("login")):
             return comment
     return None
 
@@ -354,7 +355,7 @@ def count_review_rounds(issue_comments: list[dict[str, Any]]) -> tuple[int, int]
     clean_verdicts = sum(
         1
         for c in issue_comments
-        if c.get("user", {}).get("login") in CODEX_LOGINS
+        if (c.get("user") or {}).get("login") in CODEX_LOGINS
         and CLEAN_VERDICT in c.get("body", "").lower()
     )
     return requests, clean_verdicts
@@ -367,7 +368,7 @@ def print_human(data: dict[str, Any]) -> None:
     findings, non_codex_threads = build_review_findings(data["threads"])
     requests, clean_verdicts = count_review_rounds(data["issue_comments"])
 
-    author = overview["author"]["login"]
+    author = (overview.get("author") or {}).get("login") or "ghost"
     state = overview["state"]
     print(f"PR #{overview['number']}: {overview['title']}")
     print(overview["url"])
@@ -415,7 +416,10 @@ def print_human(data: dict[str, Any]) -> None:
         print(f"\nOther review threads ({len(non_codex_threads)}):")
         for thread in non_codex_threads:
             authors = sorted(
-                {c.get("author", {}).get("login") or "unknown" for c in thread["comments"]["nodes"]}
+                {
+                    (c.get("author") or {}).get("login") or "ghost"
+                    for c in thread["comments"]["nodes"]
+                }
             )
             line_part = f":{thread['line']}" if thread["line"] is not None else ""
             print(f"  {thread['path']}{line_part}  authors={','.join(authors)}")
@@ -437,7 +441,7 @@ def print_markdown(data: dict[str, Any]) -> None:
     findings, non_codex_threads = build_review_findings(data["threads"])
     requests, clean_verdicts = count_review_rounds(data["issue_comments"])
 
-    author = overview["author"]["login"]
+    author = (overview.get("author") or {}).get("login") or "ghost"
     merge_sha = (overview.get("mergeCommit") or {}).get("oid", "")[:7]
     merged = merged_date(overview.get("mergedAt"))
 
@@ -480,7 +484,10 @@ def print_markdown(data: dict[str, Any]) -> None:
             print(f"  - fix: {entry['fix_note']}")
     for thread in non_codex_threads:
         authors = sorted(
-            {c.get("author", {}).get("login") or "unknown" for c in thread["comments"]["nodes"]}
+            {
+                (c.get("author") or {}).get("login") or "ghost"
+                for c in thread["comments"]["nodes"]
+            }
         )
         line_part = f":{thread['line']}" if thread["line"] is not None else ""
         print(f"- `{thread['path']}{line_part}` — authors: {', '.join(authors)}")
