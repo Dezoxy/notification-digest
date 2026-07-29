@@ -14,7 +14,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: pr-summary
+  group: pr-summary-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: false
 
 jobs:

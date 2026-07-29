@@ -335,6 +335,14 @@ def print_human(data: dict[str, Any]) -> None:
         f"+{overview['additions']}/-{overview['deletions']} across {overview['changedFiles']} files"
     )
 
+    body = (overview.get("body") or "").strip()
+    print("\nDescription:")
+    if body:
+        for line in body.splitlines():
+            print(f"  {line}")
+    else:
+        print("  (none)")
+
     print(f"\nCommits ({len(commits)}):")
     for commit in commits:
         print(f"  {commit['oid'][:7]}  {commit['messageHeadline']}")
@@ -393,6 +401,10 @@ def print_markdown(data: dict[str, Any]) -> None:
         f"`{merge_sha}` · `{overview['headRefName']} -> {overview['baseRefName']}` · "
         f"+{overview['additions']}/-{overview['deletions']} across {overview['changedFiles']} files"
     )
+
+    body = (overview.get("body") or "").strip()
+    print("\n## Description")
+    print(body if body else "*(none)*")
 
     print(f"\n## Commits ({len(commits)})")
     for commit in commits:

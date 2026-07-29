@@ -20,7 +20,8 @@ Produce a post-merge run-over summary for a pull request in this repo.
 4. Using the raw output as your source of truth, write a compact narrative
    with EXACTLY these four sections, in this order:
 
-   - **TL;DR** — 2-3 sentences: what the PR did and why.
+   - **TL;DR** — 2-3 sentences: what the PR did and why. The script's
+     Description section (the PR body) is the source of truth for the "why".
    - **What changed** — grouped by area (e.g. "collector", "state/DB",
      "tests", "config"), not a per-file listing.
    - **Review story** — how many Codex review rounds happened (review
