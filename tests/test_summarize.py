@@ -1073,6 +1073,127 @@ def test_enforce_link_allowlist_bare_mailto_in_prose_is_defanged():
     assert "mailto[:]attacker@example.com" in result
 
 
+# --- enforce_link_allowlist: bare non-`//` scheme tokens beyond mailto:
+# (Codex P2) ---
+#
+# tel:, sms:, geo:, and similar schemes have no `//` after their colon, so
+# they match neither the `scheme://...` alternative nor (before this fix)
+# the old mailto-only special case -- yet mail/messaging clients auto-link
+# them in the text/plain part exactly like mailto:. _BARE_URL_RE's second
+# alternative closes this by matching any letter-led scheme-shaped token
+# generically, rather than growing a scheme-name denylist.
+
+
+def test_enforce_link_allowlist_bare_tel_in_prose_is_defanged():
+    text = "Call tel:+19005551234 if this looks urgent."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "tel:+19005551234" not in result
+    assert "tel[:]+19005551234" in result
+
+
+def test_enforce_link_allowlist_bare_sms_in_prose_is_defanged():
+    text = "Text sms:+19005551234 to confirm."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "sms:+19005551234" not in result
+    assert "sms[:]+19005551234" in result
+
+
+def test_enforce_link_allowlist_bare_geo_in_prose_is_defanged():
+    text = "Meet at geo:37.786971,-122.399677 tomorrow."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "geo:37.786971,-122.399677" not in result
+    assert "geo[:]37.786971,-122.399677" in result
+
+
+def test_enforce_link_allowlist_prose_colon_with_space_is_untouched():
+    # A colon followed by a space (ordinary prose, not a URI) must not be
+    # mistaken for a scheme separator -- the generic alternative requires
+    # its payload to start immediately after the colon, with no gap.
+    text = "Deadline: tomorrow at noon."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert result == text
+
+
+def test_enforce_link_allowlist_bare_time_is_untouched():
+    # A bare time like "12:30" must not be treated as a scheme:payload
+    # token -- it doesn't start with a letter, so it never reaches the
+    # generic bare-scheme alternative at all.
+    text = "The call starts at 12:30 today."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert result == text
+
+
+def test_enforce_link_allowlist_allowed_https_in_markdown_link_untouched_render_through():
+    # The generic bare-scheme alternative must not corrupt an ALLOWED https
+    # URL sitting inside a surviving markdown link: the scheme:// pass (and
+    # the membership check) must win over the generic pass for this token,
+    # and the renderer must still see a real anchor.
+    url = "https://t.me/c/123/1"
+    text = f"See [this update]({url}) for details."
+
+    repaired = enforce_link_allowlist(text, allowed_urls={url})
+
+    assert repaired == text
+
+    html = render_html(repaired, allowed_urls={url})
+    assert f'href="{url}"' in html
+
+
+def test_enforce_link_allowlist_already_defanged_hxxps_is_not_double_mangled():
+    # Idempotence: text already containing the http/https defanged form
+    # (`hxxps://...`) must not be mangled a second time into
+    # `hxxps[:]//...` by the generic bare-scheme alternative.
+    text = "Earlier warning: hxxps://attacker.example/phish was posted."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert result == text
+
+
+def test_enforce_link_allowlist_already_defanged_generic_scheme_is_not_double_mangled():
+    # Idempotence: a generically-defanged non-http(s) scheme (`ftp[:]//...`)
+    # must survive a second pass unchanged -- the `[` breaks the
+    # scheme-immediately-followed-by-`:` adjacency both alternatives
+    # require, so neither can match it again.
+    text = "Earlier warning: ftp[:]//evil.example/x was posted."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert result == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "Call tel:+19005551234 or text sms:+19005551234, "
+            "and see ftp://evil.example/x and mailto:attacker@example.com.",
+            id="mixed_bare_schemes",
+        ),
+        pytest.param(
+            "Deadline: tomorrow at 12:30, see hxxps://attacker.example/phish "
+            "and ftp[:]//evil.example/x for context.",
+            id="mixed_prose_and_already_defanged",
+        ),
+    ],
+)
+def test_enforce_link_allowlist_is_idempotent_on_mixed_sample(text):
+    once = enforce_link_allowlist(text, allowed_urls=set())
+    twice = enforce_link_allowlist(once, allowed_urls=set())
+
+    assert twice == once
+
+
 # --- enforce_link_allowlist: render-through against the real renderer
 # (Codex P2) ---
 #

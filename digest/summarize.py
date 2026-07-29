@@ -482,41 +482,80 @@ _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULT
 # Any remaining bare URI token, run as the final pass over the whole text --
 # catches URIs mail clients would auto-linkify even though they never went
 # through a markdown link construct at all (plain prose, or what survives
-# after the passes above run). Two alternatives: any `scheme://...` token
-# (not just http/https -- `ftp://evil.example/x` is exactly as linkifiable
-# to a mail client as an http(s) URL and must not survive verbatim), and a
-# bare `mailto:...` token, which has no `//` after its scheme and so needs
-# its own alternative. Both stop at whitespace and the same closing
-# delimiters the other patterns exclude (`)`, `]`, `>`, quotes) so neither
-# swallows trailing punctuation from an enclosing markdown/HTML construct.
-# URI schemes are case-insensitive (RFC 3986) and mail clients linkify
-# `HTTPS://...` / `MAILTO:...` exactly as readily as their lowercase forms,
-# so this must match regardless of scheme case -- a lowercase-only pattern
+# after the passes above run). Two alternatives:
+#
+# 1. Any `scheme://...` token (not just http/https -- `ftp://evil.example/x`
+#    is exactly as linkifiable to a mail client as an http(s) URL and must
+#    not survive verbatim).
+# 2. Any OTHER scheme-shaped bare token, generically -- `[a-zA-Z][\w+.-]*:`
+#    followed by at least two non-whitespace, non-colon payload characters.
+#    This is deliberately NOT a denylist of specific non-`//` schemes
+#    (`tel:`, `sms:`, `geo:`, `mailto:`, ...) -- a mail/messaging client's
+#    set of auto-linkified schemes is neither fixed nor fully known to this
+#    codebase, and chasing it one scheme at a time is the same losing game
+#    as chasing grammar variants. Going generic on the *shape* of a URI
+#    (RFC 3986: `scheme ":" ...`) instead catches any bare
+#    `tel:+19005551234`, `sms:+1...`, `geo:...`, or `mailto:...` token
+#    without needing to know its name in advance. The payload requires >= 2
+#    chars so a lone trailing colon (or a colon immediately followed by
+#    another colon or whitespace) can't match; excluding `:` from the
+#    payload itself means a colon-separated non-URI token like "12:30" is
+#    never mistaken for `scheme:payload` in the first place (`12` isn't
+#    letter-led, so it never even reaches this alternative), and a prose
+#    colon like "Deadline: tomorrow" doesn't match either, since the
+#    payload class demands the two-plus chars sit immediately after the
+#    colon with no gap, and a space is not a payload character.
+#
+#    The `(?!//)` right after this alternative's `:` is the load-bearing
+#    guard against corrupting the FIRST alternative's job: an actual
+#    `scheme://...` token (allowlisted or not) also matches the generic
+#    `scheme:` shape up to its colon, so without this guard the two
+#    alternatives would race for the same text. Since Python's `re` tries
+#    alternatives left-to-right at each position and stops at the first
+#    that matches, alternative 1 already wins that race for any `://` token
+#    -- this guard on alternative 2 is defense in depth, and it doubles as
+#    the fix for a second, more concrete hazard: it stops this alternative
+#    from re-matching output the http/https branch of _defang already
+#    produced. That branch defangs by renaming the scheme in place
+#    (`https://` -> `hxxps://`) rather than breaking the `:` separator the
+#    way the generic-scheme defang does (`ftp://` -> `ftp[:]//`), so
+#    `hxxps://...` still looks exactly like `scheme://...` -- letters
+#    directly followed by `://` -- and would otherwise match this
+#    alternative too (`hxxps` reads as a fine scheme name) and get mangled
+#    a SECOND time into `hxxps[:]//...`. `(?!//)` excludes it outright: the
+#    colon in `hxxps:` IS followed by `//`, so this alternative never even
+#    starts. (A generically-defanged token doesn't need a matching guard
+#    here: `ftp[:]//host` has no scheme immediately followed by `:` at all
+#    -- the `[` breaks that adjacency -- so neither alternative can match it
+#    a second time.)
+#
+# Both alternatives stop at whitespace and the same closing delimiters the
+# other patterns exclude (`)`, `]`, `>`, quotes) so neither swallows
+# trailing punctuation from an enclosing markdown/HTML construct. URI
+# schemes are case-insensitive (RFC 3986) and mail clients linkify
+# `HTTPS://...` / `TEL:...` exactly as readily as their lowercase forms, so
+# this must match regardless of scheme case -- a lowercase-only pattern
 # lets an uppercase- or mixed-case-scheme URI sail through this final pass
 # untouched.
 #
-# The `\b(?!hxxps?://)` guard on the scheme:// alternative exists because
-# this pass runs AFTER the autolink pass above, which -- for the http/https
-# convention specifically -- defangs by renaming the scheme in place
-# (`https://` -> `hxxps://`) rather than breaking the `://` separator the
-# way the generic-scheme defang does (`ftp://` -> `ftp[:]//`). That
-# convention deliberately keeps `hxxps://` looking URL-shaped (scheme
-# letters directly followed by `://`) for readability, but that same shape
-# would otherwise match this pass's own generic `scheme://` alternative
-# (`hxxps` is a valid-looking scheme name) and get defanged a SECOND time
-# into `hxxps[:]//...`, corrupting output that was already handled
-# correctly. `hxxp`/`hxxps` are never a real scheme this codebase collects
-# or allowlists, so excluding them here is safe. The leading `\b` is load-
-# bearing, not decorative: a negative lookahead only blocks a match from
-# STARTING at that exact position -- without `\b`, the regex engine simply
-# retries one character to the right ("xxps://...", still letters followed
-# by "://") and matches that shifted substring instead, leaving the leading
-# "h" untouched and producing "hxxps[:]//..." anyway. Requiring a word
-# boundary right before the scheme means the only position "hxxps://" could
-# ever start a match is at its own "h" -- which the lookahead already
-# excludes -- so no shifted, one-character-short match is possible either.
+# The `\b(?!hxxps?://)` guard on the scheme:// alternative exists for the
+# same reason as alternative 2's `(?!//)` guard above: it stops that
+# alternative from re-matching `hxxps://...`/`hxxp://...` output the
+# http/https branch of _defang already produced, corrupting output that
+# was already handled correctly. `hxxp`/`hxxps` are never a real scheme
+# this codebase collects or allowlists, so excluding them here is safe. The
+# leading `\b` is load-bearing, not decorative: a negative lookahead only
+# blocks a match from STARTING at that exact position -- without `\b`, the
+# regex engine simply retries one character to the right ("xxps://...",
+# still letters followed by "://") and matches that shifted substring
+# instead, leaving the leading "h" untouched and producing "hxxps[:]//..."
+# anyway. Requiring a word boundary right before the scheme means the only
+# position "hxxps://" could ever start a match is at its own "h" -- which
+# the lookahead already excludes -- so no shifted, one-character-short
+# match is possible either.
 _BARE_URL_RE = re.compile(
-    r"\b(?!hxxps?://)[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)\]>\"']+|\bmailto:[^\s)\]>\"']+",
+    r"\b(?!hxxps?://)[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)\]>\"']+"
+    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}",
     re.IGNORECASE,
 )
 
@@ -534,16 +573,22 @@ def _defang(url: str) -> str:
     case) while no longer being a live, clickable URL to any client that
     recognizes the scheme.
 
-    Any OTHER scheme (``ftp://``, a custom scheme, etc.) is defanged
-    generically by breaking the ``:`` scheme separator into ``[:]`` instead
-    of renaming the scheme: ``ftp://host/path`` -> ``ftp[:]//host/path``.
-    ``mailto:`` (which has no ``//``) gets the same treatment:
-    ``mailto:user@host`` -> ``mailto[:]user@host``. Breaking the separator,
-    rather than renaming the scheme the way hxxp/hxxps do, is what kills
-    linkification for an arbitrary scheme -- there is no equivalent
-    "familiar renamed scheme" convention for schemes other than http/https,
-    and renaming an arbitrary scheme risks coincidentally landing on another
-    scheme a mail client DOES recognize.
+    Any OTHER scheme (``ftp://``, ``mailto:``, ``tel:``, ``sms:``, ``geo:``,
+    a custom scheme, etc. -- deliberately not enumerated; see _BARE_URL_RE's
+    comment for why a denylist of specific schemes is the wrong shape here)
+    is defanged generically by breaking the ``:`` scheme separator into
+    ``[:]`` instead of renaming the scheme: ``ftp://host/path`` ->
+    ``ftp[:]//host/path``, ``mailto:user@host`` -> ``mailto[:]user@host``,
+    ``tel:+19005551234`` -> ``tel[:]+19005551234``. This also covers a
+    scheme with no ``//`` at all (``mailto:``, ``tel:``, ``sms:``, ...) --
+    there's nothing special-cased about the *absence* of ``//`` here, since
+    breaking the ``:`` separator kills linkification whether or not a
+    ``//`` follows it. Breaking the separator, rather than renaming the
+    scheme the way hxxp/hxxps do, is what kills linkification for an
+    arbitrary scheme -- there is no equivalent "familiar renamed scheme"
+    convention for schemes other than http/https, and renaming an arbitrary
+    scheme risks coincidentally landing on another scheme a mail client
+    DOES recognize.
 
     The scheme is detected case-insensitively throughout -- URI schemes are
     case-insensitive per RFC 3986, and mail clients linkify `HTTPS://`,
@@ -556,8 +601,6 @@ def _defang(url: str) -> str:
         return "hxxps://" + url[8:]
     if url[:7].lower() == "http://":
         return "hxxp://" + url[7:]
-    if url[:7].lower() == "mailto:":
-        return "mailto[:]" + url[7:]
     scheme_end = url.find(":")
     if scheme_end != -1:
         return url[:scheme_end] + "[:]" + url[scheme_end + 1 :]
@@ -610,12 +653,14 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
 
     Finally, a fourth pass runs over the *entire* result: every remaining
     bare URI token -- any `scheme://...` token (not just http/https) plus
-    bare `mailto:...` tokens, whether already bare in the model's prose or
-    left behind by the passes above -- is defanged unless it is an exact
-    member of ``allowed_urls``. This pass must run last, after the
-    markdown-link and reference-definition passes, so that an allowed URL
-    still embedded in a surviving markdown link -- which is necessarily also
-    in ``allowed_urls`` -- is spared by the membership check rather than
+    any other bare scheme-shaped token (`mailto:...`, `tel:...`, `sms:...`,
+    `geo:...`, and any other scheme a mail/messaging client might
+    auto-linkify, whether already bare in the model's prose or left behind
+    by the passes above) -- is defanged unless it is an exact member of
+    ``allowed_urls``. This pass must run last, after the markdown-link and
+    reference-definition passes, so that an allowed URL still embedded in a
+    surviving markdown link -- which is necessarily also in
+    ``allowed_urls`` -- is spared by the membership check rather than
     mangled.
 
     Defanging exists because this function's output is used verbatim as the
@@ -635,8 +680,21 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
     just deleting the URI) closes that gap while keeping the destination
     readable. `https://` -> `hxxps://` and `http://` -> `hxxp://` follow the
     familiar security-community convention; every other scheme (including
-    `mailto:`) is defanged by breaking its `:` separator into `[:]` instead
-    -- see _defang's docstring for why that's the right generalization.
+    `mailto:`, `tel:`, `sms:`, `geo:`, and anything else letter-scheme-
+    shaped) is defanged by breaking its `:` separator into `[:]` instead --
+    see _defang's docstring for why that's the right generalization, and
+    _BARE_URL_RE's comment for why matching is done by URI *shape* rather
+    than by enumerating specific non-`//` schemes.
+
+    A deliberate false-positive trade-off applies to this generic bare-
+    scheme alternative: a stray prose token that happens to look
+    scheme-shaped (e.g. some hypothetical "Deadline:tomorrow" written with
+    no space) would get cosmetically mangled into "Deadline[:]tomorrow" --
+    harmless, if odd to read. The alternative failure mode -- a genuinely
+    linkifiable URI slipping through this pass untouched -- is a real
+    provenance bypass, exactly the class of bug this function exists to
+    close. In a personal digest, that asymmetry favors defanging a few
+    stray prose tokens over ever missing a live URI.
 
     This repairs rather than rejects: the digest still goes out with
     unknown links neutralized, rather than raising and discarding the
