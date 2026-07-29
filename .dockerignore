@@ -11,3 +11,6 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .DS_Store
+
+# local dev container state: Claude OAuth credentials + private digest archives
+local-data/

@@ -8,17 +8,27 @@
 # One-shot run, no scheduling here (the systemd timer on the VM owns that):
 #   docker compose build
 #   docker compose run --rm digest
+#
+# Uses a named volume (digest-data), not a bind mount. On first run, Docker
+# initializes a named volume's contents from the image's /data directory —
+# including its uid-1000 (digest) ownership — so the container's non-root
+# process can always write to it. A `./local-data:/data` bind mount would
+# instead have Docker auto-create the host directory as root, which shadows
+# the image's chown and leaves /data unwritable by the uid-1000 process.
+# See README.md § Container for how to inspect/reset this volume.
 
 services:
   digest:
     build: .
     env_file: .env
     environment:
-      # All persisted state lives under one bind-mounted directory so a
-      # single volume covers the SQLite db, the markdown archive, and the
-      # Claude CLI's config/credentials dir.
+      # All persisted state lives under one volume so it covers the SQLite
+      # db, the markdown archive, and the Claude CLI's config/credentials dir.
       STATE_DB_PATH: /data/state.db
       ARCHIVE_DIR: /data/archive
       CLAUDE_CONFIG_DIR: /data/claude-home
     volumes:
-      - ./local-data:/data
+      - digest-data:/data
+
+volumes:
+  digest-data:

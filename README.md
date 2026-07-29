@@ -56,12 +56,41 @@ docker compose build          # build the image locally
 docker compose run --rm digest   # one-shot run (no daemon, no ports)
 ```
 
-Local state (SQLite db, markdown archive, Claude CLI config dir) lands under
-`./local-data/`, bind-mounted into the container at `/data`. `compose.yml`
-here is for local dev only — the VM's production compose service lives in
-the separate homelab repo (see Deployment below). Releases are cut by
-pushing a git tag (`vX.Y.Z`); `.github/workflows/release.yml` builds and
-pushes the image to GHCR.
+Local state (SQLite db, markdown archive, Claude CLI config dir) lands in
+the named Docker volume `digest-data`, mounted into the container at
+`/data`. A named volume is used instead of a `./local-data:/data` bind mount
+because Docker initializes a named volume's contents (and ownership) from
+the image on first run: `/data` in the image is already chowned to the
+container's uid-1000 (non-root) user, so the volume is writable from the
+very first `docker compose run`. A bind mount, by contrast, would have
+Docker auto-create the host directory as root on first run, which shadows
+that chown and leaves the uid-1000 process unable to write — silently
+breaking the container. `compose.yml` here is for local dev only — the VM's
+production compose service lives in the separate homelab repo (see
+Deployment below). Releases are cut by pushing a git tag (`vX.Y.Z`);
+`.github/workflows/release.yml` builds and pushes the image to GHCR.
+
+To inspect the archive without a shell in the running container:
+
+```
+docker compose run --rm --entrypoint ls digest -la /data/archive
+```
+
+or copy files out via a temporary container:
+
+```
+docker run --rm -v digest-data:/data -v "$PWD":/backup busybox \
+  cp -r /data/archive /backup/
+```
+
+To reset all local state (start clean, e.g. after a schema change):
+
+```
+docker volume rm x_and_telegram-scrape_digest-data
+```
+
+(the exact volume name is prefixed with the compose project directory name —
+run `docker volume ls` to confirm it).
 
 ## Deployment
 
