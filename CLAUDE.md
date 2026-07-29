@@ -50,6 +50,9 @@ deep links. See PLAN.md for the full plan and current phase status.
   defaults to unresolved, actionable, Codex-only threads) and address every
   finding it reports — fix or explicitly rebut, never ignore. Only Codex
   findings gate PRs; other reviewers' threads are informational.
+- After merging a PR, `/pr-summary <n>` (or
+  `uv run python scripts/pr_summary.py <n>`) produces the post-merge run-over
+  summary.
 
 ## Verification
 
