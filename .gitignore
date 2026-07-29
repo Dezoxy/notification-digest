@@ -1,7 +1,7 @@
 # secrets
 .env
 !.env.example
-cookies*.json
+*cookies*.json
 *.session
 
 # python

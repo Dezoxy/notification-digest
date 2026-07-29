@@ -14,3 +14,6 @@ __pycache__
 
 # local dev container state: Claude OAuth credentials + private digest archives
 local-data/
+
+# session cookie jars (x-cookies.json etc.) — never in the build context
+*cookies*.json
