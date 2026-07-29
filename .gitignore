@@ -1,0 +1,20 @@
+# secrets
+.env
+!.env.example
+cookies*.json
+*.session
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# state
+*.db
+*.sqlite3
+
+# os / build
+dist/
+.DS_Store

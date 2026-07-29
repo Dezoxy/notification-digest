@@ -1,0 +1,23 @@
+#!/bin/sh
+# Block direct pushes (including branch deletes) to main/master.
+# Enable with: git config core.hooksPath .githooks
+# Bootstrap override: ALLOW_MAIN_PUSH=1 git push ...
+
+if [ "$ALLOW_MAIN_PUSH" = "1" ]; then
+	exit 0
+fi
+
+# Reads stdin lines: <local_ref> <local_sha> <remote_ref> <remote_sha>
+# A branch delete (local_sha all zeros) still names its target as remote_ref,
+# so the same match blocks deletes of main/master too.
+while read -r local_ref local_sha remote_ref remote_sha; do
+	case "$remote_ref" in
+	refs/heads/main | refs/heads/master)
+		echo "error: direct push to main blocked — push a feature branch and open a PR" >&2
+		echo "bootstrap override: ALLOW_MAIN_PUSH=1 git push ..." >&2
+		exit 1
+		;;
+	esac
+done
+
+exit 0
