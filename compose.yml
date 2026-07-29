@@ -1,0 +1,24 @@
+# LOCAL DEV ONLY.
+#
+# The production compose service for the VM (01-myapps-vm, Ansible `myapps`
+# role) lives in the separate ~/developer/homelab repo — it pulls the pinned
+# ghcr.io/dezoxy/notification-digest image tag and is never built from this
+# repo. See PLAN.md §6.
+#
+# One-shot run, no scheduling here (the systemd timer on the VM owns that):
+#   docker compose build
+#   docker compose run --rm digest
+
+services:
+  digest:
+    build: .
+    env_file: .env
+    environment:
+      # All persisted state lives under one bind-mounted directory so a
+      # single volume covers the SQLite db, the markdown archive, and the
+      # Claude CLI's config/credentials dir.
+      STATE_DB_PATH: /data/state.db
+      ARCHIVE_DIR: /data/archive
+      CLAUDE_CONFIG_DIR: /data/claude-home
+    volumes:
+      - ./local-data:/data

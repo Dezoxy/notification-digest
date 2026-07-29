@@ -49,6 +49,20 @@ uv run python -m digest
 | `STATE_DB_PATH` | Path to the SQLite state database. |
 | `ARCHIVE_DIR` | Directory where markdown digest copies are archived. |
 
+## Container
+
+```
+docker compose build          # build the image locally
+docker compose run --rm digest   # one-shot run (no daemon, no ports)
+```
+
+Local state (SQLite db, markdown archive, Claude CLI config dir) lands under
+`./local-data/`, bind-mounted into the container at `/data`. `compose.yml`
+here is for local dev only — the VM's production compose service lives in
+the separate homelab repo (see Deployment below). Releases are cut by
+pushing a git tag (`vX.Y.Z`); `.github/workflows/release.yml` builds and
+pushes the image to GHCR.
+
 ## Deployment
 
 Not deployed from this repo. A git tag triggers `.github/workflows/release.yml`,
