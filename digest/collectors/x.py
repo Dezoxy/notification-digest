@@ -20,6 +20,20 @@ source (.venv/lib/python3.12/site-packages/twikit/), not from memory:
   It returns a ``Result[Notification]``, which supports plain iteration
   (``__iter__``/``__getitem__``/``__len__`` -- utils.py) -- no special
   unwrapping needed for a single page.
+- ``Result[Notification]`` (utils.py) supports plain iteration for a single
+  page, plus pagination: ``await result.next()`` fetches the following page
+  as a new ``Result``, and ``.next_cursor`` exposes the cursor that page was
+  (or the following page will be) built from. Critically,
+  ``get_notifications`` (client/client.py) ALWAYS builds its ``Result`` with
+  an unconditional ``functools.partial(self.get_notifications, type, count,
+  next_cursor)`` as the next-page fetcher -- even when ``next_cursor`` is
+  ``None`` (no ``cursor-bottom`` entry in the response, i.e. genuinely no
+  more pages). That means calling ``.next()`` when ``next_cursor`` is falsy
+  does NOT raise or return an empty ``Result`` -- it silently refetches
+  page one from the top (``cursor=None`` again). This module therefore
+  always checks ``next_cursor`` truthiness itself BEFORE calling
+  ``.next()``, rather than trusting ``.next()``'s return value to signal
+  "no more pages".
 - ``Notification`` (notification.py) has ``.id`` (str), ``.message`` (str),
   ``.tweet`` (``Tweet | None`` -- ``None`` for notifications with no linked
   tweet, e.g. a pure follow event), and ``.from_user`` (``User | None``).
@@ -41,6 +55,7 @@ source (.venv/lib/python3.12/site-packages/twikit/), not from memory:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -56,6 +71,19 @@ logger = logging.getLogger(__name__)
 # only, no home timeline). 'Mentions' would be narrower than what the PLAN
 # describes as the surface to collect.
 _NOTIFICATION_TYPE = "All"
+
+# Bounded pagination cap (see `collect`'s docstring): the notifications API
+# is newest-first-only, so catching up after a backlog means walking pages
+# oldest-ward until the cursor is bridged. Capped rather than unbounded so a
+# huge backlog can't turn one scheduled run into an unbounded number of
+# requests -- gentleness/ban-risk mitigation (PLAN.md §8), same rationale as
+# telegram.py's _MAX_MESSAGES_PER_CHAT cap.
+_MAX_NOTIFICATION_PAGES = 5
+
+# Paced delay between successive page fetches within one collect() call --
+# gentleness (don't burst several requests back to back), matching the
+# ban-risk mitigation posture already applied to the single-page case.
+_PAGE_FETCH_DELAY_SECONDS = 1.5
 
 
 class XClientLike(Protocol):
@@ -120,13 +148,62 @@ def _tweet_and_screen_name(notification: Any) -> tuple[Any, str | None]:
     return tweet, screen_name
 
 
-async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
-    """Fetch ONE page of the notifications timeline since `cursor`.
+def _extract_candidates(notifications: Any) -> tuple[list[tuple[int, Any, str]], int, int]:
+    """(tweet_id, tweet, screen_name) candidates from one page, plus skip counts.
 
-    No pagination loop -- `.next()` on the twikit Result is never called.
-    Gentleness (one page, once per scheduled run) is a ban-risk mitigation
-    (PLAN.md §8); the 3-hourly cadence is the drain, not an internal retry
-    or pagination loop in this module.
+    Split out of `collect` so the same filtering runs identically for every
+    page fetched during pagination, not just the first.
+    """
+    candidates: list[tuple[int, Any, str]] = []
+    skipped_no_tweet = 0
+    skipped_no_screen_name = 0
+    for notification in notifications:
+        tweet, screen_name = _tweet_and_screen_name(notification)
+        if tweet is None:
+            skipped_no_tweet += 1
+            continue
+        if not screen_name:
+            skipped_no_screen_name += 1
+            continue
+        candidates.append((int(tweet.id), tweet, screen_name))
+    return candidates, skipped_no_tweet, skipped_no_screen_name
+
+
+def _page_bridges_cursor(
+    page_notification_count: int, page_candidates: list[tuple[int, Any, str]], cursor_int: int
+) -> bool:
+    """True once this page reaches (or passes) the cursor -- pagination can stop.
+
+    Bridged when either: a candidate on this page has a tweet id <= cursor
+    (everything older is already-seen ground), or the page came back with
+    zero raw notifications (nothing left to page through, regardless of
+    whether any of them happened to be candidates).
+    """
+    if page_notification_count == 0:
+        return True
+    return any(tweet_id <= cursor_int for tweet_id, _, _ in page_candidates)
+
+
+async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
+    """Fetch the notifications timeline since `cursor`, paginating as needed.
+
+    First run (cursor is None): fetch a single page and seed the cursor from
+    it -- no pagination needed to seed from "now" (see below).
+
+    Otherwise: the notifications API is newest-first-only (no way to ask for
+    "oldest new item first"), so unlike telegram.py's oldest-first fetching,
+    catching up after a backlog means walking pages *from the newest
+    downward* until either a page's candidate tweet id is <= cursor (the
+    cursor is "bridged" -- everything past that point is already-seen) or a
+    hard cap of `_MAX_NOTIFICATION_PAGES` (5) pages is reached. Each
+    additional page fetch is preceded by `asyncio.sleep(_PAGE_FETCH_DELAY_SECONDS)`
+    (1.5s) -- gentleness, so a backlog catch-up doesn't burst several
+    requests back to back (ban-risk mitigation, PLAN.md §8). If the cap is
+    hit while still not bridged, a warning is logged naming how many pages
+    were fetched: older notifications beyond the cap are skipped for this
+    run (visible truncation, not silent data loss) -- they remain fetchable
+    on a future run once the cursor has caught up far enough, though a
+    sufficiently large sustained backlog can still outrun the cap.
 
     Cursor/idempotency contract (mirrors telegram.py's, scoped to
     ("x", "notifications") instead of per-chat):
@@ -138,19 +215,19 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       to be a clean numeric snowflake, whereas a linked Tweet's `.id` is
       (see module docstring).
     - First run (cursor is None): seed the cursor from the newest such
-      tweet id in this page and emit NO items -- consistent with
+      tweet id in the first page and emit NO items -- consistent with
       telegram.py's no-history-backfill rule (the first digest starts from
       "now"). If the page is empty, or every notification in it lacks a
       linked tweet, there is no candidate id to seed from -- seed "0" so
       the scope isn't re-treated as first-run forever.
-    - Otherwise: emit items for every notification whose linked tweet id is
-      > cursor, oldest-first (ascending by tweet id) to match the item
-      ordering convention used elsewhere in this codebase. The cursor
-      advances to the newest tweet id SEEN in this page (not just the ones
-      that became items) as long as it's actually newer than the current
-      cursor -- mirrors telegram.py's "cursor advances past textless
-      messages too" behavior, just for tweetless notifications instead of
-      textless messages.
+    - Otherwise: emit items for every notification (across all pages
+      fetched) whose linked tweet id is > cursor, oldest-first (ascending by
+      tweet id) to match the item ordering convention used elsewhere in
+      this codebase. The cursor advances to the newest tweet id SEEN across
+      all pages fetched (not just the ones that became items) as long as
+      it's actually newer than the current cursor -- mirrors telegram.py's
+      "cursor advances past textless messages too" behavior, just for
+      tweetless notifications instead of textless messages.
     - Notifications without a linked tweet, or whose tweet's author
       screen_name is unavailable, are skipped from BOTH items and cursor
       candidacy -- logged as a count, never individually (PLAN.md: no
@@ -159,14 +236,19 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
 
     Error handling (PLAN.md §4.3): auth/cookie failures (`Unauthorized`,
     `Forbidden`, `AccountLocked`, `AccountSuspended`) and rate limiting
-    (`TooManyRequests`) both set `failed=True` and return immediately --
-    NO retry, NO re-login attempt; a silent retry on an unofficial,
-    cookie-based API risks tripping X's automation detection further, and
-    the next scheduled run (3h later) is the retry. Any other exception
-    (e.g. a GraphQL/endpoint shape change) is caught the same way so a
-    twikit break never crashes the whole digest run -- only the type name
-    is logged, never exception details that might embed cookie/session
-    material.
+    (`TooManyRequests`) on the FIRST page both set `failed=True` and return
+    immediately -- NO retry, NO re-login attempt; a silent retry on an
+    unofficial, cookie-based API risks tripping X's automation detection
+    further, and the next scheduled run (3h later) is the retry. Any other
+    exception on the first page (e.g. a GraphQL/endpoint shape change) is
+    caught the same way so a twikit break never crashes the whole digest run
+    -- only the type name is logged, never exception details that might
+    embed cookie/session material. An exception while fetching page 2+
+    (during pagination) is caught the same way, but -- mirroring
+    telegram.py's partial-results-survive behavior -- does NOT discard items
+    or cursor progress already gathered from the pages fetched before it:
+    `failed=True` is set, pagination simply stops there, and the result is
+    finalized from whatever was collected so far.
     """
     from twikit.errors import (
         AccountLocked,
@@ -179,7 +261,7 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     result = CollectResult()
 
     try:
-        notifications = await client.get_notifications(_NOTIFICATION_TYPE)
+        page = await client.get_notifications(_NOTIFICATION_TYPE)
     except (Unauthorized, Forbidden, AccountLocked, AccountSuspended) as exc:
         logger.warning("x auth/cookie error: %s", type(exc).__name__)
         result.failed = True
@@ -195,18 +277,55 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
 
     fetched_at = datetime.now(UTC).isoformat()
 
-    candidates: list[tuple[int, Any, str]] = []  # (tweet_id, tweet, screen_name)
-    skipped_no_tweet = 0
-    skipped_no_screen_name = 0
-    for notification in notifications:
-        tweet, screen_name = _tweet_and_screen_name(notification)
-        if tweet is None:
-            skipped_no_tweet += 1
-            continue
-        if not screen_name:
-            skipped_no_screen_name += 1
-            continue
-        candidates.append((int(tweet.id), tweet, screen_name))
+    page_notifications = list(page)
+    candidates, skipped_no_tweet, skipped_no_screen_name = _extract_candidates(page_notifications)
+
+    if cursor is None:
+        newest_in_page = max((c[0] for c in candidates), default=None)
+        new_cursor = str(newest_in_page) if newest_in_page is not None else "0"
+        logger.info("x notifications: first run, seeded cursor at %s", new_cursor)
+        result.cursor_updates[("x", "notifications")] = new_cursor
+        return result
+
+    cursor_int = int(cursor)
+    pages_fetched = 1
+    pagination_failed = False
+    bridged = _page_bridges_cursor(len(page_notifications), candidates, cursor_int)
+
+    while not bridged and pages_fetched < _MAX_NOTIFICATION_PAGES:
+        next_cursor = getattr(page, "next_cursor", None)
+        if not next_cursor:
+            break
+
+        await asyncio.sleep(_PAGE_FETCH_DELAY_SECONDS)
+        try:
+            page = await page.next()
+        except Exception as exc:
+            logger.warning(
+                "x notification pagination failed on page %d: %s",
+                pages_fetched + 1,
+                type(exc).__name__,
+            )
+            result.failed = True
+            pagination_failed = True
+            break
+
+        pages_fetched += 1
+        page_notifications = list(page)
+        page_candidates, page_skipped_no_tweet, page_skipped_no_screen_name = (
+            _extract_candidates(page_notifications)
+        )
+        candidates.extend(page_candidates)
+        skipped_no_tweet += page_skipped_no_tweet
+        skipped_no_screen_name += page_skipped_no_screen_name
+        bridged = _page_bridges_cursor(len(page_notifications), page_candidates, cursor_int)
+
+    if not bridged and not pagination_failed and pages_fetched >= _MAX_NOTIFICATION_PAGES:
+        logger.warning(
+            "x notifications: page cap reached, %d pages fetched; older notifications "
+            "beyond the cap are skipped",
+            pages_fetched,
+        )
 
     if skipped_no_tweet:
         logger.info("x notifications: skipped %d with no linkable tweet", skipped_no_tweet)
@@ -215,15 +334,7 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             "x notifications: skipped %d with no author screen_name", skipped_no_screen_name
         )
 
-    newest_in_page = max((c[0] for c in candidates), default=None)
-
-    if cursor is None:
-        new_cursor = str(newest_in_page) if newest_in_page is not None else "0"
-        logger.info("x notifications: first run, seeded cursor at %s", new_cursor)
-        result.cursor_updates[("x", "notifications")] = new_cursor
-        return result
-
-    cursor_int = int(cursor)
+    newest_seen = max((c[0] for c in candidates), default=None)
     new_candidates = sorted((c for c in candidates if c[0] > cursor_int), key=lambda c: c[0])
 
     for tweet_id, tweet, screen_name in new_candidates:
@@ -239,12 +350,13 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             )
         )
 
-    if newest_in_page is not None and newest_in_page > cursor_int:
-        result.cursor_updates[("x", "notifications")] = str(newest_in_page)
+    if newest_seen is not None and newest_seen > cursor_int:
+        result.cursor_updates[("x", "notifications")] = str(newest_seen)
 
     logger.info(
-        "x notifications: collected %d items, cursor -> %s",
+        "x notifications: collected %d items across %d page(s), cursor -> %s",
         len(result.items),
+        pages_fetched,
         result.cursor_updates.get(("x", "notifications"), cursor),
     )
     return result

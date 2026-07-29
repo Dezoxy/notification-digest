@@ -24,6 +24,7 @@ import sys
 
 import pytest
 
+from digest.collectors import x as x_module
 from digest.collectors.x import build_client, collect
 
 
@@ -68,6 +69,89 @@ class FakeXClient:
 
 def _tweet(id_: str, text: str, screen_name: str = "alice") -> FakeTweet:
     return FakeTweet(id=id_, full_text=text, user=FakeUser(screen_name))
+
+
+class FakeResultPage:
+    """Mirrors twikit.utils.Result enough for collect()'s pagination path.
+
+    Plain iteration (like Result's __iter__), plus an async `.next()` and a
+    `.next_cursor` attribute. Real twikit's Result (utils.py) always wires
+    `.next()` to an unconditional `functools.partial(self.get_notifications,
+    type, count, next_cursor)` -- even when `next_cursor` is None -- so
+    calling `.next()` once `next_cursor` is falsy would silently refetch
+    page one (cursor=None) rather than raise or come back empty (see
+    digest/collectors/x.py's module docstring). `collect()` must therefore
+    never call `.next()` in that state; `next_error`/no-`next_page` here
+    simulate that misuse loudly (AssertionError) instead of silently
+    looping, so a regression fails fast in tests.
+
+    `next_call_log` is a list shared across an entire chain of pages --
+    every `.next()` call anywhere in the chain appends to it, so a test can
+    assert exactly how many next-page fetches happened.
+    """
+
+    def __init__(
+        self,
+        notifications: list[FakeNotification],
+        next_cursor: str | None,
+        next_call_log: list[int],
+        next_page: FakeResultPage | None = None,
+        next_error: Exception | None = None,
+    ):
+        self._notifications = notifications
+        self.next_cursor = next_cursor
+        self._next_call_log = next_call_log
+        self._next_page = next_page
+        self._next_error = next_error
+
+    def __iter__(self):
+        return iter(self._notifications)
+
+    def __len__(self):
+        return len(self._notifications)
+
+    async def next(self) -> FakeResultPage:
+        self._next_call_log.append(1)
+        if self._next_error is not None:
+            raise self._next_error
+        if self._next_page is None:
+            raise AssertionError(
+                "collect() called .next() with no next page configured -- it should "
+                "have stopped via the next_cursor guard instead"
+            )
+        return self._next_page
+
+
+def _build_page_chain(
+    pages: list[tuple[list[FakeNotification], str | None]],
+    *,
+    error_after: int | None = None,
+    error: Exception | None = None,
+) -> tuple[FakeResultPage, list[int]]:
+    """Build a linked chain of FakeResultPage from (notifications, next_cursor) pairs.
+
+    ``error_after``/``error``: if set, the page at that 1-based index (i.e.
+    the page whose `.next()` is called) raises ``error`` instead of handing
+    back the following page -- used to simulate a mid-pagination failure.
+
+    Returns (first_page, next_call_log).
+    """
+    next_call_log: list[int] = []
+    built: list[FakeResultPage] = []
+    for idx, (notifications, next_cursor) in enumerate(reversed(pages), start=1):
+        real_idx = len(pages) - idx + 1
+        raise_here = error_after is not None and real_idx == error_after
+        built.append(
+            FakeResultPage(
+                notifications,
+                next_cursor,
+                next_call_log,
+                next_page=None if raise_here else (built[-1] if built else None),
+                next_error=error if raise_here else None,
+            )
+        )
+    built.reverse()
+    return built[0], next_call_log
 
 
 # --- first run seeding ---
@@ -161,6 +245,128 @@ async def test_incremental_notification_without_screen_name_is_skipped():
     result = await collect(client, cursor="0")
 
     assert [i.source_id for i in result.items] == ["100"]
+
+
+# --- pagination: bounded catch-up when >1 page of new notifications ---
+
+
+async def test_pagination_multi_page_collects_all_until_cursor_bridged(monkeypatch):
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page1_notifications = [
+        FakeNotification("n5", "m", _tweet("500", "fifth")),
+        FakeNotification("n4", "m", _tweet("400", "fourth")),
+    ]
+    page2_notifications = [
+        FakeNotification("n3", "m", _tweet("300", "third")),
+        FakeNotification("n2b", "m", _tweet("250", "second-b")),
+    ]
+    page3_notifications = [
+        FakeNotification("n2", "m", _tweet("200", "second")),
+        FakeNotification("n1", "m", _tweet("100", "first")),  # <= cursor: bridges here
+    ]
+    first_page, next_call_log = _build_page_chain(
+        [
+            (page1_notifications, "c1"),
+            (page2_notifications, "c2"),
+            (page3_notifications, "c3"),
+        ]
+    )
+    client = FakeXClient(notifications=first_page)
+
+    result = await collect(client, cursor="150")
+
+    assert [i.source_id for i in result.items] == ["200", "250", "300", "400", "500"]
+    assert result.cursor_updates == {("x", "notifications"): "500"}
+    assert result.failed is False
+    # 1 initial get_notifications() call (page 1) + 2 .next() calls (-> page 2, -> page 3).
+    assert client.calls == 1
+    assert len(next_call_log) == 2
+    # sleep awaited once between each pair of page fetches, never before the first.
+    assert sleeps == [1.5, 1.5]
+
+
+async def test_pagination_cursor_bridged_on_first_page_makes_exactly_one_fetch_no_sleep(
+    monkeypatch,
+):
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    notifications = [
+        FakeNotification("n2", "m", _tweet("500", "new")),
+        FakeNotification("n1", "m", _tweet("100", "old")),  # <= cursor: bridged on page 1
+    ]
+    client = FakeXClient(notifications=notifications)
+
+    result = await collect(client, cursor="150")
+
+    assert [i.source_id for i in result.items] == ["500"]
+    assert result.cursor_updates == {("x", "notifications"): "500"}
+    assert client.calls == 1
+    assert sleeps == []
+
+
+async def test_pagination_page_cap_reached_logs_warning_but_cursor_still_advances(
+    monkeypatch, caplog
+):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    # 6 pages, all-new ids (never <= cursor), forcing the cap at 5 pages.
+    pages = [
+        ([FakeNotification(f"n{i}", "m", _tweet(str(i), f"t{i}"))], f"c{i}")
+        for i in (600, 500, 400, 300, 200, 100)
+    ]
+    first_page, next_call_log = _build_page_chain(pages)
+    client = FakeXClient(notifications=first_page)
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursor="50")
+
+    # Page 6 (id 100) is never fetched -- only 4 `.next()` calls (1->2->3->4->5).
+    assert len(next_call_log) == 4
+    assert result.cursor_updates == {("x", "notifications"): "600"}
+    # Ids 600,500,400,300,200 came from the 5 fetched pages; 100 (page 6) never arrives.
+    assert [i.source_id for i in result.items] == ["200", "300", "400", "500", "600"]
+    assert any(
+        "page cap reached, 5 pages fetched" in record.message for record in caplog.records
+    )
+
+
+async def test_pagination_exception_on_second_page_keeps_first_page_items(monkeypatch):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page1_notifications = [
+        FakeNotification("n2", "m", _tweet("100", "b")),
+        FakeNotification("n1", "m", _tweet("80", "a")),
+    ]
+    first_page, next_call_log = _build_page_chain(
+        [(page1_notifications, "c1")],
+        error_after=1,
+        error=RuntimeError("graphql shape changed"),
+    )
+    client = FakeXClient(notifications=first_page)
+
+    result = await collect(client, cursor="50")
+
+    assert [i.source_id for i in result.items] == ["80", "100"]
+    assert result.cursor_updates == {("x", "notifications"): "100"}
+    assert result.failed is True
+    assert len(next_call_log) == 1
 
 
 # --- errors: auth/cookie failures never retry ---
