@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 
 import digest.emailer as emailer_mod
-from digest.emailer import archive, render_html, send_digest
+from digest.emailer import (
+    _highlight_tldr_paragraph,
+    _inject_source_badges,
+    _wrap_banner_paragraph,
+    archive,
+    render_html,
+    send_digest,
+)
 
 # --- render_html ---
 
@@ -114,6 +121,187 @@ def test_render_html_keeps_allowlisted_url_containing_ampersand_after_entity_rou
     assert 'href="https://t.me/c/1/2?a=1&amp;b=2"' in html
     assert "<a " in html
     assert "see it</a>" in html
+
+
+# --- _inject_source_badges ---
+
+
+def test_inject_source_badges_wraps_telegram_group_heading():
+    html = "<h3>Telegram — Homelab Hungary</h3>"
+
+    result = _inject_source_badges(html)
+
+    assert "background-color:#229ED9" in result
+    assert ">Telegram</span>" in result
+    assert "— Homelab Hungary</h3>" in result
+    # The literal "Telegram" prefix must not also survive un-chipped outside
+    # the span (it should appear exactly once, inside the chip).
+    assert result.count("Telegram") == 1
+
+
+def test_inject_source_badges_wraps_bare_x_heading():
+    html = "<h3>X</h3>"
+
+    result = _inject_source_badges(html)
+
+    assert "background-color:#000000" in result
+    assert "𝕏</span>" in result
+    assert result.endswith("</h3>")
+
+
+def test_inject_source_badges_wraps_x_heading_with_topic():
+    html = "<h3>X — Some Topic</h3>"
+
+    result = _inject_source_badges(html)
+
+    assert "𝕏</span>" in result
+    assert "— Some Topic</h3>" in result
+
+
+def test_inject_source_badges_leaves_non_source_h3_untouched():
+    html = "<h3>Random Section</h3>"
+
+    result = _inject_source_badges(html)
+
+    assert result == html
+
+
+def test_inject_source_badges_does_not_match_prefix_that_is_a_different_word():
+    # "Xavier" and "Telegramish" share a literal prefix with "X"/"Telegram"
+    # but are a different word entirely -- must not get chipped.
+    html = "<h3>Xavier's update</h3><h3>Telegramish thing</h3>"
+
+    result = _inject_source_badges(html)
+
+    assert result == html
+
+
+def test_inject_source_badges_ignores_h2_headings():
+    html = "<h2>Telegram</h2>"
+
+    result = _inject_source_badges(html)
+
+    assert result == html
+
+
+# --- _wrap_banner_paragraph ---
+
+
+def test_wrap_banner_paragraph_styles_leading_warning_paragraph():
+    html = "<p>⚠ telegram collection failed this run</p>\n<h2>Needs attention</h2>"
+
+    result = _wrap_banner_paragraph(html)
+
+    assert "background-color:#fff3cd" in result
+    assert "color:#664d03" in result
+    assert "⚠ telegram collection failed this run" in result
+    assert "<h2>Needs attention</h2>" in result
+
+
+def test_wrap_banner_paragraph_converts_embedded_newlines_between_multiple_sources():
+    # Multiple failed-source banner lines collapse into ONE <p> joined by a
+    # literal "\n" (python-markdown does not insert <br> between lines of
+    # the same paragraph) -- those must become <br> so they still read as
+    # separate lines.
+    html = "<p>⚠ telegram collection failed this run\n⚠ x collection failed this run</p>"
+
+    result = _wrap_banner_paragraph(html)
+
+    assert "<br>" in result
+    assert "\n" not in result
+
+
+def test_wrap_banner_paragraph_absent_is_a_noop():
+    html = "<p><strong>TL;DR:</strong> quiet day.</p><h2>Needs attention</h2>"
+
+    result = _wrap_banner_paragraph(html)
+
+    assert result == html
+
+
+# --- _highlight_tldr_paragraph ---
+
+
+def test_highlight_tldr_paragraph_styles_when_present():
+    html = "<p><strong>TL;DR:</strong> quiet day, nothing urgent.</p><h2>Needs attention</h2>"
+
+    result = _highlight_tldr_paragraph(html)
+
+    assert "background-color:#f0f0f0" in result
+    assert "<strong>TL;DR:</strong> quiet day, nothing urgent." in result
+    assert "<h2>Needs attention</h2>" in result
+
+
+def test_highlight_tldr_paragraph_absent_is_a_noop():
+    html = "<p>just a regular paragraph</p><h2>Needs attention</h2>"
+
+    result = _highlight_tldr_paragraph(html)
+
+    assert result == html
+
+
+def test_highlight_tldr_paragraph_skips_past_a_leading_banner_paragraph():
+    html = (
+        "<p>⚠ telegram collection failed this run</p>"
+        "<p><strong>TL;DR:</strong> quiet day.</p>"
+        "<h2>Needs attention</h2>"
+    )
+
+    result = _highlight_tldr_paragraph(html)
+
+    assert "background-color:#f0f0f0" in result
+    # The banner paragraph itself must be untouched by this pass.
+    assert "<p>⚠ telegram collection failed this run</p>" in result
+
+
+# --- render_html: full integration of the visual-upgrade passes ---
+
+
+def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenance():
+    body_md = (
+        "⚠ telegram collection failed this run\n\n"
+        "**TL;DR:** Homelab discussion wrapped up, one X thread flagged for review.\n\n"
+        "## Needs attention\n\n"
+        "- [reply to Bob](https://t.me/c/123/1): confirm the maintenance window\n\n"
+        "## Worth knowing\n\n"
+        "### Telegram — Homelab Hungary\n\n"
+        "- [see the thread](https://t.me/c/123/2): the group agreed to move the "
+        "backup job to 3am after discussing disk contention.\n"
+        "- [phishing attempt](https://attacker.example/phish): someone posted a "
+        "suspicious link, not from an allowlisted item.\n\n"
+        "### X\n\n"
+        "- [see the post](https://x.com/foo/status/1): announcement of a new release.\n\n"
+        "## Noise skipped\n\n"
+        "- a handful of low-signal reaction messages were filtered.\n"
+    )
+    allowed_urls = {
+        "https://t.me/c/123/1",
+        "https://t.me/c/123/2",
+        "https://x.com/foo/status/1",
+    }
+
+    html = render_html(body_md, allowed_urls)
+
+    # Banner styling applied.
+    assert "background-color:#fff3cd" in html
+    assert "⚠ telegram collection failed this run" in html
+    # TL;DR highlight applied.
+    assert "background-color:#f0f0f0" in html
+    assert "Homelab discussion wrapped up" in html
+    # Telegram and X chips both present.
+    assert "background-color:#229ED9" in html
+    assert ">Telegram</span>" in html
+    assert "background-color:#000000" in html
+    assert "𝕏</span>" in html
+    # Allowed links survive as real anchors (anchor-provenance pass intact).
+    assert 'href="https://t.me/c/123/1"' in html
+    assert 'href="https://t.me/c/123/2"' in html
+    assert 'href="https://x.com/foo/status/1"' in html
+    # The non-allowlisted link is unwrapped, never a live href.
+    assert "attacker.example" not in html
+    assert "phishing attempt" in html
+    # Dark-mode media query present in the document.
+    assert "prefers-color-scheme: dark" in html
 
 
 # --- send_digest ---

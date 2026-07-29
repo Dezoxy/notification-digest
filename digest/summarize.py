@@ -555,7 +555,12 @@ _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULT
 # match is possible either.
 _BARE_URL_RE = re.compile(
     r"\b(?!hxxps?://)[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)\]>\"']+"
-    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}",
+    # The generic non-// branch requires a URI-plausible first payload char
+    # (letter/digit//+~%_): real URIs (mailto:user, tel:+1, geo:47.5) always
+    # start that way, while markdown emphasis right after a colon does not —
+    # without this, the digest's own mandated "**TL;DR:**" opener was mangled
+    # into "TL;DR[:]**" (the `DR:**…` token matched; found by live test).
+    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[A-Za-z0-9/+~%_][^\s:)\]>\"']+",
     re.IGNORECASE,
 )
 
