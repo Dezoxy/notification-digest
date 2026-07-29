@@ -291,6 +291,53 @@ def test_validate_output_fenced_block_quoting_heading_does_not_double_count():
     validate_output(markdown_text)  # must not raise
 
 
+def test_validate_output_indented_template_refusal_raises_missing_all_three():
+    # A refusal that pads a template with 4-space indentation (not a fenced
+    # block) must not validate: per CommonMark, 4+ leading spaces makes
+    # these lines an indented code block, not real ATX headings.
+    refusal = (
+        "I can't do this. Here's the template you asked about:\n"
+        "    ## Needs attention\n"
+        "    ## Worth knowing\n"
+        "    ## Noise skipped\n"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_indented_line_quoting_heading_does_not_double_count():
+    # Three real headings plus a 4-space-indented line inside a section
+    # body that happens to quote one of the heading strings verbatim must
+    # still pass -- the indented occurrence is code content, not a real
+    # heading line, and must not trigger a duplicate error.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "    ## Needs attention\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
+def test_validate_output_headings_indented_up_to_three_spaces_still_count():
+    # Per CommonMark, an ATX heading may be indented at most 3 spaces --
+    # these are still real headings and must satisfy the contract.
+    markdown_text = (
+        " ## Needs attention\n- nothing\n\n"
+        "  ## Worth knowing\n- nothing\n\n"
+        "   ## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
 def test_validate_output_duplicate_heading_raises_naming_it():
     markdown_text = (
         "## Needs attention\n- nothing\n\n"

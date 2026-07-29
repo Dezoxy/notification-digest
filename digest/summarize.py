@@ -156,10 +156,23 @@ def validate_output(markdown_text: str) -> None:
     toggles an in-fence flag; while the flag is set, "## " lines are not
     counted as headings, and the fence delimiter lines themselves are never
     counted as headings either.
+
+    Indented lines are excluded from both heading and fence-delimiter
+    detection, before any stripping happens: per CommonMark, an ATX heading
+    (or a fence delimiter) may be indented at most 3 spaces -- a line
+    starting with a tab, or with 4 or more leading spaces, is an indented
+    code block instead. A refusal that pads a template with 4-space
+    indentation (e.g. "    ## Needs attention") is therefore code content,
+    not a real heading, and must not satisfy the contract.
     """
     heading_lines = []
     in_fence = False
     for line in markdown_text.splitlines():
+        # CommonMark: 4+ leading spaces or a leading tab makes this an
+        # indented code block -- neither a heading nor a fence delimiter
+        # can start here, regardless of what follows the indentation.
+        if line.startswith("\t") or line[:4] == "    ":
+            continue
         stripped = line.strip()
         if stripped.startswith("```"):
             in_fence = not in_fence
