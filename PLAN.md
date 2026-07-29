@@ -115,16 +115,19 @@ CREATE TABLE IF NOT EXISTS digests (
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
-    source        TEXT PRIMARY KEY CHECK (source IN ('telegram', 'x')),
+    source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+    scope         TEXT NOT NULL,              -- telegram: chat id (IDs are per-chat); x: 'notifications'
     last_seen_id  TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (source, scope)
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 ```
 
 Idempotency contract:
-- Each collector reads its `cursors.last_seen_id` before fetching, and only requests items newer than that.
+- Each collector reads its `cursors.last_seen_id` per `(source, scope)` before fetching, and only requests items newer than that — Telegram message IDs are only monotonic within a chat, so each allowlisted chat gets its own cursor row; X uses a single `notifications` scope.
+- First run for a chat (no cursor row): seed the cursor from the latest message without emitting items — the first digest starts from "now", never a full-history backfill.
 - Inserts use `INSERT OR IGNORE` on the `(source, source_id)` unique constraint — re-fetching an overlapping window is a no-op.
 - The cursor only advances after items are durably committed in the same transaction as the insert.
 - A digest row is created before the email send attempt (`email_sent=0`) and flipped to `1` only after SMTP confirms; items are stamped with `digest_id` at creation. If the process crashes after commit but before send, the next run detects an existing digest with `email_sent=0` and retries the send instead of re-summarizing (avoids double-billing Opus calls). If it crashes before the digest row commits, next run's "new since last digest" query naturally includes the same items — no loss, no duplicate items (duplicate *summarization* of a stuck row is bounded to one retry pass).
