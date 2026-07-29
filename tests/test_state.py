@@ -7,9 +7,12 @@ from digest.state import (
     Item,
     commit_new_items,
     connect,
+    create_digest,
     get_cursors,
+    get_pending_digest,
     get_unsummarized_items,
     init_db,
+    mark_digest_sent,
 )
 
 
@@ -145,8 +148,8 @@ def test_get_unsummarized_items_orders_by_fetched_at(conn):
     )
     # mark one item as already summarized — it must be excluded
     conn.execute(
-        "INSERT INTO digests (created_at, item_count, email_sent) VALUES (?, 1, 1)",
-        ("2026-07-29T13:00:00+00:00",),
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) VALUES (?, 1, 1, ?)",
+        ("2026-07-29T13:00:00+00:00", "already sent"),
     )
     digest_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.execute("UPDATE items SET digest_id = ? WHERE source_id = '3'", (digest_id,))
@@ -154,3 +157,56 @@ def test_get_unsummarized_items_orders_by_fetched_at(conn):
 
     items = get_unsummarized_items(conn)
     assert [i.source_id for i in items] == ["1", "2"]
+
+
+# --- digest bookkeeping (Phase 2) ---
+
+
+def test_create_digest_stamps_all_unsummarized_items_and_stores_body_md(conn):
+    commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
+    items = get_unsummarized_items(conn)
+
+    digest_id = create_digest(conn, "## Needs attention\n...", items)
+
+    rows = conn.execute("SELECT source_id, digest_id FROM items ORDER BY source_id").fetchall()
+    assert rows == [("1", digest_id), ("2", digest_id)]
+
+    digest_row = conn.execute(
+        "SELECT item_count, email_sent, body_md FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert digest_row == (2, 0, "## Needs attention\n...")
+
+    # newly stamped items no longer show up as unsummarized
+    assert get_unsummarized_items(conn) == []
+
+
+def test_get_pending_digest_returns_newest_unsent_then_none_after_marked_sent(conn):
+    assert get_pending_digest(conn) is None
+
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    first_id = create_digest(conn, "first digest", get_unsummarized_items(conn))
+
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    second_id = create_digest(conn, "second digest", get_unsummarized_items(conn))
+
+    # newest unsent digest wins
+    assert get_pending_digest(conn) == (second_id, "second digest")
+
+    mark_digest_sent(conn, second_id)
+    assert get_pending_digest(conn) == (first_id, "first digest")
+
+    mark_digest_sent(conn, first_id)
+    assert get_pending_digest(conn) is None
+
+
+def test_create_digest_rollback_on_failure_leaves_items_unstamped(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    items = get_unsummarized_items(conn)
+
+    # body_md violates NOT NULL -> the whole transaction must roll back,
+    # leaving the item's digest_id untouched.
+    with pytest.raises(sqlite3.IntegrityError):
+        create_digest(conn, None, items)
+
+    assert conn.execute("SELECT COUNT(*) FROM digests").fetchone()[0] == 0
+    assert get_unsummarized_items(conn) == items

@@ -199,7 +199,9 @@ def main() -> int:
         action="store_true",
         help="Include outdated threads (default: only actionable current-diff threads)",
     )
-    parser.add_argument("--exit-code", action="store_true", help="Exit 1 if any matching thread exists")
+    parser.add_argument(
+        "--exit-code", action="store_true", help="Exit 1 if any matching thread exists"
+    )
     args = parser.parse_args()
 
     pull_request, threads = filtered_threads(args)

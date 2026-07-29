@@ -7,6 +7,7 @@ idempotency contract this module must uphold.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,7 +30,8 @@ CREATE TABLE IF NOT EXISTS digests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
     item_count  INTEGER NOT NULL,
-    email_sent  INTEGER NOT NULL DEFAULT 0
+    email_sent  INTEGER NOT NULL DEFAULT 0,
+    body_md     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -174,3 +176,55 @@ def get_unsummarized_items(conn: sqlite3.Connection) -> list[Item]:
         )
         for row in rows
     ]
+
+
+def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item]) -> int:
+    """Durably record a digest and stamp its items, in one transaction.
+
+    Inserts a `digests` row (created_at = now UTC, item_count = len(items),
+    email_sent = 0, body_md) and stamps every currently-unsummarized item
+    (digest_id IS NULL) with the new digest's id. This must happen BEFORE
+    the email send attempt (PLAN.md §4.1): if the process crashes after this
+    commits but before the send confirms, the next run finds a pending
+    unsent digest and retries the send instead of re-summarizing (avoids
+    double-billing the Claude call). On any failure the whole transaction is
+    rolled back so a digest row never exists without its items stamped, and
+    vice versa.
+    """
+    now = datetime.now(UTC).isoformat()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            INSERT INTO digests (created_at, item_count, email_sent, body_md)
+            VALUES (?, ?, 0, ?)
+            """,
+            (now, len(items), body_md),
+        )
+        digest_id = cur.lastrowid
+        cur.execute(
+            "UPDATE items SET digest_id = ? WHERE digest_id IS NULL",
+            (digest_id,),
+        )
+        conn.commit()
+        return digest_id
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_pending_digest(conn: sqlite3.Connection) -> tuple[int, str] | None:
+    """Return (id, body_md) of the newest unsent digest, or None if none is pending."""
+    row = conn.execute(
+        "SELECT id, body_md FROM digests WHERE email_sent = 0 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0], row[1])
+
+
+def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
+    """Flip a digest's email_sent flag to 1 after SMTP confirms delivery."""
+    conn.execute("UPDATE digests SET email_sent = 1 WHERE id = ?", (digest_id,))
+    conn.commit()

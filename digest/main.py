@@ -1,22 +1,37 @@
 """Entrypoint: python -m digest.main — orchestrates one collection run.
 
-Phase 1 scope: Telegram collection + state persistence only. Summarization
-and email (§4.4, §4.5 of PLAN.md) land in Phase 2.
+Phase 2: Telegram collection + state persistence, then summarization
+(§4.4) and email delivery (§4.5) of PLAN.md.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import sys
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from digest.collectors import telegram as telegram_collector
+from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
-from digest.state import commit_new_items, connect, get_cursors, init_db
+from digest.emailer import archive, send_digest
+from digest.state import (
+    commit_new_items,
+    connect,
+    create_digest,
+    get_cursors,
+    get_pending_digest,
+    get_unsummarized_items,
+    init_db,
+    mark_digest_sent,
+)
+from digest.summarize import SummarizeError, summarize
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,8 +58,83 @@ async def _client_ready(client: TelegramClient) -> bool:
         return False
 
 
+def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bool:
+    """Post-collection delivery: retry any pending send, else summarize+send new items.
+
+    (a) A pending unsent digest (crash/SMTP failure on a previous run) is
+        resent as-is -- summarize is never called twice for the same items.
+    (b) No unsummarized items -- nothing to send, this is a normal empty-
+        window run.
+    (c) Otherwise: summarize, durably record the digest (BEFORE sending, so
+        a crash after this point retries the send next run instead of
+        re-summarizing), send, mark sent, archive.
+
+    Returns True if delivery succeeded or wasn't needed. Deliberately does
+    NOT factor in `result.failed` -- the caller combines this with the
+    collector's own failure flag, because a Telegram collector failure must
+    surface as a non-zero exit (the sole signal for the Loki alert on
+    digest.service) even on a run that sends no email at all, e.g. zero
+    collected items with no pending/unsummarized backlog to fall back on.
+    """
+    pending = get_pending_digest(conn)
+    if pending is not None:
+        digest_id, body_md = pending
+        logger.info("retrying send of digest %d", digest_id)
+        item_count = conn.execute(
+            "SELECT item_count FROM digests WHERE id = ?", (digest_id,)
+        ).fetchone()[0]
+        return _send_and_finalize(conn, cfg, digest_id, body_md, item_count)
+
+    items = get_unsummarized_items(conn)
+    if not items:
+        logger.info("no unsummarized items, nothing to send")
+        return True
+
+    failed_sources = ["telegram"] if result.failed else []
+    try:
+        body_md = summarize(items, failed_sources, cfg.anthropic_model, cfg.claude_timeout_seconds)
+    except SummarizeError as exc:
+        logger.error("summarization failed: %s", exc)
+        return False
+
+    digest_id = create_digest(conn, body_md, items)
+    return _send_and_finalize(conn, cfg, digest_id, body_md, len(items))
+
+
+def _send_and_finalize(
+    conn: sqlite3.Connection, cfg: Config, digest_id: int, body_md: str, item_count: int
+) -> bool:
+    """Send the digest, mark it sent, and archive it.
+
+    On SMTP failure the digest row is deliberately left email_sent=0 so the
+    next run's `get_pending_digest` branch retries the send (PLAN.md §4.1).
+    Email subject time is rendered in Europe/Budapest per CLAUDE.md (storage
+    stays UTC; only render/email time converts).
+    """
+    now_local = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest"))
+    subject = f"digest: {item_count} items · {now_local:%Y-%m-%d %H:%M}"
+    try:
+        send_digest(
+            cfg.smtp_host,
+            cfg.smtp_port,
+            cfg.smtp_user,
+            cfg.smtp_password,
+            cfg.digest_from,
+            cfg.digest_to,
+            subject,
+            body_md,
+        )
+    except Exception as exc:
+        logger.error("email send failed for digest %d: %s", digest_id, type(exc).__name__)
+        return False
+
+    mark_digest_sent(conn, digest_id)
+    archive(body_md, cfg.archive_dir, digest_id)
+    return True
+
+
 async def _run(cfg: Config) -> bool:
-    """Run one collection cycle. Returns True if it completed without failure."""
+    """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
     try:
         init_db(conn)
@@ -69,7 +159,9 @@ async def _run(cfg: Config) -> bool:
             inserted,
             len(result.cursor_updates),
         )
-        return not result.failed
+
+        delivered = _deliver(conn, cfg, result)
+        return delivered and not result.failed
     finally:
         conn.close()
 
