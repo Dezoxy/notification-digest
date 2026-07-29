@@ -151,30 +151,53 @@ def select_items_for_prompt(
     returns it that way) -- this function preserves that order and never
     reorders or drops from the middle, it only shrinks from the end.
 
-    Halves the candidate count on each miss (`n = max(1, n // 2)`) rather
-    than decrementing one at a time: a single oversized item (or a batch
-    saturated with multi-byte text) could otherwise take hundreds of
-    build_prompt calls -- each one re-serializing the whole candidate slice
-    -- to converge. Halving reaches a fit in O(log n) builds.
+    Finds the LONGEST fitting prefix, not just *a* fitting one: the full
+    list is tried first (the common case -- everything fits, return as-is
+    with zero extra build_prompt calls). If that misses, this binary
+    searches for the largest n in [1, len(items) - 1] whose built prefix
+    fits, rather than halving n on a miss and stopping at the first hit.
+    Halving-and-stop can badly under-fill: e.g. if 199 of 200 items would
+    have fit, halving jumps straight to 100 and returns it, needlessly
+    discarding 99 items (and roughly halving how fast the backlog drains)
+    even though a much longer prefix fits. Binary search still converges in
+    O(log n) build_prompt calls -- same order of magnitude as halving -- but
+    lands on the actual longest fitting prefix instead of an arbitrary
+    shorter one. Each build_prompt call is itself O(prefix size); at the
+    n <= 200 scale this module operates at (_MAX_ITEMS_PER_DIGEST in
+    digest/main.py), a handful of O(log n) builds is cheap.
+
+    The search's fit predicate (`len(build_prompt(items[:n], ...)) <=
+    max_prompt_chars`) is monotone in n: a longer prefix only ever adds
+    JSON/text, never removes it, so built-prompt length is non-decreasing as
+    n grows. That monotonicity is what makes binary search valid here.
 
     Stops at a 1-item floor: build_prompt on a single item always fits,
     because per-item text is already truncated to _MAX_ITEM_TEXT_CHARS by
     build_prompt itself, bounding one item's contribution regardless of its
-    original length. The loop still explicitly returns the 1-item prefix
-    once n reaches 1, rather than trusting the size check to naturally pass,
-    so a pathological template/overhead blowup can't spin this into an
-    infinite loop.
+    original length. n=1 is returned even if it somehow doesn't fit --
+    rather than trusting the size check to naturally pass -- so a
+    pathological template/overhead blowup can't leave this with nothing to
+    return.
     """
     if not items:
         return items
 
     n = len(items)
-    while True:
-        candidate = items[:n]
-        prompt = build_prompt(candidate, failed_sources)
-        if len(prompt) <= max_prompt_chars or n <= 1:
-            return candidate
-        n = max(1, n // 2)
+    if len(build_prompt(items, failed_sources)) <= max_prompt_chars:
+        return items
+
+    if n == 1:
+        return items
+
+    lo, hi = 1, n - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        candidate = items[:mid]
+        if len(build_prompt(candidate, failed_sources)) <= max_prompt_chars:
+            lo = mid
+        else:
+            hi = mid - 1
+    return items[:lo]
 
 
 def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:

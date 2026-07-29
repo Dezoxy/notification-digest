@@ -163,25 +163,44 @@ def test_build_prompt_item_text_with_placeholder_literal_is_not_rescanned():
     assert "Collector status: telegram collection failed this run" in prompt
 
 
-# --- select_items_for_prompt (P1 fix: bound the BUILT prompt, not source chars) ---
+# --- select_items_for_prompt (P2 fix: exact longest-fitting prefix via binary search) ---
 
 
-def test_select_items_for_prompt_halves_until_the_built_prompt_fits():
+def test_select_items_for_prompt_finds_the_longest_fitting_prefix_not_a_halved_underfill():
+    # P2 regression: 199 of 200 items fit -- construct sizes so exactly
+    # len(items) - 1 items fit and the full list does not. A halving
+    # implementation would jump straight to 100 and stop there; the correct
+    # behavior is to keep searching until it finds that len - 1 is in fact
+    # the longest fitting prefix.
+    items = [dataclasses.replace(_item(str(i)), text="x" * 100) for i in range(200)]
+    max_prompt_chars = len(build_prompt(items[:199], []))
+    assert len(build_prompt(items, [])) > max_prompt_chars  # full list does not fit
+
+    selected = select_items_for_prompt(items, [], max_prompt_chars)
+
+    assert len(selected) == 199
+    assert selected == items[:199]
+
+
+def test_select_items_for_prompt_binary_searches_to_the_exact_longest_fit():
     # Each item carries a large text so the full batch's built prompt blows
-    # past a deliberately small max_prompt_chars. The function must shrink
-    # by halving (5 -> 2 -> 1) until the built prompt for the candidate
-    # prefix fits, rather than failing or looping item-by-item.
+    # past a deliberately small max_prompt_chars. The function must binary
+    # search for the exact longest fitting prefix, not stop at the first
+    # (possibly much shorter) prefix that happens to fit.
     items = [dataclasses.replace(_item(str(i)), text="x" * 4000) for i in range(5)]
 
-    # Single item: len(build_prompt([items[0]], [])) is the floor; pick a
-    # cap comfortably above that but well below what 5, 4, 3, or 2 items
-    # would produce, so only the 1-item (or 2-item) prefix can fit.
-    one_item_len = len(build_prompt([items[0]], []))
-    max_prompt_chars = one_item_len + 500
+    # Pick a cap that admits exactly 2 items but not 3, so the correct
+    # answer is unambiguous and distinguishable from an under-filling
+    # halving result.
+    two_item_len = len(build_prompt(items[:2], []))
+    three_item_len = len(build_prompt(items[:3], []))
+    assert two_item_len < three_item_len
+    max_prompt_chars = two_item_len
 
     selected = select_items_for_prompt(items, [], max_prompt_chars)
 
     assert len(build_prompt(selected, [])) <= max_prompt_chars
+    assert len(selected) == 2
     # Oldest-first prefix: whatever subset survives must be a prefix
     # starting at item "0", not an arbitrary or reordered subset.
     assert [item.source_id for item in selected] == [
@@ -193,11 +212,12 @@ def test_select_items_for_prompt_halves_until_the_built_prompt_fits():
 def test_select_items_for_prompt_keeps_oldest_prefix_when_shrinking():
     items = [dataclasses.replace(_item(str(i)), text="y" * 3000) for i in range(8)]
     max_prompt_chars = len(build_prompt(items[:2], [])) + 10
+    assert len(build_prompt(items[:3], [])) > max_prompt_chars  # 3 items must not fit
 
     selected = select_items_for_prompt(items, [], max_prompt_chars)
 
-    assert len(selected) < len(items)
-    assert [item.source_id for item in selected] == ["0", "1"][: len(selected)]
+    assert len(selected) == 2
+    assert [item.source_id for item in selected] == ["0", "1"]
     # Never picks from the middle or end -- always the oldest contiguous prefix.
     assert selected == items[: len(selected)]
 
