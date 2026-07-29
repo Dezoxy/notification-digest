@@ -19,8 +19,10 @@ logger = logging.getLogger(__name__)
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "digest.md"
 
 # The three section headings the output contract in prompts/digest.md
-# requires, always, verbatim, lowercased for case-insensitive matching.
-_REQUIRED_HEADINGS = ("## needs attention", "## worth knowing", "## noise skipped")
+# requires, always, in this relative order, lowercased for case-insensitive
+# matching. These are the heading TEXT only (no "## " prefix) -- see
+# validate_output, which parses actual heading lines rather than substrings.
+_REQUIRED_HEADINGS = ("needs attention", "worth knowing", "noise skipped")
 
 
 class SummarizeError(Exception):
@@ -108,6 +110,17 @@ def validate_output(markdown_text: str) -> None:
     run re-selects and re-summarizes the same items instead of treating
     them as already handled.
 
+    A plain substring check (`heading in text.lower()`) is fooled by a
+    refusal that merely *mentions* the headings inline -- e.g. "I cannot
+    produce ## Needs attention, ## Worth knowing, or ## Noise skipped in
+    this case." contains all three substrings without a single real
+    heading line. So instead this parses actual heading LINES: a line
+    whose stripped form starts with exactly "## " (two hashes -- "###  "
+    subgroup headings are not h2 and are ignored). Each of the three
+    required sections must appear exactly once among those heading lines,
+    and in the fixed relative order given by _REQUIRED_HEADINGS. Unknown
+    extra h2 headings are allowed.
+
     Only the heading names are checked, case-insensitively -- never the
     error message includes the offending output itself, since it may
     contain scraped Telegram/X message content (see SummarizeError).
@@ -116,11 +129,27 @@ def validate_output(markdown_text: str) -> None:
     noise legitimately produces zero `[text](url)` links in "Worth
     knowing", and that is correct output, not a contract violation.
     """
-    lowered = markdown_text.lower()
-    missing = [heading for heading in _REQUIRED_HEADINGS if heading not in lowered]
-    if missing:
-        names = ", ".join(heading.removeprefix("## ") for heading in missing)
-        raise SummarizeError(f"digest output missing required section(s): {names}")
+    heading_lines = []
+    for line in markdown_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            heading_lines.append(stripped[3:].strip().lower())
+
+    missing = [heading for heading in _REQUIRED_HEADINGS if heading not in heading_lines]
+    duplicated = [
+        heading for heading in _REQUIRED_HEADINGS if heading_lines.count(heading) > 1
+    ]
+    if missing or duplicated:
+        parts = []
+        if missing:
+            parts.append(f"missing required section(s): {', '.join(missing)}")
+        if duplicated:
+            parts.append(f"duplicated section(s): {', '.join(duplicated)}")
+        raise SummarizeError("digest output " + "; ".join(parts))
+
+    positions = [heading_lines.index(heading) for heading in _REQUIRED_HEADINGS]
+    if positions != sorted(positions):
+        raise SummarizeError("digest output sections out of order")
 
 
 def summarize(

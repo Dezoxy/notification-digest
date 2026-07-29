@@ -177,6 +177,60 @@ def test_validate_output_missing_only_noise_skipped_names_just_that_section():
     assert "worth knowing" not in message
 
 
+def test_validate_output_inline_mention_refusal_is_not_fooled_by_substrings():
+    # A refusal that name-drops all three headings inline, with no actual
+    # "## " heading lines, must still be treated as missing all three --
+    # a naive `heading in text.lower()` substring check would pass this.
+    refusal = (
+        "I cannot produce ## Needs attention, ## Worth knowing, "
+        "or ## Noise skipped in this case."
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_passes_with_subgroup_h3_headings_inside_sections():
+    markdown_text = (
+        "## Needs attention\n### Subgroup A\n- nothing\n\n"
+        "## Worth knowing\n### Subgroup B\n- nothing\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
+def test_validate_output_sections_out_of_order_raises():
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Noise skipped\n- nothing\n\n"
+        "## Worth knowing\n- nothing\n"
+    )
+
+    with pytest.raises(SummarizeError, match="out of order"):
+        validate_output(markdown_text)
+
+
+def test_validate_output_duplicate_heading_raises_naming_it():
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n- nothing\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(markdown_text)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+
+
 # --- summarize (composition) ---
 
 
