@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import ssl
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
 import markdown
+import nh3
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +48,52 @@ _HTML_TEMPLATE = """\
 """
 
 
+# Tags the digest contract can legitimately produce (PLAN.md §4.5 body_md is
+# headings/lists/links/emphasis/code/quotes only). No `img`: nothing in the
+# digest needs an image, and allowing it would let hostile markdown embed a
+# tracking pixel via `![x](https://attacker.example/pixel)`.
+_ALLOWED_TAGS = {
+    "h1", "h2", "h3", "p", "ul", "ol", "li", "a", "strong", "em", "code",
+    "pre", "blockquote", "br", "hr",
+}
+_ALLOWED_ATTRIBUTES = {"a": {"href"}}
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
 def render_html(body_md: str) -> str:
     """Convert digest markdown to a self-contained HTML document.
 
-    `&` and `<` are entity-escaped BEFORE markdown conversion. This is what
-    neutralizes any raw HTML that Claude might echo verbatim from hostile
-    message text (e.g. a smuggled `<img onerror=...>`) -- PLAN.md §5
-    requires that raw HTML never survive into the rendered email, since it
-    renders directly in the owner's mail client. Escaping `<` turns any raw
-    tag into inert text (`&lt;img ...&gt;`) before the markdown converter
-    ever sees it, while legitimate markdown syntax (`# heading`, `[text](url)`,
-    etc.) contains neither character and is unaffected.
+    Two distinct threats are neutralized here, in two different layers:
+
+    1. Raw HTML smuggled verbatim in message text (e.g. a hostile chat
+       message containing `<img onerror=...>` that Claude echoes into the
+       digest). `&` and `<` are entity-escaped BEFORE markdown conversion,
+       turning any raw tag into inert text (`&lt;img ...&gt;`) before the
+       markdown converter ever sees it. Legitimate markdown syntax
+       (`# heading`, `[text](url)`, etc.) contains neither character and is
+       unaffected.
+
+    2. Active content that hostile *markdown* (not raw HTML) generates once
+       converted -- e.g. `![status](https://attacker.example/pixel)` becomes
+       a real `<img>` tracking pixel, or `[click](javascript:...)` becomes a
+       `javascript:` link. The pre-escape above does nothing here since the
+       source text has no `<`. After conversion, `nh3.clean` sanitizes the
+       generated HTML against an allowlist of tags/attributes the digest
+       contract can legitimately produce, dropping anything else (including
+       `<img>` and non-http(s) URL schemes) -- this is the authority for
+       markdown-generated content, with the pre-escape acting as defense in
+       depth for raw HTML.
     """
     escaped = body_md.replace("&", "&amp;").replace("<", "&lt;")
     body_html = markdown.markdown(escaped)
-    return _HTML_TEMPLATE.format(body=body_html)
+    sanitized = nh3.clean(
+        body_html,
+        tags=_ALLOWED_TAGS,
+        attributes=_ALLOWED_ATTRIBUTES,
+        url_schemes=_ALLOWED_URL_SCHEMES,
+        link_rel="noopener noreferrer",
+    )
+    return _HTML_TEMPLATE.format(body=sanitized)
 
 
 def send_digest(
@@ -87,7 +120,11 @@ def send_digest(
     msg.attach(MIMEText(render_html(body_md), "html"))
 
     with smtplib.SMTP(smtp_host, smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
-        smtp.starttls()
+        # An explicit default context enforces certificate-chain and
+        # hostname verification. Without it, starttls() falls back to
+        # Python's unverified compatibility SSL context, which would let an
+        # impersonating server harvest the iCloud username + app password.
+        smtp.starttls(context=ssl.create_default_context())
         smtp.login(smtp_user, smtp_password)
         smtp.send_message(msg)
 

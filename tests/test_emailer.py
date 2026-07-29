@@ -1,3 +1,4 @@
+import ssl
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,7 @@ def test_render_html_still_renders_legit_headers_and_links():
     html = render_html(body_md)
 
     assert "<h2>Needs attention</h2>" in html
-    assert '<a href="https://t.me/c/123/42">ping from Bob</a>' in html
+    assert '<a href="https://t.me/c/123/42" rel="noopener noreferrer">ping from Bob</a>' in html
 
 
 def test_render_html_wraps_in_full_document_with_readable_style():
@@ -36,6 +37,32 @@ def test_render_html_wraps_in_full_document_with_readable_style():
 
     assert "<html>" in html
     assert "max-width: 42em" in html
+
+
+def test_render_html_strips_img_from_markdown_image_syntax():
+    # `![status](url)` is legitimate markdown, but Claude echoes hostile
+    # message text verbatim, so this must not become a tracking-pixel <img>.
+    body_md = "## Worth knowing\n\n![status](https://attacker.example/pixel.png)\n"
+
+    html = render_html(body_md)
+
+    assert "<img" not in html
+
+
+def test_render_html_strips_javascript_scheme_from_markdown_link():
+    body_md = "[click](javascript:alert(1))\n"
+
+    html = render_html(body_md)
+
+    assert "javascript:" not in html
+
+
+def test_render_html_still_renders_legit_link_with_safe_rel():
+    body_md = "[see it](https://t.me/c/123/45)\n"
+
+    html = render_html(body_md)
+
+    assert '<a href="https://t.me/c/123/45" rel="noopener noreferrer">see it</a>' in html
 
 
 # --- send_digest ---
@@ -60,8 +87,9 @@ class FakeSMTP:
     def __exit__(self, *exc_info):
         return False
 
-    def starttls(self):
+    def starttls(self, context=None):
         self.calls.append("starttls")
+        self.starttls_context = context
 
     def login(self, user, password):
         self.calls.append("login")
@@ -102,6 +130,12 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
     assert smtp.calls == ["starttls", "login", "send_message"]
     assert smtp.login_user == "user@example.com"
     assert smtp.login_password == "app-specific-password"
+
+    # STARTTLS must use a verifying context, not the unverified compat
+    # default -- otherwise an impersonating server could harvest the login.
+    assert isinstance(smtp.starttls_context, ssl.SSLContext)
+    assert smtp.starttls_context.verify_mode == ssl.CERT_REQUIRED
+    assert smtp.starttls_context.check_hostname is True
 
     msg = smtp.sent_message
     assert msg["From"] == "digest@4rgus.com"
