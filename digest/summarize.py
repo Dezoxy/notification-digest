@@ -148,25 +148,29 @@ def validate_output(markdown_text: str) -> None:
     noise legitimately produces zero `[text](url)` links in "Worth
     knowing", and that is correct output, not a contract violation.
 
-    Fenced code blocks are also excluded from heading detection: a refusal
-    can legitimately quote the required heading text inside a ``` block
-    (e.g. "here's the template you asked about:\n```\n## Needs attention\n...")
-    and that is not a real section -- it is example text sitting inside a
-    code fence. A stripped line starting with three or more backticks
-    toggles an in-fence flag; while the flag is set, "## " lines are not
-    counted as headings, and the fence delimiter lines themselves are never
-    counted as headings either.
+    Fenced code blocks are also excluded from heading line detection: a
+    refusal can legitimately quote the required heading text inside a
+    fenced block (e.g. "here's the template you asked about:\n```
+    \n## Needs attention\n...") and that is not a real section -- it is
+    example text sitting inside a code fence. Per CommonMark, a fence can
+    be delimited by three-or-more backticks OR three-or-more tildes, and a
+    fence only closes on a line starting with three-or-more of the SAME
+    delimiter character that opened it -- a ``` line inside a ~~~ fence
+    (or vice versa) is just fence content, not a closer. While the in-fence
+    flag is set, "## " lines are not counted as headings, and the fence
+    delimiter lines themselves are never counted either.
 
-    Indented lines are excluded from both heading and fence-delimiter
-    detection, before any stripping happens: per CommonMark, an ATX heading
-    (or a fence delimiter) may be indented at most 3 spaces -- a line
-    starting with a tab, or with 4 or more leading spaces, is an indented
-    code block instead. A refusal that pads a template with 4-space
-    indentation (e.g. "    ## Needs attention") is therefore code content,
-    not a real heading, and must not satisfy the contract.
+    Indented lines are excluded from heading and fence-delimiter detection,
+    before any stripping happens: per CommonMark, an ATX heading (or a
+    fence delimiter) may be indented at most 3 spaces -- a line starting
+    with a tab, or with 4 or more leading spaces, is an indented code block
+    instead. A refusal that pads a template with 4-space indentation (e.g.
+    "    ## Needs attention") is therefore code content, not a real
+    heading, and must not satisfy the contract.
     """
     heading_lines = []
     in_fence = False
+    fence_char = None
     for line in markdown_text.splitlines():
         # CommonMark: 4+ leading spaces or a leading tab makes this an
         # indented code block -- neither a heading nor a fence delimiter
@@ -174,10 +178,22 @@ def validate_output(markdown_text: str) -> None:
         if line.startswith("\t") or line[:4] == "    ":
             continue
         stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
         if in_fence:
+            # A fence only closes on a line starting with three-or-more of
+            # the SAME delimiter character that opened it -- content using
+            # the other fence character is just fence content, not a
+            # closer (CommonMark fence-matching rule).
+            if stripped.startswith(fence_char * 3):
+                in_fence = False
+                fence_char = None
+            continue
+        if stripped.startswith("```"):
+            in_fence = True
+            fence_char = "`"
+            continue
+        if stripped.startswith("~~~"):
+            in_fence = True
+            fence_char = "~"
             continue
         if stripped.startswith("## "):
             heading_lines.append(stripped[3:].strip().lower())
@@ -205,14 +221,29 @@ def summarize(
     model: str,
     timeout_seconds: int,
 ) -> str:
-    """Build the prompt, run it through Claude, and validate the contract.
+    """Build the prompt, run it through Claude, validate the contract, and
+    deterministically prepend the collector-failure banner.
 
     Never call with an empty item list. Raises SummarizeError (via
     run_claude or validate_output) rather than returning malformed output,
     so the caller never persists a digest for content that failed the
     output contract.
+
+    The `⚠ <source> collection failed this run` banner is generated here,
+    in code, rather than asked of the model: a live test against real Opus
+    showed the model omits the banner even when the prompt explicitly and
+    emphatically instructs it to write one. Whether a partial-collection
+    run is flagged to the reader is deterministic system state -- it must
+    never depend on model compliance. One banner line is emitted per
+    failed source, in the given order, followed by a blank line, then the
+    (validated) model output unchanged.
     """
     prompt = build_prompt(items, failed_sources)
     output = run_claude(prompt, model, timeout_seconds)
     validate_output(output)
+    if failed_sources:
+        banner = "".join(
+            f"⚠ {source} collection failed this run\n" for source in failed_sources
+        )
+        return banner + "\n" + output
     return output

@@ -48,10 +48,13 @@ def test_build_prompt_status_line_names_the_failed_source_only_when_failures_giv
     prompt = build_prompt([_item()], failed_sources=["telegram"])
 
     assert "Collector status: telegram collection failed this run" in prompt
-    # the banner-prepend instruction itself is static template text present
-    # either way; what changes per-run is the collector-status line above,
-    # which is what actually tells Claude whether to act on it
-    assert "prepend a single banner" in prompt
+    # the model is told a banner is added automatically -- it must never be
+    # asked to write one itself; that instruction is static template text
+    # present either way, what changes per-run is the collector-status line.
+    # Normalize wrapped prose whitespace before the substring check.
+    normalized = " ".join(prompt.split())
+    assert "a failure banner is added automatically by the system" in normalized
+    assert "do not write one yourself" in normalized
 
 
 def test_build_prompt_empty_items_still_produces_valid_json_array():
@@ -353,7 +356,63 @@ def test_validate_output_duplicate_heading_raises_naming_it():
     assert "needs attention" in message
 
 
+# --- validate_output: tilde fences (Finding B) ---
+
+
+def test_validate_output_headings_inside_tilde_fence_raises_missing_all_three():
+    # A ~~~-fenced refusal template must not satisfy the contract -- fence
+    # tracking must recognize tilde fences, not just backtick fences.
+    refusal = (
+        "I can't do this. Here's the template you asked about:\n"
+        "~~~\n## Needs attention\n## Worth knowing\n## Noise skipped\n~~~"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_backtick_fence_inside_tilde_fence_does_not_close_early():
+    # A ``` line inside a ~~~ fence is content, not a closer (CommonMark:
+    # closing fence must match the opening delimiter character). If ```
+    # incorrectly closed the ~~~ fence, "## Noise skipped" below it would
+    # be read as a real heading and the real headings above would be
+    # miscounted -- construct output where that mismatch, if mishandled,
+    # would leak a heading or double-count, and assert it does not.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "~~~\n"
+        "```\n"
+        "## Noise skipped\n"  # still inside the ~~~ fence -- not a real heading
+        "~~~\n"
+        "\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise (exactly one real Noise skipped)
+
+
+def test_validate_output_backtick_fences_still_work_unchanged():
+    # Existing backtick-fence behavior must be unaffected by tilde support.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "```\n## Needs attention\n```\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
 # --- summarize (composition) ---
+
+
+_MODEL_OUTPUT = "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
 
 
 def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
@@ -365,7 +424,7 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
 
     def fake_run_claude(prompt, model, timeout_seconds):
         calls["run_claude"] = (prompt, model, timeout_seconds)
-        return "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
+        return _MODEL_OUTPUT
 
     monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
@@ -373,9 +432,47 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
     items = [_item()]
     result = summarize(items, ["telegram"], "claude-opus-5", 300)
 
-    assert result == "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
+    assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert calls["build_prompt"] == (items, ["telegram"])
     assert calls["run_claude"] == ("built prompt", "claude-opus-5", 300)
+
+
+def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
+    monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
+    monkeypatch.setattr(
+        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: _MODEL_OUTPUT
+    )
+
+    result = summarize([_item()], ["telegram"], "claude-opus-5", 300)
+
+    assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
+    assert result.startswith("⚠ telegram collection failed this run\n\n")
+
+
+def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch):
+    monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
+    monkeypatch.setattr(
+        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: _MODEL_OUTPUT
+    )
+
+    result = summarize([_item()], [], "claude-opus-5", 300)
+
+    assert result == _MODEL_OUTPUT
+    assert "⚠" not in result
+
+
+def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypatch):
+    monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
+    monkeypatch.setattr(
+        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: _MODEL_OUTPUT
+    )
+
+    result = summarize([_item()], ["telegram", "x"], "claude-opus-5", 300)
+
+    assert result == (
+        "⚠ telegram collection failed this run\n"
+        "⚠ x collection failed this run\n\n" + _MODEL_OUTPUT
+    )
 
 
 def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
