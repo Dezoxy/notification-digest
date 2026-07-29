@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS digests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
     item_count  INTEGER NOT NULL,
-    email_sent  INTEGER NOT NULL DEFAULT 0  -- 0/1
+    email_sent  INTEGER NOT NULL DEFAULT 0, -- 0/1
+    body_md     TEXT NOT NULL               -- summarizer output; enables send-retry without re-summarizing
 );
 
 CREATE TABLE IF NOT EXISTS cursors (

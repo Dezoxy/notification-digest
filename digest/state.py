@@ -7,6 +7,7 @@ idempotency contract this module must uphold.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,7 +30,8 @@ CREATE TABLE IF NOT EXISTS digests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
     item_count  INTEGER NOT NULL,
-    email_sent  INTEGER NOT NULL DEFAULT 0
+    email_sent  INTEGER NOT NULL DEFAULT 0,
+    body_md     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -71,6 +73,23 @@ def init_db(conn: sqlite3.Connection) -> None:
     """Create the schema if it doesn't already exist. Safe to call repeatedly."""
     conn.executescript(_SCHEMA)
     conn.commit()
+    _migrate_add_body_md_column(conn)
+
+
+def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.body_md` on databases created before Phase 2.
+
+    Phase 1 (pre-summarizer) created `digests` without `body_md`.
+    `CREATE TABLE IF NOT EXISTS` in _SCHEMA never alters an existing table,
+    so an upgraded Phase-1 database would otherwise be missing this column
+    and every run would crash in get_pending_digest() with
+    "sqlite3.OperationalError: no such column: body_md". This migration is
+    idempotent: it only runs the ALTER TABLE when the column isn't present.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "body_md" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN body_md TEXT NOT NULL DEFAULT ''")
+        conn.commit()
 
 
 def get_cursors(conn: sqlite3.Connection, source: str) -> dict[str, str]:
@@ -152,16 +171,29 @@ def commit_new_items(
         raise
 
 
-def get_unsummarized_items(conn: sqlite3.Connection) -> list[Item]:
-    """Return items not yet attached to a digest, ordered by fetched_at ascending."""
-    rows = conn.execute(
-        """
+def get_unsummarized_items(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[Item]:
+    """Return items not yet attached to a digest, ordered by fetched_at ascending.
+
+    `limit`, when given, caps the number of rows returned to the `limit`
+    OLDEST unsummarized items (fetched_at ASC is unaffected -- the bound is
+    applied via `LIMIT ?` after ordering, not by changing the order). This
+    lets a caller drain a large backlog in bounded batches across multiple
+    runs instead of loading everything at once (see digest/main.py's
+    _MAX_ITEMS_PER_DIGEST).
+    """
+    query = """
         SELECT source, source_id, chat_id, author, text, url, fetched_at
         FROM items
         WHERE digest_id IS NULL
         ORDER BY fetched_at ASC
         """
-    ).fetchall()
+    params: tuple[int, ...] = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        params = (limit,)
+    rows = conn.execute(query, params).fetchall()
     return [
         Item(
             source=row[0],
@@ -174,3 +206,104 @@ def get_unsummarized_items(conn: sqlite3.Connection) -> list[Item]:
         )
         for row in rows
     ]
+
+
+def count_unsummarized_items(conn: sqlite3.Connection) -> int:
+    """Return the total number of items not yet attached to a digest."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM items WHERE digest_id IS NULL"
+    ).fetchone()[0]
+
+
+def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item]) -> int:
+    """Durably record a digest and stamp its items, in one transaction.
+
+    Inserts a `digests` row (created_at = now UTC, item_count = len(items),
+    email_sent = 0, body_md) and stamps exactly the given `items` snapshot
+    with the new digest's id — one `UPDATE ... WHERE source = ? AND
+    source_id = ? AND digest_id IS NULL` per item. We deliberately do NOT use
+    an unqualified `WHERE digest_id IS NULL` update: `items` is a snapshot
+    taken by an earlier call to get_unsummarized_items(), and if a new item
+    is inserted between that snapshot and this transaction, an unqualified
+    update would silently attach it to this digest even though the digest's
+    body (already summarized before this call) never mentions it — the item
+    is then permanently skipped by future summarization, and item_count would
+    no longer match the number of items actually stamped. Scoping each
+    update to the snapshot's own (source, source_id) guarantees only those
+    items are touched. We sum the affected rowcounts and require the total to
+    equal len(items); a mismatch means the snapshot is stale (an item was
+    already stamped/deleted out from under us) or contains a duplicate, and
+    we raise so the whole transaction rolls back rather than persisting a
+    digest whose item_count disagrees with what got stamped. This must
+    happen BEFORE the email send attempt (PLAN.md §4.1): if the process
+    crashes after this commits but before the send confirms, the next run
+    finds a pending unsent digest and retries the send instead of
+    re-summarizing (avoids double-billing the Claude call). On any failure
+    the whole transaction is rolled back so a digest row never exists
+    without its items stamped, and vice versa.
+    """
+    now = datetime.now(UTC).isoformat()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            INSERT INTO digests (created_at, item_count, email_sent, body_md)
+            VALUES (?, ?, 0, ?)
+            """,
+            (now, len(items), body_md),
+        )
+        digest_id = cur.lastrowid
+        stamped = 0
+        for item in items:
+            cur.execute(
+                """
+                UPDATE items SET digest_id = ?
+                WHERE source = ? AND source_id = ? AND digest_id IS NULL
+                """,
+                (digest_id, item.source, item.source_id),
+            )
+            stamped += cur.rowcount
+        if stamped != len(items):
+            raise ValueError(
+                f"digest stamping affected {stamped} of {len(items)} items"
+            )
+        conn.commit()
+        return digest_id
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
+    """Return the set of item URLs stamped to the given digest.
+
+    This is how the HTML link-provenance allowlist (digest/emailer.py's
+    render_html) is recovered for a PENDING resend: on a resend, the
+    original Item objects from the run that summarized and stamped this
+    digest are long gone (that run already returned), but the URLs survive
+    in the `items` table via the `digest_id` foreign key stamped by
+    create_digest at digest-creation time -- before send_digest is ever
+    called, on both the fresh-digest and pending-resend paths. So this
+    query works identically for both.
+    """
+    rows = conn.execute(
+        "SELECT url FROM items WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def get_pending_digest(conn: sqlite3.Connection) -> tuple[int, str] | None:
+    """Return (id, body_md) of the newest unsent digest, or None if none is pending."""
+    row = conn.execute(
+        "SELECT id, body_md FROM digests WHERE email_sent = 0 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0], row[1])
+
+
+def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
+    """Flip a digest's email_sent flag to 1 after SMTP confirms delivery."""
+    conn.execute("UPDATE digests SET email_sent = 1 WHERE id = ?", (digest_id,))
+    conn.commit()

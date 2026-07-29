@@ -7,6 +7,7 @@ dependencies = [
     "telethon>=1.36",
     "twikit>=2.3",
     "markdown>=3.7",
+    "nh3>=0.2",
     "python-dotenv>=1.0",
 ]
 
