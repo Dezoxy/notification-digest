@@ -9,10 +9,15 @@ Produce a post-merge run-over summary for a pull request in this repo.
 
 1. Determine the PR number. If the user invoked this as `/pr-summary <n>` or
    otherwise gave a number, use it. Otherwise ask for the PR number.
-2. Run `uv run python scripts/pr_summary.py <n>` (the script defaults to the
+2. Check whether `docs/pr-summaries/pr-<n>.md` already exists — CI
+   auto-generates it on merge (`.github/workflows/pr-summary.yml`, via
+   `scripts/pr_summary.py <n> --markdown`). It's a useful reference, but
+   still run the script yourself for fresh, narrative-ready data (below);
+   don't just paste the auto-generated file back.
+3. Run `uv run python scripts/pr_summary.py <n>` (the script defaults to the
    current repo via `gh`; only pass `--repo OWNER/REPO` if the user names a
    different repo).
-3. Using the raw output as your source of truth, write a compact narrative
+4. Using the raw output as your source of truth, write a compact narrative
    with EXACTLY these four sections, in this order:
 
    - **TL;DR** — 2-3 sentences: what the PR did and why.
@@ -27,8 +32,8 @@ Produce a post-merge run-over summary for a pull request in this repo.
      or unresolved/outdated findings that never got a follow-up. Derive this
      from the data — do not invent risks that aren't backed by the output.
 
-4. Keep the whole narrative under about 40 lines. Include the PR URL (from
+5. Keep the whole narrative under about 40 lines. Include the PR URL (from
    the script's header line) so it's one click away.
-5. Do not re-paste the raw script output in full — synthesize it. Quote a
+6. Do not re-paste the raw script output in full — synthesize it. Quote a
    finding's title or fix note only when it's the clearest way to make a
    point.

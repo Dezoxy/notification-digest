@@ -52,7 +52,10 @@ deep links. See PLAN.md for the full plan and current phase status.
   findings gate PRs; other reviewers' threads are informational.
 - After merging a PR, `/pr-summary <n>` (or
   `uv run python scripts/pr_summary.py <n>`) produces the post-merge run-over
-  summary.
+  summary. A markdown copy also lands automatically at
+  `docs/pr-summaries/pr-<n>.md` on merge (CI: `.github/workflows/pr-summary.yml`,
+  `scripts/pr_summary.py <n> --markdown`) — the skill/script above remain the
+  way to get the narrative, human-synthesized version on demand.
 
 ## Verification
 
