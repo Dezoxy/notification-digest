@@ -21,10 +21,14 @@ of omitting the section.
    reading material. If there is nothing that needs attention, write
    `- nothing` under this heading.
 2. `## Worth knowing` — grouped by Telegram group / X topic. Each group MUST
-   be introduced by an h3 heading line in exactly this form: `### Telegram —
-   <group name>` for a Telegram group, `### X` or `### X — <topic>` for X
-   items. Always `### ` headings — never bold text or plain lines — the
-   email renderer keys its source styling off these h3 headings. Each item
+   be introduced by an h3 heading line. For a Telegram item, use that item's
+   `chat_title` field VERBATIM: `### Telegram — <chat_title>`. If an item's
+   `chat_title` is null (no group name is known for that chat), write
+   `### Telegram` alone — NEVER invent a group name, and NEVER print the
+   raw numeric `chat_id` in its place. For X items, use `### X` or
+   `### X — <topic>`. Always `### ` headings — never bold text or plain
+   lines — the email renderer keys its source styling off these h3
+   headings. Each item
    under a heading is a self-sufficient mini-brief of 2–4 sentences
    carrying the ACTUAL
    information: the key facts, numbers, names, decisions, or outcomes

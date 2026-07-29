@@ -64,6 +64,15 @@ _HTML_TEMPLATE = """\
     body {{ background-color: #1a1a1a !important; color: #e8e8e8 !important; }}
     a {{ color: #6ea8fe !important; }}
     h2 {{ border-bottom-color: #3a3a3a !important; }}
+    /* The TL;DR and banner callouts below set an explicit light-mode
+       foreground inline (readable regardless of mode in clients that strip
+       <style>, e.g. Outlook desktop). For clients that DO honor a <style>
+       block, override to a dark-mode-appropriate palette instead of
+       inheriting the dark `body` foreground on top of an unchanged light
+       inline background -- #e8e8e8 on #f0f0f0 (TL;DR's light background) is
+       ~1:1 contrast, effectively invisible. */
+    .tldr {{ background:#2b2b2b !important; color:#e8e8e8 !important; }}
+    .banner {{ background:#4d3800 !important; color:#ffe69c !important; }}
   }}
 </style>
 </head>
@@ -225,12 +234,20 @@ def _wrap_banner_paragraph(sanitized_html: str) -> str:
 
     A no-op (returns the input unchanged) when there is no such paragraph,
     which is the common case (no failed collectors that run).
+
+    The inline style already sets an explicit foreground (#664d03 on
+    #fff3cd) that stays readable in any client, dark-mode or not -- audited
+    alongside the TL;DR contrast fix (see _highlight_tldr_paragraph) and
+    left as-is. The `class="banner"` attribute added here exists only so
+    clients that DO honor the document's <style> block (rather than just
+    inheriting this inline style) get a dark-mode-appropriate override too
+    -- see the `.banner` rule in _HTML_TEMPLATE's dark-mode media query.
     """
 
     def _replace(match: re.Match[str]) -> str:
         content = match.group(1).replace("\n", "<br>")
         return (
-            '<p style="background-color:#fff3cd;color:#664d03;'
+            '<p class="banner" style="background-color:#fff3cd;color:#664d03;'
             'padding:0.75em 1em;border-radius:6px;margin:0 0 1em 0;">'
             f"{content}</p>"
         )
@@ -257,12 +274,26 @@ def _highlight_tldr_paragraph(sanitized_html: str) -> str:
     A no-op (returns the input unchanged) when there is no such paragraph --
     e.g. a digest that predates this prompt change, or a rerun of stored
     archive markdown -- so absence is fine, never an error.
+
+    P2 fix: the original inline style set only `background-color:#f0f0f0`
+    with no explicit foreground, so this paragraph inherited whatever
+    foreground was in scope -- in a client that honors
+    `@media (prefers-color-scheme: dark)`, that's the dark-mode `body`
+    foreground (#e8e8e8) from _HTML_TEMPLATE, landing #e8e8e8 text on an
+    unchanged light #f0f0f0 background: roughly 1:1 contrast, effectively
+    unreadable. `color:#1a1a1a` is now set explicitly inline so this
+    paragraph reads correctly in ANY mode, including clients that strip
+    `<style>` blocks entirely (inline styles survive those). The
+    `class="tldr"` attribute is added on top for clients that DO honor the
+    document's `<style>` block: see the `.tldr` dark-mode override in
+    _HTML_TEMPLATE, which swaps to a dark-appropriate background/foreground
+    pair instead of relying on the light-mode inline style everywhere.
     """
 
     def _replace(match: re.Match[str]) -> str:
         return (
-            '<p style="background-color:#f0f0f0;padding:0.75em 1em;'
-            'border-radius:6px;margin:0 0 1em 0;">'
+            '<p class="tldr" style="background-color:#f0f0f0;color:#1a1a1a;'
+            'padding:0.75em 1em;border-radius:6px;margin:0 0 1em 0;">'
             f"{match.group(1)}</p>"
         )
 

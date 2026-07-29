@@ -342,6 +342,79 @@ def test_create_digest_does_not_stamp_items_inserted_after_snapshot(conn):
     assert digest_row == (2,)
 
 
+# --- chat_title (P2 finding: prompt demands a group name the data didn't carry) ---
+
+
+def test_item_chat_title_round_trips_through_commit_and_get_unsummarized(conn):
+    item = _item("1", chat_title="Homelab Hungary")
+    commit_new_items(conn, [item], {("telegram", "123"): "1"})
+
+    items = get_unsummarized_items(conn)
+
+    assert items[0].chat_title == "Homelab Hungary"
+
+
+def test_item_chat_title_defaults_to_none_when_omitted(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    items = get_unsummarized_items(conn)
+
+    assert items[0].chat_title is None
+
+
+def test_init_db_migrates_pre_chat_title_items_table_missing_column(tmp_path: Path):
+    # Simulate a database created before the chat_title column existed on
+    # `items` (mirrors test_init_db_migrates_pre_phase2_digests_table_missing_body_md
+    # above, but for the items.chat_title migration).
+    old_conn = connect(str(tmp_path / "legacy_chat_title.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+        """
+    )
+    old_conn.commit()
+
+    # Must not raise sqlite3.OperationalError: no such column: chat_title
+    init_db(old_conn)
+
+    # commit/round-trip works against the migrated table, chat_title included
+    commit_new_items(
+        old_conn, [_item("1", chat_title="Homelab Hungary")], {("telegram", "123"): "1"}
+    )
+    items = get_unsummarized_items(old_conn)
+
+    assert items[0].chat_title == "Homelab Hungary"
+
+    old_conn.close()
+
+
 def test_create_digest_raises_and_rolls_back_on_snapshot_mismatch(conn):
     # A snapshot item that doesn't match any unstamped row (stale or
     # duplicated) must abort the whole transaction: no digest row, no

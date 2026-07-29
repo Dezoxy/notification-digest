@@ -211,6 +211,17 @@ def test_wrap_banner_paragraph_converts_embedded_newlines_between_multiple_sourc
     assert "\n" not in result
 
 
+def test_wrap_banner_paragraph_has_banner_class_for_dark_mode_override():
+    html = "<p>⚠ telegram collection failed this run</p>"
+
+    result = _wrap_banner_paragraph(html)
+
+    assert 'class="banner"' in result
+    # The existing explicit inline foreground/background must be untouched.
+    assert "background-color:#fff3cd" in result
+    assert "color:#664d03" in result
+
+
 def test_wrap_banner_paragraph_absent_is_a_noop():
     html = "<p><strong>TL;DR:</strong> quiet day.</p><h2>Needs attention</h2>"
 
@@ -230,6 +241,29 @@ def test_highlight_tldr_paragraph_styles_when_present():
     assert "background-color:#f0f0f0" in result
     assert "<strong>TL;DR:</strong> quiet day, nothing urgent." in result
     assert "<h2>Needs attention</h2>" in result
+
+
+def test_highlight_tldr_paragraph_sets_explicit_readable_color():
+    # P2 finding: the original inline style set only a light background
+    # (#f0f0f0) with no explicit foreground, so in a client that honors
+    # `prefers-color-scheme: dark` this paragraph inherited the dark-mode
+    # body foreground (#e8e8e8) -- landing #e8e8e8 text on an unchanged
+    # light #f0f0f0 background, ~1:1 contrast. An explicit inline color must
+    # be set so this paragraph reads correctly in any client, including one
+    # that strips <style> blocks (inline styles survive that).
+    html = "<p><strong>TL;DR:</strong> quiet day, nothing urgent.</p>"
+
+    result = _highlight_tldr_paragraph(html)
+
+    assert "color:#1a1a1a" in result
+
+
+def test_highlight_tldr_paragraph_has_tldr_class_for_dark_mode_override():
+    html = "<p><strong>TL;DR:</strong> quiet day.</p>"
+
+    result = _highlight_tldr_paragraph(html)
+
+    assert 'class="tldr"' in result
 
 
 def test_highlight_tldr_paragraph_absent_is_a_noop():
@@ -302,6 +336,27 @@ def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenanc
     assert "phishing attempt" in html
     # Dark-mode media query present in the document.
     assert "prefers-color-scheme: dark" in html
+
+
+def test_render_html_dark_mode_block_has_tldr_and_banner_class_overrides():
+    # P2 finding: the TL;DR and banner callouts need dark-mode-specific
+    # class overrides in the <style> block, for clients that honor it
+    # (rather than relying solely on the inline light-mode style, which the
+    # separate inline `color:#1a1a1a` addition covers for clients that
+    # strip <style> entirely).
+    body_md = (
+        "⚠ telegram collection failed this run\n\n"
+        "**TL;DR:** quiet day.\n\n"
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n- nothing\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    html = render_html(body_md, allowed_urls=set())
+
+    dark_block = html[html.index("prefers-color-scheme: dark") :]
+    assert ".tldr" in dark_block
+    assert ".banner" in dark_block
 
 
 # --- send_digest ---

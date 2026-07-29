@@ -87,6 +87,7 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
         {
             "source": item.source,
             "chat_id": item.chat_id,
+            "chat_title": item.chat_title,
             "author": item.author,
             "text": _truncate_item_text(item.text),
             "url": item.url,
@@ -555,12 +556,21 @@ _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULT
 # match is possible either.
 _BARE_URL_RE = re.compile(
     r"\b(?!hxxps?://)[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)\]>\"']+"
-    # The generic non-// branch requires a URI-plausible first payload char
-    # (letter/digit//+~%_): real URIs (mailto:user, tel:+1, geo:47.5) always
-    # start that way, while markdown emphasis right after a colon does not —
-    # without this, the digest's own mandated "**TL;DR:**" opener was mangled
-    # into "TL;DR[:]**" (the `DR:**…` token matched; found by live test).
-    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[A-Za-z0-9/+~%_][^\s:)\]>\"']+",
+    # The generic non-// branch's payload is intentionally broad (any run of
+    # 2+ non-delimiter chars) so real delimiter-led URIs still match:
+    # `mailto:?to=x@y.z` (payload starts with `?`), `tel:*67` (a real
+    # vertical-service-code URI, payload starts with `*`), `geo:47.5,...`,
+    # etc. An earlier, tighter version of this branch restricted the FIRST
+    # payload char to a URI-plausible class (letter/digit/+/~/%/_), which
+    # broke exactly those delimiter-led forms (`?`/`*` aren't in that class)
+    # — a P2 regression. The only thing that actually needs excluding is
+    # markdown's own double-emphasis marker immediately after the colon:
+    # without the `(?!\*\*|__)` guard, the digest's own mandated
+    # "**TL;DR:**" opener gets misread as `scheme=DR, payload=** ...` and
+    # mangled into "TL;DR[:]**" (found by live test). The guard only blocks
+    # a payload that starts with `**` or `__` — a single asterisk/underscore
+    # (as in `tel:*67`) is unaffected.
+    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)(?!\*\*|__)[^\s:)\]>\"']{2,}",
     re.IGNORECASE,
 )
 

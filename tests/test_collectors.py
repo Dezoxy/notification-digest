@@ -16,9 +16,10 @@ class FakeMessage:
 
 
 class FakeEntity:
-    def __init__(self, id: int, username: str | None = None):
+    def __init__(self, id: int, username: str | None = None, title: str | None = None):
         self.id = id
         self.username = username
+        self.title = title
 
 
 class FakeClient:
@@ -225,6 +226,33 @@ async def test_incremental_run_respects_min_id_orders_ascending_and_skips_textle
     assert client.iter_messages_calls == [
         (chat_id, telegram_collector._MAX_MESSAGES_PER_CHAT, 9, True)
     ]
+
+
+# --- chat_title (P2 finding: prompt demands a group name the data didn't carry) ---
+
+
+async def test_incremental_run_sets_chat_title_from_entity_title():
+    chat_id = -1000000002223
+    client = FakeClient(
+        entities={chat_id: FakeEntity(chat_id, title="Homelab Hungary")},
+        messages={chat_id: [FakeMessage(10, "hello")]},
+    )
+
+    result = await collect(client, [chat_id], cursors={str(chat_id): "9"})
+
+    assert [i.chat_title for i in result.items] == ["Homelab Hungary"]
+
+
+async def test_incremental_run_chat_title_is_none_when_entity_has_no_title():
+    chat_id = -1000000002224
+    client = FakeClient(
+        entities={chat_id: FakeEntity(chat_id)},  # no title -- e.g. a DM
+        messages={chat_id: [FakeMessage(10, "hello")]},
+    )
+
+    result = await collect(client, [chat_id], cursors={str(chat_id): "9"})
+
+    assert result.items[0].chat_title is None
 
 
 # --- legacy basic group filtering ---
