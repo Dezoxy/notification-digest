@@ -62,18 +62,51 @@ def fetch_overview(number: int, repo: str | None) -> dict[str, Any]:
     return gh_json(args)
 
 
-def fetch_commits(number: int, repo: str | None) -> list[dict[str, Any]]:
-    args = ["pr", "view", str(number), "--json", "commits"]
-    if repo:
-        args.extend(["--repo", repo])
-    return gh_json(args)["commits"]
+def fetch_commits(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+    # `gh pr view --json commits` caps out at the GraphQL CLI's fixed page size
+    # (100), silently truncating larger PRs. Paginate the REST endpoint instead
+    # and flatten (see fetch_issue_comments for the --paginate/--slurp shape),
+    # then remap REST's field names to the oid/messageHeadline shape the rest
+    # of the script expects.
+    pages: list[list[dict[str, Any]]] = gh_json(
+        [
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{owner}/{repo}/pulls/{number}/commits",
+        ]
+    )
+    commits = [commit for page in pages for commit in page]
+    return [
+        {
+            "oid": commit["sha"],
+            "messageHeadline": commit["commit"]["message"].partition("\n")[0],
+            "authoredDate": commit["commit"]["author"]["date"],
+        }
+        for commit in commits
+    ]
 
 
-def fetch_files(number: int, repo: str | None) -> list[dict[str, Any]]:
-    args = ["pr", "view", str(number), "--json", "files"]
-    if repo:
-        args.extend(["--repo", repo])
-    return gh_json(args)["files"]
+def fetch_files(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+    # Same fixed-page-size issue as fetch_commits: paginate the REST endpoint
+    # and remap filename -> path to match the GraphQL shape used elsewhere.
+    pages: list[list[dict[str, Any]]] = gh_json(
+        [
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{owner}/{repo}/pulls/{number}/files",
+        ]
+    )
+    files = [f for page in pages for f in page]
+    return [
+        {
+            "path": f["filename"],
+            "additions": f["additions"],
+            "deletions": f["deletions"],
+        }
+        for f in files
+    ]
 
 
 def fetch_issue_comments(owner: str, repo: str, number: int) -> list[dict[str, Any]]:
@@ -220,8 +253,8 @@ def gather(number: int, repo: str | None) -> dict[str, Any]:
         "owner": owner,
         "repo": name,
         "overview": fetch_overview(number, repo),
-        "commits": fetch_commits(number, repo),
-        "files": fetch_files(number, repo),
+        "commits": fetch_commits(owner, name, number),
+        "files": fetch_files(owner, name, number),
         "threads": fetch_threads(owner, name, number),
         "issue_comments": fetch_issue_comments(owner, name, number),
     }
