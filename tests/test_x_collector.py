@@ -2,12 +2,24 @@
 
 Fakes below mirror the twikit shapes confirmed by reading the installed
 package source (.venv/lib/python3.12/site-packages/twikit/):
-notification.py (Notification.id/.tweet/.from_user/.message), tweet.py
-(Tweet.id (str)/.full_text/.user), user.py (User.screen_name), and
-errors.py (Unauthorized, Forbidden, AccountLocked, AccountSuspended,
-TooManyRequests). twikit's own get_notifications() returns a Result, which
-supports plain iteration (utils.py's __iter__/__getitem__/__len__) -- a
-plain list works identically for these fakes.
+notification.py (Notification.id/.timestamp_ms/.tweet/.from_user/.message
+-- `.timestamp_ms` is `int` at construction, `self.timestamp_ms =
+int(data['timestampMs'])`), tweet.py (Tweet.id (str)/.full_text/.user),
+user.py (User.screen_name), and errors.py (Unauthorized, Forbidden,
+AccountLocked, AccountSuspended, TooManyRequests). twikit's own
+get_notifications() returns a Result, which supports plain iteration
+(utils.py's __iter__/__getitem__/__len__) -- a plain list works identically
+for these fakes.
+
+Cursor semantics tested here are notification-timestamp-based, not
+tweet-id-based (Codex review findings P1-a/P1-b -- see digest/collectors/
+x.py's module and `collect` docstrings for the full rationale). Most
+fixtures below give a notification's linked tweet the SAME numeric value
+for both its id and its `timestamp_ms`, purely so small integers stay easy
+to read -- that pairing is NOT meaningful in general (a tweet id and a
+notification timestamp are unrelated axes), and the tests that specifically
+exercise that distinction (the "old tweet, new notification" class of
+tests) deliberately give them different values.
 
 `collect()` is exercised exclusively against these fakes -- never a real
 twikit Client, and never over the network. The `build_client` tests are
@@ -47,11 +59,13 @@ class FakeNotification:
         id: str,
         message: str,
         tweet: FakeTweet | None,
+        timestamp_ms: int,
         icon: dict | None = None,
     ):
         self.id = id
         self.message = message
         self.tweet = tweet
+        self.timestamp_ms = timestamp_ms
         self.from_user = tweet.user if tweet is not None else None
         self.icon = icon
 
@@ -165,17 +179,17 @@ def _build_page_chain(
 # --- first run seeding ---
 
 
-async def test_first_run_seeds_newest_id_and_emits_no_items():
+async def test_first_run_seeds_newest_timestamp_and_emits_no_items():
     notifications = [
-        FakeNotification("n2", "mentioned you", _tweet("200", "hello")),
-        FakeNotification("n1", "mentioned you", _tweet("100", "hi")),
+        FakeNotification("n2", "mentioned you", _tweet("200", "hello"), timestamp_ms=2000),
+        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), timestamp_ms=1000),
     ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor=None)
 
     assert result.items == []
-    assert result.cursor_updates == {("x", "notifications"): "200"}
+    assert result.cursor_updates == {("x", "notifications"): "2000"}
     assert result.failed is False
 
 
@@ -189,26 +203,32 @@ async def test_first_run_empty_page_seeds_zero_cursor():
     assert result.failed is False
 
 
-async def test_first_run_page_with_only_tweetless_notifications_seeds_zero_cursor():
-    # No candidate id exists anywhere in the page (every notification lacks
-    # a linked tweet) -- treated the same as an empty page.
-    notifications = [FakeNotification("n1", "followed you", tweet=None)]
+async def test_first_run_tweetless_page_seeds_from_its_newest_timestamp():
+    # Every notification lacks a linked tweet (e.g. pure follow events), but
+    # each still carries its own timestamp_ms -- seeding no longer depends
+    # on any notification having a linked tweet (redesign point 4's "any
+    # non-empty page seeds from its newest timestamp", superseding the old
+    # "tweetless-only page seeds 0" rule).
+    notifications = [
+        FakeNotification("n2", "followed you", tweet=None, timestamp_ms=1500),
+        FakeNotification("n1", "followed you", tweet=None, timestamp_ms=1200),
+    ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor=None)
 
     assert result.items == []
-    assert result.cursor_updates == {("x", "notifications"): "0"}
+    assert result.cursor_updates == {("x", "notifications"): "1500"}
 
 
 # --- incremental ---
 
 
-async def test_incremental_only_ids_greater_than_cursor_oldest_first():
+async def test_incremental_only_timestamps_greater_than_cursor_oldest_first():
     notifications = [
-        FakeNotification("n3", "m", _tweet("300", "third")),
-        FakeNotification("n2", "m", _tweet("200", "second")),
-        FakeNotification("n1", "m", _tweet("100", "first")),
+        FakeNotification("n3", "m", _tweet("300", "third"), timestamp_ms=300),
+        FakeNotification("n2", "m", _tweet("200", "second"), timestamp_ms=200),
+        FakeNotification("n1", "m", _tweet("100", "first"), timestamp_ms=100),
     ]
     client = FakeXClient(notifications=notifications)
 
@@ -220,8 +240,10 @@ async def test_incremental_only_ids_greater_than_cursor_oldest_first():
     assert result.failed is False
 
 
-async def test_incremental_no_new_ids_leaves_cursor_untouched():
-    notifications = [FakeNotification("n1", "m", _tweet("100", "old"))]
+async def test_incremental_no_new_timestamps_leaves_cursor_untouched():
+    notifications = [
+        FakeNotification("n1", "m", _tweet("100", "old"), timestamp_ms=100),
+    ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor="500")
@@ -230,29 +252,37 @@ async def test_incremental_no_new_ids_leaves_cursor_untouched():
     assert result.cursor_updates == {}
 
 
-async def test_incremental_notification_without_tweet_is_skipped():
+async def test_incremental_notification_without_tweet_is_skipped_but_still_counts_for_cursor():
     notifications = [
-        FakeNotification("n2", "followed you", tweet=None),
-        FakeNotification("n1", "mentioned you", _tweet("100", "hi")),
+        FakeNotification("n2", "followed you", tweet=None, timestamp_ms=50),
+        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), timestamp_ms=100),
     ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor="0")
 
     assert [i.source_id for i in result.items] == ["100"]
+    # Newest timestamp across ALL notifications this page (100), even
+    # though the tweetless one (50) never became an item -- chronology is
+    # kind/linkage-agnostic (redesign point 3/4).
     assert result.cursor_updates == {("x", "notifications"): "100"}
 
 
-async def test_incremental_notification_without_screen_name_is_skipped():
+async def test_incremental_notification_without_screen_name_skipped_but_advances_cursor():
     notifications = [
-        FakeNotification("n2", "mentioned you", _tweet("200", "no author", screen_name="")),
-        FakeNotification("n1", "mentioned you", _tweet("100", "has author")),
+        FakeNotification(
+            "n2", "mentioned you", _tweet("200", "no author", screen_name=""), timestamp_ms=200
+        ),
+        FakeNotification("n1", "mentioned you", _tweet("100", "has author"), timestamp_ms=100),
     ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor="0")
 
     assert [i.source_id for i in result.items] == ["100"]
+    # The screen_name-less notification's timestamp (200) still counts for
+    # chronology even though it was excluded as an item.
+    assert result.cursor_updates == {("x", "notifications"): "200"}
 
 
 # --- pagination: bounded catch-up when >1 page of new notifications ---
@@ -267,16 +297,17 @@ async def test_pagination_multi_page_collects_all_until_cursor_bridged(monkeypat
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
     page1_notifications = [
-        FakeNotification("n5", "m", _tweet("500", "fifth")),
-        FakeNotification("n4", "m", _tweet("400", "fourth")),
+        FakeNotification("n5", "m", _tweet("500", "fifth"), timestamp_ms=500),
+        FakeNotification("n4", "m", _tweet("400", "fourth"), timestamp_ms=400),
     ]
     page2_notifications = [
-        FakeNotification("n3", "m", _tweet("300", "third")),
-        FakeNotification("n2b", "m", _tweet("250", "second-b")),
+        FakeNotification("n3", "m", _tweet("300", "third"), timestamp_ms=300),
+        FakeNotification("n2b", "m", _tweet("250", "second-b"), timestamp_ms=250),
     ]
     page3_notifications = [
-        FakeNotification("n2", "m", _tweet("200", "second")),
-        FakeNotification("n1", "m", _tweet("100", "first")),  # <= cursor: bridges here
+        FakeNotification("n2", "m", _tweet("200", "second"), timestamp_ms=200),
+        # timestamp <= cursor: bridges here
+        FakeNotification("n1", "m", _tweet("100", "first"), timestamp_ms=100),
     ]
     first_page, next_call_log = _build_page_chain(
         [
@@ -310,8 +341,9 @@ async def test_pagination_cursor_bridged_on_first_page_makes_exactly_one_fetch_n
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
     notifications = [
-        FakeNotification("n2", "m", _tweet("500", "new")),
-        FakeNotification("n1", "m", _tweet("100", "old")),  # <= cursor: bridged on page 1
+        FakeNotification("n2", "m", _tweet("500", "new"), timestamp_ms=500),
+        # timestamp <= cursor: bridged on page 1
+        FakeNotification("n1", "m", _tweet("100", "old"), timestamp_ms=100),
     ]
     client = FakeXClient(notifications=notifications)
 
@@ -323,17 +355,26 @@ async def test_pagination_cursor_bridged_on_first_page_makes_exactly_one_fetch_n
     assert sleeps == []
 
 
-async def test_pagination_page_cap_reached_logs_warning_but_cursor_still_advances(
+async def test_pagination_page_cap_reached_cursor_set_to_oldest_fetched_preserves_gap(
     monkeypatch, caplog
 ):
+    """Codex review finding P1-b: an unbridged cap-hit must NOT advance the
+    cursor to the newest tweet/notification seen -- that would skip past the
+    unfetched gap permanently (next run would bridge instantly on page 1).
+    Instead the cursor advances only to the OLDEST timestamp actually
+    fetched this run, preserving the still-unfetched older gap (here: the
+    6th page, timestamp 100, never fetched) for a future run to re-walk
+    into. See `collect`'s docstring, cursor-advancement case 2.
+    """
+
     async def fake_sleep(seconds):
         pass
 
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
-    # 6 pages, all-new ids (never <= cursor), forcing the cap at 5 pages.
+    # 6 pages, all-new timestamps (never <= cursor), forcing the cap at 5 pages.
     pages = [
-        ([FakeNotification(f"n{i}", "m", _tweet(str(i), f"t{i}"))], f"c{i}")
+        ([FakeNotification(f"n{i}", "m", _tweet(str(i), f"t{i}"), timestamp_ms=i)], f"c{i}")
         for i in (600, 500, 400, 300, 200, 100)
     ]
     first_page, next_call_log = _build_page_chain(pages)
@@ -342,14 +383,78 @@ async def test_pagination_page_cap_reached_logs_warning_but_cursor_still_advance
     with caplog.at_level("WARNING", logger="digest.collectors.x"):
         result = await collect(client, cursor="50")
 
-    # Page 6 (id 100) is never fetched -- only 4 `.next()` calls (1->2->3->4->5).
+    # Page 6 (timestamp 100) is never fetched -- only 4 `.next()` calls (1->2->3->4->5).
     assert len(next_call_log) == 4
-    assert result.cursor_updates == {("x", "notifications"): "600"}
-    # Ids 600,500,400,300,200 came from the 5 fetched pages; 100 (page 6) never arrives.
+    # Oldest FETCHED timestamp this run (200, the 5th page) -- not the
+    # newest (600), which is what the old, buggy behavior would have set.
+    assert result.cursor_updates == {("x", "notifications"): "200"}
+    # Items are unaffected by the cursor-advancement choice: everything
+    # fetched and > the (unchanged, true) input cursor(50) is still collected.
     assert [i.source_id for i in result.items] == ["200", "300", "400", "500", "600"]
     assert any(
         "page cap reached, 5 pages fetched" in record.message for record in caplog.records
     )
+    assert any("oldest fetched timestamp" in record.message for record in caplog.records)
+
+
+async def test_unbridged_cap_followup_collect_re_walks_and_extends_past_prior_reach(monkeypatch):
+    """P1-b, two-phase: a follow-up collect() call fed the prior run's
+    gap-preserving cursor re-walks the previously-fetched (now
+    already-seen) region for free -- deduplicated downstream via the
+    (source, source_id) UNIQUE constraint, never re-flagged as new here
+    either, since chronology (timestamp > cursor) is what gates items -- and
+    is able to keep paginating deeper/further than an instantly-bridging
+    "cursor = newest" design would have allowed, picking up genuinely new
+    content along the way instead of getting stuck.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    # --- Phase 1: same cap-hit setup as the single-phase test above. ---
+    phase1_pages = [
+        ([FakeNotification(f"n{i}", "m", _tweet(str(i), f"t{i}"), timestamp_ms=i)], f"c{i}")
+        for i in (600, 500, 400, 300, 200, 100)
+    ]
+    phase1_first_page, _ = _build_page_chain(phase1_pages)
+    phase1_client = FakeXClient(notifications=phase1_first_page)
+
+    phase1_result = await collect(phase1_client, cursor="50")
+
+    assert phase1_result.cursor_updates == {("x", "notifications"): "200"}
+    phase2_cursor = phase1_result.cursor_updates[("x", "notifications")]
+
+    # --- Phase 2: a follow-up run, fed phase 1's cursor (200, NOT 600). ---
+    # New content (900, 700) arrived since phase 1; the rest (300, the
+    # already-emitted overlap) and (100, previously out of reach) are
+    # re-walked. Bridges at the notification with timestamp 100 (<= 200).
+    phase2_pages = [
+        ([FakeNotification("n900", "m", _tweet("900", "newest"), timestamp_ms=900)], "d1"),
+        ([FakeNotification("n700", "m", _tweet("700", "newer"), timestamp_ms=700)], "d2"),
+        ([FakeNotification("n300", "m", _tweet("300", "t300"), timestamp_ms=300)], "d3"),
+        # timestamp 100 <= cursor(200): bridges here.
+        ([FakeNotification("n100", "m", _tweet("100", "t100"), timestamp_ms=100)], "d4"),
+    ]
+    phase2_first_page, phase2_next_call_log = _build_page_chain(phase2_pages)
+    phase2_client = FakeXClient(notifications=phase2_first_page)
+
+    phase2_result = await collect(phase2_client, cursor=phase2_cursor)
+
+    # 4 pages fetched (3 `.next()` calls) -- successfully bridged this time,
+    # NOT capped out again: a cursor of 600 (the old, buggy "newest" choice)
+    # would have bridged trivially on page 1 or 2 instead, as soon as it saw
+    # ANY notification <= 600, and would never have re-confirmed 300 or
+    # walked as far as 100.
+    assert len(phase2_next_call_log) == 3
+    assert phase2_result.failed is False
+    # 900 and 700 are genuinely new; 300 is the harmlessly re-walked overlap
+    # from phase 1 (dedup happens downstream via the UNIQUE constraint, not
+    # here); 100 stays excluded (<= cursor).
+    assert [i.source_id for i in phase2_result.items] == ["300", "700", "900"]
+    # Bridged this run -> cursor advances to the newest seen (900).
+    assert phase2_result.cursor_updates == {("x", "notifications"): "900"}
 
 
 async def test_pagination_exception_on_second_page_keeps_first_page_items(monkeypatch):
@@ -359,8 +464,8 @@ async def test_pagination_exception_on_second_page_keeps_first_page_items(monkey
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
     page1_notifications = [
-        FakeNotification("n2", "m", _tweet("100", "b")),
-        FakeNotification("n1", "m", _tweet("80", "a")),
+        FakeNotification("n2", "m", _tweet("100", "b"), timestamp_ms=100),
+        FakeNotification("n1", "m", _tweet("80", "a"), timestamp_ms=80),
     ]
     first_page, next_call_log = _build_page_chain(
         [(page1_notifications, "c1")],
@@ -372,6 +477,9 @@ async def test_pagination_exception_on_second_page_keeps_first_page_items(monkey
     result = await collect(client, cursor="50")
 
     assert [i.source_id for i in result.items] == ["80", "100"]
+    # A genuine pipeline failure (not a deliberate cap truncation) still
+    # advances to the newest seen, same as a normal bridge -- see
+    # `collect`'s docstring, cursor-advancement case 3.
     assert result.cursor_updates == {("x", "notifications"): "100"}
     assert result.failed is True
     assert len(next_call_log) == 1
@@ -391,8 +499,10 @@ class _TweetMissingFullText:
 
 async def test_incremental_nonnumeric_tweet_id_is_skipped_others_collected(caplog):
     notifications = [
-        FakeNotification("n2", "m", _tweet("not-a-number", "bad id")),
-        FakeNotification("n1", "m", _tweet("100", "good")),
+        FakeNotification(
+            "n2", "m", _tweet("not-a-number", "bad id"), timestamp_ms=200
+        ),
+        FakeNotification("n1", "m", _tweet("100", "good"), timestamp_ms=100),
     ]
     client = FakeXClient(notifications=notifications)
 
@@ -400,7 +510,10 @@ async def test_incremental_nonnumeric_tweet_id_is_skipped_others_collected(caplo
         result = await collect(client, cursor="0")
 
     assert [i.source_id for i in result.items] == ["100"]
-    assert result.cursor_updates == {("x", "notifications"): "100"}
+    # The malformed notification's OWN timestamp (200) is still readable
+    # (it's independent of its tweet's malformed id) and still counts for
+    # cursor chronology.
+    assert result.cursor_updates == {("x", "notifications"): "200"}
     assert result.failed is False
     assert any(
         "skipped 1 malformed notification" in record.message for record in caplog.records
@@ -409,15 +522,17 @@ async def test_incremental_nonnumeric_tweet_id_is_skipped_others_collected(caplo
 
 async def test_incremental_tweet_missing_full_text_is_skipped_others_collected():
     notifications = [
-        FakeNotification("n2", "m", _TweetMissingFullText("200", FakeUser("alice"))),
-        FakeNotification("n1", "m", _tweet("100", "good")),
+        FakeNotification(
+            "n2", "m", _TweetMissingFullText("200", FakeUser("alice")), timestamp_ms=200
+        ),
+        FakeNotification("n1", "m", _tweet("100", "good"), timestamp_ms=100),
     ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor="0")
 
     assert [i.source_id for i in result.items] == ["100"]
-    assert result.cursor_updates == {("x", "notifications"): "100"}
+    assert result.cursor_updates == {("x", "notifications"): "200"}
     assert result.failed is False
 
 
@@ -471,12 +586,12 @@ async def test_pagination_iterator_raising_mid_page_keeps_prior_page_items(monke
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
     page2 = _RaisingNotificationsPage(
-        [FakeNotification("n2", "m", _tweet("200", "lost to the raise"))],
+        [FakeNotification("n2", "m", _tweet("200", "lost to the raise"), timestamp_ms=200)],
         RuntimeError("notification iterator exploded"),
     )
     page1_notifications = [
-        FakeNotification("n4", "m", _tweet("400", "fourth")),
-        FakeNotification("n3", "m", _tweet("300", "third")),
+        FakeNotification("n4", "m", _tweet("400", "fourth"), timestamp_ms=400),
+        FakeNotification("n3", "m", _tweet("300", "third"), timestamp_ms=300),
     ]
     first_page = _FirstPageWithRaisingNext(page1_notifications, page2)
     client = FakeXClient(notifications=first_page)
@@ -493,14 +608,18 @@ async def test_pagination_iterator_raising_mid_page_keeps_prior_page_items(monke
 
 # --- Codex review finding B: engagement notifications (likes, reposts) are
 # never emitted as items -- the notification KIND is the discriminator, not
-# tweet age, since a like/repost on a post-cursor tweet is the OWNER's own
-# content, not incoming content. ---
+# tweet/notification age. Their timestamps still advance chronology exactly
+# like any other notification (bridging + cursor), independent of kind. ---
 
 
 async def test_like_notification_on_post_cursor_tweet_skipped_as_item_but_advances_cursor():
     notifications = [
         FakeNotification(
-            "n1", "liked your Tweet", _tweet("999", "owner's own tweet"), icon={"id": "heart_icon"}
+            "n1",
+            "liked your Tweet",
+            _tweet("999", "owner's own tweet"),
+            timestamp_ms=999,
+            icon={"id": "heart_icon"},
         ),
     ]
     client = FakeXClient(notifications=notifications)
@@ -515,7 +634,10 @@ async def test_like_notification_on_post_cursor_tweet_skipped_as_item_but_advanc
 async def test_repost_notification_on_post_cursor_tweet_skipped_as_item():
     notifications = [
         FakeNotification(
-            "n1", "reposted your Tweet", _tweet("999", "owner's own tweet"),
+            "n1",
+            "reposted your Tweet",
+            _tweet("999", "owner's own tweet"),
+            timestamp_ms=999,
             icon={"id": "retweet_icon"},
         ),
     ]
@@ -530,10 +652,12 @@ async def test_repost_notification_on_post_cursor_tweet_skipped_as_item():
 async def test_mention_and_reply_kind_notifications_are_included():
     notifications = [
         FakeNotification(
-            "n2", "mentioned you", _tweet("300", "hey @you"), icon={"id": "at_icon"}
+            "n2", "mentioned you", _tweet("300", "hey @you"), timestamp_ms=300,
+            icon={"id": "at_icon"},
         ),
         FakeNotification(
-            "n1", "replied to you", _tweet("200", "a reply"), icon={"id": "reply_icon"}
+            "n1", "replied to you", _tweet("200", "a reply"), timestamp_ms=200,
+            icon={"id": "reply_icon"},
         ),
     ]
     client = FakeXClient(notifications=notifications)
@@ -546,7 +670,7 @@ async def test_mention_and_reply_kind_notifications_are_included():
 async def test_unrecognized_icon_kind_fails_open_and_is_included():
     notifications = [
         FakeNotification(
-            "n1", "something new", _tweet("100", "quote maybe?"),
+            "n1", "something new", _tweet("100", "quote maybe?"), timestamp_ms=100,
             icon={"id": "some_future_icon_id"},
         ),
     ]
@@ -559,7 +683,7 @@ async def test_unrecognized_icon_kind_fails_open_and_is_included():
 
 async def test_missing_icon_fails_open_and_is_included():
     notifications = [
-        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), icon=None),
+        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), timestamp_ms=100, icon=None),
     ]
     client = FakeXClient(notifications=notifications)
 
@@ -570,14 +694,113 @@ async def test_missing_icon_fails_open_and_is_included():
 
 async def test_follow_notification_no_tweet_unaffected_by_icon_kind():
     notifications = [
-        FakeNotification("n2", "followed you", tweet=None, icon={"id": "user_icon"}),
-        FakeNotification("n1", "mentioned you", _tweet("100", "hi"), icon={"id": "at_icon"}),
+        FakeNotification(
+            "n2", "followed you", tweet=None, timestamp_ms=150, icon={"id": "user_icon"}
+        ),
+        FakeNotification(
+            "n1", "mentioned you", _tweet("100", "hi"), timestamp_ms=100, icon={"id": "at_icon"}
+        ),
     ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor="0")
 
     assert [i.source_id for i in result.items] == ["100"]
+
+
+async def test_engagement_notification_timestamp_bridges_pagination_like_any_other(monkeypatch):
+    """Codex review finding P1-a/redesign point 3: bridging is kind-agnostic
+    -- an engagement notification's timestamp <= cursor stops pagination
+    exactly like a content notification's would, even though the engagement
+    notification itself never becomes an item.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page1_notifications = [
+        FakeNotification(
+            "n2", "liked your Tweet", _tweet("777", "own tweet"), timestamp_ms=1500,
+            icon={"id": "heart_icon"},
+        ),
+    ]
+    page2_notifications = [
+        # timestamp <= cursor(1000): bridges, purely via an engagement
+        # notification's chronology -- no content/tweet-linked notification
+        # is needed to trigger a bridge.
+        FakeNotification(
+            "n1", "reposted your Tweet", _tweet("888", "own tweet"), timestamp_ms=900,
+            icon={"id": "retweet_icon"},
+        ),
+    ]
+    first_page, next_call_log = _build_page_chain(
+        [(page1_notifications, "c1"), (page2_notifications, "c2")]
+    )
+    client = FakeXClient(notifications=first_page)
+
+    result = await collect(client, cursor="1000")
+
+    assert len(next_call_log) == 1
+    assert result.items == []
+    # Bridged -> cursor advances to the newest timestamp seen (1500), even
+    # though every notification fetched was pure engagement.
+    assert result.cursor_updates == {("x", "notifications"): "1500"}
+
+
+# --- Codex review finding P1-a: bridging must be by NOTIFICATION timestamp,
+# never by linked tweet id -- the 'All' timeline is ordered by notification
+# time, so a fresh like/repost on an OLD tweet can land on page 1 with a
+# small, "old-looking" tweet id while a genuinely unseen mention (with a
+# large, new tweet id) sits unread on page 2. Bridging on tweet id would
+# stop pagination on page 1 and silently lose the page-2 mention. ---
+
+
+async def test_old_tweet_fresh_like_on_page1_does_not_falsely_bridge_past_page2_mention():
+    cursor = "1000"
+
+    # Page 1: a LIKE notification that just happened (timestamp 2000, well
+    # after the cursor) on a tweet from long ago (id "5" -- if bridging were
+    # still done by tweet id, "5 <= 1000" would falsely bridge right here).
+    page1_notifications = [
+        FakeNotification(
+            "n1",
+            "liked your Tweet",
+            _tweet("5", "an old tweet of the owner's"),
+            timestamp_ms=2000,
+            icon={"id": "heart_icon"},
+        ),
+    ]
+    # Page 2: a genuinely new, previously-unseen mention (large tweet id,
+    # new timestamp) -- must be reached and collected, followed by a
+    # notification old enough to legitimately bridge (ends the test cleanly).
+    page2_notifications = [
+        FakeNotification(
+            "n2", "mentioned you", _tweet("3000", "hey @you"), timestamp_ms=2100,
+            icon={"id": "at_icon"},
+        ),
+        # timestamp <= cursor(1000): bridges here.
+        FakeNotification(
+            "n3", "replied to you", _tweet("10", "stale"), timestamp_ms=900,
+            icon={"id": "reply_icon"},
+        ),
+    ]
+    first_page, next_call_log = _build_page_chain(
+        [(page1_notifications, "c1"), (page2_notifications, "c2")]
+    )
+    client = FakeXClient(notifications=first_page)
+
+    result = await collect(client, cursor=cursor)
+
+    # Pagination continued past page 1 -- 1 `.next()` call -- instead of
+    # falsely bridging on the old-tweet-id-but-new-timestamp like.
+    assert len(next_call_log) == 1
+    # The page-2 mention was reached and collected; the page-1 like (pure
+    # engagement) and the stale page-2 reply (timestamp <= cursor) were not.
+    assert [i.source_id for i in result.items] == ["3000"]
+    assert result.cursor_updates == {("x", "notifications"): "2100"}
+    assert result.failed is False
 
 
 # --- errors: auth/cookie failures never retry ---
@@ -659,7 +882,9 @@ async def test_other_exception_flags_failed_never_crashes():
 
 
 async def test_url_built_only_from_api_returned_screen_name_and_tweet_id():
-    notifications = [FakeNotification("n1", "m", _tweet("999", "hi", screen_name="bob"))]
+    notifications = [
+        FakeNotification("n1", "m", _tweet("999", "hi", screen_name="bob"), timestamp_ms=999)
+    ]
     client = FakeXClient(notifications=notifications)
 
     result = await collect(client, cursor="0")
@@ -693,7 +918,7 @@ def test_build_client_loads_from_inline_json():
     assert client.get_cookies() == {"ct0": "abc", "auth_token": "def"}
 
 
-# --- X_ENABLED=false: zero twikit import side effects (Phase 3 acceptance) ---
+# --- X_ENABLED=false: zero twikit import side effects (Phase 3 acceptance)
 #
 # Run in a fresh subprocess rather than in-process: other tests in this
 # file deliberately trigger `from twikit.errors import ...` (lazy imports
