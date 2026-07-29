@@ -584,15 +584,15 @@ _BARE_URL_RE = re.compile(
     # branch stays maximally broad here and the actual whole-payload check
     # happens in code, in _replace_bare_url below, once the full match
     # (and thus the full payload) is known.
-    # The trailing lookahead forbids the generic match from ENDING while the
-    # very next text is `<scheme chars>://` — without it, an unknown URL glued
-    # to markdown emphasis (`**TL;DR:**https://attacker.example/x`) lets this
-    # branch consume `DR:**https`, splitting the real URL's scheme so the
-    # attacker link reassembles around the defanged token. With the lookahead
-    # every backtracked ending fails too, the token doesn't match at all, and
-    # the scanner then finds the full `https://...` via the first branch,
-    # which defangs it properly.
-    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}(?![a-zA-Z0-9+.\-]*://)",
+    # No trailing lookahead here (an earlier revision had one to stop this
+    # branch biting into a following URL's scheme): nested/adjacent cases —
+    # `**TL;DR:**https://...` (emphasis-glued) and `custom:abchttps://...`
+    # (URI whose payload tail is itself scheme-shaped) — are instead handled
+    # by running the whole substitution TO FIXPOINT in enforce_link_allowlist:
+    # pass 1 defangs the outer colon, which exposes the inner `scheme://`
+    # token for pass 2. A single-pass lookahead can protect only one of the
+    # two colons, whichever way it is written.
+    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}",
     re.IGNORECASE,
 )
 
@@ -811,7 +811,17 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
         defanged += 1
         return _defang(url)
 
-    result = _BARE_URL_RE.sub(_replace_bare_url, result)
+    # Run the bare-URL pass TO FIXPOINT (bounded): a nested construct like
+    # `custom:abchttps://attacker.example/x` or emphasis-glued
+    # `**TL;DR:**https://...` needs one pass to break the OUTER colon and a
+    # second to defang the inner `scheme://` token it exposes. Defanged
+    # output never rematches (idempotence is tested), so the loop terminates
+    # in practice after <=2 passes; the bound is a pure safety rail.
+    for _ in range(5):
+        next_result = _BARE_URL_RE.sub(_replace_bare_url, result)
+        if next_result == result:
+            break
+        result = next_result
 
     if stripped or defanged:
         logger.warning(
