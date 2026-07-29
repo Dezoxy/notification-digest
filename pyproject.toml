@@ -5,7 +5,18 @@ description = "Personal Telegram/X notification-digest service"
 requires-python = ">=3.12"
 dependencies = [
     "telethon>=1.36",
-    "twikit>=2.3",
+    # Maintained fork of the dead upstream `twikit` (2.3.3, Feb 2025): X
+    # changed their webpack bundle in March 2026, breaking twikit's
+    # transaction-ID signing before any auth could even be attempted
+    # ("Couldn't get KEY_BYTE indices"). `twifork` 2.3.5 fixes exactly that
+    # and still imports as `twikit` -- no import lines change anywhere in
+    # this codebase (see digest/collectors/x.py's module docstring). Pinned
+    # to an EXACT version deliberately: this is a single-maintainer fork
+    # handling a live session cookie, so there is no automatic version
+    # drift here -- bump only after re-auditing the diff against the
+    # previous pin, same as the audit this pin followed (no new network
+    # hosts, no new eval/exec/base64/subprocess/pickle).
+    "twifork==2.3.5",
     "markdown>=3.7",
     "nh3>=0.2",
     "python-dotenv>=1.0",
