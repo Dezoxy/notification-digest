@@ -18,6 +18,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from digest.collectors import telegram as telegram_collector
+from digest.collectors import x as x_collector
 from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
 from digest.emailer import archive, send_digest
@@ -70,7 +71,9 @@ async def _client_ready(client: TelegramClient) -> bool:
         return False
 
 
-def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bool:
+def _deliver(
+    conn: sqlite3.Connection, cfg: Config, failed_sources: list[str]
+) -> bool:
     """Post-collection delivery: retry any pending send, then summarize+send new items.
 
     (a) A pending unsent digest (crash/SMTP failure on a previous run) is
@@ -80,7 +83,7 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
         a broken SMTP path, and the freshly collected items remain
         unsummarized for a later run to pick up. If it SUCCEEDS, we do NOT
         return -- we fall through to the normal path below so this run's
-        own collection (and its own `result.failed` state) still gets
+        own collection (and its own `failed_sources` state) still gets
         summarized and sent as a second email in the same run. Without this
         fallthrough, this run's items would sit unsummarized until a later
         run summarizes them with a fresh (possibly healthy) failed_sources,
@@ -93,12 +96,19 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
         retries the send next run instead of re-summarizing), send, mark
         sent, archive.
 
+    `failed_sources` is a list of collector names (e.g. `["telegram"]`,
+    `["x"]`, or `["telegram", "x"]`) built by the caller from each
+    collector's own CollectResult.failed -- not a single bool -- so a
+    Telegram-only failure and an X-only failure produce distinct banner
+    text (PLAN.md §5) instead of collapsing to one undifferentiated flag.
+
     Returns True if delivery succeeded or wasn't needed. Deliberately does
-    NOT factor in `result.failed` -- the caller combines this with the
-    collector's own failure flag, because a Telegram collector failure must
-    surface as a non-zero exit (the sole signal for the Loki alert on
-    digest.service) even on a run that sends no email at all, e.g. zero
-    collected items with no pending/unsummarized backlog to fall back on.
+    NOT factor in whether `failed_sources` is non-empty -- the caller
+    combines this with the collectors' own failure flags, because ANY
+    collector failure must surface as a non-zero exit (the sole signal for
+    the Loki alert on digest.service) even on a run that sends no email at
+    all, e.g. zero collected items with no pending/unsummarized backlog to
+    fall back on.
     """
     pending = get_pending_digest(conn)
     if pending is not None:
@@ -117,8 +127,6 @@ def _deliver(conn: sqlite3.Connection, cfg: Config, result: CollectResult) -> bo
     if not items:
         logger.info("no unsummarized items, nothing to send")
         return True
-
-    failed_sources = ["telegram"] if result.failed else []
 
     # Shrink to whatever actually fits in one prompt BEFORE both summarize()
     # and create_digest(): the item-count cap above (_MAX_ITEMS_PER_DIGEST)
@@ -197,35 +205,88 @@ def _send_and_finalize(
     return True
 
 
+async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResult:
+    """Build the X client and run one notifications-page collect, if enabled.
+
+    No-ops entirely (returns a fresh, unfailed CollectResult without ever
+    importing twikit) when `cfg.x_enabled` is False -- the caller only
+    invokes this when `cfg.x_enabled` is True, but the check is repeated
+    here so this function is safe to call unconditionally too. Any
+    exception raised while BUILDING the client (e.g. a malformed cookies
+    file/JSON, or the cookies path not existing) is treated the same as an
+    in-collector failure: logged (type name only -- the underlying error
+    could embed cookie material) and flagged, never allowed to crash the
+    run. This mirrors telegram.py's `_client_ready`-then-collect split,
+    where a client that can't even be constructed/authorized is just
+    another shape of collector failure.
+
+    `x_collector.collect` is already exception-proof internally (Codex
+    review finding A -- see its docstring), but the call is wrapped in a
+    catch-all here too as a second line of defense: this mirrors how
+    `_run`'s telegram path can never raise past `_collect_one_chat`/
+    `_client_ready` either, so a not-yet-anticipated bug in the collector
+    still can't take down the whole run (and Telegram's already-collected
+    items) before `commit_new_items` gets a chance to persist them.
+    """
+    if not cfg.x_enabled:
+        return CollectResult()
+
+    x_cursors = get_cursors(conn, "x")
+    try:
+        client = x_collector.build_client(cfg.x_cookies_path, cfg.x_cookies)
+    except Exception as exc:
+        logger.warning("x client setup failed: %s", type(exc).__name__)
+        return CollectResult(failed=True)
+
+    try:
+        return await x_collector.collect(client, x_cursors.get("notifications"))
+    except Exception as exc:
+        logger.warning("x collection crashed unexpectedly: %s", type(exc).__name__)
+        return CollectResult(failed=True)
+
+
 async def _run(cfg: Config) -> bool:
     """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
     try:
         init_db(conn)
 
-        cursors = get_cursors(conn, "telegram")
+        tg_cursors = get_cursors(conn, "telegram")
 
         client = TelegramClient(StringSession(cfg.tg_session), cfg.tg_api_id, cfg.tg_api_hash)
         try:
             if not await _client_ready(client):
                 logger.warning("telegram session not authorized / connect failed")
-                result = telegram_collector.CollectResult(failed=True)
+                tg_result = telegram_collector.CollectResult(failed=True)
             else:
-                result = await telegram_collector.collect(client, cfg.tg_chat_allowlist, cursors)
+                tg_result = await telegram_collector.collect(
+                    client, cfg.tg_chat_allowlist, tg_cursors
+                )
         finally:
             if client.is_connected():
                 await client.disconnect()
 
-        inserted = commit_new_items(conn, result.items, result.cursor_updates)
+        x_result = await _run_x_collector(conn, cfg)
+
+        items = tg_result.items + x_result.items
+        cursor_updates = {**tg_result.cursor_updates, **x_result.cursor_updates}
+
+        inserted = commit_new_items(conn, items, cursor_updates)
         logger.info(
-            "collected %d new items (%d inserted), cursors advanced for %d chats",
-            len(result.items),
+            "collected %d new items (%d inserted), cursors advanced for %d scopes",
+            len(items),
             inserted,
-            len(result.cursor_updates),
+            len(cursor_updates),
         )
 
-        delivered = _deliver(conn, cfg, result)
-        return delivered and not result.failed
+        failed_sources = [
+            source
+            for source, failed in (("telegram", tg_result.failed), ("x", x_result.failed))
+            if failed
+        ]
+
+        delivered = _deliver(conn, cfg, failed_sources)
+        return delivered and not failed_sources
     finally:
         conn.close()
 
