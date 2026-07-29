@@ -1418,3 +1418,21 @@ async def test_summarize_with_tldr_no_warning(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         summarize_mod.summarize(items, [], "m", 10)
     assert not any("TL;DR opener" in r.message for r in caplog.records)
+
+
+def test_enforce_link_allowlist_url_glued_to_emphasis_is_fully_defanged():
+    from digest.summarize import enforce_link_allowlist
+
+    md = "**TL;DR:**https://attacker.example/phish is bad"
+    out = enforce_link_allowlist(md, allowed_urls=set())
+    assert "https://attacker.example" not in out
+    assert "hxxps://attacker.example/phish" in out
+    # the emphasis-glued token must not have been split mid-scheme
+    assert "DR[:]" not in out
+
+
+def test_enforce_link_allowlist_normal_tldr_with_space_still_untouched():
+    from digest.summarize import enforce_link_allowlist
+
+    md = "**TL;DR:** all quiet today."
+    assert enforce_link_allowlist(md, allowed_urls=set()) == md

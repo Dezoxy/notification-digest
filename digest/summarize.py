@@ -584,7 +584,15 @@ _BARE_URL_RE = re.compile(
     # branch stays maximally broad here and the actual whole-payload check
     # happens in code, in _replace_bare_url below, once the full match
     # (and thus the full payload) is known.
-    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}",
+    # The trailing lookahead forbids the generic match from ENDING while the
+    # very next text is `<scheme chars>://` — without it, an unknown URL glued
+    # to markdown emphasis (`**TL;DR:**https://attacker.example/x`) lets this
+    # branch consume `DR:**https`, splitting the real URL's scheme so the
+    # attacker link reassembles around the defanged token. With the lookahead
+    # every backtracked ending fails too, the token doesn't match at all, and
+    # the scanner then finds the full `https://...` via the first branch,
+    # which defangs it properly.
+    r"|\b[a-zA-Z][a-zA-Z0-9+.\-]*:(?!//)[^\s:)\]>\"']{2,}(?![a-zA-Z0-9+.\-]*://)",
     re.IGNORECASE,
 )
 
