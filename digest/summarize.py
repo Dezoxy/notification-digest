@@ -166,6 +166,31 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
     return stdout
 
 
+def _leading_whitespace_column(line: str) -> int:
+    """Compute the CommonMark indentation column of a line's leading whitespace.
+
+    Per CommonMark, indentation is measured in columns, not characters: a
+    space advances the column by exactly 1, but a tab advances to the NEXT
+    multiple-of-4 column (`col = col + 4 - (col % 4)`) -- the standard
+    tab-stop expansion rule, identical to how a terminal renders a tab.
+    Stops at the first character that is neither a space nor a tab. A line
+    like " \t## Needs attention" (one space, then a tab) reaches column 4
+    from just two leading characters -- neither `line.startswith("\t")` nor
+    `line[:4] == "    "` catches that, since the line starts with a space
+    and its first four characters aren't four literal spaces, so a
+    character-counting check silently misses this case.
+    """
+    col = 0
+    for ch in line:
+        if ch == " ":
+            col += 1
+        elif ch == "\t":
+            col += 4 - (col % 4)
+        else:
+            break
+    return col
+
+
 def validate_output(markdown_text: str) -> None:
     """Enforce that the digest markdown carries all three required section headings.
 
@@ -223,21 +248,38 @@ def validate_output(markdown_text: str) -> None:
 
     Indented lines are excluded from heading and fence-delimiter detection,
     before any stripping happens: per CommonMark, an ATX heading (or a
-    fence delimiter) may be indented at most 3 spaces -- a line starting
-    with a tab, or with 4 or more leading spaces, is an indented code block
+    fence delimiter) may be indented at most 3 columns -- a line whose
+    leading whitespace reaches column 4 or more is an indented code block
     instead. A refusal that pads a template with 4-space indentation (e.g.
     "    ## Needs attention") is therefore code content, not a real
     heading, and must not satisfy the contract.
+
+    Column, not character count, is what CommonMark actually measures: a
+    tab does not advance by a literal 4 columns, it advances to the NEXT
+    multiple-of-4 column (`col = col + 4 - (col % 4)`), the same rule a
+    terminal or renderer uses to expand tabs. A single space always
+    advances by exactly 1. This means a line can reach column 4 -- and so
+    count as indented code -- with fewer than 4 leading characters: " \t"
+    (one space, column 1, then a tab that jumps straight to column 4) is
+    two characters but column 4, and a naive `line[:4] == "    "` /
+    `line.startswith("\t")` check misses it entirely (the line doesn't
+    start with a tab, and its first four characters aren't four literal
+    spaces) -- letting a mixed space+tab-indented refusal template slip
+    past this check as if it were a real heading line. See
+    _leading_whitespace_column.
     """
     heading_lines = []
     in_fence = False
     fence_char = None
     fence_len = 0
     for line in markdown_text.splitlines():
-        # CommonMark: 4+ leading spaces or a leading tab makes this an
-        # indented code block -- neither a heading nor a fence delimiter
-        # can start here, regardless of what follows the indentation.
-        if line.startswith("\t") or line[:4] == "    ":
+        # CommonMark: leading whitespace reaching column 4 or more makes
+        # this an indented code block -- neither a heading nor a fence
+        # delimiter can start here, regardless of what follows the
+        # indentation. Computed via CommonMark tab-expansion rules (see
+        # _leading_whitespace_column), not pattern-matched, so mixed
+        # space+tab indentation that reaches column 4 is caught too.
+        if _leading_whitespace_column(line) >= 4:
             continue
         stripped = line.strip()
         if in_fence:
@@ -293,8 +335,12 @@ _MARKDOWN_LINK_RE = re.compile(
     r"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(\"[^\"]*\"|'[^']*'))?\s*\)"
 )
 # CommonMark autolink form: `<https://example.com>` -- a bare URL wrapped in
-# angle brackets, with no link text of its own.
-_AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]+)>")
+# angle brackets, with no link text of its own. URI schemes are
+# case-insensitive (RFC 3986) and mail clients linkify `<HTTP://...>` just as
+# readily as `<http://...>`, so this must match regardless of scheme case --
+# otherwise an uppercase-scheme autolink skips this pass entirely and is
+# never recognized as an autolink to defang.
+_AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]+)>", re.IGNORECASE)
 # Reference-style link definition line, e.g. `[id]: https://example.com`
 # (optionally indented up to 3 spaces, per CommonMark). This does not match
 # the *usage* site (`[text][id]`) -- only the definition. Deliberately
@@ -306,8 +352,12 @@ _REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULT
 # through a markdown link construct at all (plain prose, or what survives
 # after the passes above run). Stops at whitespace and the same closing
 # delimiters the other patterns exclude (`)`, `]`, `>`, quotes) so it doesn't
-# swallow trailing punctuation from an enclosing markdown/HTML construct.
-_BARE_URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
+# swallow trailing punctuation from an enclosing markdown/HTML construct. URI
+# schemes are case-insensitive (RFC 3986) and mail clients linkify
+# `HTTPS://...` exactly as readily as `https://...`, so this must match
+# regardless of scheme case -- a lowercase-only pattern lets an uppercase- or
+# mixed-case-scheme URL sail through this final pass untouched.
+_BARE_URL_RE = re.compile(r"https?://[^\s)\]>\"']+", re.IGNORECASE)
 
 
 def _defang(url: str) -> str:
@@ -318,11 +368,19 @@ def _defang(url: str) -> str:
     prefix, so the destination stays human-readable (useful for the "someone
     sent a suspicious link" summary case) while no longer being a live,
     clickable URL to any client that recognizes the scheme.
+
+    The scheme is detected case-insensitively -- URI schemes are
+    case-insensitive per RFC 3986, and mail clients linkify `HTTPS://` or
+    `hTtPs://` exactly as readily as `https://` -- so a lowercase-only check
+    here would leave an uppercase- or mixed-case-scheme URL live and
+    clickable. The output scheme is always written lowercase
+    (`hxxps://`/`hxxp://`); only the prefix is touched, so the remainder of
+    the URL is preserved exactly, case included.
     """
-    if url.startswith("https://"):
-        return "hxxps://" + url[len("https://") :]
-    if url.startswith("http://"):
-        return "hxxp://" + url[len("http://") :]
+    if url[:8].lower() == "https://":
+        return "hxxps://" + url[8:]
+    if url[:7].lower() == "http://":
+        return "hxxp://" + url[7:]
     return url
 
 

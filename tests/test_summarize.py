@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 import subprocess
 from types import SimpleNamespace
 
@@ -429,6 +430,81 @@ def test_validate_output_headings_indented_up_to_three_spaces_still_count():
     validate_output(markdown_text)  # must not raise
 
 
+def test_validate_output_mixed_space_tab_indented_refusal_raises_missing_all_three():
+    # Finding A (P1): CommonMark expands a tab to the NEXT multiple-of-4
+    # column, not a literal 4 columns. " \t" is one space (column 1) then a
+    # tab that jumps straight to column 4 -- two characters, but column 4,
+    # so this is indented code per CommonMark even though it doesn't match
+    # `line.startswith("\t")` or `line[:4] == "    "`. A refusal padded this
+    # way must not satisfy the contract.
+    refusal = (
+        "I can't do this. Here's the template you asked about:\n"
+        " \t## Needs attention\n"
+        " \t## Worth knowing\n"
+        " \t## Noise skipped\n"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+
+
+def test_validate_output_tab_indented_heading_still_skipped():
+    # Regression: a line starting with a bare tab must still be treated as
+    # indented code (column 4 immediately), same as before this fix.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "\t## Needs attention\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise (exactly one real heading each)
+
+
+def test_validate_output_four_space_indented_heading_still_skipped():
+    # Regression: four literal leading spaces must still be treated as
+    # indented code, same as before this fix.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "    ## Needs attention\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise (exactly one real heading each)
+
+
+def test_validate_output_headings_indented_one_to_three_spaces_still_count_columns():
+    # Regression/confirmation for the column-based rewrite: 1-3 leading
+    # spaces stay real ATX headings (column < 4).
+    markdown_text = (
+        " ## Needs attention\n- nothing\n\n"
+        "  ## Worth knowing\n- nothing\n\n"
+        "   ## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
+def test_validate_output_two_spaces_then_tab_reaching_column_four_is_skipped():
+    # Finding A (P1): two spaces (column 2) then a tab jumps to column 4
+    # (2 + (4 - 2 % 4) = 4) -- also indented code, must be skipped just like
+    # the " \t" case.
+    markdown_text = (
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n"
+        "  \t## Needs attention\n\n"
+        "## Noise skipped\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise (exactly one real heading each)
+
+
 def test_validate_output_duplicate_heading_raises_naming_it():
     markdown_text = (
         "## Needs attention\n- nothing\n\n"
@@ -750,6 +826,43 @@ def test_enforce_link_allowlist_allowed_url_bare_in_prose_is_untouched():
     result = enforce_link_allowlist(text, allowed_urls={url})
 
     assert result == text
+
+
+def test_enforce_link_allowlist_uppercase_scheme_bare_url_is_defanged():
+    # Finding B (P1): URI schemes are case-insensitive (RFC 3986) and mail
+    # clients linkify HTTPS://... just as readily as https://... -- an
+    # uppercase-scheme bare URL must not evade _BARE_URL_RE/_defang.
+    text = "Heads up, someone posted HTTPS://attacker.example/phish in the chat."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "hxxps://attacker.example/phish" in result
+    # No case-variant of the live scheme must survive anywhere in the output.
+    assert re.search(r"https://attacker\.example", result, re.IGNORECASE) is None
+
+
+def test_enforce_link_allowlist_uppercase_scheme_autolink_is_defanged():
+    # Finding B (P1): an uppercase-scheme autolink must still be recognized
+    # as an autolink (not just incidentally caught by the bare-URL pass) and
+    # defanged.
+    text = "Reference: <HTTP://attacker.example/x> for more."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "<HTTP://attacker.example/x>" not in result
+    assert "hxxp://attacker.example/x" in result
+    assert re.search(r"http://attacker\.example", result, re.IGNORECASE) is None
+
+
+def test_enforce_link_allowlist_mixed_case_scheme_is_defanged():
+    # Finding B (P1): a mixed-case scheme (neither all-lowercase nor
+    # all-uppercase) must be detected and defanged the same way.
+    text = "Look: hTtPs://attacker.example/y is suspicious."
+
+    result = enforce_link_allowlist(text, allowed_urls=set())
+
+    assert "hxxps://attacker.example/y" in result
+    assert re.search(r"https://attacker\.example", result, re.IGNORECASE) is None
 
 
 # --- enforce_link_allowlist: render-through against the real renderer
