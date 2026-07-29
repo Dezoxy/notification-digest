@@ -86,7 +86,7 @@ docker run --rm -v digest-data:/data -v "$PWD":/backup busybox \
 To reset all local state (start clean, e.g. after a schema change):
 
 ```
-docker volume rm x_and_telegram-scrape_digest-data
+docker volume rm digest-data
 ```
 
 (the exact volume name is prefixed with the compose project directory name —

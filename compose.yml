@@ -32,3 +32,7 @@ services:
 
 volumes:
   digest-data:
+    # Explicit name: without it Compose project-scopes the volume
+    # (<project>_digest-data), and the README's `docker run -v digest-data:...`
+    # inspection/copy commands would silently open a different, empty volume.
+    name: digest-data
