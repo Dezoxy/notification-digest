@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import digest.summarize as summarize_mod
+from digest.emailer import render_html
 from digest.state import Item
 from digest.summarize import (
     SummarizeError,
@@ -688,6 +689,73 @@ def test_enforce_link_allowlist_known_autolink_is_preserved():
     result = enforce_link_allowlist(text, allowed_urls={url})
 
     assert result == text
+
+
+# --- enforce_link_allowlist: render-through against the real renderer
+# (Codex P2) ---
+#
+# The regex-only tests above prove enforce_link_allowlist's own output looks
+# right, but the actual security boundary is what digest.emailer.render_html
+# does with that output: python-markdown recognizes several link syntaxes
+# beyond the plain `[text](url)` form these tests target, and nh3 keeps any
+# http(s) href regardless of which syntax produced the anchor. These tests
+# run each hostile form through enforce_link_allowlist *and then* render_html,
+# and assert the attacker URL never ends up in an href attribute -- proving
+# the renderer agrees the link is gone, not just that the intermediate
+# markdown string looks stripped.
+_ALLOWED_RENDER_URL = "https://t.me/c/123/1"
+
+
+@pytest.mark.parametrize(
+    "hostile_markdown",
+    [
+        pytest.param(
+            'See [click here](https://attacker.example/x "details") for more.',
+            id="inline_double_quoted_title",
+        ),
+        pytest.param(
+            "See [click here](https://attacker.example/x 'details') for more.",
+            id="inline_single_quoted_title",
+        ),
+        pytest.param(
+            "See [click here](<https://attacker.example/x>) for more.",
+            id="inline_angle_bracketed_url",
+        ),
+        pytest.param(
+            "See [click here][ref] for more.\n\n[ref]: https://attacker.example/x\n",
+            id="reference_style_with_definition",
+        ),
+        pytest.param(
+            "See [click here](https://attacker.example/x) for more.",
+            id="plain_inline_regression",
+        ),
+        pytest.param(
+            "See <https://attacker.example/x> for more.",
+            id="autolink_regression",
+        ),
+    ],
+)
+def test_enforce_link_allowlist_render_through_neutralizes_every_hostile_link_form(
+    hostile_markdown,
+):
+    repaired = enforce_link_allowlist(hostile_markdown, allowed_urls={_ALLOWED_RENDER_URL})
+
+    html = render_html(repaired)
+
+    assert 'href="https://attacker.example' not in html
+
+
+def test_enforce_link_allowlist_render_through_keeps_allowed_inline_title_link_as_anchor():
+    # The title-form rewrite must not clobber an ALLOWED url -- the anchor
+    # must still render, even though the title itself may be dropped along
+    # the way (nh3's attribute allowlist for `a` is href-only regardless, so
+    # the title never survives to the final HTML either way).
+    text = f'See [t.me update]({_ALLOWED_RENDER_URL} "details") for more.'
+
+    repaired = enforce_link_allowlist(text, allowed_urls={_ALLOWED_RENDER_URL})
+    html = render_html(repaired)
+
+    assert f'href="{_ALLOWED_RENDER_URL}"' in html
 
 
 def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatch):

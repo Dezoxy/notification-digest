@@ -259,13 +259,25 @@ def validate_output(markdown_text: str) -> None:
         raise SummarizeError("digest output sections out of order")
 
 
-# Non-nested markdown inline link: `[text](url)`. Good enough for our
-# contract -- the digest's own template only ever emits flat, non-nested
-# links, so this does not need a full CommonMark-grade parser.
-_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
+# Markdown inline link: `[text](url)`, optionally with a title
+# (`[text](url "title")` or `[text](url 'title')`) and/or an
+# angle-bracketed URL (`[text](<url>)`). Good enough for our contract --
+# the digest's own template only ever emits flat, non-nested links -- but
+# it must still match every inline form python-markdown's default
+# renderer turns into a real `<a href>` anchor, since a form we don't
+# match is a form we silently let through with its raw URL intact.
+_MARKDOWN_LINK_RE = re.compile(
+    r"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(\"[^\"]*\"|'[^']*'))?\s*\)"
+)
 # CommonMark autolink form: `<https://example.com>` -- a bare URL wrapped in
 # angle brackets, with no link text of its own.
 _AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]+)>")
+# Reference-style link definition line, e.g. `[id]: https://example.com`
+# (optionally indented up to 3 spaces, per CommonMark). This does not match
+# the *usage* site (`[text][id]`) -- only the definition. Deliberately
+# permissive about what follows the URL (title, trailing text) since the
+# only decision made here is whether the URL is allowlisted.
+_REFERENCE_DEFINITION_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+).*$", re.MULTILINE)
 
 
 def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) -> str:
@@ -282,15 +294,40 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
     This function is the layer that checks link *provenance* instead of
     just syntax, closing that gap.
 
-    This repairs rather than rejects: an unknown link is turned into plain
-    text (`[text](url)` -> `text`; `<url>` -> `url` with the brackets
-    dropped) and the digest still goes out, rather than raising and
-    discarding the whole run's output. A hard validation failure here (the
-    way validate_output raises on a missing section) would risk looping
+    Three distinct markdown forms python-markdown's default renderer turns
+    into a real `<a href>` anchor are covered here, all against the same
+    allowlist:
+
+    1. Inline links, `[text](url)`, including the variations the CommonMark
+       grammar allows within the parens: an optional title in either quote
+       style (`[text](url "title")` / `[text](url 'title')`), an optional
+       angle-bracketed URL (`[text](<url>)`), and flexible whitespace around
+       the URL. An unknown URL is repaired to plain text (`text`); a title,
+       if present, is dropped along with the parens -- the title is not
+       rendered as visible text by python-markdown either way, so dropping
+       it loses nothing a reader would see.
+    2. Reference-style links, `[text][id]`, defined elsewhere by a separate
+       `[id]: url` definition line. The two-part syntax means the URL never
+       appears at the `[text][id]` usage site at all -- there is nothing to
+       repair there. Instead, this strips the *definition* line: if its URL
+       is not allowlisted, the whole line is deleted. python-markdown then
+       has no definition for `id`, so every `[text][id]` referencing it
+       renders as literal bracket text, not an anchor -- the same "becomes
+       plain text" outcome as the inline case, just achieved by removing the
+       definition instead of rewriting each usage site (which may be
+       numerous, or precede the definition in document order).
+    3. CommonMark autolinks, `<url>` -- a bare URL with no link text of its
+       own, unchanged from the previous implementation.
+
+    This repairs rather than rejects: the digest still goes out with
+    unknown links neutralized, rather than raising and discarding the
+    whole run's output. A hard validation failure here (the way
+    validate_output raises on a missing section) would risk looping
     forever if the model keeps emitting a bad link on every retry --
     section headings are a static template the model can plausibly get
     right on a rerun, but there's no reason to expect a rerun would stop
-    hallucinating a URL. Known links are left completely untouched.
+    hallucinating a URL. Known links (and known reference definitions) are
+    left completely untouched.
 
     Only the COUNT of stripped links is logged, never the URLs themselves:
     an attacker-chosen URL reaching the log (and Loki) is itself exposure
@@ -318,6 +355,16 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
         return url
 
     result = _AUTOLINK_RE.sub(_replace_autolink, result)
+
+    def _replace_reference_definition(match: re.Match[str]) -> str:
+        nonlocal stripped
+        url = match.group(1).strip("<>")
+        if url in allowed:
+            return match.group(0)
+        stripped += 1
+        return ""
+
+    result = _REFERENCE_DEFINITION_RE.sub(_replace_reference_definition, result)
 
     if stripped:
         logger.warning(
