@@ -60,9 +60,11 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
     """Invoke `claude -p` headless and return its stripped stdout.
 
     Raises SummarizeError on a non-zero exit, empty/whitespace-only stdout,
-    or a timeout. The error message includes a short stderr tail for
-    diagnostics but never the prompt itself (it contains scraped message
-    content).
+    or a timeout. On a non-zero exit, stderr is suppressed entirely (only its
+    length is reported) rather than included in the error message: the CLI
+    can echo submitted text -- which contains scraped Telegram/X message
+    content -- in its diagnostics, and that error message gets logged and
+    shipped to Loki.
     """
     try:
         result = subprocess.run(
@@ -76,9 +78,9 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
         raise SummarizeError(f"claude -p timed out after {timeout_seconds}s") from exc
 
     if result.returncode != 0:
-        stderr_tail = result.stderr.strip()[-500:]
         raise SummarizeError(
-            f"claude -p exited {result.returncode}: {stderr_tail}"
+            f"claude -p exited {result.returncode} (stderr suppressed, "
+            f"{len(result.stderr)} chars — rerun manually to inspect)"
         )
 
     stdout = result.stdout.strip()

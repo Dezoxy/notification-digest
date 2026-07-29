@@ -91,14 +91,18 @@ def test_run_claude_success_returns_stripped_stdout(monkeypatch):
     assert captured["kwargs"]["text"] is True
 
 
-def test_run_claude_nonzero_exit_raises_summarize_error(monkeypatch):
+def test_run_claude_nonzero_exit_raises_summarize_error_without_stderr_content(monkeypatch):
+    fake_stderr = "auth error: session expired SECRET_STDERR_MARKER_98765"
+
     def fake_run(cmd, **kwargs):
-        return _fake_completed(returncode=1, stdout="", stderr="auth error: session expired")
+        return _fake_completed(returncode=1, stdout="", stderr=fake_stderr)
 
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
-    with pytest.raises(SummarizeError, match="exited 1"):
+    with pytest.raises(SummarizeError, match="exited 1") as exc_info:
         run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+
+    assert "SECRET_STDERR_MARKER_98765" not in str(exc_info.value)
 
 
 def test_run_claude_empty_stdout_raises_summarize_error(monkeypatch):
