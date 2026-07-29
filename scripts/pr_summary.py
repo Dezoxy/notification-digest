@@ -239,7 +239,20 @@ def first_codex_comment(thread: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def latest_human_reply(thread: dict[str, Any]) -> dict[str, Any] | None:
-    for comment in reversed(thread["comments"]["nodes"]):
+    """Return the latest non-Codex comment that replies to the Codex finding.
+
+    Only comments strictly after ``first_codex_comment`` (the finding itself)
+    are eligible, so a human comment that merely precedes the finding (e.g.
+    the human-authored comment that opened the thread, with Codex replying
+    later) is never mistaken for a reply to it. Returns None if no non-Codex
+    comment occurs after the first Codex comment.
+    """
+    comments = thread["comments"]["nodes"]
+    codex_comment = first_codex_comment(thread)
+    if codex_comment is None:
+        return None
+    codex_index = comments.index(codex_comment)
+    for comment in reversed(comments[codex_index + 1 :]):
         if not is_codex(comment.get("author", {}).get("login")):
             return comment
     return None
