@@ -53,8 +53,16 @@ uv run python -m digest
 
 ```
 docker compose build          # build the image locally
+docker compose run --rm -it --entrypoint claude digest   # ONE-TIME: /login (Max subscription)
 docker compose run --rm digest   # one-shot run (no daemon, no ports)
 ```
+
+The interactive `claude` step is required once per fresh `digest-data`
+volume: the summarizer authenticates via the persisted subscription login
+in `CLAUDE_CONFIG_DIR` (no API key), and a brand-new volume has no
+credentials — without the login, the first run that collects any items
+fails at summarization. Complete `/login` in the prompt, exit, and the
+credentials persist in the volume for every later run.
 
 Local state (SQLite db, markdown archive, Claude CLI config dir) lands in
 the named Docker volume `digest-data`, mounted into the container at
@@ -89,8 +97,9 @@ To reset all local state (start clean, e.g. after a schema change):
 docker volume rm digest-data
 ```
 
-(the exact volume name is prefixed with the compose project directory name —
-run `docker volume ls` to confirm it).
+(`compose.yml` pins the volume's literal name via `name: digest-data`, so
+it is *not* project-prefixed — the commands above address the exact volume
+the service uses).
 
 ## Deployment
 
