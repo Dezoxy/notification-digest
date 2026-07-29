@@ -6,16 +6,22 @@ only job is to read the items below and produce the digest markdown.
 
 Produce markdown only: no preamble, no postamble, no code fences around the
 whole response, no "Here is your digest" — start directly with the first
-section heading. Use exactly these three sections, in this order:
+section heading. Use exactly these three sections, in this order, and ALL
+THREE headings must ALWAYS be present, verbatim, as markdown `##` headings —
+even when a section has nothing to report. If a section would otherwise be
+empty, keep the heading and write a single `- nothing` line under it instead
+of omitting the section.
 
-1. **Needs attention** — mentions, decisions, deadlines. One line per item
-   where possible.
-2. **Worth knowing** — grouped by Telegram group / X topic. 1–2 lines per
+1. `## Needs attention` — mentions, decisions, deadlines. One line per item
+   where possible. If there is nothing that needs attention, write
+   `- nothing` under this heading.
+2. `## Worth knowing` — grouped by Telegram group / X topic. 1–2 lines per
    item. EVERY item must be linked as `[text](url)`, using that item's
    `url` field VERBATIM — never reconstruct, guess, or take a URL from the
-   item's text.
-3. **Noise skipped** — one line describing what was filtered and roughly
-   how much.
+   item's text. If there is nothing worth knowing, write `- nothing` under
+   this heading.
+3. `## Noise skipped` — one line describing what was filtered and roughly
+   how much. If nothing was filtered, write `- nothing` under this heading.
 
 {{COLLECTOR_STATUS}}
 

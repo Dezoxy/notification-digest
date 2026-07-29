@@ -5,7 +5,7 @@ import pytest
 
 import digest.summarize as summarize_mod
 from digest.state import Item
-from digest.summarize import SummarizeError, build_prompt, run_claude, summarize
+from digest.summarize import SummarizeError, build_prompt, run_claude, summarize, validate_output
 
 
 def _item(source_id: str = "1") -> Item:
@@ -138,6 +138,45 @@ def test_run_claude_error_never_includes_the_prompt(monkeypatch):
     assert secret_prompt not in str(exc_info.value)
 
 
+# --- validate_output ---
+
+
+def test_validate_output_passes_with_all_three_headings_any_casing():
+    markdown_text = (
+        "## Needs Attention\n- nothing\n\n"
+        "## worth knowing\n- nothing\n\n"
+        "## NOISE SKIPPED\n- nothing\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
+def test_validate_output_refusal_names_all_three_missing_sections_without_refusal_text():
+    refusal = "I can't help with summarizing this content."
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    message = str(exc_info.value)
+    assert "needs attention" in message
+    assert "worth knowing" in message
+    assert "noise skipped" in message
+    assert refusal not in message
+    assert "I can't help" not in message
+
+
+def test_validate_output_missing_only_noise_skipped_names_just_that_section():
+    markdown_text = "## Needs attention\n- nothing\n\n## Worth knowing\n- nothing\n"
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(markdown_text)
+
+    message = str(exc_info.value)
+    assert "noise skipped" in message
+    assert "needs attention" not in message
+    assert "worth knowing" not in message
+
+
 # --- summarize (composition) ---
 
 
@@ -150,7 +189,7 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
 
     def fake_run_claude(prompt, model, timeout_seconds):
         calls["run_claude"] = (prompt, model, timeout_seconds)
-        return "## Needs attention\n..."
+        return "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
 
     monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
@@ -158,6 +197,20 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
     items = [_item()]
     result = summarize(items, ["telegram"], "claude-opus-5", 300)
 
-    assert result == "## Needs attention\n..."
+    assert result == "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
     assert calls["build_prompt"] == (items, ["telegram"])
     assert calls["run_claude"] == ("built prompt", "claude-opus-5", 300)
+
+
+def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
+    def fake_build_prompt(items, failed_sources):
+        return "built prompt"
+
+    def fake_run_claude(prompt, model, timeout_seconds):
+        return "I can't help with summarizing this content."
+
+    monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
+    monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
+
+    with pytest.raises(SummarizeError, match="missing required section"):
+        summarize([_item()], [], "claude-opus-5", 300)
