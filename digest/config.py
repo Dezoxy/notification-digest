@@ -18,6 +18,14 @@ class ConfigError(Exception):
     """
 
 
+# Valid values for CLAUDE_EFFORT, mirroring the `claude` CLI's own
+# `--effort <low|medium|high|xhigh|max>` flag (see run_claude in
+# digest/summarize.py). Kept here, next to the validator, rather than
+# inlined at the call site, so the allowed set has exactly one place to
+# update if the CLI ever adds or removes a level.
+_CLAUDE_EFFORT_CHOICES = ("low", "medium", "high", "xhigh", "max")
+
+
 @dataclass(frozen=True)
 class Config:
     tg_api_id: int
@@ -37,6 +45,7 @@ class Config:
     anthropic_model: str = "claude-opus-5"
     archive_dir: str = "./archive"
     claude_timeout_seconds: int = 300
+    claude_effort: str = "high"
 
     @classmethod
     def from_env(cls) -> Config:
@@ -63,6 +72,9 @@ class Config:
         claude_timeout_seconds = _optional_positive_int(
             "CLAUDE_TIMEOUT_SECONDS", default=300
         )
+        claude_effort = _optional_choice(
+            "CLAUDE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES
+        )
 
         return cls(
             tg_api_id=tg_api_id,
@@ -82,6 +94,7 @@ class Config:
             anthropic_model=anthropic_model,
             archive_dir=archive_dir,
             claude_timeout_seconds=claude_timeout_seconds,
+            claude_effort=claude_effort,
         )
 
 
@@ -179,6 +192,32 @@ def _optional_positive_int(name: str, *, default: int) -> int:
         raise ConfigError(f"{name} must be a positive integer") from exc
     if value <= 0:
         raise ConfigError(f"{name} must be a positive integer")
+    return value
+
+
+def _optional_choice(name: str, *, default: str, choices: tuple[str, ...]) -> str:
+    """Read an optional string env var, falling back to `default` if unset/blank.
+
+    Also rejects any set value that isn't one of `choices` -- used for
+    CLAUDE_EFFORT, which is handed straight into the `claude -p` subprocess
+    argv (see run_claude in digest/summarize.py) as `--effort <value>`. The
+    CLI itself would reject a bad value, but only after spawning the
+    subprocess -- validating here at startup instead means a typo'd
+    CLAUDE_EFFORT fails fast, before any collector runs, with a clear error
+    naming the valid set, rather than surfacing as an opaque non-zero exit
+    from `claude -p` deep inside a scheduled run. Unlike ConfigError's usual
+    contract, the offending value IS included in the message here: this
+    setting is not a secret, and the invalid value is exactly the actionable
+    detail a fixer needs.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip()
+    if value not in choices:
+        raise ConfigError(
+            f"{name} must be one of {', '.join(choices)}, got {value!r}"
+        )
     return value
 
 
