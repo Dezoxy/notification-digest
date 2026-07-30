@@ -76,7 +76,7 @@ x_and_telegram-scrape/
 │   ├── summarize.py           # builds JSON payload from items, invokes `claude -p`, returns markdown
 │   └── emailer.py             # markdown→HTML render, smtplib send, archive-to-disk
 ├── prompts/
-│   └── digest.md              # fixed prompt template (3-section output contract)
+│   └── digest.md              # fixed prompt template (prose BRIEFING output contract, §5)
 ├── scripts/
 │   └── telegram_login.py      # one-time interactive Telethon login → prints StringSession for Key Vault
 ├── tests/
@@ -169,7 +169,7 @@ Idempotency contract:
 - **Library:** subprocess call to the `claude` CLI (headless mode, `-p`), no SDK dependency.
 - **Auth:** the CLI authenticates via the owner's Claude Max subscription (one-time interactive `claude` login performed by the owner on the VM), not an API key. Its config/credentials dir is persisted in a volume (`/srv/appdata/digest/claude-home`), mounted into the container as the CLI's home/config dir — mirrors the existing T3MP3ST pattern on the same VM that persists an agent home at `/srv/appdata/agent`. No `ANTHROPIC_API_KEY` is set.
 - **Input:** `ANTHROPIC_MODEL` (default `claude-opus-5`), items JSON, collector failure flags (to inject the "⚠ X collection failed" banner context).
-- **Output:** markdown string matching the 3-section contract (§5).
+- **Output:** markdown string matching the BRIEFING contract (§5).
 - **Error handling:** non-zero exit / empty stdout from `claude -p` → treat as summarizer failure, do not send a garbage email; log and exit non-zero so systemd/journal record the failure (surfaces via Loki). No automatic retry within the run — next scheduled run picks up the same unsummarized items since `digest_id` was never assigned. A subscription session expiry/revocation fails the same way (non-zero exit → existing Loki alert); recovery is a manual re-login on the VM, not automated (§8).
 
 ### 4.5 `emailer.py`
@@ -206,14 +206,27 @@ Idempotency contract:
 
 ## 5. Summarization prompt design
 
-`prompts/digest.md` is a fixed template (no per-run templating engine — string substitution of the JSON items block is sufficient). Contract:
+`prompts/digest.md` is a fixed template (no per-run templating engine — string substitution of the JSON items block is sufficient).
 
-- **Input to the prompt:** the new items since the last digest, serialized as a JSON array (source, chat/author context, text, url, fetched_at), plus a flag noting whether any collector failed this run.
-- **Output from Claude:** markdown only, three fixed sections, in this order:
-  1. **Needs attention** — mentions, decisions, deadlines. Terse, one line per item where possible.
-  2. **Worth knowing** — grouped by Telegram group / X topic, 1–2 lines each, every item deep-linked (`[text](url)` markdown links using the `url` field verbatim — never reconstructed).
-  3. **Noise skipped** — one summary line describing what was filtered and roughly how much.
-- If a collector failed this run, the prompt instructs Claude to prepend a `⚠ <source> collection failed this run` banner line before section 1.
+**The problem the current (BRIEFING) contract solves:** the owner gets 50–100 items per 3h window from three structurally different kinds of source — news channels (self-contained events), discussion groups (conversations, e.g. a crypto group debating tokenomics in 30-char messages), and pure chatter (greetings, reactions, promo). An earlier flat bullet-list contract made him read everything to find what mattered; a single-narrative newsletter rewrite invented connections between unrelated stories that didn't exist. The current contract — validated live against 50 real items before being adopted — handles the three kinds differently instead of forcing one shape on all of them:
+
+- **Events** are clustered by STORY: every item about the same event, across every source, merges into one passage.
+- **Conversations** are characterized, not transcribed: what a group discussed, whether it reached a conclusion, anything worth knowing — never a message-by-message recap.
+- **Chatter** is never described individually, only counted at the end.
+
+**Output shape:**
+
+- The briefing OPENS with a single bold paragraph, before any heading, in exactly the form `**TL;DR:** ...` — two or three sentences naming only what genuinely mattered. `emailer.py` visually highlights this paragraph.
+- A `## Needs attention` section goes ABOVE the TL;DR paragraph only when something needs the reader's action (a direct mention, a deadline, a decision awaiting him) — omitted entirely otherwise, never emitted empty.
+- One `## ` section per story/topic cluster after that, headed by whatever the cluster is actually about (e.g. `## Missile strike in Poland`), ordered most-important-first. Sections are independent — the prompt explicitly forbids inventing a through-line between them, since most windows have none.
+- A **section budget** (~8 `## ` sections) keeps headings meaningful on a phone: anything that would only earn a sentence or two is folded into a single closing `## Also this window` prose section instead of getting its own heading.
+- A **soft length target** (~900 words) keeps the whole thing a few minutes' read regardless of item count.
+- Citations are superscript-digit markdown links (`the yield hit 5.21%[¹](url)`), numbered sequentially through the whole briefing, where every URL must be copied VERBATIM from an item's `url` field — never reconstructed, guessed, or pulled from item text.
+- A closing italic line reports how many items were drawn on and what was left out (e.g. `*From 74 items; 38 were chatter...*`).
+- If a collector failed this run, the prompt instructs Claude *not* to write its own banner — `summarize.py` deterministically prepends a `⚠ <source> collection failed this run` line in code instead (a live test showed the model omits a model-written banner unreliably even under an explicit, emphatic instruction; whether a partial-collection run is flagged must not depend on model compliance).
+
+**The gate is thin, deliberately:** `validate_output` in `summarize.py` no longer hard-gates specific section names, an exact count, or a fixed order — an earlier revision of this contract required three fixed headings (*Needs attention / Worth knowing / Noise skipped*), always present, in that order, and raised `SummarizeError` on any deviation. That hard-gated stylistic compliance from a model whose wording legitimately varies run to run, and coupled with `main.py`'s "no row recorded until validation passes" persistence contract, a persistent (but harmless) stylistic drift meant the same backlog of items would fail validation and get re-attempted forever, never actually shipping. The current gate enforces exactly one STRUCTURAL property a legitimate briefing can never fail to have — at least one real `## ` heading line — using fence-aware (backtick and tilde, matching-delimiter, opening-length rules) and CommonMark-indentation-aware line scanning, so a fenced or 4-space-indented refusal template can't fake a heading and pass. That one property is still what rejects a bare refusal ("I can't help with that"), which is the entire point of keeping a gate at all; everything about *quality* (the TL;DR opener, the section budget, the word target, citation density) is an instruction to the model in the prompt, not something a raising validator polices. Two cheap SOFT checks in `summarize()` log-and-ship instead of raising: a missing `**TL;DR:` opener, and zero citation links in the output (a window of pure chatter can legitimately cite nothing).
+- **Citation-provenance guarantee:** `enforce_link_allowlist` (unchanged by the BRIEFING rewrite — verified live: 33/33 citations in the validation run were allowlisted item URLs) strips or defangs any link/autolink/bare-URL whose destination is not an exact match of one of the run's item `url` fields, at the markdown-source level; `emailer.py`'s `_enforce_anchor_provenance` re-checks the same property after HTML rendering, as an authoritative, renderer-grammar-proof second layer. A hallucinated or prompt-injected URL can therefore never reach the reader as a live link in either the plain-text or HTML part of the email.
 - `emailer.py` converts the markdown to HTML for the email body; the same markdown string is archived to disk unmodified. The digest *does* contain third-party text (message content Claude may echo verbatim), so the markdown→HTML conversion must escape raw HTML in the source (e.g. `markdown` with raw-HTML disabled) — the email renders in the owner's own mail client, and a hostile `<img>`/`<a>` smuggled through a group message shouldn't survive to the HTML body.
 - Empty item list → `summarize.py` never calls Claude, `main.py` exits 0 with no email — enforced in code, not left to the prompt to "decide."
 

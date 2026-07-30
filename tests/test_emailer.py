@@ -7,7 +7,6 @@ import pytest
 import digest.emailer as emailer_mod
 from digest.emailer import (
     _highlight_tldr_paragraph,
-    _inject_source_badges,
     _wrap_banner_paragraph,
     archive,
     render_html,
@@ -45,6 +44,39 @@ def test_render_html_wraps_in_full_document_with_readable_style():
 
     assert "<html>" in html
     assert "max-width: 42em" in html
+
+
+# --- render_html: iOS/Apple Mail dark-mode opt-in (highest-value fix) ---
+
+
+def test_render_html_declares_color_scheme_meta_tags_for_ios_mail():
+    # Apple/iOS Mail ignores `@media (prefers-color-scheme: dark)` entirely
+    # unless the document opts in via these two meta tags -- without them
+    # the dark-mode block never activates on the owner's phone.
+    html = render_html("hello", allowed_urls=set())
+
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert '<meta name="supported-color-schemes" content="light dark">' in html
+
+
+def test_render_html_declares_root_color_scheme_in_style_block():
+    html = render_html("hello", allowed_urls=set())
+
+    assert ":root { color-scheme: light dark; }" in html
+
+
+def test_render_html_existing_dark_mode_overrides_unchanged_by_color_scheme_addition():
+    # The color-scheme opt-in must be purely additive: the existing
+    # prefers-color-scheme overrides for body/link/h2/.tldr/.banner must
+    # still all be present, unchanged, alongside it.
+    html = render_html("hello", allowed_urls=set())
+
+    dark_block = html[html.index("prefers-color-scheme: dark") :]
+    assert "background-color: #1a1a1a !important; color: #e8e8e8 !important;" in dark_block
+    assert "color: #6ea8fe !important;" in dark_block
+    assert "border-bottom-color: #3a3a3a !important;" in dark_block
+    assert "background:#2b2b2b !important; color:#e8e8e8 !important;" in dark_block
+    assert "background:#4d3800 !important; color:#ffe69c !important;" in dark_block
 
 
 def test_render_html_strips_img_from_markdown_image_syntax():
@@ -121,67 +153,6 @@ def test_render_html_keeps_allowlisted_url_containing_ampersand_after_entity_rou
     assert 'href="https://t.me/c/1/2?a=1&amp;b=2"' in html
     assert "<a " in html
     assert "see it</a>" in html
-
-
-# --- _inject_source_badges ---
-
-
-def test_inject_source_badges_wraps_telegram_group_heading():
-    html = "<h3>Telegram — Homelab Hungary</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert "background-color:#229ED9" in result
-    assert ">Telegram</span>" in result
-    assert "— Homelab Hungary</h3>" in result
-    # The literal "Telegram" prefix must not also survive un-chipped outside
-    # the span (it should appear exactly once, inside the chip).
-    assert result.count("Telegram") == 1
-
-
-def test_inject_source_badges_wraps_bare_x_heading():
-    html = "<h3>X</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert "background-color:#000000" in result
-    assert "𝕏</span>" in result
-    assert result.endswith("</h3>")
-
-
-def test_inject_source_badges_wraps_x_heading_with_topic():
-    html = "<h3>X — Some Topic</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert "𝕏</span>" in result
-    assert "— Some Topic</h3>" in result
-
-
-def test_inject_source_badges_leaves_non_source_h3_untouched():
-    html = "<h3>Random Section</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert result == html
-
-
-def test_inject_source_badges_does_not_match_prefix_that_is_a_different_word():
-    # "Xavier" and "Telegramish" share a literal prefix with "X"/"Telegram"
-    # but are a different word entirely -- must not get chipped.
-    html = "<h3>Xavier's update</h3><h3>Telegramish thing</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert result == html
-
-
-def test_inject_source_badges_ignores_h2_headings():
-    html = "<h2>Telegram</h2>"
-
-    result = _inject_source_badges(html)
-
-    assert result == html
 
 
 # --- _wrap_banner_paragraph ---
@@ -288,30 +259,44 @@ def test_highlight_tldr_paragraph_skips_past_a_leading_banner_paragraph():
     assert "<p>⚠ telegram collection failed this run</p>" in result
 
 
-# --- render_html: full integration of the visual-upgrade passes ---
+# --- render_html: full integration against a realistic BRIEFING body ---
 
 
-def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenance():
+def test_render_html_integration_realistic_briefing_body():
+    # Realistic body in the current prose-briefing shape (prompts/digest.md):
+    # a leading collector-failure banner, a TL;DR opener, several `## `
+    # story/topic sections with superscript-digit citations (no source
+    # chips, no h3 subgroups -- that contract is gone), a closing
+    # `## Also this window` prose section, and the closing italic line.
     body_md = (
         "⚠ telegram collection failed this run\n\n"
-        "**TL;DR:** Homelab discussion wrapped up, one X thread flagged for review.\n\n"
-        "## Needs attention\n\n"
-        "- [reply to Bob](https://t.me/c/123/1): confirm the maintenance window\n\n"
-        "## Worth knowing\n\n"
-        "### Telegram — Homelab Hungary\n\n"
-        "- [see the thread](https://t.me/c/123/2): the group agreed to move the "
-        "backup job to 3am after discussing disk contention.\n"
-        "- [phishing attempt](https://attacker.example/phish): someone posted a "
-        "suspicious link, not from an allowlisted item.\n\n"
-        "### X\n\n"
-        "- [see the post](https://x.com/foo/status/1): announcement of a new release.\n\n"
-        "## Noise skipped\n\n"
-        "- a handful of low-signal reaction messages were filtered.\n"
+        "**TL;DR:** A border incident drew most of the attention, and the "
+        "ASI Alliance group spent the window debating a token migration "
+        "with no resolution.\n\n"
+        "## Missile strike reported near the border\n\n"
+        "Local channels reported a strike near the border region"
+        "[¹](https://t.me/c/123/1), with casualty figures still "
+        "unconfirmed by independent accounts"
+        "[²](https://x.com/foo/status/1).\n\n"
+        "## ASI Alliance: token migration questions\n\n"
+        "The group spent most of the window debating the mechanics of the "
+        "token migration without reaching a conclusion"
+        "[³](https://t.me/c/123/2). One member also posted a suspicious "
+        "link[⁴](https://attacker.example/phish) that is not from an "
+        "allowlisted item.\n\n"
+        "## Also this window\n\n"
+        "A routine market update[⁵](https://t.me/c/123/3) and a minor "
+        "product announcement[⁶](https://x.com/foo/status/2) rounded out "
+        "the rest of the window.\n\n"
+        "*From 42 items; 30 were chatter, reactions and duplicate "
+        "reposts.*\n"
     )
     allowed_urls = {
         "https://t.me/c/123/1",
-        "https://t.me/c/123/2",
         "https://x.com/foo/status/1",
+        "https://t.me/c/123/2",
+        "https://t.me/c/123/3",
+        "https://x.com/foo/status/2",
     }
 
     html = render_html(body_md, allowed_urls)
@@ -321,19 +306,24 @@ def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenanc
     assert "⚠ telegram collection failed this run" in html
     # TL;DR highlight applied.
     assert "background-color:#f0f0f0" in html
-    assert "Homelab discussion wrapped up" in html
-    # Telegram and X chips both present.
-    assert "background-color:#229ED9" in html
-    assert ">Telegram</span>" in html
-    assert "background-color:#000000" in html
-    assert "𝕏</span>" in html
-    # Allowed links survive as real anchors (anchor-provenance pass intact).
+    assert "A border incident drew most of the attention" in html
+    # Story/topic headings render as plain h2 -- no source chips of any kind.
+    assert "<h2>Missile strike reported near the border</h2>" in html
+    assert "<h2>ASI Alliance: token migration questions</h2>" in html
+    assert "<h2>Also this window</h2>" in html
+    assert "background-color:#229ED9" not in html
+    assert "background-color:#000000" not in html
+    # Allowlisted citations survive as real anchors.
     assert 'href="https://t.me/c/123/1"' in html
-    assert 'href="https://t.me/c/123/2"' in html
     assert 'href="https://x.com/foo/status/1"' in html
-    # The non-allowlisted link is unwrapped, never a live href.
+    assert 'href="https://t.me/c/123/2"' in html
+    assert 'href="https://t.me/c/123/3"' in html
+    assert 'href="https://x.com/foo/status/2"' in html
+    # A non-allowlisted citation is unwrapped, never a live href.
     assert "attacker.example" not in html
-    assert "phishing attempt" in html
+    assert "suspicious" in html
+    # Closing italic line survives.
+    assert "<em>From 42 items; 30 were chatter" in html
     # Dark-mode media query present in the document.
     assert "prefers-color-scheme: dark" in html
 
