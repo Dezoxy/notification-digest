@@ -239,7 +239,7 @@ async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResu
         return CollectResult(failed=True)
 
     try:
-        return await x_collector.collect(client, x_cursors.get("notifications"))
+        return await x_collector.collect(client, x_cursors)
     except Exception as exc:
         logger.warning("x collection crashed unexpectedly: %s", type(exc).__name__)
         return CollectResult(failed=True)
