@@ -85,6 +85,7 @@ def _cfg() -> Config:
         anthropic_model="claude-opus-5",
         archive_dir="./archive",
         claude_timeout_seconds=300,
+        claude_effort="high",
     )
 
 
@@ -178,7 +179,16 @@ def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
 def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn, monkeypatch):
     commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    summarize_calls = []
+
+    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
+        # cfg.claude_effort must reach summarize() unchanged -- the only hop
+        # between Config.claude_effort and the eventual `--effort` argv flag
+        # in digest/summarize.py's run_claude.
+        summarize_calls.append(effort)
+        return "## Needs attention\n..."
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
 
     sent = {}
     monkeypatch.setattr(
@@ -196,6 +206,7 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
+    assert summarize_calls == ["high"]  # cfg.claude_effort threaded through
     assert sent["body_md"] == "## Needs attention\n..."
     assert "2 items" in sent["subject"]
     assert sent["allowed_urls"] == {"https://t.me/c/123/1", "https://t.me/c/123/2"}
@@ -216,7 +227,7 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds):
+    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
         summarize_calls.append((items, failed_sources))
         return "## Needs attention\n...new..."
 
@@ -256,7 +267,7 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds):
+    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
         summarize_calls.append(failed_sources)
         return "## Needs attention\n...new..."
 
@@ -317,7 +328,7 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds):
+    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
         summarize_calls.append(items)
         return "## Needs attention\n...batch..."
 
@@ -360,7 +371,7 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
 
     summarize_received = {}
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds):
+    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
         summarize_received["items"] = items
         return "## Needs attention\n...selected..."
 

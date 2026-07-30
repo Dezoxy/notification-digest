@@ -334,7 +334,9 @@ def test_run_claude_success_returns_stripped_stdout(monkeypatch):
 
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
-    result = run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+    result = run_claude(
+        "the prompt", model="claude-opus-5", timeout_seconds=300, effort="high"
+    )
 
     assert result == "## Needs attention\nsome text"
     assert captured["cmd"] == [
@@ -346,6 +348,8 @@ def test_run_claude_success_returns_stripped_stdout(monkeypatch):
         "text",
         "--tools",
         "",
+        "--effort",
+        "high",
     ]
     assert captured["kwargs"]["input"] == "the prompt"
     assert captured["kwargs"]["timeout"] == 300
@@ -369,7 +373,7 @@ def test_run_claude_passes_explicit_utf8_encoding(monkeypatch):
 
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
-    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
 
     assert captured["kwargs"]["encoding"] == "utf-8"
 
@@ -378,6 +382,10 @@ def test_run_claude_disables_all_tools_via_argv(monkeypatch):
     # Finding A (P1): `claude -p` runs the full agent with tools available
     # by default. `--tools ""` must be present so a prompt injection in
     # scraped message text has no tool to invoke.
+    #
+    # Also covers the `--effort` flag (added for CLAUDE_EFFORT): it must be
+    # present in argv with the configured value, immediately following its
+    # flag.
     captured = {}
 
     def fake_run(cmd, **kwargs):
@@ -386,11 +394,13 @@ def test_run_claude_disables_all_tools_via_argv(monkeypatch):
 
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
-    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="xhigh")
 
     cmd = captured["cmd"]
     assert "--tools" in cmd
     assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--effort" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "xhigh"
 
 
 def test_run_claude_env_is_scrubbed_of_secrets(monkeypatch):
@@ -411,7 +421,7 @@ def test_run_claude_env_is_scrubbed_of_secrets(monkeypatch):
 
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
-    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
 
     assert "env" in captured["kwargs"]
     env = captured["kwargs"]["env"]
@@ -429,7 +439,7 @@ def test_run_claude_nonzero_exit_raises_summarize_error_without_stderr_content(m
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
     with pytest.raises(SummarizeError, match="exited 1") as exc_info:
-        run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+        run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
 
     assert "SECRET_STDERR_MARKER_98765" not in str(exc_info.value)
 
@@ -441,7 +451,7 @@ def test_run_claude_empty_stdout_raises_summarize_error(monkeypatch):
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
     with pytest.raises(SummarizeError, match="empty"):
-        run_claude("the prompt", model="claude-opus-5", timeout_seconds=300)
+        run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
 
 
 def test_run_claude_timeout_raises_summarize_error(monkeypatch):
@@ -451,7 +461,7 @@ def test_run_claude_timeout_raises_summarize_error(monkeypatch):
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
     with pytest.raises(SummarizeError, match="timed out"):
-        run_claude("the prompt", model="claude-opus-5", timeout_seconds=5)
+        run_claude("the prompt", model="claude-opus-5", timeout_seconds=5, effort="high")
 
 
 def test_run_claude_error_never_includes_the_prompt(monkeypatch):
@@ -462,7 +472,7 @@ def test_run_claude_error_never_includes_the_prompt(monkeypatch):
 
     secret_prompt = "SECRET_MESSAGE_CONTENT_12345"
     with pytest.raises(SummarizeError) as exc_info:
-        run_claude(secret_prompt, model="claude-opus-5", timeout_seconds=300)
+        run_claude(secret_prompt, model="claude-opus-5", timeout_seconds=300, effort="high")
 
     assert secret_prompt not in str(exc_info.value)
 
@@ -794,28 +804,48 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
         calls["build_prompt"] = (items, failed_sources)
         return "built prompt"
 
-    def fake_run_claude(prompt, model, timeout_seconds):
-        calls["run_claude"] = (prompt, model, timeout_seconds)
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        calls["run_claude"] = (prompt, model, timeout_seconds, effort)
         return _MODEL_OUTPUT
 
     monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
     items = [_item()]
-    result = summarize(items, ["telegram"], "claude-opus-5", 300)
+    result = summarize(items, ["telegram"], "claude-opus-5", 300, "high")
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert calls["build_prompt"] == (items, ["telegram"])
-    assert calls["run_claude"] == ("built prompt", "claude-opus-5", 300)
+    assert calls["run_claude"] == ("built prompt", "claude-opus-5", 300, "high")
+
+
+def test_summarize_threads_effort_through_to_run_claude(monkeypatch):
+    # The `effort` parameter must reach run_claude unchanged -- this is the
+    # only hop between Config.claude_effort (via digest/main.py) and the
+    # `--effort` argv flag run_claude builds.
+    captured = {}
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        captured["effort"] = effort
+        return _MODEL_OUTPUT
+
+    monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
+    monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
+
+    summarize([_item()], [], "claude-opus-5", 300, "xhigh")
+
+    assert captured["effort"] == "xhigh"
 
 
 def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
     monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
     monkeypatch.setattr(
-        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: _MODEL_OUTPUT
+        summarize_mod,
+        "run_claude",
+        lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result = summarize([_item()], ["telegram"], "claude-opus-5", 300)
+    result = summarize([_item()], ["telegram"], "claude-opus-5", 300, "high")
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert result.startswith("⚠ telegram collection failed this run\n\n")
@@ -824,10 +854,12 @@ def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
 def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch):
     monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
     monkeypatch.setattr(
-        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: _MODEL_OUTPUT
+        summarize_mod,
+        "run_claude",
+        lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result = summarize([_item()], [], "claude-opus-5", 300)
+    result = summarize([_item()], [], "claude-opus-5", 300, "high")
 
     assert result == _MODEL_OUTPUT
     assert "⚠" not in result
@@ -836,10 +868,12 @@ def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch)
 def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypatch):
     monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
     monkeypatch.setattr(
-        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: _MODEL_OUTPUT
+        summarize_mod,
+        "run_claude",
+        lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result = summarize([_item()], ["telegram", "x"], "claude-opus-5", 300)
+    result = summarize([_item()], ["telegram", "x"], "claude-opus-5", 300, "high")
 
     assert result == (
         "⚠ telegram collection failed this run\n"
@@ -851,14 +885,14 @@ def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
     def fake_build_prompt(items, failed_sources):
         return "built prompt"
 
-    def fake_run_claude(prompt, model, timeout_seconds):
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
         return "I can't help with summarizing this content."
 
     monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
     with pytest.raises(SummarizeError, match="no real '## ' heading"):
-        summarize([_item()], [], "claude-opus-5", 300)
+        summarize([_item()], [], "claude-opus-5", 300, "high")
 
 
 # --- enforce_link_allowlist (Finding B) ---
@@ -1299,10 +1333,12 @@ def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatc
 
     monkeypatch.setattr(summarize_mod, "build_prompt", lambda items, failed_sources: "p")
     monkeypatch.setattr(
-        summarize_mod, "run_claude", lambda prompt, model, timeout_seconds: model_output
+        summarize_mod,
+        "run_claude",
+        lambda prompt, model, timeout_seconds, effort: model_output,
     )
 
-    result = summarize([known_item], [], "claude-opus-5", 300)
+    result = summarize([known_item], [], "claude-opus-5", 300, "high")
 
     assert f"[known]({known_item.url})" in result
     assert "https://attacker.example/phish" not in result
@@ -1325,7 +1361,7 @@ async def test_summarize_missing_tldr_logs_warning_but_still_ships(monkeypatch, 
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out = summarize_mod.summarize(items, [], "m", 10)
+        out = summarize_mod.summarize(items, [], "m", 10, "high")
     assert out == valid_no_tldr
     assert any("TL;DR opener" in r.message for r in caplog.records)
 
@@ -1347,7 +1383,7 @@ async def test_summarize_with_tldr_no_warning(monkeypatch, caplog):
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        summarize_mod.summarize(items, [], "m", 10)
+        summarize_mod.summarize(items, [], "m", 10, "high")
     assert not any("TL;DR opener" in r.message for r in caplog.records)
 
 
@@ -1370,7 +1406,7 @@ async def test_summarize_zero_links_logs_warning_but_still_ships(monkeypatch, ca
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out = summarize_mod.summarize(items, [], "m", 10)
+        out = summarize_mod.summarize(items, [], "m", 10, "high")
     assert out == no_links
     assert any("no citation links" in r.message for r in caplog.records)
 
@@ -1390,7 +1426,7 @@ async def test_summarize_with_links_no_zero_links_warning(monkeypatch, caplog):
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        summarize_mod.summarize(items, [], "m", 10)
+        summarize_mod.summarize(items, [], "m", 10, "high")
     assert not any("no citation links" in r.message for r in caplog.records)
 
 

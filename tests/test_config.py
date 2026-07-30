@@ -156,3 +156,33 @@ def test_x_enabled_true_with_only_inline_cookies_is_ok(monkeypatch):
     assert config.x_enabled is True
     assert config.x_cookies_path is None
     assert config.x_cookies == '{"ct0": "abc", "auth_token": "def"}'
+
+
+# --- CLAUDE_EFFORT ---
+
+
+def test_claude_effort_unset_falls_back_to_high(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("CLAUDE_EFFORT", raising=False)
+
+    config = Config.from_env()
+
+    assert config.claude_effort == "high"
+
+
+@pytest.mark.parametrize("value", ["low", "medium", "high", "xhigh", "max"])
+def test_claude_effort_valid_values_round_trip(monkeypatch, value):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", value)
+
+    config = Config.from_env()
+
+    assert config.claude_effort == value
+
+
+def test_claude_effort_invalid_value_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "ultra")
+
+    with pytest.raises(ConfigError, match="CLAUDE_EFFORT must be one of"):
+        Config.from_env()

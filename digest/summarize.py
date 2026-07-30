@@ -218,7 +218,7 @@ def select_items_for_prompt(
     return items[:lo]
 
 
-def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
+def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> str:
     """Invoke `claude -p` headless and return its stripped stdout.
 
     `claude -p` runs the full Claude Code agent, not a plain completion
@@ -238,6 +238,23 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
        TG_API_HASH, SMTP_PASSWORD, or any other secret out of the parent
        environment.
 
+    `--effort <effort>` is set explicitly rather than left at the CLI's
+    default: an A/B measured on 50 real production items showed `high`
+    produces materially better editorial judgment than the (lower) CLI
+    default -- tighter story clustering, output closer to the target length
+    -- while `max` produced near-identical output for 65% more wall-clock.
+    `high` is therefore the chosen default (Config.claude_effort, digest/
+    config.py), not `max`: the owner authenticates via a Max subscription
+    (no per-token billing), so the real cost of a higher effort level isn't
+    money, it's a bigger bite out of that subscription's shared usage
+    limits -- paid on every one of the 8 unattended runs this job makes per
+    day, forever, for a `max`-vs-`high` difference the A/B found was not
+    perceptible in the output. Timing is a non-issue either way: `high`
+    measured ~81s against the 300s CLAUDE_TIMEOUT_SECONDS default, nowhere
+    close to that budget. The value is still config-driven (CLAUDE_EFFORT)
+    rather than hardcoded, so it can be turned up temporarily (e.g. to
+    debug a run of unusually poor quality) without a code change.
+
     Raises SummarizeError on a non-zero exit, empty/whitespace-only stdout,
     or a timeout. On a non-zero exit, stderr is suppressed entirely (only its
     length is reported) rather than included in the error message: the CLI
@@ -252,7 +269,18 @@ def run_claude(prompt: str, model: str, timeout_seconds: int) -> str:
         # summarization. A neutral cwd keeps the prompt the only input.
         with tempfile.TemporaryDirectory(prefix="digest-claude-") as neutral_cwd:
             result = subprocess.run(
-                ["claude", "-p", "--model", model, "--output-format", "text", "--tools", ""],
+                [
+                    "claude",
+                    "-p",
+                    "--model",
+                    model,
+                    "--output-format",
+                    "text",
+                    "--tools",
+                    "",
+                    "--effort",
+                    effort,
+                ],
                 input=prompt,
                 capture_output=True,
                 text=True,
@@ -842,9 +870,14 @@ def summarize(
     failed_sources: list[str],
     model: str,
     timeout_seconds: int,
+    effort: str,
 ) -> str:
     """Build the prompt, run it through Claude, validate and repair the
     contract, and deterministically prepend the collector-failure banner.
+
+    `effort` is threaded straight through to run_claude's `--effort` flag
+    (see that function's docstring for why it's set explicitly and why
+    `high`, Config.claude_effort's default, rather than `max`).
 
     Never call with an empty item list. Raises SummarizeError (via
     run_claude or validate_output) rather than returning malformed output,
@@ -880,7 +913,7 @@ def summarize(
     (validated) model output unchanged.
     """
     prompt = build_prompt(items, failed_sources)
-    output = run_claude(prompt, model, timeout_seconds)
+    output = run_claude(prompt, model, timeout_seconds, effort)
     validate_output(output)
     # The TL;DR opener is checked SOFTLY, unlike the heading requirement: a
     # missing TL;DR degrades one email cosmetically, while raising here

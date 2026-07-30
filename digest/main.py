@@ -144,7 +144,13 @@ def _deliver(
     items = select_items_for_prompt(items, failed_sources, _MAX_PROMPT_BYTES)
 
     try:
-        body_md = summarize(items, failed_sources, cfg.anthropic_model, cfg.claude_timeout_seconds)
+        body_md = summarize(
+            items,
+            failed_sources,
+            cfg.anthropic_model,
+            cfg.claude_timeout_seconds,
+            cfg.claude_effort,
+        )
     except SummarizeError as exc:
         logger.error("summarization failed: %s", exc)
         return False

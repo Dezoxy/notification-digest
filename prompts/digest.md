@@ -56,9 +56,13 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   `## Also this window` section instead, written as flowing prose (still
   cited), covering everything too small to deserve its own heading. This
   keeps headings meaningful on a phone.
-- **Length:** aim for roughly 900 words total, and never much beyond it
-  regardless of how many items came in — the reader wants a few minutes,
-  not a report.
+- **Length:** scale to what the window actually holds rather than to a fixed
+  number. A quiet window with only a few real stories should come in around
+  500–700 words; a typical one around 900; a genuinely busy window carrying
+  many distinct significant stories may run to about 1,200. Never pad to
+  reach a length, and never run far past 1,200 — compression is what makes
+  this readable at all, and beyond that the reader is back to reading
+  everything.
 - End with one italic line: how many items you drew on and what you left
   out, e.g. `*From 74 items; 38 were chatter, reactions and duplicate
   reposts.*`
