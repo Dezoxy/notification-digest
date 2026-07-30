@@ -128,6 +128,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -155,6 +156,32 @@ _MAX_NOTIFICATION_PAGES = 5
 # ban-risk mitigation posture already applied to the single-page case.
 _PAGE_FETCH_DELAY_SECONDS = 1.5
 
+# Phase 2 -- content-aggregate ("bell") notifications, see the module
+# docstring's "Required implementation" section below the fold (added
+# alongside `fetch_user_posts`/`collect`'s phase-2 integration): these
+# notifications name WHO posted but never link a specific tweet, so this
+# module fetches each named account's own recent posts directly.
+#
+# Bounded per-run cap on distinct accounts fetched this way -- same
+# gentleness/ban-risk rationale as `_MAX_NOTIFICATION_PAGES`: an unbounded
+# number of bell-notification targets in one run (e.g. the owner just
+# enabled post notifications for many accounts at once) must not turn one
+# scheduled run into an unbounded number of extra API calls. Exceeding it
+# is logged loudly (never a silent truncation), same posture as the
+# notification page cap.
+_MAX_POST_FETCH_USERS = 20
+
+# Posts requested per fetched account, per run. Raised from 20 to 40 (X's
+# own page size for this endpoint) -- posts now have their OWN per-account
+# cursor (("x", f"posts:{user_id}"), see `collect`'s docstring), so a page
+# that undershoots this cap is a real miss, not just "filtered back out
+# against the shared notifications cursor" like the old 20-post/shared-
+# cursor design. Doubling the page size halves how often a genuinely active
+# poster can outrun one page (see the "truncation honesty" warning in
+# `collect`), at the cost of one GraphQL page being twice as large -- a
+# comfortable trade at this endpoint's own natural page granularity.
+_POSTS_PER_USER = 40
+
 
 class _V11ClientLike(Protocol):
     """Minimal duck-typed surface of twifork's ``Client.v11`` this module needs."""
@@ -162,17 +189,37 @@ class _V11ClientLike(Protocol):
     async def notifications_all(self, count: int, cursor: str | None) -> tuple[dict, Any]: ...
 
 
+class _GqlClientLike(Protocol):
+    """Minimal duck-typed surface of twifork's ``Client.gql`` this module needs.
+
+    Used only by `fetch_user_posts` (phase 2, see module docstring) --
+    `user_tweets` is the same GraphQL endpoint twifork's own
+    `get_user_tweets(..., tweet_type='Tweets', ...)` calls internally
+    (confirmed by reading the installed twifork package source,
+    ``.venv/lib/python3.12/site-packages/twikit/client/client.py`` /
+    ``client/gql.py``), bypassed here for the identical reason the
+    notifications path bypasses twifork's model layer: this module parses
+    the raw GraphQL response itself and never constructs a twifork `Tweet`/
+    `User` object.
+    """
+
+    async def user_tweets(
+        self, user_id: str, count: int, cursor: str | None
+    ) -> tuple[dict, Any]: ...
+
+
 class XClientLike(Protocol):
     """Minimal duck-typed surface of a twifork Client this module needs.
 
-    Only the raw ``v11`` REST transport is used -- see the module docstring
-    for why this module bypasses twifork's higher-level
+    Only the raw ``v11``/``gql`` transports are used -- see the module
+    docstring for why this module bypasses twifork's higher-level
     `get_notifications`/model layer entirely and parses the raw JSON
     response itself. Kept loose deliberately so tests can inject a fake
     client without depending on real twifork/network objects.
     """
 
     v11: _V11ClientLike
+    gql: _GqlClientLike
 
 
 def build_client(cookies_path: str | None, cookies_inline: str | None) -> Any:
@@ -261,6 +308,74 @@ def _find_first(obj: Any, key: str) -> Any:
     return None
 
 
+# P2 fix (Codex review): embedded original tweets under a retweet/quote
+# wrapper carry their OWN `full_text`/`screen_name` nested inside these two
+# keys -- `retweeted_status_result` (a plain repost) and
+# `quoted_status_result` (a quote-tweet's quoted original), both verified
+# present in real `user_tweets` responses, nested under the WRAPPING tweet's
+# own `legacy`/`result` node. Descending into them from `_find_all`
+# (post-content extraction) would emit the embedded original as a SEPARATE
+# item under the wrapper's own screen_name -- duplicating it and, since
+# `_resolve_post_screen_name` returns `None` in practice (verified live),
+# misattributing someone else's post to the notified/wrapper account.
+# Excluding these keys from traversal means only the WRAPPER tweet itself
+# (the one the fetched account actually posted) is ever found -- exactly one
+# item, correctly attributed. Shared by both `_find_all` (post extraction)
+# and `_SCREEN_NAME_SEARCH_EXCLUDED_KEYS` (screen_name resolution) below, so
+# the two can never drift apart on this.
+_RETWEET_QUOTE_EXCLUDED_KEYS = frozenset({"retweeted_status_result", "quoted_status_result"})
+
+
+def _find_all(
+    obj: Any,
+    key: str,
+    max_depth: int = 14,
+    exclude_keys: frozenset[str] = frozenset(),
+) -> list[dict]:
+    """Depth-first search for EVERY dict in nested dict/list data that directly contains `key`.
+
+    Sibling of `_find_first` above, written for `fetch_user_posts` (see its
+    docstring): a `client.gql.user_tweets` response embeds many tweets, each
+    its own dict carrying `full_text` as a direct key (X's `legacy` tweet
+    object) -- unlike the notifications-page cursor lookups `_find_first`
+    was written for, which only ever need the FIRST match, this needs ALL of
+    them.
+
+    Returns the MATCHING DICT ITSELF (e.g. the `legacy` object), not
+    `obj[key]` (contrast with `_find_first`, which returns the value at
+    `key`) -- a caller here needs sibling fields of `key` (e.g. `id_str`
+    alongside `full_text`), not just `key`'s own value.
+
+    `max_depth` bounds the recursion (tweets are verified nested ~10-14
+    levels deep in a real `user_tweets` response, per `fetch_user_posts`'s
+    docstring) so a future, differently-shaped or deeper response can't blow
+    the recursion stack -- silently stops descending past the bound rather
+    than raising, consistent with this module's fail-open-on-shape-change
+    posture throughout.
+
+    `exclude_keys` (P2 fix, see `_RETWEET_QUOTE_EXCLUDED_KEYS` above): a dict
+    key whose NAME is in this set is still checked for `key` itself (so a
+    wrapper tweet carrying one of these keys as a sibling of `full_text` is
+    still found), but its VALUE is never recursed into -- so a nested
+    original tweet embedded under a retweet/quote wrapper is never
+    separately discovered.
+    """
+    if max_depth < 0:
+        return []
+    results: list[dict] = []
+    if isinstance(obj, dict):
+        if key in obj:
+            results.append(obj)
+        for child_key, value in obj.items():
+            if child_key in exclude_keys:
+                continue
+            results.extend(_find_all(value, key, max_depth - 1, exclude_keys))
+    elif isinstance(obj, list):
+        for item in obj:
+            results.extend(_find_all(item, key, max_depth - 1, exclude_keys))
+    return results
+
+
 def _extract_next_cursor(resp: dict) -> str | None:
     """The API's own next-page pagination token, or None if exhausted.
 
@@ -315,6 +430,34 @@ def _extract_tweet_ref(notification: dict) -> str | None:
         return None
     tweet_id = tweet_ref.get("id")
     return str(tweet_id) if tweet_id is not None else None
+
+
+def _extract_from_user_ids(notification: dict) -> list[str]:
+    """User ids from one raw notification's `fromUsers`, or `[]`.
+
+    Mirrors `_extract_tweet_ref`'s defensive `.get()` chain, but walks
+    `template.aggregateUserActionsV1.fromUsers[].user.id` instead of
+    `targetObjects[0].tweet.id` -- the field the module docstring's "The
+    problem" section identifies as the ONLY linkable data a content-
+    aggregate ("bell") notification carries: it names WHO posted, even
+    though it has no linked tweet at all (`targetObjects == []`). Used by
+    `_extract_post_fetch_targets` to build the phase-2 post-fetch target
+    list; never raises, `[]` on any missing/malformed piece.
+    """
+    if not isinstance(notification, dict):
+        return []
+    template = notification.get("template")
+    user_actions = template.get("aggregateUserActionsV1") if isinstance(template, dict) else None
+    from_users = user_actions.get("fromUsers") if isinstance(user_actions, dict) else None
+    if not isinstance(from_users, list):
+        return []
+    ids: list[str] = []
+    for entry in from_users:
+        user = entry.get("user") if isinstance(entry, dict) else None
+        user_id = user.get("id") if isinstance(user, dict) else None
+        if user_id is not None:
+            ids.append(str(user_id))
+    return ids
 
 
 def _parse_one_notification(
@@ -457,6 +600,60 @@ def _is_engagement_icon(icon_id: str | None) -> bool:
     recoverable than a missed mention (false negative).
     """
     return icon_id in _ENGAGEMENT_ICON_IDS
+
+
+def _extract_post_fetch_targets(resp: dict) -> dict[str, str]:
+    """Map user_id -> screen_name for one page's content-aggregate ("bell") notifications.
+
+    A content-aggregate notification (module docstring, "The problem") is:
+    NOT an engagement icon (`_is_engagement_icon`), has NO linked tweet
+    (`_extract_tweet_ref` returns `None`), AND names at least one poster via
+    `fromUsers` (`_extract_from_user_ids`). These are exactly the
+    notifications the pre-phase-2 collector could contribute nothing for --
+    "someone you follow posted", with no tweet to link to -- so `collect`
+    merges this across every page fetched this run and, for each named user
+    (up to `_MAX_POST_FETCH_USERS`), fetches their own recent posts directly
+    via `fetch_user_posts`.
+
+    Screen names are resolved via `globalObjects.users`, the SAME lookup
+    table `_parse_one_notification` uses for tweet-linked notifications. A
+    `fromUsers` id with no resolvable screen_name is silently omitted here --
+    there is no way to build a post url without one, and `collect` cannot
+    usefully fetch-then-attribute a post it can't link.
+
+    Pure and defensive throughout (isinstance/`.get()` checks at every
+    level) -- never raises, `{}` on any missing/malformed piece, matching
+    every other page-level extractor in this module.
+    """
+    if not isinstance(resp, dict):
+        return {}
+    global_objects = resp.get("globalObjects")
+    if not isinstance(global_objects, dict):
+        return {}
+    raw_users = global_objects.get("users")
+    users = raw_users if isinstance(raw_users, dict) else {}
+    raw_notifications = global_objects.get("notifications")
+    if not isinstance(raw_notifications, dict):
+        return {}
+
+    targets: dict[str, str] = {}
+    for notification in raw_notifications.values():
+        if not isinstance(notification, dict):
+            continue
+        icon = notification.get("icon")
+        icon_id = icon.get("id") if isinstance(icon, dict) else None
+        if _is_engagement_icon(icon_id if isinstance(icon_id, str) else None):
+            continue
+        if _extract_tweet_ref(notification) is not None:
+            continue
+        for user_id in _extract_from_user_ids(notification):
+            if user_id in targets:
+                continue
+            user_data = users.get(user_id)
+            screen_name = user_data.get("screen_name") if isinstance(user_data, dict) else None
+            if isinstance(screen_name, str) and screen_name:
+                targets[user_id] = screen_name
+    return targets
 
 
 def _extract_candidates(
@@ -652,11 +849,240 @@ def _is_systemic_tweet_link_failure(
     return total_tweet_linked_failed > 0 and total_tweet_linked_succeeded == 0
 
 
-async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
-    """Fetch the notifications timeline since `cursor`, paginating as needed.
+# X's own "Snowflake" epoch: 2010-11-04T01:42:54.657Z, expressed in
+# milliseconds since the Unix epoch. Every tweet id encodes its creation
+# time in its high bits as milliseconds since THIS epoch (worker/sequence
+# bits occupy the low 22 bits) -- shifting right by 22 and adding this
+# constant back recovers the tweet's exact creation time with no string
+# parsing at all. Preferred over parsing `created_at` (module docstring,
+# "Required implementation" #1): exact, timezone-free, and directly
+# comparable against this module's own millisecond cursor.
+_X_SNOWFLAKE_EPOCH_MS = 1288834974657
 
-    First run (cursor is None): fetch a single page and seed the cursor from
-    it -- no pagination needed to seed from "now" (see below).
+
+def _tweet_id_to_timestamp_ms(tweet_id: str) -> int | None:
+    """Exact tweet creation time (ms since Unix epoch), decoded from its Snowflake id.
+
+    `None` for anything not cleanly `int`-coercible (never raises) -- a
+    malformed/unexpected id shape must not crash `fetch_user_posts`.
+    """
+    try:
+        return (int(tweet_id) >> 22) + _X_SNOWFLAKE_EPOCH_MS
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass(frozen=True)
+class _RawPost:
+    """One post parsed from a `client.gql.user_tweets` response.
+
+    Deliberately flat, mirroring `_RawNotification` above -- the only shape
+    `fetch_user_posts`/`collect` consume from a parsed `user_tweets` page.
+
+    `screen_name` is nullable: resolved from the tweet's OWN nested data
+    when available (see `_resolve_post_screen_name`), else `None` --
+    `collect` falls back to the screen_name it already knows from the
+    originating bell notification's `fromUsers`/`globalObjects.users`
+    resolution (`_extract_post_fetch_targets`) when this is `None`. Neither
+    source is guaranteed, but between the two at least one almost always
+    resolves in practice.
+    """
+
+    tweet_id: str
+    timestamp_ms: int
+    text: str
+    screen_name: str | None
+
+
+# Excluded before searching a tweet's own subtree for `screen_name`
+# (`_resolve_post_screen_name`) -- `entities`/`extended_entities` hold
+# @-mention and media metadata, which themselves carry `screen_name` fields
+# for OTHER users mentioned in the tweet's text or media, not its author.
+# `retweeted_status_result`/`quoted_status_result` (P2 fix, see
+# `_RETWEET_QUOTE_EXCLUDED_KEYS` above) carry the EMBEDDED original tweet's
+# own author -- a retweet/quote wrapper's screen_name must never be resolved
+# from the post it's reposting/quoting. Searching the whole subtree
+# unfiltered would risk misattributing a post to a user it merely mentions,
+# retweets, or quotes.
+_SCREEN_NAME_SEARCH_EXCLUDED_KEYS = frozenset(
+    {"entities", "extended_entities"} | _RETWEET_QUOTE_EXCLUDED_KEYS
+)
+
+
+# P3.1 (defense in depth): a screen_name/tweet_id that doesn't match X's own
+# format rules would build a url that no longer exact-matches the emailer's
+# anchor-provenance allowlist (digest/emailer.py), silently degrading the
+# deep link to plain text -- better to skip the item loudly than emit a
+# broken link. X screen_names are 1-15 chars of [A-Za-z0-9_]; tweet ids are
+# always digits-only (Snowflake ids).
+_SCREEN_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+_TWEET_ID_RE = re.compile(r"^[0-9]+$")
+
+
+def _is_valid_screen_name(screen_name: str | None) -> bool:
+    return isinstance(screen_name, str) and bool(_SCREEN_NAME_RE.match(screen_name))
+
+
+def _is_valid_tweet_id(tweet_id: str | None) -> bool:
+    return isinstance(tweet_id, str) and bool(_TWEET_ID_RE.match(tweet_id))
+
+
+def _resolve_post_screen_name(tweet_obj: dict) -> str | None:
+    """Best-effort `screen_name` from a tweet's OWN nested data, or `None`.
+
+    `tweet_obj` is one hit from `_find_all(resp, 'full_text')` -- X's
+    `legacy` tweet object (see `fetch_user_posts`'s docstring for the
+    verified shape) -- which carries tweet content fields (`full_text`,
+    `id_str`, `created_at`, ...) but, per that same verified shape, no
+    nested AUTHOR user object of its own: author info lives as a SIBLING of
+    `legacy` under the tweet's `result` node, not inside it. In practice
+    this search is expected to return `None` almost always, and callers
+    fall back to the screen_name already known from the originating
+    notification (`_extract_post_fetch_targets`) -- this function exists
+    for the cases where X's shape does embed resolvable author data
+    directly on the tweet object, so that data is preferred when present.
+
+    See `_SCREEN_NAME_SEARCH_EXCLUDED_KEYS` for why `entities`/
+    `extended_entities` are excluded from the search first.
+    """
+    if not isinstance(tweet_obj, dict):
+        return None
+    scoped = {k: v for k, v in tweet_obj.items() if k not in _SCREEN_NAME_SEARCH_EXCLUDED_KEYS}
+    found = _find_first(scoped, "screen_name")
+    return found if isinstance(found, str) and found else None
+
+
+async def fetch_user_posts(client: XClientLike, user_id: str, count: int) -> list[_RawPost]:
+    """Fetch one user's own recent posts via `client.gql.user_tweets`, parsed to `_RawPost`.
+
+    Phase 2 of this module's notification handling (module docstring,
+    "Required implementation" #2): a content-aggregate ("bell") notification
+    names WHO posted but never links a specific tweet (`targetObjects ==
+    []`), so `collect` calls this, per named account, to fetch actual post
+    content directly.
+
+    Response shape (confirmed live -- 19 tweets returned for one account):
+    tweets are nested ~10-14 levels deep under
+    `data.user.result.timeline_v2.timeline.instructions[].entries[]...
+    tweet_results.result.legacy`, where each tweet's `legacy` object has (at
+    minimum) `full_text`, `id_str`, and `created_at`. Rather than walk that
+    exact, brittle path (X changes response shapes without notice -- module
+    docstring), this parses via
+    `_find_all(resp, 'full_text', exclude_keys=_RETWEET_QUOTE_EXCLUDED_KEYS)`,
+    which reliably yields every `legacy` object anywhere in the tree
+    regardless of exactly how deep or under what intermediate keys it's
+    nested -- EXCEPT inside a retweet/quote wrapper's own embedded original
+    (`retweeted_status_result`/`quoted_status_result`, P2 fix): without that
+    exclusion, an embedded original tweet would surface as its OWN separate
+    hit, duplicating it as a second item and (since `_resolve_post_screen_name`
+    resolves to `None` in practice) misattributing it to the wrapper
+    account's screen_name. Excluding those keys means only the WRAPPER
+    tweet -- the one this account actually posted -- is ever found.
+
+    For each hit: `id_str` + `full_text` are taken directly; the tweet's
+    creation timestamp is DECODED from `id_str` via
+    `_tweet_id_to_timestamp_ms` (never parsed from `created_at` -- see that
+    function's docstring); `screen_name` is resolved from the tweet's own
+    subtree via `_resolve_post_screen_name` (usually `None` in practice --
+    the caller's own notification-derived screen_name is the primary
+    source, see `collect`). A hit missing a readable `id_str`, `full_text`,
+    or a Snowflake-decodable timestamp is silently skipped -- one malformed
+    tweet must not drop the rest of the page.
+
+    NEVER raises: a client exception (network, auth, GraphQL shape change,
+    ...) fetching the page, or an exception while parsing it, is each
+    caught, logged, and turned into an empty list -- indistinguishable from
+    an "empty parse" to the caller, which is exactly how `collect` treats
+    both when counting per-user fetch failures (see
+    `_is_systemic_post_fetch_failure`).
+    """
+    try:
+        resp, _ = await client.gql.user_tweets(user_id, count, None)
+    except Exception as exc:
+        logger.warning("x posts: fetch failed for user %s: %s", user_id, type(exc).__name__)
+        return []
+
+    try:
+        posts: list[_RawPost] = []
+        for hit in _find_all(resp, "full_text", exclude_keys=_RETWEET_QUOTE_EXCLUDED_KEYS):
+            if not isinstance(hit, dict):
+                continue
+            raw_text = hit.get("full_text")
+            raw_id = hit.get("id_str")
+            if not isinstance(raw_text, str) or not raw_text:
+                continue
+            if not isinstance(raw_id, str) or not raw_id:
+                continue
+            timestamp_ms = _tweet_id_to_timestamp_ms(raw_id)
+            if timestamp_ms is None:
+                continue
+            posts.append(
+                _RawPost(
+                    tweet_id=raw_id,
+                    timestamp_ms=timestamp_ms,
+                    text=raw_text,
+                    screen_name=_resolve_post_screen_name(hit),
+                )
+            )
+        return posts
+    except Exception as exc:
+        logger.warning("x posts: parsing failed for user %s: %s", user_id, type(exc).__name__)
+        return []
+
+
+def _is_systemic_post_fetch_failure(users_attempted: int, users_failed: int) -> bool:
+    """True iff EVERY per-user post fetch attempted this run failed.
+
+    A sibling of `_is_systemic_tweet_link_failure` above (module docstring,
+    "Required implementation" #3: "add a sibling check rather than
+    overloading the existing counter") -- deliberately a SEPARATE predicate
+    rather than folded into that one, because the two signals cover
+    fundamentally different failure surfaces:
+
+    - `_is_systemic_tweet_link_failure` is about the NOTIFICATIONS parse
+      path, which this run's cursor axis is built directly on -- a positive
+      there blocks cursor advancement/seeding entirely (see that function's
+      docstring), because the notification chronology itself can no longer
+      be trusted.
+    - This one is about the PHASE-2 post-fetch enrichment layered on TOP of
+      an already-successful notification fetch. Each fetched account now has
+      its OWN cursor (`("x", f"posts:{user_id}")`, see `collect`'s
+      docstring's "Phase 2" section for the full per-account contract) --
+      but this predicate is unaffected by that: a positive here still marks
+      `result.failed = True` (surfacing the digest's "collection failed"
+      banner, PLAN.md §4.4) WITHOUT touching notification items or the
+      notifications cursor: the notification-tracking half of this run
+      stays fully trustworthy even when every named account's OWN timeline
+      fetch failed (e.g. rate limiting or a shape change scoped to the
+      `user_tweets` endpoint specifically, distinct from the notifications
+      endpoint). Per-account cursors for the accounts that failed this run
+      are separately left untouched by the caller (`collect`) so each is
+      retried next run -- this predicate only decides the run-level
+      `failed` flag, never any cursor value.
+
+    `users_attempted == 0` (no bell-notification targets this run) is
+    explicitly NOT systemic -- nothing was attempted, so nothing failed.
+    """
+    return users_attempted > 0 and users_failed == users_attempted
+
+
+async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult:
+    """Fetch the notifications timeline since the notifications cursor, paginating as needed.
+
+    `cursors` is exactly `state.get_cursors(conn, "x")`'s return value --
+    every persisted `("x", scope)` cursor as a flat `{scope: last_seen_id}`
+    mapping, mirroring how `telegram_collector.collect` already takes the
+    full per-chat cursor dict rather than one value at a time. This
+    function reads the notifications axis via `cursors.get("notifications")`
+    (bound to the local `cursor` below) -- EVERYTHING in this docstring
+    describing phase 1 (notification fetch/pagination/bridging/cursor
+    advancement) is unchanged, byte-for-byte, from the single-cursor
+    version; only phase 2 (see below) reads/writes additional
+    `cursors.get(f"posts:{user_id}")` entries of its own.
+
+    First run (`cursors.get("notifications")` is None): fetch a single page
+    and seed the cursor from it -- no pagination needed to seed from "now"
+    (see below).
 
     Otherwise: the notifications API is newest-first-only (no way to ask for
     "oldest new item first"), so unlike telegram.py's oldest-first fetching,
@@ -858,6 +1284,83 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
       timestamp still counts fully for cursor/bridging chronology -- see
       the kind-agnostic bridge condition above.
 
+    Phase 2 -- per-account post cursors (Codex review finding P1, data loss):
+    an earlier version of this module filtered phase-2 posts against the
+    SAME `("x", "notifications")` cursor phase 1 advances. That is UNSOUND:
+    the notifications cursor advances to the newest NOTIFICATION timestamp
+    seen this run, but a bell notification's own timestamp is always newer
+    than the posts it announces (the notification fires only after the
+    post exists). Three concrete ways that loses posts permanently once the
+    shared cursor has moved past them:
+
+      (a) an account posted more than `_POSTS_PER_USER` times since the
+          last run -- only the newest page is ever fetched, so anything
+          older falls outside it forever, with no cursor of its own to
+          remember the gap;
+      (b) an account named by a bell notification this run, but beyond
+          `_MAX_POST_FETCH_USERS`, is never fetched at all this run;
+      (c) a per-account fetch failure (exception, or an empty parse) drops
+          that account's entire window for this run, while `result.failed`
+          stays False (isolated per-account failures are gentle, see
+          `_is_systemic_post_fetch_failure`) -- so nothing flags the loss.
+
+    In each case, once the shared notifications cursor advances past the
+    lost window, nothing ever re-fetches it: the next run's phase 1 starts
+    from the new (already-advanced) notifications cursor, and phase 2 only
+    ever runs for accounts named in THIS run's bell notifications, so an
+    account that already got its one bell notification has no future
+    opportunity to have its skipped posts re-collected.
+
+    The fix mirrors telegram.py's per-chat cursor design: each account gets
+    its OWN cursor, scope `("x", f"posts:{user_id}")` in the SAME `cursors`
+    mapping this function receives (`state.get_cursors(conn, "x")` returns
+    every `("x", scope)` row for one `source`, posts scopes included),
+    completely independent of `("x", "notifications")`. Per fetched
+    account, per run:
+
+      - First sight (no `posts:{user_id}` cursor row yet): seed that
+        cursor from the NEWEST fetched post's `timestamp_ms` and emit NO
+        items -- the same no-backfill rule as first-run notifications and
+        first-sight Telegram chats (telegram.py's `_fetch_first_run_cursor`)
+        -- otherwise a newly-notification-enabled account would dump its
+        entire fetched page of history into the very next digest.
+      - Otherwise: posts with `timestamp_ms >= that account's own cursor`
+        are emitted (INCLUSIVE, same tie-handling rule as phase 1's
+        notifications -- a boundary re-emit is absorbed for free by the
+        `(source, source_id)` UNIQUE constraint), then that account's
+        cursor advances to the newest post captured this run (high-water
+        mark, never backward -- mirrors phase 1's own
+        `max(newest_seen, existing_cursor)` formula).
+      - Truncation honesty: if the fetch returned exactly
+        `_POSTS_PER_USER` posts (the account's own page cap) AND the
+        OLDEST of those posts is still newer than that account's cursor,
+        the fetch did not reach the cursor -- there is an unfetched gap
+        between the cursor and the oldest post returned. This mirrors the
+        notification page-cap warning's own "digest favors newest content,
+        loudly" posture (see "why no resumable catch-up" above): the
+        cursor still advances to newest anyway (a digest is not an
+        archive), but a WARNING names the account and the gap so an
+        operator watching journal/Loki can see it happened, rather than
+        the loss being silent.
+      - Per-account fetch failure (exception inside `fetch_user_posts`, or
+        a genuinely empty parse -- indistinguishable to this caller by
+        design, see that function's docstring): this account's cursor is
+        NOT advanced at all, so its window stays fully retryable next run
+        -- counted toward `_is_systemic_post_fetch_failure` exactly as
+        before, and a WARNING names the account.
+      - Accounts skipped by the `_MAX_POST_FETCH_USERS` per-run cap: never
+        iterated at all, so their cursors are simply never touched --
+        nothing is lost, a future run (where they're still named, or named
+        again) picks them up from wherever their cursor already sits.
+
+    The whole phase-2 block additionally runs inside its own try/except
+    (Codex review, defense in depth, mirroring phase 1's own top-level
+    try/except): an unanticipated exception anywhere in phase 2 sets
+    `result.failed = True` and returns with phase 1's items/cursor exactly
+    as already finalized -- phase-2 items/cursor updates gathered before
+    the exception are discarded rather than partially merged, keeping the
+    already-trustworthy phase-1 half of the result uncontaminated.
+
     Systemic vs. isolated per-notification parsing failure (Codex review
     finding A): `_extract_candidates` counts, per page, how many
     tweet-linked notifications (`tweet_id` present, `screen_name` resolved)
@@ -927,6 +1430,12 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     )
 
     result = CollectResult()
+    # Phase 1's own cursor axis, unpacked from the full per-scope mapping --
+    # see this docstring's opening paragraph. Everything below this line
+    # through the end of phase 1 is unchanged from the single-cursor
+    # version; only `cursor`'s SOURCE (a dict lookup instead of a bare
+    # parameter) is new.
+    cursor = cursors.get("notifications")
 
     try:
         resp, _ = await client.v11.notifications_all(_NOTIFICATION_COUNT, None)
@@ -1027,6 +1536,13 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
     total_tweet_linked_failed = tweet_linked_failed
     total_tweet_linked_succeeded = tweet_linked_succeeded
     bridged = _page_bridges_cursor(raw_count, page_timestamps, cursor_int)
+    # Phase 2 targets (module docstring, "Required implementation" #3):
+    # user_id -> screen_name for every content-aggregate ("bell")
+    # notification seen on any page fetched this run, merged as pagination
+    # proceeds -- never gathered on the first run at all, since this whole
+    # block is unreachable until after the `cursor is None` branch above has
+    # already returned.
+    post_fetch_targets: dict[str, str] = dict(_extract_post_fetch_targets(resp))
 
     while not bridged and pages_fetched < _MAX_NOTIFICATION_PAGES:
         if not api_cursor:
@@ -1083,6 +1599,7 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             page_skipped_malformed,
             page_skipped_engagement,
         )
+        post_fetch_targets.update(_extract_post_fetch_targets(resp))
         bridged = _page_bridges_cursor(page_raw_count, page_timestamps, cursor_int)
 
     # Codex review finding A: a systemic parsing failure (every tweet-linked
@@ -1121,19 +1638,11 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
         )
 
     try:
-        new_items = [
-            Item(
-                source="x",
-                source_id=str(tweet_id),
-                chat_id=None,
-                author=screen_name,
-                text=text,
-                url=f"https://x.com/{screen_name}/status/{tweet_id}",
-                fetched_at=fetched_at,
-            )
-            for timestamp_ms, tweet_id, text, screen_name in sorted(
-                all_candidates, key=lambda c: c[0]
-            )
+        new_items = []
+        skipped_invalid_format = 0
+        for timestamp_ms, tweet_id, text, screen_name in sorted(
+            all_candidates, key=lambda c: c[0]
+        ):
             # Codex review finding B: INCLUSIVE (>=), not strict (>) --
             # millisecond-resolution ties can't be told apart from the
             # timestamp alone, so a candidate exactly at the cursor is
@@ -1142,8 +1651,32 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
             # (source, source_id) UNIQUE constraint (digest/state.py) if
             # it's actually a repeat -- see `collect`'s docstring,
             # "Equal-timestamp boundary".
-            if timestamp_ms >= cursor_int
-        ]
+            if timestamp_ms < cursor_int:
+                continue
+            # P3.1 (defense in depth): a malformed screen_name/tweet_id
+            # would build a url that no longer exact-matches the emailer's
+            # anchor-provenance allowlist (digest/emailer.py), silently
+            # degrading the deep link to plain text -- never emitted, only
+            # counted (see `_is_valid_screen_name`/`_is_valid_tweet_id`).
+            if not (_is_valid_screen_name(screen_name) and _is_valid_tweet_id(str(tweet_id))):
+                skipped_invalid_format += 1
+                continue
+            new_items.append(
+                Item(
+                    source="x",
+                    source_id=str(tweet_id),
+                    chat_id=None,
+                    author=screen_name,
+                    text=text,
+                    url=f"https://x.com/{screen_name}/status/{tweet_id}",
+                    fetched_at=fetched_at,
+                )
+            )
+        if skipped_invalid_format:
+            logger.warning(
+                "x notifications: skipped %d item(s) with malformed screen_name/tweet_id",
+                skipped_invalid_format,
+            )
         result.items = new_items
 
         # Cursor advancement -- exactly two outcomes (see `collect`'s
@@ -1170,6 +1703,205 @@ async def collect(client: XClientLike, cursor: str | None) -> CollectResult:
         logger.warning("x notification item construction failed: %s", type(exc).__name__)
         result.failed = True
         return result
+
+    # Phase 2: fetch actual post content for content-aggregate ("bell")
+    # notifications (module docstring, "Required implementation" #3), now
+    # tracked via a PER-ACCOUNT cursor scope `("x", f"posts:{user_id}")` --
+    # see `collect`'s docstring's "Phase 2 -- per-account post cursors"
+    # section for the full P1 data-loss rationale this replaces.
+    #
+    # Skipped entirely when pagination itself already failed this run
+    # (`pagination_failed`) -- that outcome already sets `result.failed`
+    # and leaves the cursor untouched, so piling more API calls onto an
+    # already-degraded run buys nothing and only adds ban-risk exposure.
+    # Never reached on a first run either: this whole tail of `collect` is
+    # unreachable until after the `cursor is None` branch above has
+    # already returned (first runs never fetch posts, by construction, not
+    # by an explicit extra check here).
+    #
+    # P3.2 (defense in depth): the whole block runs inside its own
+    # try/except, mirroring phase 1's own top-level try/except -- an
+    # unanticipated exception anywhere below sets `result.failed = True`
+    # and returns with phase 1's items/cursor exactly as already finalized
+    # above. Phase-2 items/cursor updates are accumulated in LOCAL
+    # variables (`phase2_items`/`phase2_cursor_updates`) and only merged
+    # into `result` in the `else` clause, i.e. only when the whole block
+    # completes without raising -- so a mid-loop exception can never leave
+    # a partial phase-2 contribution mixed into an otherwise-trustworthy
+    # phase-1 result.
+    if not pagination_failed and post_fetch_targets:
+        try:
+            targets = list(post_fetch_targets.items())
+            if len(targets) > _MAX_POST_FETCH_USERS:
+                skipped_targets = len(targets) - _MAX_POST_FETCH_USERS
+                logger.warning(
+                    "x posts: %d account(s) named in bell notifications this run "
+                    "exceeded the per-run fetch cap (%d); skipping %d -- their "
+                    "post cursors are left untouched, so nothing is lost, a future "
+                    "run will pick them up",
+                    len(targets),
+                    _MAX_POST_FETCH_USERS,
+                    skipped_targets,
+                )
+                targets = targets[:_MAX_POST_FETCH_USERS]
+
+            post_candidates: list[tuple[int, str, str, str]] = []
+            phase2_cursor_updates: dict[tuple[str, str], str] = {}
+            users_attempted = 0
+            users_failed = 0
+            skipped_post_no_screen_name = 0
+            skipped_post_invalid_format = 0
+
+            for index, (user_id, notified_screen_name) in enumerate(targets):
+                if index > 0:
+                    # Gentleness between successive fetches -- same posture
+                    # as `_PAGE_FETCH_DELAY_SECONDS` between notification
+                    # pages; never awaited before the FIRST fetch, matching
+                    # the pagination loop's own convention above.
+                    await asyncio.sleep(_PAGE_FETCH_DELAY_SECONDS)
+                users_attempted += 1
+                account_scope = f"posts:{user_id}"
+                account_cursor = cursors.get(account_scope)
+
+                posts = await fetch_user_posts(client, user_id, _POSTS_PER_USER)
+                if not posts:
+                    # Per-account failure: an exception inside
+                    # fetch_user_posts, or a genuinely empty parse, are
+                    # indistinguishable to this caller by design (see that
+                    # function's docstring) -- either way, this account's
+                    # cursor is left untouched so its window stays
+                    # retryable next run, rather than risking advancing
+                    # past content that was never actually seen.
+                    users_failed += 1
+                    logger.warning(
+                        "x posts: fetch failed for @%s (user %s) -- its post window "
+                        "will be retried next run, cursor not advanced",
+                        notified_screen_name,
+                        user_id,
+                    )
+                    continue
+
+                newest_fetched = max(post.timestamp_ms for post in posts)
+
+                if account_cursor is None:
+                    # First sight of this account: seed from the newest
+                    # fetched post and emit NO items -- same no-backfill
+                    # rule as first-run notifications / first-sight
+                    # Telegram chats (see `collect`'s docstring's "Phase 2"
+                    # section) -- otherwise a newly-notification-enabled
+                    # account would dump its entire fetched page of history
+                    # into the very next digest.
+                    phase2_cursor_updates[("x", account_scope)] = str(newest_fetched)
+                    logger.info(
+                        "x posts: first sight of @%s (user %s), seeded cursor at "
+                        "%s, no items emitted",
+                        notified_screen_name,
+                        user_id,
+                        newest_fetched,
+                    )
+                    continue
+
+                account_cursor_int = int(account_cursor)
+
+                # Truncation honesty: the fetch returned exactly this
+                # account's page cap AND the oldest post we got back is
+                # still newer than its cursor -- we did not reach the
+                # cursor, so there is an unfetched gap. Mirrors the
+                # notification page-cap warning's own "digest favors
+                # newest content, loudly" posture (see this function's
+                # "why no resumable catch-up" docstring section) -- the
+                # cursor still advances to newest anyway, on purpose, the
+                # gap is simply abandoned, loudly rather than silently.
+                oldest_fetched = min(post.timestamp_ms for post in posts)
+                if len(posts) == _POSTS_PER_USER and oldest_fetched > account_cursor_int:
+                    logger.warning(
+                        "x posts: @%s (user %s) posted more than the %d-post page "
+                        "cap since the last run; older posts between %s and %s "
+                        "were deliberately skipped (digest favors newest content)",
+                        notified_screen_name,
+                        user_id,
+                        _POSTS_PER_USER,
+                        account_cursor_int,
+                        oldest_fetched,
+                    )
+
+                for post in posts:
+                    if post.timestamp_ms < account_cursor_int:
+                        continue
+                    screen_name = post.screen_name or notified_screen_name
+                    if not screen_name:
+                        skipped_post_no_screen_name += 1
+                        continue
+                    # P3.1 (defense in depth): see the matching phase-1
+                    # check above -- a malformed screen_name/tweet_id would
+                    # build a url the emailer's anchor-provenance allowlist
+                    # can't exact-match, silently degrading the deep link.
+                    if not (
+                        _is_valid_screen_name(screen_name)
+                        and _is_valid_tweet_id(post.tweet_id)
+                    ):
+                        skipped_post_invalid_format += 1
+                        continue
+                    post_candidates.append(
+                        (post.timestamp_ms, post.tweet_id, post.text, screen_name)
+                    )
+
+                # High-water-mark advance, same formula as phase 1's cursor
+                # -- only ever forward, never backward (e.g. if every
+                # fetched post happens to be older than this account's own
+                # cursor, nothing changes here).
+                if newest_fetched > account_cursor_int:
+                    phase2_cursor_updates[("x", account_scope)] = str(newest_fetched)
+
+            if skipped_post_no_screen_name:
+                logger.info(
+                    "x posts: skipped %d post(s) with no resolvable screen_name",
+                    skipped_post_no_screen_name,
+                )
+            if skipped_post_invalid_format:
+                logger.warning(
+                    "x posts: skipped %d post(s) with malformed screen_name/tweet_id",
+                    skipped_post_invalid_format,
+                )
+
+            # Sibling systemic check (see `_is_systemic_post_fetch_failure`'s
+            # docstring for why this is separate from
+            # `_is_systemic_tweet_link_failure`): marks the run failed
+            # WITHOUT touching the notification items or cursor already
+            # finalized above.
+            phase2_failed = _is_systemic_post_fetch_failure(users_attempted, users_failed)
+            if phase2_failed:
+                logger.warning(
+                    "x posts: all %d account post fetch(es) failed this run -- possible "
+                    "endpoint/shape change or rate limiting on user_tweets specifically; "
+                    "notification items/cursor from this run are unaffected",
+                    users_attempted,
+                )
+
+            phase2_items = [
+                Item(
+                    source="x",
+                    source_id=str(tweet_id),
+                    chat_id=None,
+                    author=screen_name,
+                    text=text,
+                    url=f"https://x.com/{screen_name}/status/{tweet_id}",
+                    fetched_at=fetched_at,
+                )
+                for timestamp_ms, tweet_id, text, screen_name in sorted(
+                    post_candidates, key=lambda c: c[0]
+                )
+            ]
+        except Exception as exc:
+            logger.warning(
+                "x posts: phase 2 processing failed unexpectedly: %s", type(exc).__name__
+            )
+            result.failed = True
+        else:
+            result.items.extend(phase2_items)
+            result.cursor_updates.update(phase2_cursor_updates)
+            if phase2_failed:
+                result.failed = True
 
     logger.info(
         "x notifications: collected %d items across %d page(s), cursor -> %s",

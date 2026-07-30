@@ -489,7 +489,7 @@ def _patch_x_client(monkeypatch, x_result: CollectResult, *, build_client_raises
             raise AssertionError("x_collector.build_client must not be called")
         return object()
 
-    async def fake_collect(client, cursor):
+    async def fake_collect(client, cursors):
         return x_result
 
     monkeypatch.setattr(main_mod.x_collector, "build_client", fake_build_client)
@@ -615,7 +615,7 @@ def test_run_x_collector_crash_is_caught_returns_failed_result(monkeypatch, tmp_
     def fake_build_client(cookies_path, cookies_inline):
         return object()
 
-    async def boom_collect(client, cursor):
+    async def boom_collect(client, cursors):
         raise RuntimeError("twikit graphql shape changed")
 
     monkeypatch.setattr(main_mod.x_collector, "build_client", fake_build_client)
@@ -647,7 +647,7 @@ def test_run_x_collector_crash_does_not_prevent_telegram_items_from_committing(
     def fake_build_client(cookies_path, cookies_inline):
         return object()
 
-    async def boom_collect(client, cursor):
+    async def boom_collect(client, cursors):
         raise RuntimeError("twikit graphql shape changed")
 
     monkeypatch.setattr(main_mod.x_collector, "build_client", fake_build_client)

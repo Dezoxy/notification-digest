@@ -85,6 +85,38 @@ class _PageBuilder:
             self.users[user_id] = {"screen_name": resolved_screen_name}
         return self
 
+    def add_bell(
+        self,
+        notif_id: str,
+        timestamp_ms: int,
+        *,
+        from_user_ids: list[str],
+        screen_names: dict[str, str] | None = None,
+        icon_id: str | None = None,
+    ) -> _PageBuilder:
+        """A content-aggregate ("bell") notification: `targetObjects == []`
+        (no linked tweet at all) but `fromUsers` names who posted -- exactly
+        the shape digest/collectors/x.py's module docstring describes under
+        "The problem": the notification names WHO posted, with nothing
+        linkable inside it, hence the phase-2 `fetch_user_posts` path.
+        """
+        screen_names = screen_names or {}
+        self.notifications[notif_id] = {
+            "id": notif_id,
+            "timestampMs": str(timestamp_ms),
+            "icon": {"id": icon_id if icon_id is not None else "bell_icon"},
+            "message": {"text": "notification text"},
+            "template": {
+                "aggregateUserActionsV1": {
+                    "targetObjects": [],
+                    "fromUsers": [{"user": {"id": uid}} for uid in from_user_ids],
+                }
+            },
+        }
+        for uid in from_user_ids:
+            self.users[uid] = {"screen_name": screen_names.get(uid, f"user{uid}")}
+        return self
+
     def build(self, next_cursor: str | None = None) -> dict:
         entries = []
         if next_cursor is not None:
@@ -124,12 +156,17 @@ class FakeXClient:
         *,
         error_at_call: int | None = None,
         error: Exception | None = None,
+        gql: Any = None,
     ) -> None:
         self._pages = pages if pages is not None else []
         self._error_at_call = error_at_call
         self._error = error
         self.cursors_requested: list[str | None] = []
         self.v11 = self
+        # Phase 2 (post-fetch) surface -- a fake honoring
+        # `client.gql.user_tweets`, defaulting to one with zero configured
+        # responses (tests that never exercise phase 2 never touch this).
+        self.gql = gql if gql is not None else FakeGqlClient()
 
     @property
     def calls(self) -> int:
@@ -149,6 +186,98 @@ class FakeXClient:
         return self._pages[page_index], None
 
 
+# --- Phase 2 fixtures: content-aggregate ("bell") notifications and the
+# per-account `client.gql.user_tweets` fetch they trigger. See
+# digest/collectors/x.py's module docstring ("The problem"/"Required
+# implementation") and `fetch_user_posts`'s docstring for the verified real
+# response shape these mirror.
+
+
+def _id_for_timestamp(timestamp_ms: int) -> str:
+    """Inverse of `_tweet_id_to_timestamp_ms` -- a synthetic Snowflake tweet
+    id that decodes back to exactly `timestamp_ms`. Lets tests build posts
+    with a specific, known timestamp without depending on real tweet ids.
+    """
+    return str((timestamp_ms - x_module._X_SNOWFLAKE_EPOCH_MS) << 22)
+
+
+def _legacy_tweet(tweet_id: str, text: str, **extra: Any) -> dict:
+    """One tweet's `legacy` object -- the exact dict shape
+    `_find_all(resp, 'full_text')` is verified to yield (`full_text`/
+    `id_str` as direct sibling keys). `extra` lets a specific test add more
+    fields (e.g. `entities` to probe the mention-shadowing safety fix in
+    `_resolve_post_screen_name`).
+    """
+    return {
+        "id_str": tweet_id,
+        "full_text": text,
+        "created_at": "Wed Jan 01 00:00:00 +0000 2026",
+        **extra,
+    }
+
+
+def _user_tweets_response(legacies: list[dict]) -> dict:
+    """A realistic nested `client.gql.user_tweets` response.
+
+    Mirrors the verified real shape (`fetch_user_posts`'s docstring):
+    tweets nested under `data.user.result.timeline_v2.timeline.
+    instructions[].entries[]...tweet_results.result.legacy`. `_find_all`
+    doesn't care about the exact intermediate keys -- only that each
+    `legacy` dict is reachable somewhere in the tree -- so this fixture
+    nests realistically anyway, to exercise depth rather than just bare
+    presence.
+    """
+    entries = [
+        {
+            "entryId": f"tweet-{legacy.get('id_str', 'unknown')}",
+            "content": {
+                "itemContent": {
+                    "tweet_results": {
+                        "result": {
+                            "rest_id": legacy.get("id_str", "unknown"),
+                            "legacy": legacy,
+                        }
+                    }
+                }
+            },
+        }
+        for legacy in legacies
+    ]
+    return {
+        "data": {
+            "user": {
+                "result": {
+                    "timeline_v2": {
+                        "timeline": {"instructions": [{"entries": entries}]}
+                    }
+                }
+            }
+        }
+    }
+
+
+class FakeGqlClient:
+    """Fake honoring the `client.gql.user_tweets` surface `fetch_user_posts` uses.
+
+    `responses` maps user_id -> either a raw resp dict (returned as-is) or
+    an `Exception` INSTANCE (raised instead of returned) -- one fake, keyed
+    by the user id `collect`'s phase-2 loop / `fetch_user_posts` calls with.
+    A user_id with no configured entry gets an empty (zero-tweet, but not
+    erroring) response, mirroring an account with nothing new to fetch.
+    """
+
+    def __init__(self, responses: dict[str, Any] | None = None) -> None:
+        self._responses = responses if responses is not None else {}
+        self.calls: list[str] = []
+
+    async def user_tweets(self, user_id: str, count: int, cursor: str | None) -> tuple[Any, None]:
+        self.calls.append(user_id)
+        outcome = self._responses.get(user_id, _user_tweets_response([]))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome, None
+
+
 # --- first run seeding ---
 
 
@@ -164,7 +293,7 @@ async def test_first_run_seeds_newest_timestamp_plus_one_and_emits_no_items():
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor=None)
+    result = await collect(client, cursors={})
 
     assert result.items == []
     assert result.cursor_updates == {("x", "notifications"): "2001"}
@@ -174,7 +303,7 @@ async def test_first_run_seeds_newest_timestamp_plus_one_and_emits_no_items():
 async def test_first_run_empty_page_seeds_zero_cursor():
     client = FakeXClient(pages=[_page().build()])
 
-    result = await collect(client, cursor=None)
+    result = await collect(client, cursors={})
 
     assert result.items == []
     assert result.cursor_updates == {("x", "notifications"): "0"}
@@ -192,7 +321,7 @@ async def test_first_run_tweetless_page_seeds_from_its_newest_timestamp():
     page = _page().add("n2", 1500).add("n1", 1200).build()
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor=None)
+    result = await collect(client, cursors={})
 
     assert result.items == []
     # Finding B: newest (1500) + 1.
@@ -220,7 +349,7 @@ async def test_first_run_all_tweet_linked_malformed_is_systemic_failure_no_seed(
     client = FakeXClient(pages=[page])
 
     with caplog.at_level("WARNING", logger="digest.collectors.x"):
-        result = await collect(client, cursor=None)
+        result = await collect(client, cursors={})
 
     assert result.items == []
     assert result.failed is True
@@ -257,7 +386,7 @@ async def test_first_run_seed_plus_one_excludes_seed_time_notification_next_run(
     phase1_page = _page().add("n1", 5000, tweet_id="500", text="seed-time tweet").build()
     phase1_client = FakeXClient(pages=[phase1_page])
 
-    phase1_result = await collect(phase1_client, cursor=None)
+    phase1_result = await collect(phase1_client, cursors={})
 
     assert phase1_result.items == []
     assert phase1_result.cursor_updates == {("x", "notifications"): "5001"}
@@ -275,7 +404,7 @@ async def test_first_run_seed_plus_one_excludes_seed_time_notification_next_run(
     )
     phase2_client = FakeXClient(pages=[phase2_page])
 
-    phase2_result = await collect(phase2_client, cursor=phase2_cursor)
+    phase2_result = await collect(phase2_client, cursors={"notifications": phase2_cursor})
 
     assert [i.source_id for i in phase2_result.items] == ["502"]
     assert "501" not in [i.source_id for i in phase2_result.items]
@@ -298,7 +427,7 @@ async def test_incremental_only_timestamps_greater_than_cursor_oldest_first():
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="150")
+    result = await collect(client, cursors={"notifications": "150"})
 
     assert [i.source_id for i in result.items] == ["200", "300"]
     assert [i.text for i in result.items] == ["second", "third"]
@@ -310,7 +439,7 @@ async def test_incremental_no_new_timestamps_leaves_cursor_untouched():
     page = _page().add("n1", 100, tweet_id="100", text="old").build()
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="500")
+    result = await collect(client, cursors={"notifications": "500"})
 
     assert result.items == []
     assert result.cursor_updates == {}
@@ -325,7 +454,7 @@ async def test_incremental_notification_without_tweet_is_skipped_but_still_count
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["100"]
     # Newest timestamp across ALL notifications this page (100), even
@@ -343,7 +472,7 @@ async def test_incremental_notification_without_screen_name_skipped_but_advances
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["100"]
     # The screen_name-less notification's timestamp (200) still counts for
@@ -383,7 +512,7 @@ async def test_pagination_multi_page_collects_all_until_cursor_bridged(monkeypat
     )
     client = FakeXClient(pages=[page1, page2, page3])
 
-    result = await collect(client, cursor="150")
+    result = await collect(client, cursors={"notifications": "150"})
 
     assert [i.source_id for i in result.items] == ["200", "250", "300", "400", "500"]
     assert result.cursor_updates == {("x", "notifications"): "500"}
@@ -413,7 +542,7 @@ async def test_pagination_cursor_bridged_on_first_page_makes_exactly_one_fetch_n
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="150")
+    result = await collect(client, cursors={"notifications": "150"})
 
     assert [i.source_id for i in result.items] == ["500"]
     assert result.cursor_updates == {("x", "notifications"): "500"}
@@ -452,7 +581,7 @@ async def test_pagination_page_cap_reached_unbridged_cursor_advances_to_newest_a
     client = FakeXClient(pages=pages)
 
     with caplog.at_level("WARNING", logger="digest.collectors.x"):
-        result = await collect(client, cursor="50")
+        result = await collect(client, cursors={"notifications": "50"})
 
     # Page 6 (timestamp 100) is never fetched -- only 5 total fetches (page 1
     # through page 5).
@@ -499,7 +628,7 @@ async def test_followup_after_unbridged_cap_collects_only_newer_notifications(mo
     ]
     phase1_client = FakeXClient(pages=phase1_pages)
 
-    phase1_result = await collect(phase1_client, cursor="50")
+    phase1_result = await collect(phase1_client, cursors={"notifications": "50"})
 
     # Unbridged cap-hit -> cursor advances to the newest fetched (600), not
     # the oldest -- see the dedicated cap test above. The gap below 200
@@ -524,7 +653,7 @@ async def test_followup_after_unbridged_cap_collects_only_newer_notifications(mo
     )
     phase2_client = FakeXClient(pages=[phase2_page])
 
-    phase2_result = await collect(phase2_client, cursor=phase2_cursor)
+    phase2_result = await collect(phase2_client, cursors={"notifications": phase2_cursor})
 
     # Bridged on page 1 -- no further fetches.
     assert phase2_client.calls == 1
@@ -567,7 +696,7 @@ async def test_pagination_failure_on_second_page_keeps_first_page_items_cursor_n
         pages=[page1], error_at_call=2, error=RuntimeError("graphql shape changed")
     )
 
-    result = await collect(client, cursor="50")
+    result = await collect(client, cursors={"notifications": "50"})
 
     assert [i.source_id for i in result.items] == ["80", "100"]
     # FAILURE: the cursor is not advanced at all -- the key isn't even
@@ -591,7 +720,7 @@ async def test_incremental_tweet_missing_full_text_is_skipped_others_collected()
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["100"]
     # The malformed notification's OWN timestamp (200) is still readable
@@ -623,7 +752,7 @@ async def test_all_tweet_linked_notifications_malformed_is_systemic_failure_no_c
     client = FakeXClient(pages=[page])
 
     with caplog.at_level("WARNING", logger="digest.collectors.x"):
-        result = await collect(client, cursor="0")
+        result = await collect(client, cursors={"notifications": "0"})
 
     assert result.items == []
     assert result.failed is True
@@ -687,7 +816,7 @@ async def test_pagination_page_processing_exception_mid_pagination_keeps_prior_p
 
     monkeypatch.setattr(x_module, "_extract_candidates", fake_extract_candidates)
 
-    result = await collect(client, cursor="150")
+    result = await collect(client, cursors={"notifications": "150"})
 
     # Page 2 never contributes any items -- extraction raised before
     # anything from it could be merged in -- but page 1's items survive.
@@ -712,7 +841,7 @@ async def test_like_notification_on_post_cursor_tweet_skipped_as_item_but_advanc
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="500")
+    result = await collect(client, cursors={"notifications": "500"})
 
     assert result.items == []
     assert result.cursor_updates == {("x", "notifications"): "999"}
@@ -727,7 +856,7 @@ async def test_repost_notification_on_post_cursor_tweet_skipped_as_item():
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="500")
+    result = await collect(client, cursors={"notifications": "500"})
 
     assert result.items == []
     assert result.cursor_updates == {("x", "notifications"): "999"}
@@ -742,7 +871,7 @@ async def test_mention_and_reply_kind_notifications_are_included():
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["200", "300"]
 
@@ -755,7 +884,7 @@ async def test_unrecognized_icon_kind_fails_open_and_is_included():
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["100"]
 
@@ -764,7 +893,7 @@ async def test_missing_icon_fails_open_and_is_included():
     page = _page().add("n1", 100, tweet_id="100", text="hi", icon_missing=True).build()
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["100"]
 
@@ -778,7 +907,7 @@ async def test_follow_notification_no_tweet_unaffected_by_icon_kind():
     )
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert [i.source_id for i in result.items] == ["100"]
 
@@ -810,7 +939,7 @@ async def test_engagement_notification_timestamp_bridges_pagination_like_any_oth
     )
     client = FakeXClient(pages=[page1, page2])
 
-    result = await collect(client, cursor="1000")
+    result = await collect(client, cursors={"notifications": "1000"})
 
     assert client.calls == 2
     assert result.items == []
@@ -850,7 +979,7 @@ async def test_old_tweet_fresh_like_on_page1_does_not_falsely_bridge_past_page2_
     )
     client = FakeXClient(pages=[page1, page2])
 
-    result = await collect(client, cursor=cursor)
+    result = await collect(client, cursors={"notifications": cursor})
 
     # Pagination continued past page 1 -- 2 total fetches -- instead of
     # falsely bridging on the old-tweet-id-but-new-timestamp like.
@@ -880,7 +1009,7 @@ async def test_unseen_notification_tied_with_cursor_timestamp_is_emitted_as_item
     page = _page().add("n1", 1000, tweet_id="100", text="tied").build()
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="1000")
+    result = await collect(client, cursors={"notifications": "1000"})
 
     assert [i.source_id for i in result.items] == ["100"]
     # Item selection is inclusive, but cursor advancement is unaffected:
@@ -915,7 +1044,7 @@ async def test_tied_notification_on_later_page_is_still_reached_and_emitted(monk
     )
     client = FakeXClient(pages=[page1, page2])
 
-    result = await collect(client, cursor="1000")
+    result = await collect(client, cursors={"notifications": "1000"})
 
     # Pagination continued past page 1 -- the tie alone did not bridge.
     assert client.calls == 2
@@ -1030,7 +1159,7 @@ async def test_auth_error_unauthorized_flags_failed_no_retry():
 
     client = FakeXClient(error_at_call=1, error=Unauthorized("nope"))
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.failed is True
     assert result.items == []
@@ -1043,7 +1172,7 @@ async def test_auth_error_forbidden_flags_failed():
 
     client = FakeXClient(error_at_call=1, error=Forbidden("nope"))
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.failed is True
     assert client.calls == 1
@@ -1054,7 +1183,7 @@ async def test_account_locked_flags_failed():
 
     client = FakeXClient(error_at_call=1, error=AccountLocked("locked"))
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.failed is True
     assert client.calls == 1
@@ -1065,7 +1194,7 @@ async def test_account_suspended_flags_failed():
 
     client = FakeXClient(error_at_call=1, error=AccountSuspended("suspended"))
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.failed is True
     assert client.calls == 1
@@ -1079,7 +1208,7 @@ async def test_rate_limit_error_flags_failed_no_retry():
 
     client = FakeXClient(error_at_call=1, error=TooManyRequests("slow down"))
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.failed is True
     assert client.calls == 1
@@ -1091,7 +1220,7 @@ async def test_rate_limit_error_flags_failed_no_retry():
 async def test_other_exception_flags_failed_never_crashes():
     client = FakeXClient(error_at_call=1, error=RuntimeError("graphql shape changed"))
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.failed is True
     assert result.items == []
@@ -1104,7 +1233,7 @@ async def test_url_built_only_from_api_returned_screen_name_and_tweet_id():
     page = _page().add("n1", 999, tweet_id="999", text="hi", screen_name="bob").build()
     client = FakeXClient(pages=[page])
 
-    result = await collect(client, cursor="0")
+    result = await collect(client, cursors={"notifications": "0"})
 
     assert result.items[0].url == "https://x.com/bob/status/999"
     assert result.items[0].author == "bob"
@@ -1168,3 +1297,803 @@ def test_importing_digest_main_does_not_import_twikit():
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+# --- Phase 2: content-aggregate ("bell") notifications -- fetching post
+# CONTENT directly for named accounts, since the notification itself
+# carries nothing linkable (no tweet, only WHO posted). See
+# digest/collectors/x.py's module docstring ("The problem"/"Required
+# implementation") for the full rationale.
+
+
+def test_tweet_id_to_timestamp_ms_known_value():
+    # A real tweet id, independently computed against the documented X
+    # Snowflake formula (id >> 22) + epoch -- not derived from the
+    # collector's own constant, so this isn't a tautological self-check.
+    assert x_module._tweet_id_to_timestamp_ms("1460198939211628547") == 1636973530949
+
+
+def test_tweet_id_to_timestamp_ms_non_numeric_returns_none():
+    assert x_module._tweet_id_to_timestamp_ms("not-a-number") is None
+    assert x_module._tweet_id_to_timestamp_ms(None) is None
+
+
+def test_find_all_returns_every_matching_dict():
+    obj = {
+        "a": {"full_text": "one", "id_str": "1"},
+        "b": [{"full_text": "two", "id_str": "2"}, {"other": 1}],
+    }
+
+    hits = x_module._find_all(obj, "full_text")
+
+    assert sorted(h["id_str"] for h in hits) == ["1", "2"]
+
+
+def test_find_all_respects_max_depth():
+    innermost = {"full_text": "buried", "id_str": "deep"}
+    obj = innermost
+    for _ in range(5):
+        obj = {"nested": obj}
+
+    assert x_module._find_all(obj, "full_text", max_depth=2) == []
+    assert x_module._find_all(obj, "full_text", max_depth=10) == [innermost]
+
+
+def test_resolve_post_screen_name_prefers_own_subtree_when_present():
+    tweet_obj = {"full_text": "hi", "id_str": "1", "author": {"screen_name": "direct-author"}}
+
+    assert x_module._resolve_post_screen_name(tweet_obj) == "direct-author"
+
+
+def test_resolve_post_screen_name_ignores_mentions_in_entities():
+    # A tweet mentioning someone else must not have THAT user's screen_name
+    # picked up as if it were the author's -- see `_resolve_post_screen_name`'s
+    # docstring / `_SCREEN_NAME_SEARCH_EXCLUDED_KEYS`.
+    tweet_obj = {
+        "full_text": "hi @someone",
+        "id_str": "1",
+        "entities": {"user_mentions": [{"screen_name": "someone"}]},
+    }
+
+    assert x_module._resolve_post_screen_name(tweet_obj) is None
+
+
+def test_resolve_post_screen_name_absent_returns_none():
+    assert x_module._resolve_post_screen_name({"full_text": "hi", "id_str": "1"}) is None
+
+
+async def test_fetch_user_posts_parses_valid_and_skips_malformed():
+    resp = _user_tweets_response(
+        [
+            _legacy_tweet("900001", "good"),
+            {"id_str": "900002"},  # missing full_text
+            {"full_text": "no id"},  # missing id_str
+        ]
+    )
+    client = FakeXClient(gql=FakeGqlClient({"1": resp}))
+
+    posts = await x_module.fetch_user_posts(client, "1", 20)
+
+    assert [p.tweet_id for p in posts] == ["900001"]
+    assert posts[0].text == "good"
+    assert posts[0].screen_name is None
+
+
+async def test_fetch_user_posts_never_raises_on_client_exception():
+    client = FakeXClient(gql=FakeGqlClient({"1": RuntimeError("boom")}))
+
+    posts = await x_module.fetch_user_posts(client, "1", 20)
+
+    assert posts == []
+
+
+def test_extract_post_fetch_targets_only_bell_style_notifications():
+    resp = (
+        _page()
+        .add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "alice"})
+        .add("n2", 400, tweet_id="400", text="a mention", icon_id="at_icon")
+        # engagement, excluded -- same screen_name as n1 so this call
+        # can't accidentally clobber the shared globalObjects.users entry.
+        .add_bell("n3", 300, from_user_ids=["1"], screen_names={"1": "alice"}, icon_id="heart_icon")
+        .build()
+    )
+
+    targets = x_module._extract_post_fetch_targets(resp)
+
+    assert targets == {"1": "alice"}
+
+
+def test_is_systemic_post_fetch_failure_boundary():
+    assert x_module._is_systemic_post_fetch_failure(0, 0) is False
+    assert x_module._is_systemic_post_fetch_failure(3, 2) is False
+    assert x_module._is_systemic_post_fetch_failure(3, 3) is True
+
+
+async def test_bell_notification_fetches_and_emits_posts_once_account_cursor_exists(monkeypatch):
+    """P1 per-account cursors: an account with a PRE-EXISTING `posts:{id}`
+    cursor row (i.e. not its first sight) has its fetched posts emitted
+    immediately, filtered against ITS OWN cursor rather than the shared
+    notifications cursor. (Contrast with
+    test_first_sight_of_account_seeds_cursor_emits_no_items below, covering
+    the no-backfill first-sight case.)
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page = (
+        _page().add_bell("n1", 500, from_user_ids=["111"], screen_names={"111": "alice"}).build()
+    )
+    gql = FakeGqlClient({"111": _user_tweets_response([_legacy_tweet("900001", "hello world")])})
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(
+        client, cursors={"notifications": "0", "posts:111": "0"}
+    )
+
+    assert gql.calls == ["111"]
+    post_items = [i for i in result.items if i.source_id == "900001"]
+    assert len(post_items) == 1
+    item = post_items[0]
+    assert item.url == "https://x.com/alice/status/900001"
+    assert item.author == "alice"
+    assert item.text == "hello world"
+    assert item.source == "x"
+    assert item.chat_id is None
+    assert result.failed is False
+    # Cursor advances to the newest post captured (Snowflake-decoded from
+    # "900001") -- a per-account high-water mark, independent of the
+    # notifications cursor.
+    assert ("x", "posts:111") in result.cursor_updates
+
+
+async def test_posts_filtered_by_snowflake_timestamp_vs_account_cursor_inclusive_tie(monkeypatch):
+    """P1: posts are filtered against the ACCOUNT's own `posts:{id}` cursor,
+    not the shared notifications cursor -- the account cursor here is set
+    to the same tie-boundary value the notifications cursor used to double
+    as, to prove the (still inclusive, same tie rule as phase 1) filtering
+    now reads from the right place.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    cursor_ms = 1700000000000
+
+    def id_for(timestamp_ms: int) -> str:
+        return str((timestamp_ms - x_module._X_SNOWFLAKE_EPOCH_MS) << 22)
+
+    old_id = id_for(cursor_ms - 1000)
+    tied_id = id_for(cursor_ms)
+    new_id = id_for(cursor_ms + 1000)
+
+    page = (
+        _page()
+        .add_bell("n1", cursor_ms, from_user_ids=["7"], screen_names={"7": "bob"})
+        .build()
+    )
+    gql = FakeGqlClient(
+        {
+            "7": _user_tweets_response(
+                [
+                    _legacy_tweet(old_id, "old post"),
+                    _legacy_tweet(tied_id, "tied post"),
+                    _legacy_tweet(new_id, "new post"),
+                ]
+            )
+        }
+    )
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(
+        client,
+        cursors={"notifications": str(cursor_ms), "posts:7": str(cursor_ms)},
+    )
+
+    ids = {i.source_id for i in result.items}
+    assert old_id not in ids
+    assert tied_id in ids
+    assert new_id in ids
+
+
+async def test_first_run_never_fetches_posts_even_with_bell_notification():
+    page = _page().add_bell("n1", 500, from_user_ids=["111"]).build()
+    gql = FakeGqlClient(
+        {"111": _user_tweets_response([_legacy_tweet("1", "should not appear")])}
+    )
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(client, cursors={})
+
+    assert result.items == []
+    assert gql.calls == []
+
+
+async def test_per_user_post_fetch_failure_skips_user_keeps_others_items(monkeypatch):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page = (
+        _page()
+        .add_bell("n1", 500, from_user_ids=["1", "2"], screen_names={"1": "alice", "2": "bob"})
+        .build()
+    )
+    gql = FakeGqlClient(
+        {
+            "1": RuntimeError("boom"),
+            "2": _user_tweets_response([_legacy_tweet("900001", "hi")]),
+        }
+    )
+    client = FakeXClient(pages=[page], gql=gql)
+
+    # Both accounts already have a posts cursor (not first sight) -- user 1's
+    # fetch fails and its cursor ("posts:1") must stay untouched; user 2's
+    # succeeds and its items/cursor advance normally.
+    result = await collect(
+        client, cursors={"notifications": "0", "posts:1": "0", "posts:2": "0"}
+    )
+
+    assert result.failed is False
+    assert [i.source_id for i in result.items if i.source_id == "900001"] == ["900001"]
+    assert ("x", "posts:1") not in result.cursor_updates
+    assert ("x", "posts:2") in result.cursor_updates
+
+
+async def test_all_user_post_fetches_failing_marks_run_failed_notification_items_survive(
+    monkeypatch,
+):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page = (
+        _page()
+        .add("n2", 300, tweet_id="300", text="a mention", icon_id="at_icon")
+        .add_bell("n1", 500, from_user_ids=["1", "2"])
+        .build()
+    )
+    gql = FakeGqlClient({"1": RuntimeError("boom"), "2": RuntimeError("boom2")})
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(client, cursors={"notifications": "0"})
+
+    assert result.failed is True
+    # Notification-derived item survives: a systemic PHASE-2 post-fetch
+    # failure must not roll back the (already trustworthy) notifications
+    # half of this run -- see `_is_systemic_post_fetch_failure`'s docstring.
+    assert [i.source_id for i in result.items] == ["300"]
+
+
+async def test_post_fetch_user_cap_respected_and_warns(monkeypatch, caplog):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    user_ids = [str(i) for i in range(25)]
+    responses: dict[str, Any] = {uid: _user_tweets_response([]) for uid in user_ids[1:]}
+    responses[user_ids[0]] = _user_tweets_response([_legacy_tweet("900001", "hi")])
+    page = _page().add_bell("n1", 500, from_user_ids=user_ids).build()
+    gql = FakeGqlClient(responses)
+    client = FakeXClient(pages=[page], gql=gql)
+
+    cursors = {"notifications": "0", f"posts:{user_ids[0]}": "0"}
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursors=cursors)
+
+    assert len(gql.calls) == x_module._MAX_POST_FETCH_USERS
+    assert any("exceeded the per-run fetch cap" in r.message for r in caplog.records)
+    assert any("skipping 5" in r.message for r in caplog.records)
+    # P1: the skipped accounts' cursors are explicitly called out as
+    # untouched -- nothing is lost, a future run picks them up.
+    assert any("cursors are left untouched" in r.message for r in caplog.records)
+    assert [i.source_id for i in result.items if i.source_id == "900001"] == ["900001"]
+    # The 5 accounts beyond the cap were never iterated at all -- their
+    # posts cursors are absent from cursor_updates entirely.
+    skipped_ids = user_ids[x_module._MAX_POST_FETCH_USERS :]
+    assert not any(
+        scope.startswith("posts:") and scope.split(":", 1)[1] in skipped_ids
+        for source, scope in result.cursor_updates
+        if source == "x"
+    )
+
+
+async def test_sleep_called_between_but_not_before_first_user_fetch(monkeypatch):
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page = _page().add_bell("n1", 500, from_user_ids=["1", "2", "3"]).build()
+    gql = FakeGqlClient(
+        {
+            "1": _user_tweets_response([]),
+            "2": _user_tweets_response([]),
+            "3": _user_tweets_response([]),
+        }
+    )
+    client = FakeXClient(pages=[page], gql=gql)
+
+    await collect(client, cursors={"notifications": "0"})
+
+    assert sleeps == [x_module._PAGE_FETCH_DELAY_SECONDS, x_module._PAGE_FETCH_DELAY_SECONDS]
+
+
+async def test_engagement_notification_never_triggers_post_fetch(monkeypatch):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    # A like/repost notification's icon marks it as engagement -- even
+    # though this fixture gives it `fromUsers` data (via add_bell), it must
+    # never be treated as a phase-2 post-fetch target.
+    page = _page().add_bell("n1", 500, from_user_ids=["111"], icon_id="heart_icon").build()
+    gql = FakeGqlClient({"111": _user_tweets_response([_legacy_tweet("1", "should not fetch")])})
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(client, cursors={"notifications": "0"})
+
+    assert gql.calls == []
+    assert result.items == []
+
+
+# --- Codex review finding P2: retweeted_status_result / quoted_status_result
+# subtrees embed the ORIGINAL tweet a wrapper is reposting/quoting -- these
+# must never be discovered as separate items, and the wrapper's own
+# screen_name must never be resolved from inside them (misattribution). ---
+
+
+def test_find_all_excludes_retweeted_and_quoted_status_result_subtrees():
+    obj = {
+        "full_text": "wrapper text",
+        "id_str": "1",
+        "retweeted_status_result": {
+            "result": {"legacy": {"full_text": "embedded original", "id_str": "2"}}
+        },
+        "quoted_status_result": {
+            "result": {"legacy": {"full_text": "embedded quoted", "id_str": "3"}}
+        },
+    }
+
+    hits = x_module._find_all(obj, "full_text", exclude_keys=x_module._RETWEET_QUOTE_EXCLUDED_KEYS)
+
+    assert [h["id_str"] for h in hits] == ["1"]
+
+
+def test_resolve_post_screen_name_ignores_retweeted_status_result():
+    tweet_obj = {
+        "full_text": "hi",
+        "id_str": "1",
+        "retweeted_status_result": {
+            "result": {"legacy": {"screen_name": "original_author"}}
+        },
+    }
+
+    assert x_module._resolve_post_screen_name(tweet_obj) is None
+
+
+def test_resolve_post_screen_name_ignores_quoted_status_result():
+    tweet_obj = {
+        "full_text": "hi",
+        "id_str": "1",
+        "quoted_status_result": {
+            "result": {"legacy": {"screen_name": "quoted_author"}}
+        },
+    }
+
+    assert x_module._resolve_post_screen_name(tweet_obj) is None
+
+
+async def test_retweeted_status_result_not_emitted_as_separate_item_and_not_misattributed(
+    monkeypatch,
+):
+    """A retweet wrapper embeds the original tweet under
+    `retweeted_status_result` -- it must be emitted as exactly ONE item (the
+    wrapper), never a second item for the embedded original, and the
+    wrapper's item must carry the NOTIFIED account's screen_name (`alice`),
+    never the embedded original's author (`original_author`) --
+    `_resolve_post_screen_name` returns None in practice (verified live), so
+    without the P2 exclusion the embedded original's screen_name would leak
+    through and misattribute the wrapper to the wrong account.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    wrapper = _legacy_tweet(
+        "500",
+        "RT @someone: hello",
+        retweeted_status_result={
+            "result": {
+                "rest_id": "999",
+                "legacy": _legacy_tweet("999", "the original tweet text"),
+                "core": {
+                    "user_results": {
+                        "result": {"legacy": {"screen_name": "original_author"}}
+                    }
+                },
+            }
+        },
+    )
+    gql = FakeGqlClient({"1": _user_tweets_response([wrapper])})
+    page = _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(client, cursors={"notifications": "0", "posts:1": "0"})
+
+    ids = [i.source_id for i in result.items]
+    assert ids == ["500"]
+    assert "999" not in ids
+    item = next(i for i in result.items if i.source_id == "500")
+    assert item.author == "alice"
+    assert item.text == "RT @someone: hello"
+
+
+async def test_quoted_status_result_not_emitted_as_separate_item_and_not_misattributed(
+    monkeypatch,
+):
+    """Sibling of the retweeted_status_result test above, for quote-tweets."""
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    wrapper = _legacy_tweet(
+        "600",
+        "check this out",
+        quoted_status_result={
+            "result": {
+                "rest_id": "888",
+                "legacy": _legacy_tweet("888", "the quoted tweet text"),
+                "core": {
+                    "user_results": {
+                        "result": {"legacy": {"screen_name": "quoted_author"}}
+                    }
+                },
+            }
+        },
+    )
+    gql = FakeGqlClient({"2": _user_tweets_response([wrapper])})
+    page = _page().add_bell("n1", 500, from_user_ids=["2"], screen_names={"2": "bob"}).build()
+    client = FakeXClient(pages=[page], gql=gql)
+
+    result = await collect(client, cursors={"notifications": "0", "posts:2": "0"})
+
+    ids = [i.source_id for i in result.items]
+    assert ids == ["600"]
+    assert "888" not in ids
+    item = next(i for i in result.items if i.source_id == "600")
+    assert item.author == "bob"
+
+
+# --- Codex review finding P3.1: malformed screen_name/tweet_id are never
+# emitted (would build a url that no longer exact-matches the emailer's
+# anchor-provenance allowlist, silently degrading the deep link). ---
+
+
+def test_is_valid_screen_name_boundaries():
+    assert x_module._is_valid_screen_name("alice_123") is True
+    assert x_module._is_valid_screen_name("a" * 15) is True
+    assert x_module._is_valid_screen_name("a" * 16) is False
+    assert x_module._is_valid_screen_name("") is False
+    assert x_module._is_valid_screen_name("bad!name") is False
+    assert x_module._is_valid_screen_name("bad name") is False
+    assert x_module._is_valid_screen_name(None) is False
+
+
+def test_is_valid_tweet_id_boundaries():
+    assert x_module._is_valid_tweet_id("123456789") is True
+    assert x_module._is_valid_tweet_id("0") is True
+    assert x_module._is_valid_tweet_id("") is False
+    assert x_module._is_valid_tweet_id("+123") is False
+    assert x_module._is_valid_tweet_id("-123") is False
+    assert x_module._is_valid_tweet_id("12a") is False
+    assert x_module._is_valid_tweet_id(None) is False
+
+
+async def test_notification_invalid_screen_name_format_skipped_with_warning(caplog):
+    page = (
+        _page()
+        .add("n1", 100, tweet_id="100", text="hi", screen_name="bad name!")
+        .build()
+    )
+    client = FakeXClient(pages=[page])
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursors={"notifications": "0"})
+
+    assert result.items == []
+    assert any(
+        "malformed screen_name/tweet_id" in r.message for r in caplog.records
+    )
+
+
+async def test_notification_invalid_tweet_id_format_skipped_with_warning(caplog):
+    page = (
+        _page()
+        .add("n1", 100, tweet_id="abc123", text="hi", screen_name="alice")
+        .build()
+    )
+    client = FakeXClient(pages=[page])
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursors={"notifications": "0"})
+
+    assert result.items == []
+    assert any(
+        "malformed screen_name/tweet_id" in r.message for r in caplog.records
+    )
+
+
+async def test_post_invalid_screen_name_format_skipped_with_warning(monkeypatch, caplog):
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page = (
+        _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "bad!name"}).build()
+    )
+    gql = FakeGqlClient({"1": _user_tweets_response([_legacy_tweet("900001", "hi")])})
+    client = FakeXClient(pages=[page], gql=gql)
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursors={"notifications": "0", "posts:1": "0"})
+
+    assert result.items == []
+    assert any(
+        "malformed screen_name/tweet_id" in r.message for r in caplog.records
+    )
+
+
+async def test_post_invalid_tweet_id_format_skipped_with_warning(monkeypatch, caplog):
+    """`int("+900001")` succeeds (so the Snowflake decode in
+    `fetch_user_posts` doesn't filter this id out before it ever reaches
+    P3.1), but `+900001` is NOT digits-only -- exactly the defense-in-depth
+    gap this check closes.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page = _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    gql = FakeGqlClient({"1": _user_tweets_response([_legacy_tweet("+900001", "hi")])})
+    client = FakeXClient(pages=[page], gql=gql)
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        result = await collect(client, cursors={"notifications": "0", "posts:1": "0"})
+
+    assert result.items == []
+    assert any(
+        "malformed screen_name/tweet_id" in r.message for r in caplog.records
+    )
+
+
+# --- Two-run permanence tests (Codex review): each of these proves a
+# scenario where the OLD shared-notifications-cursor design for phase 2
+# would have permanently lost content, and the new per-account cursor design
+# instead makes it retryable/collectible on a follow-up run. ---
+
+
+async def test_account_truncated_at_page_cap_then_followup_collects_only_newer(
+    monkeypatch, caplog
+):
+    """Run 1: the account posted at least `_POSTS_PER_USER` times since its
+    (old) cursor -- only the newest page is fetched, so the oldest of the
+    fetched posts is still newer than the cursor -- triggering the
+    truncation-honesty warning. All `_POSTS_PER_USER` fetched posts are
+    still emitted (the fetch itself succeeded) and the cursor advances to
+    the newest fetched. Run 2, fed that advanced cursor: only genuinely
+    newer posts appear, with no re-emit and no error -- proving the
+    truncated older content is deliberately abandoned exactly once (not
+    repeatedly re-attempted), and new content past the truncation point is
+    never lost.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    base_ts = 1_700_000_000_000
+    old_cursor = base_ts - 10_000_000
+
+    run1_posts = [
+        _legacy_tweet(_id_for_timestamp(base_ts + i), f"post {i}")
+        for i in range(x_module._POSTS_PER_USER)
+    ]
+    newest_run1_ts = base_ts + x_module._POSTS_PER_USER - 1
+
+    page1 = _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    gql1 = FakeGqlClient({"1": _user_tweets_response(run1_posts)})
+    client1 = FakeXClient(pages=[page1], gql=gql1)
+
+    with caplog.at_level("WARNING", logger="digest.collectors.x"):
+        run1_result = await collect(
+            client1, cursors={"notifications": "0", "posts:1": str(old_cursor)}
+        )
+
+    assert len(run1_result.items) == x_module._POSTS_PER_USER
+    assert run1_result.failed is False
+    assert any(
+        "posted more than the" in r.message and "page cap" in r.message
+        for r in caplog.records
+    )
+    assert run1_result.cursor_updates[("x", "posts:1")] == str(newest_run1_ts)
+
+    older_id = _id_for_timestamp(newest_run1_ts - 5)
+    newer_id = _id_for_timestamp(newest_run1_ts + 5)
+    page2 = _page().add_bell("n2", 600, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    gql2 = FakeGqlClient(
+        {
+            "1": _user_tweets_response(
+                [_legacy_tweet(older_id, "already-seen"), _legacy_tweet(newer_id, "genuinely new")]
+            )
+        }
+    )
+    client2 = FakeXClient(pages=[page2], gql=gql2)
+
+    run2_result = await collect(
+        client2,
+        cursors={
+            "notifications": "0",
+            "posts:1": run1_result.cursor_updates[("x", "posts:1")],
+        },
+    )
+
+    assert [i.source_id for i in run2_result.items] == [newer_id]
+    assert run2_result.failed is False
+
+
+async def test_per_account_fetch_failure_then_followup_retries_successfully(monkeypatch):
+    """Run 1: account 1's post fetch fails (exception) while account 2's
+    succeeds -- account 2's item/cursor are unaffected, account 1's cursor
+    is left untouched. Run 2, fed the SAME cursors (account 1's never
+    advanced): account 1's fetch now succeeds and its window is collected --
+    proving the failed window was retryable, not permanently lost.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    page1 = (
+        _page()
+        .add_bell("n1", 500, from_user_ids=["1", "2"], screen_names={"1": "alice", "2": "bob"})
+        .build()
+    )
+    gql1 = FakeGqlClient(
+        {
+            "1": RuntimeError("boom"),
+            "2": _user_tweets_response([_legacy_tweet("900002", "bob's post")]),
+        }
+    )
+    client1 = FakeXClient(pages=[page1], gql=gql1)
+
+    run1_cursors = {"notifications": "0", "posts:1": "0", "posts:2": "0"}
+    run1_result = await collect(client1, cursors=run1_cursors)
+
+    assert run1_result.failed is False
+    assert [i.source_id for i in run1_result.items] == ["900002"]
+    assert ("x", "posts:1") not in run1_result.cursor_updates
+    assert ("x", "posts:2") in run1_result.cursor_updates
+
+    page2 = _page().add_bell("n2", 600, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    gql2 = FakeGqlClient({"1": _user_tweets_response([_legacy_tweet("900001", "alice's post")])})
+    client2 = FakeXClient(pages=[page2], gql=gql2)
+
+    run2_result = await collect(client2, cursors={"notifications": "0", "posts:1": "0"})
+
+    assert run2_result.failed is False
+    assert [i.source_id for i in run2_result.items] == ["900001"]
+    assert ("x", "posts:1") in run2_result.cursor_updates
+
+
+async def test_account_beyond_user_cap_uncollected_in_run1_collected_in_run2(monkeypatch):
+    """Run 1: an account named beyond `_MAX_POST_FETCH_USERS` is never
+    fetched at all -- its cursor is absent from `cursor_updates` entirely
+    (not just unchanged). Run 2: that same account, now within the cap
+    (fewer competing targets), IS fetched and its cursor gets seeded --
+    proving it was skipped, not lost.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    user_ids = [str(i) for i in range(x_module._MAX_POST_FETCH_USERS + 1)]
+    overflow_user = user_ids[-1]
+
+    responses = {uid: _user_tweets_response([]) for uid in user_ids[:-1]}
+    page1 = _page().add_bell("n1", 500, from_user_ids=user_ids).build()
+    gql1 = FakeGqlClient(responses)
+    client1 = FakeXClient(pages=[page1], gql=gql1)
+
+    run1_result = await collect(client1, cursors={"notifications": "0"})
+
+    assert ("x", f"posts:{overflow_user}") not in run1_result.cursor_updates
+    assert overflow_user not in gql1.calls
+
+    page2 = (
+        _page()
+        .add_bell("n2", 600, from_user_ids=[overflow_user], screen_names={overflow_user: "zed"})
+        .build()
+    )
+    gql2 = FakeGqlClient(
+        {overflow_user: _user_tweets_response([_legacy_tweet("900099", "zed's post")])}
+    )
+    client2 = FakeXClient(pages=[page2], gql=gql2)
+
+    run2_result = await collect(client2, cursors={"notifications": "0"})
+
+    assert overflow_user in gql2.calls
+    assert run2_result.items == []  # first sight of this account -- no backfill
+    assert ("x", f"posts:{overflow_user}") in run2_result.cursor_updates
+
+
+async def test_first_sight_of_account_seeds_cursor_then_followup_emits_only_newer(monkeypatch):
+    """Run 1: this ACCOUNT's first sight (no `posts:{id}` cursor row yet,
+    even though the notifications cursor already exists, i.e. this is NOT
+    the module's overall first run) seeds its cursor from the newest
+    fetched post and emits NO items. Run 2, fed that seed: a post exactly at
+    the seed's timestamp is excluded (already visible at seed time), a post
+    one ms later is included.
+    """
+
+    async def fake_sleep(seconds):
+        pass
+
+    monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
+
+    seed_ts = 1_700_000_000_000
+    seeded_at_id = _id_for_timestamp(seed_ts)
+
+    page1 = _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    gql1 = FakeGqlClient(
+        {"1": _user_tweets_response([_legacy_tweet(seeded_at_id, "seed-time post")])}
+    )
+    client1 = FakeXClient(pages=[page1], gql=gql1)
+
+    run1_result = await collect(client1, cursors={"notifications": "0"})
+
+    assert run1_result.items == []
+    assert run1_result.cursor_updates.get(("x", "posts:1")) == str(seed_ts)
+
+    older_id = _id_for_timestamp(seed_ts - 1000)
+    newer_id = _id_for_timestamp(seed_ts + 1000)
+    page2 = _page().add_bell("n2", 600, from_user_ids=["1"], screen_names={"1": "alice"}).build()
+    gql2 = FakeGqlClient(
+        {
+            "1": _user_tweets_response(
+                [_legacy_tweet(older_id, "already-seen"), _legacy_tweet(newer_id, "genuinely new")]
+            )
+        }
+    )
+    client2 = FakeXClient(pages=[page2], gql=gql2)
+
+    run2_result = await collect(
+        client2,
+        cursors={
+            "notifications": "0",
+            "posts:1": run1_result.cursor_updates[("x", "posts:1")],
+        },
+    )
+
+    assert [i.source_id for i in run2_result.items] == [newer_id]
