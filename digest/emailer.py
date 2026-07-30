@@ -32,7 +32,25 @@ _HTML_TEMPLATE = """\
 <html>
 <head>
 <meta charset="utf-8">
+<!-- Apple/iOS Mail does NOT evaluate `@media (prefers-color-scheme: dark)`
+     at all unless the document explicitly opts in via these two meta tags
+     -- without them the dark-mode block below is simply never applied, and
+     Apple Mail may instead apply its OWN automatic color-inversion heuristic
+     on top of the light-mode-only styles, which can look worse than doing
+     nothing. `color-scheme` is the standard (also used by Gmail and other
+     clients); `supported-color-schemes` is Apple's own legacy name for the
+     same thing, kept for older Mail versions that only recognize that one.
+     Both are required in practice; neither alone is reliably sufficient
+     across Apple Mail versions. -->
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
 <style>
+  /* Mirrors the two meta tags above at the CSS level -- some clients (and
+     the in-app Mail preview pane specifically) key dark-mode opt-in off
+     this property on the root element rather than (or in addition to) the
+     <meta> tags. Belt-and-suspenders for the same Apple Mail opt-in
+     requirement described above. */
+  :root {{ color-scheme: light dark; }}
   body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     max-width: 42em;
@@ -150,12 +168,16 @@ def _enforce_anchor_provenance(sanitized_html: str, allowed_urls: Collection[str
     return result
 
 
-# Matches a single `<h3>...</h3>` subgroup heading in nh3-sanitized output.
-# prompts/digest.md's "grouped by Telegram group / X topic" instruction
-# always renders a subgroup heading as either the bare source name
-# ("Telegram", "X") or the source name followed by " -- <group/topic name>"
-# (e.g. "Telegram -- Homelab Hungary"), so matching the whole heading and
-# inspecting its text is enough to recognize both forms.
+# Matches a single `<h3>...</h3>` heading in nh3-sanitized output. Under the
+# CURRENT prompts/digest.md contract, "## Worth knowing" h3 headings name a
+# TOPIC the model chose (e.g. "Markets", "Geopolitics") and never start with
+# "Telegram"/"X" -- so _inject_source_badges below is a no-op in normal
+# operation now. It stays wired in as a harmless fallback in case the model
+# ever reverts to the OLDER source-grouped heading form this regex/function
+# pair was written for (a bare source name, or the source name followed by
+# " -- <group/topic name>", e.g. "Telegram -- Homelab Hungary") -- current
+# per-bullet source attribution is handled instead by the inline
+# `**[Source/Name]**` tags _inject_inline_source_tags converts.
 _H3_HEADING_RE = re.compile(r"<h3>(.*?)</h3>")
 
 # Inline-styled chip spans injected in place of the literal "Telegram"/"X"
@@ -173,6 +195,20 @@ _X_CHIP_HTML = (
     "border-radius:4px;padding:1px 6px;margin-right:6px;"
     'font-size:0.75em;font-weight:bold;">𝕏</span>'
 )
+
+
+def _chip_html_for_source(source: str) -> str:
+    """Return the constant chip markup for `source` ("Telegram" or "X").
+
+    Shared by _inject_source_badges (h3 subgroup headings, the legacy
+    source-grouped contract) and _inject_inline_source_tags (per-bullet
+    inline tags, the current topic-grouped contract) so both places render
+    the IDENTICAL chip -- same brand color, same padding/border-radius --
+    rather than each hand-rolling its own copy of the inline styles.
+    """
+    if source == "Telegram":
+        return _TELEGRAM_CHIP_HTML
+    return _X_CHIP_HTML  # the only other value _INLINE_SOURCE_TAG_RE/_H3_HEADING_RE match
 
 
 def _inject_source_badges(sanitized_html: str) -> str:
@@ -209,6 +245,62 @@ def _inject_source_badges(sanitized_html: str) -> str:
         return match.group(0)
 
     return _H3_HEADING_RE.sub(_replace, sanitized_html)
+
+
+# Matches an inline per-bullet source tag the topic-grouped "## Worth
+# knowing" contract emits (prompts/digest.md): `**[Telegram/<chat_title>]**`
+# or `**[X/@<handle>]**`, markdown emphasis around a `[Source/Name]` bracket
+# that python-markdown renders as `<strong>[Source/Name]</strong>`. A bullet
+# confirmed by multiple sources carries several of these tags in a row,
+# space-separated -- re.sub's default (replace all non-overlapping matches,
+# left to right) converts every one of them, not just the first.
+#
+# Only the two literal source names this codebase actually collects from
+# ("Telegram", "X") are recognized. Anything else -- an invented
+# `[Slack/foo]`, say -- is left completely untouched: there is no third
+# chip color/glyph to render it with, and inventing one would misleadingly
+# imply Slack is a source this digest collects from.
+_INLINE_SOURCE_TAG_RE = re.compile(r"<strong>\[(Telegram|X)/([^\]]{1,80})\]</strong>")
+
+
+def _inject_inline_source_tags(sanitized_html: str) -> str:
+    """Turn an inline `**[Telegram/<name>]**` / `**[X/<handle>]**` bullet tag into a chip.
+
+    The current "## Worth knowing" contract groups items by TOPIC, not
+    source (prompts/digest.md), so the per-subgroup h3 heading
+    _inject_source_badges targets no longer identifies an individual
+    bullet's source -- and a bullet merging several sources' reports of the
+    same story has no single h3 to live under at all. The model instead
+    tags each bullet inline, one `**[Source/Name]**` marker per contributing
+    source, right at the start of the bullet text.
+
+    MUST run on nh3's OUTPUT, never before sanitization -- same reason as
+    _inject_source_badges: nh3's tag allowlist (_ALLOWED_TAGS) has no
+    `span`, so a `<span>` written into the markdown pre-sanitization would
+    just be stripped as an unrecognized tag. This function only ever injects
+    OUR OWN constant markup (the chip templates, via _chip_html_for_source)
+    around text nh3 already sanitized -- it never re-parses or re-emits
+    anything attacker-controlled -- so, like the other cosmetic passes
+    here, there is nothing for hostile input to subvert.
+
+    Only a `<strong>` whose ENTIRE content is exactly `[Telegram/...]` or
+    `[X/...]` is converted. Any other `<strong>` -- genuine emphasis inside
+    a mini-brief, or a tag naming a source this codebase doesn't collect
+    from -- is left completely untouched, matching _inject_source_badges'
+    same conservative default of "not a recognized source name -> don't
+    touch it."
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        source, name = match.group(1), match.group(2)
+        chip = _chip_html_for_source(source)
+        return (
+            f"{chip}"
+            '<span style="color:#6e7781;font-size:0.85em;margin-right:6px;">'
+            f"{name}</span>"
+        )
+
+    return _INLINE_SOURCE_TAG_RE.sub(_replace, sanitized_html)
 
 
 # Matches the leading `<p>` paragraph if (and only if) it starts with the
@@ -337,17 +429,20 @@ def render_html(body_md: str, allowed_urls: Collection[str]) -> str:
        text gets auto-linkified by the recipient's mail client with no
        renderer in between for this layer to inspect.
 
-    After the security-critical passes above, three purely cosmetic passes
+    After the security-critical passes above, four purely cosmetic passes
     run over the same nh3-sanitized HTML: _inject_source_badges (Telegram/X
-    chips on subgroup h3 headings), _wrap_banner_paragraph (styles the
-    collector-failure banner, if present), and _highlight_tldr_paragraph
-    (styles the TL;DR paragraph, if present). All three follow the same
-    safety pattern as _enforce_anchor_provenance -- they only ever inject
-    this module's own constant markup around text nh3 already sanitized,
-    never re-parse or re-emit attacker-controlled HTML -- and each is a
-    no-op when its target isn't present, so none of them can raise or
-    change behavior for a digest that doesn't happen to contain a banner,
-    a TL;DR paragraph, or a Telegram/X subgroup heading.
+    chips on a legacy subgroup h3 heading, if the model still emits one),
+    _inject_inline_source_tags (the same chips on the current topic-grouped
+    contract's per-bullet inline `**[Source/Name]**` tags),
+    _wrap_banner_paragraph (styles the collector-failure banner, if
+    present), and _highlight_tldr_paragraph (styles the TL;DR paragraph, if
+    present). All four follow the same safety pattern as
+    _enforce_anchor_provenance -- they only ever inject this module's own
+    constant markup around text nh3 already sanitized, never re-parse or
+    re-emit attacker-controlled HTML -- and each is a no-op when its target
+    isn't present, so none of them can raise or change behavior for a
+    digest that doesn't happen to contain a banner, a TL;DR paragraph, a
+    Telegram/X subgroup heading, or an inline source tag.
     """
     escaped = body_md.replace("&", "&amp;").replace("<", "&lt;")
     body_html = markdown.markdown(escaped)
@@ -360,6 +455,7 @@ def render_html(body_md: str, allowed_urls: Collection[str]) -> str:
     )
     sanitized = _enforce_anchor_provenance(sanitized, allowed_urls)
     sanitized = _inject_source_badges(sanitized)
+    sanitized = _inject_inline_source_tags(sanitized)
     sanitized = _wrap_banner_paragraph(sanitized)
     sanitized = _highlight_tldr_paragraph(sanitized)
     return _HTML_TEMPLATE.format(body=sanitized)

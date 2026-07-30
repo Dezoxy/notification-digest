@@ -20,37 +20,54 @@ of omitting the section.
    line per item, no elaboration — this is a to-do list to scan, not
    reading material. If there is nothing that needs attention, write
    `- nothing` under this heading.
-2. `## Worth knowing` — grouped by Telegram group / X topic. Each group MUST
-   be introduced by an h3 heading line. For a Telegram item, use that item's
-   `chat_title` field VERBATIM: `### Telegram — <chat_title>`. If an item's
-   `chat_title` is null (no group name is known for that chat), write
-   `### Telegram` alone — NEVER invent a group name, and NEVER print the
-   raw numeric `chat_id` in its place. For X items, use `### X` or
-   `### X — <topic>`. Always `### ` headings — never bold text or plain
-   lines — the email renderer keys its source styling off these h3
-   headings. Each item
-   under a heading is a self-sufficient mini-brief of 2–4 sentences
-   carrying the ACTUAL
-   information: the key facts, numbers, names, decisions, or outcomes
-   pulled from the messages themselves. Never write teaser phrasing like
+2. `## Worth knowing` — grouped by TOPIC, not by source. Choose topic names
+   from what the window actually contains (e.g. `### Markets`,
+   `### Geopolitics`, `### Crypto regulation`) and introduce every topic
+   with an `### ` heading — never bold text or a plain line. Order topics
+   most-important-first, and order items within each topic
+   most-important-first: the single biggest story in the whole window
+   should be the first item under the first topic.
+
+   Every item is a bullet that starts with a source tag in exactly this
+   form, so the renderer can style it: `**[Telegram/<chat_title>]**` for a
+   Telegram item, using that item's `chat_title` field VERBATIM (if
+   `chat_title` is null, write `**[Telegram]**` alone — NEVER invent a group
+   name, and NEVER print the raw numeric `chat_id` in its place), or
+   `**[X/@<handle>]**` for an X item.
+
+   Merge duplicates: the owner's Telegram channels and X accounts often
+   cover the same story, so when several items — from the same source or
+   different sources — report the SAME story, do not list them separately.
+   Emit ONE bullet carrying every contributing source's tag, space-
+   separated, e.g. `**[Telegram/CryptoWorldNews]** **[X/@BitcoinNews]** ...`,
+   and summarize the union of the facts across them. Never repeat the same
+   story as separate bullets, and never repeat it under more than one topic.
+
+   After the source tag(s), each bullet is a self-sufficient mini-brief of
+   2–4 sentences carrying the ACTUAL information: the key facts, numbers,
+   names, decisions, or outcomes pulled from the messages themselves (the
+   union of the facts, when merging). Never write teaser phrasing like
    "someone shared a link about X" or "there was a discussion about Y" —
    the reader must learn what was actually said or decided without opening
    the link. The deep link is for digging deeper (full thread, replies,
    the original post) — it is never the only place the substance lives.
 
-   When multiple messages in the window are about the same subject (e.g. a
-   long back-and-forth in a group), do not list them as separate items:
-   merge them into ONE item summarizing the state or outcome of that
-   discussion, and link the single most representative message (the one
-   that best captures the outcome, or the last substantive message in the
-   thread).
+   EVERY bullet must be linked as `[text](url)`, using that item's `url`
+   field VERBATIM — never reconstruct, guess, or take a URL from the
+   item's text. When a bullet merges multiple sources, add exactly one
+   link, to the single most substantive source (the one with the most
+   facts, or the clearest statement of the outcome) — never add more than
+   one link to the same bullet. If there is nothing worth knowing, write
+   `- nothing` under this heading.
 
-   EVERY item must be linked as `[text](url)`, using that item's
-   `url` field VERBATIM — never reconstruct, guess, or take a URL from the
-   item's text. If there is nothing worth knowing, write `- nothing` under
-   this heading.
+   Low-signal items — price-only ticks, reaction-only messages, pure
+   promo/ads — are NOT bullets here: fold them into the `## Noise skipped`
+   count below instead, along with any other duplicate reports that were
+   merged away rather than kept as their own bullet.
 3. `## Noise skipped` — one line describing what was filtered and roughly
-   how much. If nothing was filtered, write `- nothing` under this heading.
+   how much, e.g. "31 items folded: routine price ticks, duplicate reposts,
+   3 promos." If nothing was filtered, write `- nothing` under this
+   heading.
 
 {{COLLECTOR_STATUS}}
 

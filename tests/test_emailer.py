@@ -7,6 +7,7 @@ import pytest
 import digest.emailer as emailer_mod
 from digest.emailer import (
     _highlight_tldr_paragraph,
+    _inject_inline_source_tags,
     _inject_source_badges,
     _wrap_banner_paragraph,
     archive,
@@ -45,6 +46,39 @@ def test_render_html_wraps_in_full_document_with_readable_style():
 
     assert "<html>" in html
     assert "max-width: 42em" in html
+
+
+# --- render_html: iOS/Apple Mail dark-mode opt-in (highest-value fix) ---
+
+
+def test_render_html_declares_color_scheme_meta_tags_for_ios_mail():
+    # Apple/iOS Mail ignores `@media (prefers-color-scheme: dark)` entirely
+    # unless the document opts in via these two meta tags -- without them
+    # the dark-mode block never activates on the owner's phone.
+    html = render_html("hello", allowed_urls=set())
+
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert '<meta name="supported-color-schemes" content="light dark">' in html
+
+
+def test_render_html_declares_root_color_scheme_in_style_block():
+    html = render_html("hello", allowed_urls=set())
+
+    assert ":root { color-scheme: light dark; }" in html
+
+
+def test_render_html_existing_dark_mode_overrides_unchanged_by_color_scheme_addition():
+    # The color-scheme opt-in must be purely additive: the existing
+    # prefers-color-scheme overrides for body/link/h2/.tldr/.banner must
+    # still all be present, unchanged, alongside it.
+    html = render_html("hello", allowed_urls=set())
+
+    dark_block = html[html.index("prefers-color-scheme: dark") :]
+    assert "background-color: #1a1a1a !important; color: #e8e8e8 !important;" in dark_block
+    assert "color: #6ea8fe !important;" in dark_block
+    assert "border-bottom-color: #3a3a3a !important;" in dark_block
+    assert "background:#2b2b2b !important; color:#e8e8e8 !important;" in dark_block
+    assert "background:#4d3800 !important; color:#ffe69c !important;" in dark_block
 
 
 def test_render_html_strips_img_from_markdown_image_syntax():
@@ -180,6 +214,68 @@ def test_inject_source_badges_ignores_h2_headings():
     html = "<h2>Telegram</h2>"
 
     result = _inject_source_badges(html)
+
+    assert result == html
+
+
+# --- _inject_inline_source_tags (current topic-grouped contract) ---
+
+
+def test_inject_inline_source_tags_converts_telegram_tag():
+    html = "<li><strong>[Telegram/CryptoWorldNews]</strong> BTC rallied 8%.</li>"
+
+    result = _inject_inline_source_tags(html)
+
+    assert "background-color:#229ED9" in result
+    assert ">Telegram</span>" in result
+    assert "CryptoWorldNews</span>" in result
+    assert "[Telegram/CryptoWorldNews]" not in result
+    assert "BTC rallied 8%." in result
+
+
+def test_inject_inline_source_tags_converts_x_tag():
+    html = "<li><strong>[X/@BitcoinNews]</strong> announcement of a new release.</li>"
+
+    result = _inject_inline_source_tags(html)
+
+    assert "background-color:#000000" in result
+    assert "𝕏</span>" in result
+    assert "@BitcoinNews</span>" in result
+    assert "[X/@BitcoinNews]" not in result
+
+
+def test_inject_inline_source_tags_converts_multiple_tags_on_one_bullet():
+    # A story confirmed by multiple sources carries several tags,
+    # space-separated -- all of them must convert, not just the first.
+    html = (
+        "<li><strong>[Telegram/CryptoWorldNews]</strong> "
+        "<strong>[X/@BitcoinNews]</strong> merged story about the rally.</li>"
+    )
+
+    result = _inject_inline_source_tags(html)
+
+    assert "background-color:#229ED9" in result
+    assert "background-color:#000000" in result
+    assert "CryptoWorldNews</span>" in result
+    assert "@BitcoinNews</span>" in result
+    assert "[Telegram/" not in result
+    assert "[X/" not in result
+
+
+def test_inject_inline_source_tags_leaves_non_source_strong_untouched():
+    html = "<li><strong>important</strong> regular emphasis in a mini-brief.</li>"
+
+    result = _inject_inline_source_tags(html)
+
+    assert result == html
+
+
+def test_inject_inline_source_tags_leaves_unknown_source_untouched():
+    # No third chip color/glyph exists for a source this codebase doesn't
+    # collect from -- an invented tag must survive as plain text.
+    html = "<li><strong>[Slack/foo]</strong> not a real source.</li>"
+
+    result = _inject_inline_source_tags(html)
 
     assert result == html
 
@@ -336,6 +432,50 @@ def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenanc
     assert "phishing attempt" in html
     # Dark-mode media query present in the document.
     assert "prefers-color-scheme: dark" in html
+
+
+def test_render_html_integration_new_topic_grouped_merged_source_format():
+    # Realistic new-format body: topic h3 headings (not source headings),
+    # a merged multi-source bullet, a single-source bullet, TL;DR, and the
+    # noise-folded count line -- must all coexist with anchor provenance.
+    body_md = (
+        "**TL;DR:** Markets rallied on ETF inflows and a new crypto bill "
+        "advanced in committee.\n\n"
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n\n"
+        "### Markets\n\n"
+        "- **[Telegram/CryptoWorldNews]** **[X/@BitcoinNews]** "
+        "[read the thread](https://x.com/foo/status/1): BTC rallied 8% to "
+        "$70k after strong ETF inflow data, both sources confirming the "
+        "move and citing the same $1.2B inflow figure.\n\n"
+        "### Geopolitics\n\n"
+        "- **[Telegram/GeoNews]** [see the report](https://t.me/c/999/1): "
+        "talks resumed between the two delegations in Geneva; no ceasefire "
+        "agreed yet, next session scheduled for Friday.\n\n"
+        "## Noise skipped\n\n"
+        "- 31 items folded: routine price ticks, duplicate reposts, 3 "
+        "promos.\n"
+    )
+    allowed_urls = {"https://x.com/foo/status/1", "https://t.me/c/999/1"}
+
+    html = render_html(body_md, allowed_urls)
+
+    # Topic h3 headings render as plain headings (not source chips).
+    assert "<h3>Markets</h3>" in html
+    assert "<h3>Geopolitics</h3>" in html
+    # Both chip colors present, from the inline per-bullet tags.
+    assert "background-color:#229ED9" in html
+    assert "background-color:#000000" in html
+    assert "CryptoWorldNews</span>" in html
+    assert "@BitcoinNews</span>" in html
+    assert "GeoNews</span>" in html
+    # Allowlisted links survive as real anchors.
+    assert 'href="https://x.com/foo/status/1"' in html
+    assert 'href="https://t.me/c/999/1"' in html
+    # TL;DR highlight and dark-mode opt-in still present.
+    assert "background-color:#f0f0f0" in html
+    assert "prefers-color-scheme: dark" in html
+    assert '<meta name="color-scheme" content="light dark">' in html
 
 
 def test_render_html_dark_mode_block_has_tldr_and_banner_class_overrides():

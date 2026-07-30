@@ -699,6 +699,27 @@ def test_validate_output_two_spaces_then_tab_reaching_column_four_is_skipped():
     validate_output(markdown_text)  # must not raise (exactly one real heading each)
 
 
+def test_validate_output_passes_with_new_topic_grouped_merged_source_format():
+    # validate_output only checks the three required "## " section
+    # headings/order -- confirm the current topic-grouped, cross-source-
+    # merged "## Worth knowing" shape (prompts/digest.md) still satisfies
+    # that contract: topic h3 headings instead of source h3 headings, and
+    # inline `**[Source/Name]**` bullet tags instead of an h3-per-source.
+    markdown_text = (
+        "**TL;DR:** Markets rallied on ETF inflows.\n\n"
+        "## Needs attention\n- nothing\n\n"
+        "## Worth knowing\n\n"
+        "### Markets\n\n"
+        "- **[Telegram/CryptoWorldNews]** **[X/@BitcoinNews]** "
+        "[read](https://x.com/foo/status/1): BTC rallied 8% to $70k.\n\n"
+        "## Noise skipped\n\n"
+        "- 31 items folded: routine price ticks, duplicate reposts, 3 "
+        "promos.\n"
+    )
+
+    validate_output(markdown_text)  # must not raise
+
+
 def test_validate_output_duplicate_heading_raises_naming_it():
     markdown_text = (
         "## Needs attention\n- nothing\n\n"
