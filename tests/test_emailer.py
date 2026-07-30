@@ -7,8 +7,6 @@ import pytest
 import digest.emailer as emailer_mod
 from digest.emailer import (
     _highlight_tldr_paragraph,
-    _inject_inline_source_tags,
-    _inject_source_badges,
     _wrap_banner_paragraph,
     archive,
     render_html,
@@ -157,129 +155,6 @@ def test_render_html_keeps_allowlisted_url_containing_ampersand_after_entity_rou
     assert "see it</a>" in html
 
 
-# --- _inject_source_badges ---
-
-
-def test_inject_source_badges_wraps_telegram_group_heading():
-    html = "<h3>Telegram — Homelab Hungary</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert "background-color:#229ED9" in result
-    assert ">Telegram</span>" in result
-    assert "— Homelab Hungary</h3>" in result
-    # The literal "Telegram" prefix must not also survive un-chipped outside
-    # the span (it should appear exactly once, inside the chip).
-    assert result.count("Telegram") == 1
-
-
-def test_inject_source_badges_wraps_bare_x_heading():
-    html = "<h3>X</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert "background-color:#000000" in result
-    assert "𝕏</span>" in result
-    assert result.endswith("</h3>")
-
-
-def test_inject_source_badges_wraps_x_heading_with_topic():
-    html = "<h3>X — Some Topic</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert "𝕏</span>" in result
-    assert "— Some Topic</h3>" in result
-
-
-def test_inject_source_badges_leaves_non_source_h3_untouched():
-    html = "<h3>Random Section</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert result == html
-
-
-def test_inject_source_badges_does_not_match_prefix_that_is_a_different_word():
-    # "Xavier" and "Telegramish" share a literal prefix with "X"/"Telegram"
-    # but are a different word entirely -- must not get chipped.
-    html = "<h3>Xavier's update</h3><h3>Telegramish thing</h3>"
-
-    result = _inject_source_badges(html)
-
-    assert result == html
-
-
-def test_inject_source_badges_ignores_h2_headings():
-    html = "<h2>Telegram</h2>"
-
-    result = _inject_source_badges(html)
-
-    assert result == html
-
-
-# --- _inject_inline_source_tags (current topic-grouped contract) ---
-
-
-def test_inject_inline_source_tags_converts_telegram_tag():
-    html = "<li><strong>[Telegram/CryptoWorldNews]</strong> BTC rallied 8%.</li>"
-
-    result = _inject_inline_source_tags(html)
-
-    assert "background-color:#229ED9" in result
-    assert ">Telegram</span>" in result
-    assert "CryptoWorldNews</span>" in result
-    assert "[Telegram/CryptoWorldNews]" not in result
-    assert "BTC rallied 8%." in result
-
-
-def test_inject_inline_source_tags_converts_x_tag():
-    html = "<li><strong>[X/@BitcoinNews]</strong> announcement of a new release.</li>"
-
-    result = _inject_inline_source_tags(html)
-
-    assert "background-color:#000000" in result
-    assert "𝕏</span>" in result
-    assert "@BitcoinNews</span>" in result
-    assert "[X/@BitcoinNews]" not in result
-
-
-def test_inject_inline_source_tags_converts_multiple_tags_on_one_bullet():
-    # A story confirmed by multiple sources carries several tags,
-    # space-separated -- all of them must convert, not just the first.
-    html = (
-        "<li><strong>[Telegram/CryptoWorldNews]</strong> "
-        "<strong>[X/@BitcoinNews]</strong> merged story about the rally.</li>"
-    )
-
-    result = _inject_inline_source_tags(html)
-
-    assert "background-color:#229ED9" in result
-    assert "background-color:#000000" in result
-    assert "CryptoWorldNews</span>" in result
-    assert "@BitcoinNews</span>" in result
-    assert "[Telegram/" not in result
-    assert "[X/" not in result
-
-
-def test_inject_inline_source_tags_leaves_non_source_strong_untouched():
-    html = "<li><strong>important</strong> regular emphasis in a mini-brief.</li>"
-
-    result = _inject_inline_source_tags(html)
-
-    assert result == html
-
-
-def test_inject_inline_source_tags_leaves_unknown_source_untouched():
-    # No third chip color/glyph exists for a source this codebase doesn't
-    # collect from -- an invented tag must survive as plain text.
-    html = "<li><strong>[Slack/foo]</strong> not a real source.</li>"
-
-    result = _inject_inline_source_tags(html)
-
-    assert result == html
-
-
 # --- _wrap_banner_paragraph ---
 
 
@@ -384,30 +259,44 @@ def test_highlight_tldr_paragraph_skips_past_a_leading_banner_paragraph():
     assert "<p>⚠ telegram collection failed this run</p>" in result
 
 
-# --- render_html: full integration of the visual-upgrade passes ---
+# --- render_html: full integration against a realistic BRIEFING body ---
 
 
-def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenance():
+def test_render_html_integration_realistic_briefing_body():
+    # Realistic body in the current prose-briefing shape (prompts/digest.md):
+    # a leading collector-failure banner, a TL;DR opener, several `## `
+    # story/topic sections with superscript-digit citations (no source
+    # chips, no h3 subgroups -- that contract is gone), a closing
+    # `## Also this window` prose section, and the closing italic line.
     body_md = (
         "⚠ telegram collection failed this run\n\n"
-        "**TL;DR:** Homelab discussion wrapped up, one X thread flagged for review.\n\n"
-        "## Needs attention\n\n"
-        "- [reply to Bob](https://t.me/c/123/1): confirm the maintenance window\n\n"
-        "## Worth knowing\n\n"
-        "### Telegram — Homelab Hungary\n\n"
-        "- [see the thread](https://t.me/c/123/2): the group agreed to move the "
-        "backup job to 3am after discussing disk contention.\n"
-        "- [phishing attempt](https://attacker.example/phish): someone posted a "
-        "suspicious link, not from an allowlisted item.\n\n"
-        "### X\n\n"
-        "- [see the post](https://x.com/foo/status/1): announcement of a new release.\n\n"
-        "## Noise skipped\n\n"
-        "- a handful of low-signal reaction messages were filtered.\n"
+        "**TL;DR:** A border incident drew most of the attention, and the "
+        "ASI Alliance group spent the window debating a token migration "
+        "with no resolution.\n\n"
+        "## Missile strike reported near the border\n\n"
+        "Local channels reported a strike near the border region"
+        "[¹](https://t.me/c/123/1), with casualty figures still "
+        "unconfirmed by independent accounts"
+        "[²](https://x.com/foo/status/1).\n\n"
+        "## ASI Alliance: token migration questions\n\n"
+        "The group spent most of the window debating the mechanics of the "
+        "token migration without reaching a conclusion"
+        "[³](https://t.me/c/123/2). One member also posted a suspicious "
+        "link[⁴](https://attacker.example/phish) that is not from an "
+        "allowlisted item.\n\n"
+        "## Also this window\n\n"
+        "A routine market update[⁵](https://t.me/c/123/3) and a minor "
+        "product announcement[⁶](https://x.com/foo/status/2) rounded out "
+        "the rest of the window.\n\n"
+        "*From 42 items; 30 were chatter, reactions and duplicate "
+        "reposts.*\n"
     )
     allowed_urls = {
         "https://t.me/c/123/1",
-        "https://t.me/c/123/2",
         "https://x.com/foo/status/1",
+        "https://t.me/c/123/2",
+        "https://t.me/c/123/3",
+        "https://x.com/foo/status/2",
     }
 
     html = render_html(body_md, allowed_urls)
@@ -417,65 +306,26 @@ def test_render_html_integration_all_visual_passes_coexist_with_anchor_provenanc
     assert "⚠ telegram collection failed this run" in html
     # TL;DR highlight applied.
     assert "background-color:#f0f0f0" in html
-    assert "Homelab discussion wrapped up" in html
-    # Telegram and X chips both present.
-    assert "background-color:#229ED9" in html
-    assert ">Telegram</span>" in html
-    assert "background-color:#000000" in html
-    assert "𝕏</span>" in html
-    # Allowed links survive as real anchors (anchor-provenance pass intact).
+    assert "A border incident drew most of the attention" in html
+    # Story/topic headings render as plain h2 -- no source chips of any kind.
+    assert "<h2>Missile strike reported near the border</h2>" in html
+    assert "<h2>ASI Alliance: token migration questions</h2>" in html
+    assert "<h2>Also this window</h2>" in html
+    assert "background-color:#229ED9" not in html
+    assert "background-color:#000000" not in html
+    # Allowlisted citations survive as real anchors.
     assert 'href="https://t.me/c/123/1"' in html
-    assert 'href="https://t.me/c/123/2"' in html
     assert 'href="https://x.com/foo/status/1"' in html
-    # The non-allowlisted link is unwrapped, never a live href.
+    assert 'href="https://t.me/c/123/2"' in html
+    assert 'href="https://t.me/c/123/3"' in html
+    assert 'href="https://x.com/foo/status/2"' in html
+    # A non-allowlisted citation is unwrapped, never a live href.
     assert "attacker.example" not in html
-    assert "phishing attempt" in html
+    assert "suspicious" in html
+    # Closing italic line survives.
+    assert "<em>From 42 items; 30 were chatter" in html
     # Dark-mode media query present in the document.
     assert "prefers-color-scheme: dark" in html
-
-
-def test_render_html_integration_new_topic_grouped_merged_source_format():
-    # Realistic new-format body: topic h3 headings (not source headings),
-    # a merged multi-source bullet, a single-source bullet, TL;DR, and the
-    # noise-folded count line -- must all coexist with anchor provenance.
-    body_md = (
-        "**TL;DR:** Markets rallied on ETF inflows and a new crypto bill "
-        "advanced in committee.\n\n"
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n\n"
-        "### Markets\n\n"
-        "- **[Telegram/CryptoWorldNews]** **[X/@BitcoinNews]** "
-        "[read the thread](https://x.com/foo/status/1): BTC rallied 8% to "
-        "$70k after strong ETF inflow data, both sources confirming the "
-        "move and citing the same $1.2B inflow figure.\n\n"
-        "### Geopolitics\n\n"
-        "- **[Telegram/GeoNews]** [see the report](https://t.me/c/999/1): "
-        "talks resumed between the two delegations in Geneva; no ceasefire "
-        "agreed yet, next session scheduled for Friday.\n\n"
-        "## Noise skipped\n\n"
-        "- 31 items folded: routine price ticks, duplicate reposts, 3 "
-        "promos.\n"
-    )
-    allowed_urls = {"https://x.com/foo/status/1", "https://t.me/c/999/1"}
-
-    html = render_html(body_md, allowed_urls)
-
-    # Topic h3 headings render as plain headings (not source chips).
-    assert "<h3>Markets</h3>" in html
-    assert "<h3>Geopolitics</h3>" in html
-    # Both chip colors present, from the inline per-bullet tags.
-    assert "background-color:#229ED9" in html
-    assert "background-color:#000000" in html
-    assert "CryptoWorldNews</span>" in html
-    assert "@BitcoinNews</span>" in html
-    assert "GeoNews</span>" in html
-    # Allowlisted links survive as real anchors.
-    assert 'href="https://x.com/foo/status/1"' in html
-    assert 'href="https://t.me/c/999/1"' in html
-    # TL;DR highlight and dark-mode opt-in still present.
-    assert "background-color:#f0f0f0" in html
-    assert "prefers-color-scheme: dark" in html
-    assert '<meta name="color-scheme" content="light dark">' in html
 
 
 def test_render_html_dark_mode_block_has_tldr_and_banner_class_overrides():

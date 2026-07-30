@@ -22,12 +22,6 @@ logger = logging.getLogger(__name__)
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "digest.md"
 
-# The three section headings the output contract in prompts/digest.md
-# requires, always, in this relative order, lowercased for case-insensitive
-# matching. These are the heading TEXT only (no "## " prefix) -- see
-# validate_output, which parses actual heading lines rather than substrings.
-_REQUIRED_HEADINGS = ("needs attention", "worth knowing", "noise skipped")
-
 # Bounds each item's text as it's embedded in the prompt payload. Telegram
 # messages can reach 4096 chars; at up to _MAX_ITEMS_PER_DIGEST (200) items
 # per run (digest/main.py), 200 x 2000 chars keeps the prompt comfortably
@@ -302,7 +296,7 @@ def _leading_whitespace_column(line: str) -> int:
     multiple-of-4 column (`col = col + 4 - (col % 4)`) -- the standard
     tab-stop expansion rule, identical to how a terminal renders a tab.
     Stops at the first character that is neither a space nor a tab. A line
-    like " \t## Needs attention" (one space, then a tab) reaches column 4
+    like " \t## Example" (one space, then a tab) reaches column 4
     from just two leading characters -- neither `line.startswith("\t")` nor
     `line[:4] == "    "` catches that, since the line starts with a space
     and its first four characters aren't four literal spaces, so a
@@ -320,43 +314,65 @@ def _leading_whitespace_column(line: str) -> int:
 
 
 def validate_output(markdown_text: str) -> None:
-    """Enforce that the digest markdown carries all three required section headings.
+    """Enforce that the briefing markdown carries at least one real `## ` heading.
 
     `run_claude` only guarantees non-empty stdout — a refusal ("I can't help
-    with that"), truncated prose, or output that silently drops a section
-    would otherwise pass through untouched. If that garbage reaches
-    `_deliver`, every item gets stamped with the digest id and, once SMTP
-    succeeds, the digest row is final: those items are lost to
+    with that") would otherwise pass through untouched. If that garbage
+    reaches `_deliver`, every item gets stamped with the digest id and, once
+    SMTP succeeds, the digest row is final: those items are lost to
     summarization forever. This check must run before anything is
     persisted, and it must raise SummarizeError on failure so the caller
     skips writing a digest row entirely -- with no row recorded, the next
     run re-selects and re-summarizes the same items instead of treating
     them as already handled.
 
-    A plain substring check (`heading in text.lower()`) is fooled by a
-    refusal that merely *mentions* the headings inline -- e.g. "I cannot
-    produce ## Needs attention, ## Worth knowing, or ## Noise skipped in
-    this case." contains all three substrings without a single real
-    heading line. So instead this parses actual heading LINES: a line
-    whose stripped form starts with exactly "## " (two hashes -- "###  "
-    subgroup headings are not h2 and are ignored). Each of the three
-    required sections must appear exactly once among those heading lines,
-    and in the fixed relative order given by _REQUIRED_HEADINGS. Unknown
-    extra h2 headings are allowed.
+    The prompt's contract (prompts/digest.md) used to mandate three fixed,
+    always-present section headings in a fixed order; this function used to
+    hard-gate exactly that. That contract is gone: the current briefing
+    format is free-form prose whose section headings are chosen per-run from
+    whatever the window actually contains (an event's own name, a group's
+    name, "## Also this window", ...) -- there is no fixed heading text left
+    to check for. Hard-gating stylistic compliance (section names, counts,
+    ordering, word budget, citation density, ...) against a model that can
+    legitimately vary its wording every run is exactly the failure mode this
+    repo already lived through once (see the old three-heading contract this
+    replaces, and its git history): when the model drifts from a hard-gated
+    stylistic template, retries loop forever instead of shipping something
+    useful, because there is no guarantee ANY rerun converges on the exact
+    template text. So this gate is now deliberately MINIMAL and STRUCTURAL
+    only -- it enforces the one property a legitimate briefing can never
+    fail to have (at least one real markdown heading) and nothing about the
+    heading's text, count, or position. Everything about quality --
+    "TL;DR opens the briefing", "at most ~8 sections", "roughly 900 words",
+    the citation format -- lives in the prompt as an instruction to the
+    model, not as a raising validator here; see summarize()'s soft checks
+    for the two cases (missing TL;DR, zero citations) worth a log line
+    without holding the whole run hostage over a nicety.
 
-    Only the heading names are checked, case-insensitively -- never the
-    error message includes the offending output itself, since it may
-    contain scraped Telegram/X message content (see SummarizeError).
+    A plain substring check (`"## " in text`) is fooled by a refusal that
+    merely *mentions* a heading-shaped string inline -- e.g. "I cannot
+    produce a ## heading in this case." contains the substring without a
+    single real heading line. So instead this parses actual heading LINES: a
+    line whose stripped form starts with exactly "## " (two hashes -- "### "
+    subgroup headings are not h2 and don't count). At least one such line
+    must exist; if none does (a bare refusal, empty prose, or any other
+    output with zero real h2 headings), this raises. This is still exactly
+    what stops a bare refusal like "I can't help with that" from passing as
+    a real briefing -- the whole point of keeping a gate at all.
+
+    The error message never includes the offending output itself, since it
+    may contain scraped Telegram/X message content (see SummarizeError).
 
     Links are deliberately NOT validated here: a window with nothing but
-    noise legitimately produces zero `[text](url)` links in "Worth
-    knowing", and that is correct output, not a contract violation.
+    chatter legitimately produces zero citation links, and that is correct
+    output, not a contract violation (see summarize()'s soft warning for
+    this case instead).
 
     Fenced code blocks are also excluded from heading line detection: a
-    refusal can legitimately quote the required heading text inside a
-    fenced block (e.g. "here's the template you asked about:\n```
-    \n## Needs attention\n...") and that is not a real section -- it is
-    example text sitting inside a code fence. Per CommonMark, a fence can
+    refusal can legitimately quote heading-shaped text inside a fenced block
+    (e.g. "here's the template you asked about:\n```\n## Example\n...") and
+    that is not a real section -- it is example text sitting inside a code
+    fence. Per CommonMark, a fence can
     be delimited by three-or-more backticks OR three-or-more tildes, and a
     fence only closes on a line starting with three-or-more of the SAME
     delimiter character that opened it -- a ``` line inside a ~~~ fence
@@ -379,8 +395,8 @@ def validate_output(markdown_text: str) -> None:
     fence delimiter) may be indented at most 3 columns -- a line whose
     leading whitespace reaches column 4 or more is an indented code block
     instead. A refusal that pads a template with 4-space indentation (e.g.
-    "    ## Needs attention") is therefore code content, not a real
-    heading, and must not satisfy the contract.
+    "    ## Example") is therefore code content, not a real heading, and
+    must not satisfy the contract.
 
     Column, not character count, is what CommonMark actually measures: a
     tab does not advance by a literal 4 columns, it advances to the NEXT
@@ -435,21 +451,8 @@ def validate_output(markdown_text: str) -> None:
         if stripped.startswith("## "):
             heading_lines.append(stripped[3:].strip().lower())
 
-    missing = [heading for heading in _REQUIRED_HEADINGS if heading not in heading_lines]
-    duplicated = [
-        heading for heading in _REQUIRED_HEADINGS if heading_lines.count(heading) > 1
-    ]
-    if missing or duplicated:
-        parts = []
-        if missing:
-            parts.append(f"missing required section(s): {', '.join(missing)}")
-        if duplicated:
-            parts.append(f"duplicated section(s): {', '.join(duplicated)}")
-        raise SummarizeError("digest output " + "; ".join(parts))
-
-    positions = [heading_lines.index(heading) for heading in _REQUIRED_HEADINGS]
-    if positions != sorted(positions):
-        raise SummarizeError("digest output sections out of order")
+    if not heading_lines:
+        raise SummarizeError("digest output has no real '## ' heading line")
 
 
 # Markdown inline link: `[text](url)`, optionally with a title
@@ -848,6 +851,18 @@ def summarize(
     so the caller never persists a digest for content that failed the
     output contract.
 
+    The output is now a free-form prose BRIEFING (prompts/digest.md), not
+    the old fixed three-section list. validate_output only enforces the one
+    structural property a legitimate briefing can never fail to have (at
+    least one real `## ` heading) -- everything else about quality is a
+    SOFT check here: logged if missed, never raised, because the model's
+    exact wording legitimately varies run to run and hard-gating wording
+    against a varying model is what caused the old three-heading contract's
+    retry loops. Two soft checks run on the raw model output before link
+    repair: a missing `**TL;DR:` opener (degrades one email cosmetically),
+    and zero citation links (a window of pure chatter can legitimately cite
+    nothing, so this must never raise).
+
     enforce_link_allowlist runs after validate_output and before the banner:
     every link in the model's output is checked against the URLs of the
     items it was actually given, and any link that doesn't match one
@@ -867,14 +882,22 @@ def summarize(
     prompt = build_prompt(items, failed_sources)
     output = run_claude(prompt, model, timeout_seconds)
     validate_output(output)
-    # The TL;DR opener is checked SOFTLY, unlike the section headings: a
+    # The TL;DR opener is checked SOFTLY, unlike the heading requirement: a
     # missing TL;DR degrades one email cosmetically, while raising here
     # would hold every collected item hostage for a full scheduling cycle
     # over a nicety (the banner saga proved hard-gating model compliance
-    # loops when the model persistently misbehaves). Structural failures
-    # (missing sections) stay hard; quality misses log and ship.
+    # loops when the model persistently misbehaves). The one structural
+    # failure (no real heading at all) stays hard; quality misses log and
+    # ship.
     if not output.lstrip().startswith("**TL;DR:"):
         logger.warning("digest output missing the TL;DR opener — sending anyway")
+    # Same soft-check reasoning for citations: a window that was pure
+    # chatter can legitimately produce zero `[text](url)` links (nothing met
+    # the citation bar), and that is correct output, not a bug -- so this
+    # only logs, checked on the raw model output before enforce_link_allowlist
+    # potentially strips any non-allowlisted link down to plain text below.
+    if not _MARKDOWN_LINK_RE.search(output):
+        logger.warning("digest output contains no citation links — sending anyway")
     output = enforce_link_allowlist(output, allowed_urls={item.url for item in items})
     if failed_sources:
         banner = "".join(

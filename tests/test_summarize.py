@@ -468,87 +468,93 @@ def test_run_claude_error_never_includes_the_prompt(monkeypatch):
 
 
 # --- validate_output ---
+#
+# The contract this gate enforces shrank to one property: at least one real
+# `## ` heading line (fence-aware, indent-aware). The three-specific-
+# headings/exactly-once/fixed-order requirements are gone -- the briefing
+# format (prompts/digest.md) chooses its own heading text per run, so there
+# is no fixed heading text left to check for, and hard-gating something a
+# compliant model can legitimately vary is exactly what caused this gate's
+# predecessor to loop forever on persistent (but harmless) stylistic drift.
+# All the fence-/indentation-tracking machinery below is unchanged from the
+# old three-heading gate and is exercised exactly as thoroughly here -- only
+# the pass/fail verdict at the end of each scenario has been updated to the
+# new, thinner rule.
 
 
-def test_validate_output_passes_with_all_three_headings_any_casing():
+def test_validate_output_passes_with_a_single_real_heading():
+    validate_output("## Something\n- nothing\n")  # must not raise
+
+
+def test_validate_output_passes_with_prose_briefing_several_sections():
+    # A realistic BRIEFING-format output (prompts/digest.md): a TL;DR
+    # opener, several `## ` story/topic sections with superscript-digit
+    # citations, an `## Also this window` catch-all, and the closing
+    # italic line -- must satisfy the (now minimal) contract.
     markdown_text = (
-        "## Needs Attention\n- nothing\n\n"
-        "## worth knowing\n- nothing\n\n"
-        "## NOISE SKIPPED\n- nothing\n"
+        "**TL;DR:** Markets rallied on ETF inflows and a group debated a "
+        "token migration with no resolution.\n\n"
+        "## Missile strike reported near the border\n\n"
+        "Local channels reported a strike near the border"
+        "[¹](https://t.me/c/123/1).\n\n"
+        "## ASI Alliance: token migration questions\n\n"
+        "The group debated the mechanics of the migration without "
+        "reaching a conclusion[²](https://t.me/c/123/2).\n\n"
+        "## Also this window\n\n"
+        "A routine market update rounded out the rest of the window"
+        "[³](https://t.me/c/123/3).\n\n"
+        "*From 42 items; 30 were chatter, reactions and duplicate "
+        "reposts.*\n"
     )
 
     validate_output(markdown_text)  # must not raise
 
 
-def test_validate_output_refusal_names_all_three_missing_sections_without_refusal_text():
+def test_validate_output_bare_refusal_no_heading_raises():
+    # The whole point of keeping a gate at all: a bare refusal with zero
+    # real headings anywhere must still raise.
     refusal = "I can't help with summarizing this content."
 
     with pytest.raises(SummarizeError) as exc_info:
         validate_output(refusal)
 
     message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
     assert refusal not in message
     assert "I can't help" not in message
 
 
-def test_validate_output_missing_only_noise_skipped_names_just_that_section():
-    markdown_text = "## Needs attention\n- nothing\n\n## Worth knowing\n- nothing\n"
-
-    with pytest.raises(SummarizeError) as exc_info:
-        validate_output(markdown_text)
-
-    message = str(exc_info.value)
-    assert "noise skipped" in message
-    assert "needs attention" not in message
-    assert "worth knowing" not in message
+def test_validate_output_empty_string_raises():
+    with pytest.raises(SummarizeError):
+        validate_output("")
 
 
-def test_validate_output_inline_mention_refusal_is_not_fooled_by_substrings():
-    # A refusal that name-drops all three headings inline, with no actual
-    # "## " heading lines, must still be treated as missing all three --
-    # a naive `heading in text.lower()` substring check would pass this.
-    refusal = (
-        "I cannot produce ## Needs attention, ## Worth knowing, "
-        "or ## Noise skipped in this case."
-    )
+def test_validate_output_inline_mention_of_heading_shaped_text_is_not_fooled():
+    # A refusal that name-drops a "## "-shaped string inline, with no
+    # actual heading LINE (i.e. not at the start of a line), must still be
+    # treated as having no real heading -- a naive `"## " in text` substring
+    # check would pass this.
+    refusal = "I cannot produce a ## Needs attention section in this case."
 
     with pytest.raises(SummarizeError) as exc_info:
         validate_output(refusal)
 
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
+    assert refusal not in str(exc_info.value)
 
 
-def test_validate_output_passes_with_subgroup_h3_headings_inside_sections():
-    markdown_text = (
-        "## Needs attention\n### Subgroup A\n- nothing\n\n"
-        "## Worth knowing\n### Subgroup B\n- nothing\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
+def test_validate_output_passes_with_subgroup_h3_headings_alongside_a_real_h2():
+    markdown_text = "## A real section\n### Subgroup A\n- nothing\n"
 
     validate_output(markdown_text)  # must not raise
 
 
-def test_validate_output_sections_out_of_order_raises():
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Noise skipped\n- nothing\n\n"
-        "## Worth knowing\n- nothing\n"
-    )
-
-    with pytest.raises(SummarizeError, match="out of order"):
-        validate_output(markdown_text)
+# --- validate_output: fenced code blocks (backtick and tilde) ---
 
 
-def test_validate_output_fenced_refusal_raises_missing_all_three():
-    # A refusal that dumps the required headings inside a fenced code block
+def test_validate_output_refusal_with_headings_only_inside_fenced_block_raises():
+    # A refusal that dumps heading-shaped lines inside a fenced code block
     # (e.g. "here's the template you asked about") must not validate: those
-    # are not real heading lines, just quoted example text.
+    # are not real heading lines, just quoted example text, so this output
+    # has zero real headings anywhere.
     refusal = (
         "I can't do this. Here's the template you asked about:\n"
         "```\n## Needs attention\n## Worth knowing\n## Noise skipped\n```"
@@ -557,30 +563,69 @@ def test_validate_output_fenced_refusal_raises_missing_all_three():
     with pytest.raises(SummarizeError) as exc_info:
         validate_output(refusal)
 
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
+    assert refusal not in str(exc_info.value)
 
 
-def test_validate_output_fenced_block_quoting_heading_does_not_double_count():
-    # Three real headings plus a fenced block that happens to quote one of
-    # the heading strings verbatim must still pass -- the fenced occurrence
-    # is not a real heading line and must not trigger a duplicate error.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "```\n## Needs attention\n```\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
+def test_validate_output_real_heading_survives_alongside_fenced_block_quoting_heading_text():
+    # A real heading plus a fenced block that happens to quote heading-
+    # shaped text verbatim must still pass -- the fenced occurrence is not
+    # a real heading line.
+    markdown_text = "## Worth knowing\n```\n## Needs attention\n```\n- nothing\n"
 
     validate_output(markdown_text)  # must not raise
 
 
-def test_validate_output_indented_template_refusal_raises_missing_all_three():
+def test_validate_output_headings_inside_tilde_fence_raises():
+    # A ~~~-fenced refusal template must not satisfy the contract -- fence
+    # tracking must recognize tilde fences, not just backtick fences.
+    refusal = (
+        "I can't do this. Here's the template you asked about:\n"
+        "~~~\n## Needs attention\n## Worth knowing\n## Noise skipped\n~~~"
+    )
+
+    with pytest.raises(SummarizeError) as exc_info:
+        validate_output(refusal)
+
+    assert refusal not in str(exc_info.value)
+
+
+def test_validate_output_backtick_fence_inside_tilde_fence_does_not_close_early():
+    # A ``` line inside a ~~~ fence is content, not a closer (CommonMark:
+    # closing fence must match the opening delimiter character). This
+    # output has NO real heading anywhere -- every "## " line sits inside
+    # the still-open ~~~ fence. If a ``` line incorrectly closed a ~~~
+    # fence, "## Noise skipped" would wrongly be read as a real heading
+    # OUTSIDE the fence, and this would wrongly pass instead of raising.
+    markdown_text = "I can't do this.\n~~~\n```\n## Noise skipped\n~~~\n"
+
+    with pytest.raises(SummarizeError):
+        validate_output(markdown_text)
+
+
+def test_validate_output_real_heading_after_properly_closed_tilde_fence_is_recognized():
+    # Companion to the test above: once the ~~~ fence properly closes (via
+    # a matching ~~~ closer, not the nested ``` line), a real heading after
+    # it must still be recognized.
+    markdown_text = "~~~\n```\nexample content\n~~~\n\n## Needs attention\n- nothing\n"
+
+    validate_output(markdown_text)  # must not raise
+
+
+def test_validate_output_backtick_fences_still_work_unchanged():
+    # Existing backtick-fence behavior must be unaffected by tilde support.
+    markdown_text = "## Worth knowing\n```\n## Needs attention\n```\n- nothing\n"
+
+    validate_output(markdown_text)  # must not raise
+
+
+# --- validate_output: indentation (an indented-code "heading" doesn't count) ---
+
+
+def test_validate_output_indented_template_refusal_raises():
     # A refusal that pads a template with 4-space indentation (not a fenced
     # block) must not validate: per CommonMark, 4+ leading spaces makes
-    # these lines an indented code block, not real ATX headings.
+    # these lines an indented code block, not real ATX headings -- so this
+    # output has no real heading anywhere.
     refusal = (
         "I can't do this. Here's the template you asked about:\n"
         "    ## Needs attention\n"
@@ -591,23 +636,14 @@ def test_validate_output_indented_template_refusal_raises_missing_all_three():
     with pytest.raises(SummarizeError) as exc_info:
         validate_output(refusal)
 
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
+    assert refusal not in str(exc_info.value)
 
 
-def test_validate_output_indented_line_quoting_heading_does_not_double_count():
-    # Three real headings plus a 4-space-indented line inside a section
-    # body that happens to quote one of the heading strings verbatim must
-    # still pass -- the indented occurrence is code content, not a real
-    # heading line, and must not trigger a duplicate error.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "    ## Needs attention\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
+def test_validate_output_indented_line_quoting_heading_text_does_not_count():
+    # A real heading plus a 4-space-indented line that happens to quote a
+    # heading string verbatim must still pass -- the indented occurrence is
+    # code content, not a real heading line.
+    markdown_text = "## Worth knowing\n    ## Needs attention\n- nothing\n"
 
     validate_output(markdown_text)  # must not raise
 
@@ -624,13 +660,13 @@ def test_validate_output_headings_indented_up_to_three_spaces_still_count():
     validate_output(markdown_text)  # must not raise
 
 
-def test_validate_output_mixed_space_tab_indented_refusal_raises_missing_all_three():
+def test_validate_output_mixed_space_tab_indented_refusal_raises():
     # Finding A (P1): CommonMark expands a tab to the NEXT multiple-of-4
     # column, not a literal 4 columns. " \t" is one space (column 1) then a
     # tab that jumps straight to column 4 -- two characters, but column 4,
     # so this is indented code per CommonMark even though it doesn't match
     # `line.startswith("\t")` or `line[:4] == "    "`. A refusal padded this
-    # way must not satisfy the contract.
+    # way has no real heading anywhere and must raise.
     refusal = (
         "I can't do this. Here's the template you asked about:\n"
         " \t## Needs attention\n"
@@ -638,39 +674,26 @@ def test_validate_output_mixed_space_tab_indented_refusal_raises_missing_all_thr
         " \t## Noise skipped\n"
     )
 
-    with pytest.raises(SummarizeError) as exc_info:
+    with pytest.raises(SummarizeError):
         validate_output(refusal)
 
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
+
+def test_validate_output_tab_indented_heading_does_not_count():
+    # A line starting with a bare tab is indented code (column 4
+    # immediately) -- if it were the ONLY heading-shaped line, this must
+    # raise rather than count it.
+    markdown_text = "\t## Needs attention\n"
+
+    with pytest.raises(SummarizeError):
+        validate_output(markdown_text)
 
 
-def test_validate_output_tab_indented_heading_still_skipped():
-    # Regression: a line starting with a bare tab must still be treated as
-    # indented code (column 4 immediately), same as before this fix.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "\t## Needs attention\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
+def test_validate_output_four_space_indented_heading_does_not_count():
+    # Four literal leading spaces is indented code -- same as above.
+    markdown_text = "    ## Needs attention\n"
 
-    validate_output(markdown_text)  # must not raise (exactly one real heading each)
-
-
-def test_validate_output_four_space_indented_heading_still_skipped():
-    # Regression: four literal leading spaces must still be treated as
-    # indented code, same as before this fix.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "    ## Needs attention\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
-
-    validate_output(markdown_text)  # must not raise (exactly one real heading each)
+    with pytest.raises(SummarizeError):
+        validate_output(markdown_text)
 
 
 def test_validate_output_headings_indented_one_to_three_spaces_still_count_columns():
@@ -685,117 +708,24 @@ def test_validate_output_headings_indented_one_to_three_spaces_still_count_colum
     validate_output(markdown_text)  # must not raise
 
 
-def test_validate_output_two_spaces_then_tab_reaching_column_four_is_skipped():
+def test_validate_output_two_spaces_then_tab_reaching_column_four_does_not_count():
     # Finding A (P1): two spaces (column 2) then a tab jumps to column 4
-    # (2 + (4 - 2 % 4) = 4) -- also indented code, must be skipped just like
-    # the " \t" case.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "  \t## Needs attention\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
+    # (2 + (4 - 2 % 4) = 4) -- also indented code. If it were the ONLY
+    # heading-shaped line, this must raise rather than count it.
+    markdown_text = "  \t## Needs attention\n"
 
-    validate_output(markdown_text)  # must not raise (exactly one real heading each)
-
-
-def test_validate_output_passes_with_new_topic_grouped_merged_source_format():
-    # validate_output only checks the three required "## " section
-    # headings/order -- confirm the current topic-grouped, cross-source-
-    # merged "## Worth knowing" shape (prompts/digest.md) still satisfies
-    # that contract: topic h3 headings instead of source h3 headings, and
-    # inline `**[Source/Name]**` bullet tags instead of an h3-per-source.
-    markdown_text = (
-        "**TL;DR:** Markets rallied on ETF inflows.\n\n"
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n\n"
-        "### Markets\n\n"
-        "- **[Telegram/CryptoWorldNews]** **[X/@BitcoinNews]** "
-        "[read](https://x.com/foo/status/1): BTC rallied 8% to $70k.\n\n"
-        "## Noise skipped\n\n"
-        "- 31 items folded: routine price ticks, duplicate reposts, 3 "
-        "promos.\n"
-    )
-
-    validate_output(markdown_text)  # must not raise
-
-
-def test_validate_output_duplicate_heading_raises_naming_it():
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n- nothing\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
-
-    with pytest.raises(SummarizeError) as exc_info:
+    with pytest.raises(SummarizeError):
         validate_output(markdown_text)
 
-    message = str(exc_info.value)
-    assert "needs attention" in message
 
-
-# --- validate_output: tilde fences (Finding B) ---
-
-
-def test_validate_output_headings_inside_tilde_fence_raises_missing_all_three():
-    # A ~~~-fenced refusal template must not satisfy the contract -- fence
-    # tracking must recognize tilde fences, not just backtick fences.
-    refusal = (
-        "I can't do this. Here's the template you asked about:\n"
-        "~~~\n## Needs attention\n## Worth knowing\n## Noise skipped\n~~~"
-    )
-
-    with pytest.raises(SummarizeError) as exc_info:
-        validate_output(refusal)
-
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
-
-
-def test_validate_output_backtick_fence_inside_tilde_fence_does_not_close_early():
-    # A ``` line inside a ~~~ fence is content, not a closer (CommonMark:
-    # closing fence must match the opening delimiter character). If ```
-    # incorrectly closed the ~~~ fence, "## Noise skipped" below it would
-    # be read as a real heading and the real headings above would be
-    # miscounted -- construct output where that mismatch, if mishandled,
-    # would leak a heading or double-count, and assert it does not.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "~~~\n"
-        "```\n"
-        "## Noise skipped\n"  # still inside the ~~~ fence -- not a real heading
-        "~~~\n"
-        "\n"
-        "## Noise skipped\n- nothing\n"
-    )
-
-    validate_output(markdown_text)  # must not raise (exactly one real Noise skipped)
-
-
-def test_validate_output_backtick_fences_still_work_unchanged():
-    # Existing backtick-fence behavior must be unaffected by tilde support.
-    markdown_text = (
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n"
-        "```\n## Needs attention\n```\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
-
-    validate_output(markdown_text)  # must not raise
-
-
-# --- validate_output: closing-fence length/bareness (Finding B) ---
+# --- validate_output: closing-fence length/bareness ---
 
 
 def test_validate_output_four_backtick_fence_not_closed_by_three_backtick_line():
     # CommonMark: the closer must be AT LEAST as long as the opener. A
     # 3-backtick line inside a 4-backtick-opened fence is just content, not
-    # a closer -- the fence (and thus all three headings below it) never
-    # actually closes, so all three headings stay missing.
+    # a closer -- the fence never actually closes, so every "## " line
+    # inside it stays hidden and this output has no real heading anywhere.
     markdown_text = (
         "````\n"
         "```\n"
@@ -805,24 +735,14 @@ def test_validate_output_four_backtick_fence_not_closed_by_three_backtick_line()
         "````\n"
     )
 
-    with pytest.raises(SummarizeError) as exc_info:
+    with pytest.raises(SummarizeError):
         validate_output(markdown_text)
-
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
 
 
 def test_validate_output_four_backtick_fence_closed_by_four_backtick_line():
     # A closer at least as long as the opener does close the fence --
     # headings after it are real.
-    markdown_text = (
-        "````\nsome example\n````\n\n"
-        "## Needs attention\n- nothing\n\n"
-        "## Worth knowing\n- nothing\n\n"
-        "## Noise skipped\n- nothing\n"
-    )
+    markdown_text = "````\nsome example\n````\n\n## Needs attention\n- nothing\n"
 
     validate_output(markdown_text)  # must not raise
 
@@ -839,20 +759,16 @@ def test_validate_output_closing_length_rule_applies_to_tildes_too():
         "~~~~\n"
     )
 
-    with pytest.raises(SummarizeError) as exc_info:
+    with pytest.raises(SummarizeError):
         validate_output(markdown_text)
-
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
 
 
 def test_validate_output_closer_with_trailing_text_does_not_close_fence():
     # Per CommonMark, an opener may carry an info string (```json) but a
     # CLOSER may not -- a line with trailing non-whitespace after the
     # delimiter run is just fence content, not a closer, even though its
-    # run length matches the opener.
+    # run length matches the opener. The fence never closes, so every
+    # "## " line inside it stays hidden.
     markdown_text = (
         "```\n"
         "```extra\n"
@@ -862,16 +778,10 @@ def test_validate_output_closer_with_trailing_text_does_not_close_fence():
         "```\n"
     )
 
-    with pytest.raises(SummarizeError) as exc_info:
+    with pytest.raises(SummarizeError):
         validate_output(markdown_text)
 
-    message = str(exc_info.value)
-    assert "needs attention" in message
-    assert "worth knowing" in message
-    assert "noise skipped" in message
 
-
-# --- summarize (composition) ---
 
 
 _MODEL_OUTPUT = "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
@@ -947,7 +857,7 @@ def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
     monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
-    with pytest.raises(SummarizeError, match="missing required section"):
+    with pytest.raises(SummarizeError, match="no real '## ' heading"):
         summarize([_item()], [], "claude-opus-5", 300)
 
 
@@ -1439,6 +1349,49 @@ async def test_summarize_with_tldr_no_warning(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         summarize_mod.summarize(items, [], "m", 10)
     assert not any("TL;DR opener" in r.message for r in caplog.records)
+
+
+async def test_summarize_zero_links_logs_warning_but_still_ships(monkeypatch, caplog):
+    import logging
+
+    from digest import summarize as summarize_mod
+    from digest.state import Item
+
+    # A window of pure chatter/conversation, correctly characterized in
+    # prose with no citations at all -- legitimate output, must ship, but
+    # worth a log line since it's also what a degraded/lazy response looks
+    # like.
+    no_links = (
+        "**TL;DR:** All quiet, nothing worth citing this window.\n\n"
+        "## Also this window\n\nJust chatter.\n"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: no_links)
+    items = [
+        Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
+    ]
+    with caplog.at_level(logging.WARNING):
+        out = summarize_mod.summarize(items, [], "m", 10)
+    assert out == no_links
+    assert any("no citation links" in r.message for r in caplog.records)
+
+
+async def test_summarize_with_links_no_zero_links_warning(monkeypatch, caplog):
+    import logging
+
+    from digest import summarize as summarize_mod
+    from digest.state import Item
+
+    with_link = (
+        "**TL;DR:** One story mattered.\n\n"
+        "## A story\n\nSomething happened[¹](https://t.me/c/1/1).\n"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: with_link)
+    items = [
+        Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
+    ]
+    with caplog.at_level(logging.WARNING):
+        summarize_mod.summarize(items, [], "m", 10)
+    assert not any("no citation links" in r.message for r in caplog.records)
 
 
 def test_enforce_link_allowlist_url_glued_to_emphasis_is_fully_defanged():
