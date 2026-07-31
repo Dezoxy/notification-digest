@@ -175,8 +175,11 @@ def _send_and_finalize(
 
     On SMTP failure the digest row is deliberately left email_sent=0 so the
     next run's `get_pending_digest` branch retries the send (PLAN.md §4.1).
-    Email subject time is rendered in Europe/Budapest per CLAUDE.md (storage
-    stays UTC; only render/email time converts).
+    Email subject time, and the HTML masthead's `generated_at_label`, are
+    both rendered in Europe/Budapest per CLAUDE.md (storage stays UTC; only
+    render/email time converts) -- emailer.render_html itself does no
+    timezone conversion, it just displays whatever pre-formatted string it's
+    given.
 
     The HTML link-provenance allowlist passed to send_digest is fetched
     fresh from the digest's own stamped items (get_digest_item_urls), not
@@ -189,6 +192,11 @@ def _send_and_finalize(
     """
     now_local = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest"))
     subject = f"digest: {item_count} items · {now_local:%Y-%m-%d %H:%M}"
+    # %-d (no leading zero) is a glibc/BSD strftime extension, not POSIX --
+    # but it's the same extension on both macOS (BSD libc) and the Linux
+    # container this actually deploys to (glibc), so it's safe here despite
+    # not being portable in general.
+    generated_at_label = f"{now_local:%a, %b %-d · %H:%M}"
     allowed_urls = get_digest_item_urls(conn, digest_id)
     try:
         send_digest(
@@ -201,6 +209,7 @@ def _send_and_finalize(
             subject,
             body_md,
             allowed_urls,
+            generated_at_label,
         )
     except Exception as exc:
         logger.error("email send failed for digest %d: %s", digest_id, type(exc).__name__)
