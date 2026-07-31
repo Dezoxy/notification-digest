@@ -58,9 +58,11 @@ gadget news that merely mentions AI.
 Write PROSE — no bullet lists anywhere. But make it skimmable.
 
 - The briefing OPENS with a single bold paragraph in exactly this form,
-  before any heading: `**TL;DR:** ...` — two or three sentences naming only
-  what genuinely mattered this window, in plain language. If nothing did,
-  say so plainly in that same paragraph. No heading goes above this
+  before any heading: `**TL;DR:** ...` — two to four sentences naming only
+  what genuinely mattered this window, in plain language. One story per
+  sentence: take a fourth sentence rather than cramming two unrelated
+  stories into one. If nothing mattered, say so plainly in that same
+  paragraph. No heading goes above this
   paragraph, unless the "Needs attention" case below applies.
 - If anything needs the reader's action or attention — a direct mention of
   him, a deadline, a decision awaiting him — put it FIRST, in a
@@ -82,8 +84,15 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   attention`). Anything that would only earn one or two sentences must NOT
   get its own heading — fold every such minor item into a single final
   `## Also this window` section instead, written as flowing prose (still
-  cited), covering everything too small to deserve its own heading. This
-  keeps headings meaningful on a phone.
+  cited). This keeps headings meaningful on a phone. Before writing any
+  heading, check: if what follows it is only two sentences, the heading is
+  wrong and the item belongs in `## Also this window` — no exceptions.
+- **`## Also this window` has its own budget: about 150–200 words.** It is
+  the notable second tier, not a home for everything left over — pick the
+  handful of items genuinely worth a sentence and DROP the rest entirely;
+  dropped items exist only in the closing count. Compressing every
+  leftover item into this section just rebuilds the raw feed the reader
+  asked not to read.
 - **Length:** scale to what the window actually holds rather than to a fixed
   number. A quiet window with only a few real stories should come in around
   1,000–1,400 words; a typical one around 1,800; a genuinely busy window
