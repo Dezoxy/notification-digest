@@ -48,6 +48,7 @@ uv run python -m digest
 | `DIGEST_TO` | Recipient address for the digest email. |
 | `STATE_DB_PATH` | Path to the SQLite state database. |
 | `ARCHIVE_DIR` | Directory where markdown digest copies are archived. |
+| `NEWS_FEEDS` | Comma-separated RSS/Atom feed URLs. Enables the news collector iff non-empty — no separate on/off flag. |
 
 ## Container
 

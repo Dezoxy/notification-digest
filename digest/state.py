@@ -15,7 +15,7 @@ from pathlib import Path
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+    source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
     source_id   TEXT NOT NULL,
     chat_id     TEXT,
     chat_title  TEXT,
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS digests (
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
-    source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+    source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
     scope         TEXT NOT NULL,
     last_seen_id  TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
@@ -49,9 +49,10 @@ CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 
 @dataclass(frozen=True)
 class Item:
-    source: str  # "telegram" | "x"
+    source: str  # "telegram" | "x" | "news"
     # telegram: "{chat_id}:{msg_id}" (chat-scoped composite — msg ids repeat across chats);
     # x: bare tweet id (globally unique)
+    # news: the feed entry's own GUID (entry.id), falling back to the entry's URL
     source_id: str
     chat_id: str | None
     author: str | None
@@ -82,6 +83,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_add_body_md_column(conn)
     _migrate_add_chat_title_column(conn)
+    _migrate_expand_source_check_for_news(conn)
 
 
 def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
@@ -115,6 +117,141 @@ def _migrate_add_chat_title_column(conn: sqlite3.Connection) -> None:
     if "chat_title" not in columns:
         conn.execute("ALTER TABLE items ADD COLUMN chat_title TEXT")
         conn.commit()
+
+
+def _table_ddl(conn: sqlite3.Connection, table_name: str) -> str | None:
+    """The CREATE TABLE statement SQLite stored for `table_name`, or None if it doesn't exist."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table_name,)
+    ).fetchone()
+    return row[0] if row is not None else None
+
+
+def _migrate_expand_source_check_for_news(conn: sqlite3.Connection) -> None:
+    """Rebuild `items`/`cursors` so their `source` CHECK constraint accepts 'news'.
+
+    A database deployed before this migration was created with the
+    two-value `CHECK (source IN ('telegram', 'x'))` (see _SCHEMA's history:
+    `_migrate_add_body_md_column`/`_migrate_add_chat_title_column` are the
+    same kind of upgrade-in-place problem, but ALTER TABLE ADD COLUMN can't
+    help here -- SQLite has no `ALTER TABLE ... ALTER CONSTRAINT`, so a
+    table with the old CHECK baked in can only be widened by rebuilding it:
+    create a new table with the wider CHECK, copy every row across, drop
+    the old table, and rename the new one into its place.
+
+    Idempotent per table: each rebuild first reads the table's OWN stored
+    DDL back from `sqlite_master` (`_table_ddl`) and does nothing if it
+    already mentions `'news'` -- this single check covers both "already
+    migrated" (a previous init_db call already rebuilt it) and "freshly
+    created by _SCHEMA above" (which already declares the three-value
+    CHECK), so there is no separate first-run flag to track.
+
+    MUST run AFTER `_migrate_add_body_md_column`/`_migrate_add_chat_title_column`
+    (see init_db's call order): the explicit column list this rebuild uses
+    for `items` (`id, source, source_id, chat_id, chat_title, author, text,
+    url, fetched_at, digest_id`) assumes `items` already has exactly
+    _SCHEMA's current column SET -- the older migrations guarantee the SET,
+    not the ORDER: `ALTER TABLE ADD COLUMN` always appends, so a database
+    that predates the chat_title column carries it in a DIFFERENT physical
+    position than a table built fresh from _SCHEMA, permanently. That is
+    exactly why the copy below names its columns explicitly on BOTH sides
+    (`INSERT INTO items_new (cols...) SELECT cols... FROM items`): named
+    columns match by name, making physical order irrelevant -- whereas a
+    wildcard `SELECT *` would pair columns positionally and silently
+    misalign them on an append-ordered legacy table. Running this rebuild
+    before the column-add migrations would still crash outright, though: a
+    `chat_title` reference against a table that doesn't have the column at
+    all. Hence the call-order requirement, and never `SELECT *`.
+
+    FK note: `connect()` sets `PRAGMA foreign_keys = ON`. `items` is the
+    CHILD of `digests` (`items.digest_id REFERENCES digests(id)`; nothing
+    references `items` in turn), so `DROP TABLE items` plus the rename is
+    safe with FK enforcement on -- no other table's rows can be left
+    dangling by removing it. `cursors` has no FK relationships at all. We
+    rely on this fact rather than disabling the pragma for the migration.
+    """
+    _rebuild_items_table_for_news(conn)
+    _rebuild_cursors_table_for_news(conn)
+
+
+def _rebuild_items_table_for_news(conn: sqlite3.Connection) -> None:
+    """The `items` half of `_migrate_expand_source_check_for_news` -- see its docstring."""
+    ddl = _table_ddl(conn, "items")
+    if ddl is None or "'news'" in ddl:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            CREATE TABLE items_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+                source_id   TEXT NOT NULL,
+                chat_id     TEXT,
+                chat_title  TEXT,
+                author      TEXT,
+                text        TEXT,
+                url         TEXT NOT NULL,
+                fetched_at  TEXT NOT NULL,
+                digest_id   INTEGER REFERENCES digests(id),
+                UNIQUE (source, source_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO items_new
+                (id, source, source_id, chat_id, chat_title, author, text,
+                 url, fetched_at, digest_id)
+            SELECT id, source, source_id, chat_id, chat_title, author, text,
+                   url, fetched_at, digest_id
+            FROM items
+            """
+        )
+        cur.execute("DROP TABLE items")
+        cur.execute("ALTER TABLE items_new RENAME TO items")
+        # The index died with the old table -- CREATE TABLE doesn't resurrect
+        # indexes on the table it replaces, so it must be re-created here.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _rebuild_cursors_table_for_news(conn: sqlite3.Connection) -> None:
+    """The `cursors` half of `_migrate_expand_source_check_for_news` -- see its docstring."""
+    ddl = _table_ddl(conn, "cursors")
+    if ddl is None or "'news'" in ddl:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            CREATE TABLE cursors_new (
+                source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+                scope         TEXT NOT NULL,
+                last_seen_id  TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                PRIMARY KEY (source, scope)
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO cursors_new (source, scope, last_seen_id, updated_at)
+            SELECT source, scope, last_seen_id, updated_at
+            FROM cursors
+            """
+        )
+        cur.execute("DROP TABLE cursors")
+        cur.execute("ALTER TABLE cursors_new RENAME TO cursors")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_cursors(conn: sqlite3.Connection, source: str) -> dict[str, str]:

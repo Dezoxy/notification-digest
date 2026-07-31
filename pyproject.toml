@@ -20,6 +20,10 @@ dependencies = [
     "markdown>=3.7",
     "nh3>=0.2",
     "python-dotenv>=1.0",
+    # Battle-tested RSS/Atom parsing across malformed real-world feeds;
+    # stdlib XML parsing would mean hand-rolling namespace/date/encoding
+    # tolerance ourselves.
+    "feedparser>=6.0",
 ]
 
 [dependency-groups]

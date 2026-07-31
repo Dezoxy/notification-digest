@@ -186,3 +186,46 @@ def test_claude_effort_invalid_value_raises_config_error(monkeypatch):
 
     with pytest.raises(ConfigError, match="CLAUDE_EFFORT must be one of"):
         Config.from_env()
+
+
+# --- NEWS_FEEDS ---
+
+
+def test_news_feeds_unset_defaults_to_empty_tuple(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("NEWS_FEEDS", raising=False)
+
+    config = Config.from_env()
+
+    assert config.news_feeds == ()
+
+
+def test_news_feeds_blank_defaults_to_empty_tuple(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("NEWS_FEEDS", "   ")
+
+    config = Config.from_env()
+
+    assert config.news_feeds == ()
+
+
+def test_news_feeds_two_urls_with_spaces_parsed_and_stripped(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv(
+        "NEWS_FEEDS", " https://example.com/feed.xml , https://blog.example.org/rss "
+    )
+
+    config = Config.from_env()
+
+    assert config.news_feeds == (
+        "https://example.com/feed.xml",
+        "https://blog.example.org/rss",
+    )
+
+
+def test_news_feeds_non_http_entry_raises_config_error_naming_the_variable(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("NEWS_FEEDS", "https://example.com/feed.xml,ftp://example.com/bad")
+
+    with pytest.raises(ConfigError, match="NEWS_FEEDS"):
+        Config.from_env()
