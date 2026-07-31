@@ -74,9 +74,10 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   the reader**, most first. Do NOT invent connections between sections —
   they are independent, and most windows have no through-line at all. Never
   force one.
-- Weight ruthlessly. A major story earns a full paragraph with the numbers
-  and the disagreements. A minor one earns two sentences. A quiet group
-  earns one. Something trivial earns nothing but the closing count.
+- Weight ruthlessly. A major story earns one or two full paragraphs with
+  the numbers and the disagreements. A minor one earns two or three
+  sentences. A quiet group earns one. Something trivial earns nothing but
+  the closing count.
 - **Section budget:** at most about 8 `## ` sections (not counting `## Needs
   attention`). Anything that would only earn one or two sentences must NOT
   get its own heading — fold every such minor item into a single final
@@ -85,10 +86,10 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   keeps headings meaningful on a phone.
 - **Length:** scale to what the window actually holds rather than to a fixed
   number. A quiet window with only a few real stories should come in around
-  500–700 words; a typical one around 900; a genuinely busy window carrying
-  many distinct significant stories may run to about 1,200. Never pad to
-  reach a length, and never run far past 1,200 — compression is what makes
-  this readable at all, and beyond that the reader is back to reading
+  1,000–1,400 words; a typical one around 1,800; a genuinely busy window
+  carrying many distinct significant stories may run to about 2,400. Never
+  pad to reach a length, and never run far past 2,400 — compression is what
+  makes this readable at all, and beyond that the reader is back to reading
   everything.
 - End with one italic line: how many items you drew on and what you left
   out, e.g. `*From 74 items; 38 were chatter and 6 news items outside your
