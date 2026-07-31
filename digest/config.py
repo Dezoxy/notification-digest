@@ -46,6 +46,11 @@ class Config:
     archive_dir: str = "./archive"
     claude_timeout_seconds: int = 300
     claude_effort: str = "high"
+    # The news collector has no separate NEWS_ENABLED flag -- it is enabled
+    # iff this tuple is non-empty (see digest/main.py's _run_news_collector).
+    # An empty tuple is the natural "not configured" default, so a second
+    # on/off switch would just be a way for the two to disagree.
+    news_feeds: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> Config:
@@ -75,6 +80,7 @@ class Config:
         claude_effort = _optional_choice(
             "CLAUDE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES
         )
+        news_feeds = _optional_url_tuple("NEWS_FEEDS")
 
         return cls(
             tg_api_id=tg_api_id,
@@ -95,6 +101,7 @@ class Config:
             archive_dir=archive_dir,
             claude_timeout_seconds=claude_timeout_seconds,
             claude_effort=claude_effort,
+            news_feeds=news_feeds,
         )
 
 
@@ -219,6 +226,33 @@ def _optional_choice(name: str, *, default: str, choices: tuple[str, ...]) -> st
             f"{name} must be one of {', '.join(choices)}, got {value!r}"
         )
     return value
+
+
+def _optional_url_tuple(name: str) -> tuple[str, ...]:
+    """Read an optional comma-separated list of http(s) URLs, defaulting to ().
+
+    Unset or blank -> `()`, same "not configured" meaning
+    digest/main.py's `_run_news_collector` uses to skip the news collector
+    entirely without a separate NEWS_ENABLED flag (see Config.news_feeds'
+    own comment). Each non-empty entry, after split/strip, must start with
+    `http://` or `https://` -- these values are handed straight to
+    `urllib.request.Request` (digest/collectors/rss.py), and a typo'd or
+    non-URL entry there would surface as an opaque per-feed fetch failure
+    deep inside a scheduled run instead of a clear startup error. Unlike
+    `_optional_choice`, the offending value is NOT echoed in the
+    ConfigError -- feed URLs are owner config, not secrets, but there is no
+    strong need to echo them either (contrast CLAUDE_EFFORT, where the
+    value IS the actionable detail), so this follows the default
+    ConfigError contract of naming only the variable.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return ()
+    urls = tuple(p.strip() for p in raw.split(",") if p.strip())
+    for url in urls:
+        if not url.startswith("http://") and not url.startswith("https://"):
+            raise ConfigError(f"{name} entries must each start with http:// or https://")
+    return urls
 
 
 def claude_subprocess_env() -> dict[str, str]:

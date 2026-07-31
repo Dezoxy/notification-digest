@@ -415,6 +415,188 @@ def test_init_db_migrates_pre_chat_title_items_table_missing_column(tmp_path: Pa
     old_conn.close()
 
 
+# --- news source (source CHECK expanded to accept 'telegram' | 'x' | 'news') ---
+
+
+def test_fresh_db_accepts_news_source_item(conn):
+    item = _item(
+        "guid-1", source="news", chat_id=None, chat_title="AI Weekly", url="https://example.com/a"
+    )
+    inserted = commit_new_items(conn, [item], {})
+
+    assert inserted == 1
+    items = get_unsummarized_items(conn)
+    assert items[0].source == "news"
+    assert items[0].chat_title == "AI Weekly"
+
+
+def test_fresh_db_check_still_rejects_unknown_source(conn):
+    bad_item = _item("1", source="rss")  # not one of telegram/x/news
+
+    with pytest.raises(sqlite3.IntegrityError):
+        commit_new_items(conn, [bad_item], {})
+
+
+def test_init_db_migrates_pre_news_source_check_with_preexisting_rows(tmp_path: Path):
+    # Build a legacy DB with the OLD two-value CHECK and no chat_title column
+    # (predates both the chat_title migration and this one), then run
+    # init_db, which must apply the older column migrations FIRST and this
+    # source-CHECK migration LAST (see its docstring for why the ordering
+    # matters). Seed rows that exercise every part of the rebuild: a
+    # telegram item stamped to a digest (FK in play), an unstamped x item,
+    # and a cursor row.
+    old_conn = connect(str(tmp_path / "legacy_news.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+
+        CREATE INDEX idx_items_digest_id ON items(digest_id);
+        """
+    )
+    old_conn.commit()
+
+    old_conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) "
+        "VALUES ('2026-07-29T09:00:00+00:00', 1, 1, 'body')"
+    )
+    digest_id = old_conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    old_conn.execute(
+        """
+        INSERT INTO items (source, source_id, chat_id, author, text, url, fetched_at, digest_id)
+        VALUES ('telegram', '111:1', '111', 'alice', 'hi', 'https://t.me/c/111/1',
+                '2026-07-29T09:00:00+00:00', ?)
+        """,
+        (digest_id,),
+    )
+    old_conn.execute(
+        """
+        INSERT INTO items (source, source_id, chat_id, author, text, url, fetched_at)
+        VALUES ('x', '999', NULL, 'bob', 'hey', 'https://x.com/bob/status/999',
+                '2026-07-29T10:00:00+00:00')
+        """
+    )
+    old_conn.execute(
+        "INSERT INTO cursors (source, scope, last_seen_id, updated_at) "
+        "VALUES ('telegram', '111', '1', '2026-07-29T09:00:00+00:00')"
+    )
+    old_conn.commit()
+
+    tg_id, x_id = (
+        row[0]
+        for row in old_conn.execute(
+            "SELECT id FROM items ORDER BY source_id"
+        ).fetchall()
+    )
+
+    init_db(old_conn)  # applies chat_title migration, THEN the news-CHECK migration
+
+    # news insert now works
+    commit_new_items(
+        old_conn,
+        [_item("guid-1", source="news", chat_id=None, url="https://example.com/a")],
+        {},
+    )
+
+    rows = {
+        row[0]: (row[1], row[2])
+        for row in old_conn.execute("SELECT id, source, digest_id FROM items").fetchall()
+    }
+    assert rows[tg_id] == ("telegram", digest_id)  # same id, digest_id link intact
+    assert rows[x_id] == ("x", None)  # same id, still unstamped
+
+    assert get_cursors(old_conn, "telegram") == {"111": "1"}
+
+    index_row = old_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_items_digest_id'"
+    ).fetchone()
+    assert index_row is not None
+
+    # UNIQUE(source, source_id) still enforced post-migration
+    with pytest.raises(sqlite3.IntegrityError):
+        old_conn.execute(
+            "INSERT INTO items (source, source_id, chat_id, text, url, fetched_at) "
+            "VALUES ('news', 'guid-1', NULL, 't', 'https://example.com/a', "
+            "'2026-07-29T11:00:00+00:00')"
+        )
+
+    old_conn.close()
+
+
+def test_init_db_news_migration_runs_once_idempotent(tmp_path: Path):
+    old_conn = connect(str(tmp_path / "legacy_news_idempotent.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+        """
+    )
+    old_conn.commit()
+
+    init_db(old_conn)  # first migration run
+    init_db(old_conn)  # must not raise or alter the schema again
+
+    commit_new_items(
+        old_conn, [_item("guid-2", source="news", chat_id=None, url="https://example.com/b")], {}
+    )
+    items = get_unsummarized_items(old_conn)
+    assert items[0].source == "news"
+
+    old_conn.close()
+
+
 def test_create_digest_raises_and_rolls_back_on_snapshot_mismatch(conn):
     # A snapshot item that doesn't match any unstamped row (stale or
     # duplicated) must abort the whole transaction: no digest row, no

@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from digest.collectors import rss as rss_collector
 from digest.collectors import telegram as telegram_collector
 from digest.collectors import x as x_collector
 from digest.collectors.telegram import CollectResult
@@ -251,6 +252,40 @@ async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResu
         return CollectResult(failed=True)
 
 
+def _run_news_collector(cfg: Config) -> CollectResult:
+    """Run one RSS/Atom collect pass, if any feeds are configured.
+
+    No-ops entirely (returns a fresh, unfailed CollectResult) when
+    `cfg.news_feeds` is empty -- there is no separate NEWS_ENABLED flag
+    (see Config.news_feeds' own comment), so an empty tuple IS "disabled".
+
+    Plain `def`, called synchronously from inside this `async def _run` --
+    not `await`ed, no executor indirection. Collectors already run
+    sequentially, one at a time (telegram, then x, then news); nothing else
+    is in flight while this runs, so there is nothing for an
+    `asyncio.to_thread`/executor wrapper to protect against blocking, and
+    adding one would just be indirection with no payoff.
+
+    `rss_collector.collect` is already exception-proof internally (see its
+    module docstring -- one bad feed is caught per-feed), but this call is
+    wrapped in a catch-all here too as a second line of defense, mirroring
+    `_run_x_collector`'s own rationale: a not-yet-anticipated bug in the
+    collector still must not take down the whole run (and Telegram/X's
+    already-collected items) before `commit_new_items` gets a chance to
+    persist them. Only the exception's type name is logged -- consistent
+    with how every other collector-crash log line in this module avoids
+    echoing exception text that could embed response content.
+    """
+    if not cfg.news_feeds:
+        return CollectResult()
+
+    try:
+        return rss_collector.collect(cfg.news_feeds)
+    except Exception as exc:
+        logger.warning("news collection crashed unexpectedly: %s", type(exc).__name__)
+        return CollectResult(failed=True)
+
+
 async def _run(cfg: Config) -> bool:
     """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
@@ -273,9 +308,19 @@ async def _run(cfg: Config) -> bool:
                 await client.disconnect()
 
         x_result = await _run_x_collector(conn, cfg)
+        news_result = _run_news_collector(cfg)
 
-        items = tg_result.items + x_result.items
-        cursor_updates = {**tg_result.cursor_updates, **x_result.cursor_updates}
+        items = tg_result.items + x_result.items + news_result.items
+        # news never contributes cursor_updates (it has no cursor axis, see
+        # digest/collectors/rss.py's module docstring) -- merging its
+        # (always-empty) dict in here anyway keeps this line generic over
+        # every collector rather than special-casing the one with nothing
+        # to add.
+        cursor_updates = {
+            **tg_result.cursor_updates,
+            **x_result.cursor_updates,
+            **news_result.cursor_updates,
+        }
 
         inserted = commit_new_items(conn, items, cursor_updates)
         logger.info(
@@ -287,7 +332,11 @@ async def _run(cfg: Config) -> bool:
 
         failed_sources = [
             source
-            for source, failed in (("telegram", tg_result.failed), ("x", x_result.failed))
+            for source, failed in (
+                ("telegram", tg_result.failed),
+                ("x", x_result.failed),
+                ("news", news_result.failed),
+            )
             if failed
         ]
 
