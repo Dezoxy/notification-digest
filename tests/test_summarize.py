@@ -1205,7 +1205,7 @@ def test_enforce_link_allowlist_allowed_https_in_markdown_link_untouched_render_
 
     assert repaired == text
 
-    html = render_html(repaired, allowed_urls={url})
+    html = render_html(repaired, allowed_urls={url}, generated_at_label="Thu, Jul 31 · 18:07")
     assert f'href="{url}"' in html
 
 
@@ -1303,7 +1303,9 @@ def test_enforce_link_allowlist_render_through_neutralizes_every_hostile_link_fo
 ):
     repaired = enforce_link_allowlist(hostile_markdown, allowed_urls={_ALLOWED_RENDER_URL})
 
-    html = render_html(repaired, allowed_urls={_ALLOWED_RENDER_URL})
+    html = render_html(
+        repaired, allowed_urls={_ALLOWED_RENDER_URL}, generated_at_label="Thu, Jul 31 · 18:07"
+    )
 
     assert 'href="https://attacker.example' not in html
 
@@ -1316,7 +1318,9 @@ def test_enforce_link_allowlist_render_through_keeps_allowed_inline_title_link_a
     text = f'See [t.me update]({_ALLOWED_RENDER_URL} "details") for more.'
 
     repaired = enforce_link_allowlist(text, allowed_urls={_ALLOWED_RENDER_URL})
-    html = render_html(repaired, allowed_urls={_ALLOWED_RENDER_URL})
+    html = render_html(
+        repaired, allowed_urls={_ALLOWED_RENDER_URL}, generated_at_label="Thu, Jul 31 · 18:07"
+    )
 
     assert f'href="{_ALLOWED_RENDER_URL}"' in html
 

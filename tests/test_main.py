@@ -118,7 +118,9 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
 
     sent = {}
 
-    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
+    def fake_send_digest(
+        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+    ):
         sent["body_md"] = body_md
         sent["allowed_urls"] = allowed_urls
 
@@ -191,13 +193,18 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
 
     sent = {}
-    monkeypatch.setattr(
-        main_mod,
-        "send_digest",
-        lambda host, port, user, pw, from_, to, subject, body_md, allowed_urls: sent.update(
-            subject=subject, body_md=body_md, allowed_urls=allowed_urls
-        ),
-    )
+
+    def fake_send_digest(
+        host, port, user, pw, from_, to, subject, body_md, allowed_urls, generated_at_label
+    ):
+        sent.update(
+            subject=subject,
+            body_md=body_md,
+            allowed_urls=allowed_urls,
+            generated_at_label=generated_at_label,
+        )
+
+    monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
     archived = {}
     monkeypatch.setattr(
         main_mod, "archive", lambda body_md, archive_dir, digest_id: archived.update(id=digest_id)
@@ -210,6 +217,11 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert sent["body_md"] == "## Needs attention\n..."
     assert "2 items" in sent["subject"]
     assert sent["allowed_urls"] == {"https://t.me/c/123/1", "https://t.me/c/123/2"}
+    # Exact formatting is emailer/render_html's concern (tested there); here
+    # we only need proof _send_and_finalize actually built and threaded a
+    # real label through, not the empty-string default of an unwired param.
+    assert isinstance(sent["generated_at_label"], str)
+    assert sent["generated_at_label"] != ""
     assert get_pending_digest(conn) is None
     assert archived["id"] == 1
 
@@ -233,7 +245,9 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
 
     sends = []
 
-    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
+    def fake_send_digest(
+        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+    ):
         sends.append(body_md)
 
     archived = []
@@ -415,7 +429,9 @@ def test_send_and_finalize_passes_the_digests_stamped_item_urls_to_send_digest(
 
     captured = {}
 
-    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
+    def fake_send_digest(
+        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+    ):
         captured["allowed_urls"] = allowed_urls
 
     monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
@@ -444,7 +460,9 @@ def test_send_and_finalize_recovers_urls_for_a_pending_resend_from_a_prior_run(
 
     captured = {}
 
-    def fake_send_digest(host, port, user, password, from_, to, subject, body_md, allowed_urls):
+    def fake_send_digest(
+        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+    ):
         captured["allowed_urls"] = allowed_urls
 
     monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
