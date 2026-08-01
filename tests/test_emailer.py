@@ -1,6 +1,7 @@
 import email.utils
 import smtplib
 import ssl
+from email.utils import parseaddr
 from pathlib import Path
 
 import pytest
@@ -635,6 +636,7 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
         "user@example.com",
         "app-specific-password",
         "digest@4rgus.com",
+        "Digest",
         "me@toomhorvath.com",
         "digest: 3 items · 2026-07-29 10:00",
         "## Needs attention\n\n- nothing much\n",
@@ -658,7 +660,7 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
     assert smtp.starttls_context.check_hostname is True
 
     msg = smtp.sent_message
-    assert msg["From"] == "digest@4rgus.com"
+    assert parseaddr(msg["From"]) == ("Digest", "digest@4rgus.com")
     assert msg["To"] == "me@toomhorvath.com"
     assert msg["Subject"] == "digest: 3 items · 2026-07-29 10:00"
 
@@ -678,6 +680,7 @@ def test_send_digest_sets_a_parseable_date_header(monkeypatch):
         "user@example.com",
         "app-specific-password",
         "digest@tomhorvath.me",
+        "Digest",
         "me@toomhorvath.com",
         "subject",
         "body",
@@ -699,6 +702,7 @@ def test_send_digest_message_id_domain_matches_bare_from_address(monkeypatch):
         "user@example.com",
         "app-specific-password",
         "digest@tomhorvath.me",
+        "Digest",
         "me@toomhorvath.com",
         "subject",
         "body",
@@ -723,6 +727,7 @@ def test_send_digest_message_id_domain_matches_display_name_from_address(monkeyp
         "user@example.com",
         "app-specific-password",
         "Digest <digest@tomhorvath.me>",
+        "Digest",
         "me@toomhorvath.com",
         "subject",
         "body",
@@ -747,6 +752,7 @@ def test_send_digest_message_id_falls_back_when_from_has_no_at_sign(monkeypatch)
         "user@example.com",
         "app-specific-password",
         "not-an-email-address",
+        "Digest",
         "me@toomhorvath.com",
         "subject",
         "body",
@@ -758,6 +764,31 @@ def test_send_digest_message_id_falls_back_when_from_has_no_at_sign(monkeypatch)
     assert message_id is not None
     assert message_id.startswith("<")
     assert message_id.endswith(">")
+
+
+def test_send_digest_from_header_carries_display_name_with_comma_safely_quoted(monkeypatch):
+    # formataddr quotes the display name as needed per RFC 5322 -- a comma in
+    # the name must round-trip exactly through parseaddr rather than being
+    # misread as a second address or corrupting the header.
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", FakeSMTP)
+
+    send_digest(
+        "smtp.mail.me.com",
+        587,
+        "user@example.com",
+        "app-specific-password",
+        "digest@4rgus.com",
+        "Digest, Personal",
+        "me@toomhorvath.com",
+        "subject",
+        "body",
+        set(),
+        _WHEN,
+    )
+
+    smtp = FakeSMTP.instances[0]
+    msg = smtp.sent_message
+    assert parseaddr(msg["From"]) == ("Digest, Personal", "digest@4rgus.com")
 
 
 def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, caplog):
@@ -777,6 +808,7 @@ def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, capl
             "user@example.com",
             "app-specific-password",
             "digest@4rgus.com",
+            "Digest",
             "me@toomhorvath.com",
             "subject",
             "body",
@@ -810,6 +842,7 @@ def test_send_digest_raises_send_message_error_even_if_quit_also_fails(monkeypat
             "user@example.com",
             "app-specific-password",
             "digest@4rgus.com",
+            "Digest",
             "me@toomhorvath.com",
             "subject",
             "body",
@@ -838,6 +871,7 @@ def test_send_digest_never_opens_a_real_socket(monkeypatch):
             "u",
             "p",
             "from@x.com",
+            "Digest",
             "to@x.com",
             "subject",
             "body",

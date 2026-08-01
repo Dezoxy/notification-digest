@@ -206,6 +206,7 @@ def _send_and_finalize(
             cfg.smtp_user,
             cfg.smtp_password,
             cfg.digest_from,
+            cfg.digest_from_name,
             cfg.digest_to,
             subject,
             body_md,

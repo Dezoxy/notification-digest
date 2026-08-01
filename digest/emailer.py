@@ -15,7 +15,7 @@ from collections.abc import Collection
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from pathlib import Path
 
 import markdown
@@ -664,6 +664,7 @@ def send_digest(
     smtp_user: str,
     smtp_password: str,
     digest_from: str,
+    digest_from_name: str,
     digest_to: str,
     subject: str,
     body_md: str,
@@ -683,6 +684,12 @@ def send_digest(
     render_html for the masthead timestamp (see its docstring) -- this
     function has no opinion on its format or timezone, it just carries it
     to the one place that renders it.
+
+    The From header carries a display name via email.utils.formataddr, which
+    also gets the quoting/escaping right if ``digest_from_name`` ever
+    contains a comma or other RFC 5322 special character, rather than the
+    bare address a mail client would otherwise show in place of a friendly
+    sender name.
 
     Message acceptance -- send_message() returning without raising -- is the
     success criterion: at that point the server has taken the mail for
@@ -710,7 +717,7 @@ def send_digest(
     """
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = digest_from
+    msg["From"] = formataddr((digest_from_name, digest_from))
     msg["To"] = digest_to
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=_message_id_domain(digest_from))

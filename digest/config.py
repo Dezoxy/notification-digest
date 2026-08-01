@@ -38,6 +38,7 @@ class Config:
     smtp_password: str
     digest_from: str
     digest_to: str
+    digest_from_name: str = "Digest"
     state_db_path: str = "./state.db"
     x_enabled: bool = False
     x_cookies_path: str | None = None
@@ -65,6 +66,7 @@ class Config:
         smtp_password = _require_str("SMTP_PASSWORD")
         digest_from = _require_str("DIGEST_FROM")
         digest_to = _require_str("DIGEST_TO")
+        digest_from_name = _optional_str("DIGEST_FROM_NAME", default="Digest")
 
         state_db_path = os.environ.get("STATE_DB_PATH", "./state.db")
         x_enabled = _parse_bool(os.environ.get("X_ENABLED", "false"))
@@ -93,6 +95,7 @@ class Config:
             smtp_password=smtp_password,
             digest_from=digest_from,
             digest_to=digest_to,
+            digest_from_name=digest_from_name,
             state_db_path=state_db_path,
             x_enabled=x_enabled,
             x_cookies_path=x_cookies_path,
@@ -226,6 +229,22 @@ def _optional_choice(name: str, *, default: str, choices: tuple[str, ...]) -> st
             f"{name} must be one of {', '.join(choices)}, got {value!r}"
         )
     return value
+
+
+def _optional_str(name: str, *, default: str) -> str:
+    """Read an optional string env var, falling back to `default` if unset/blank.
+
+    No further validation -- used for DIGEST_FROM_NAME, which is purely
+    cosmetic display text for the email From header (see emailer.send_digest,
+    which hands it to email.utils.formataddr). Unlike CLAUDE_EFFORT
+    (_optional_choice) or NEWS_FEEDS (_optional_url_tuple), this value is
+    never handed to a subprocess argv or a URL fetch, so there is no unsafe
+    shape for it to take and nothing here to guard against.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip()
 
 
 def _optional_url_tuple(name: str) -> tuple[str, ...]:

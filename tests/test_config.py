@@ -188,6 +188,36 @@ def test_claude_effort_invalid_value_raises_config_error(monkeypatch):
         Config.from_env()
 
 
+# --- DIGEST_FROM_NAME ---
+
+
+def test_digest_from_name_unset_falls_back_to_default(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("DIGEST_FROM_NAME", raising=False)
+
+    config = Config.from_env()
+
+    assert config.digest_from_name == "Digest"
+
+
+def test_digest_from_name_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "Owner's Digest")
+
+    config = Config.from_env()
+
+    assert config.digest_from_name == "Owner's Digest"
+
+
+def test_digest_from_name_blank_falls_back_to_default(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "   ")
+
+    config = Config.from_env()
+
+    assert config.digest_from_name == "Digest"
+
+
 # --- NEWS_FEEDS ---
 
 
