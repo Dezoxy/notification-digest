@@ -188,6 +188,76 @@ def test_claude_effort_invalid_value_raises_config_error(monkeypatch):
         Config.from_env()
 
 
+# --- DIGEST_FROM_NAME ---
+
+
+def test_digest_from_name_unset_falls_back_to_default(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("DIGEST_FROM_NAME", raising=False)
+
+    config = Config.from_env()
+
+    assert config.digest_from_name == "Digest"
+
+
+def test_digest_from_name_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "Owner's Digest")
+
+    config = Config.from_env()
+
+    assert config.digest_from_name == "Owner's Digest"
+
+
+def test_digest_from_name_blank_falls_back_to_default(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "   ")
+
+    config = Config.from_env()
+
+    assert config.digest_from_name == "Digest"
+
+
+def test_digest_from_name_embedded_crlf_raises_config_error(monkeypatch):
+    # Codex review finding on PR #20: an embedded CR/LF makes formataddr
+    # build a header value that Python's email Generator refuses to
+    # serialize (HeaderParseError), and that failure happens deep inside
+    # send_digest AFTER the digest row is already durably recorded -- every
+    # subsequent run's pending-digest retry hits the identical failure
+    # forever. Must be rejected here, at startup, instead.
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "Digest\r\nX-Injected: evil")
+
+    with pytest.raises(ConfigError, match="DIGEST_FROM_NAME must not contain control characters"):
+        Config.from_env()
+
+
+def test_digest_from_name_embedded_control_character_raises_config_error(monkeypatch):
+    # Not narrowed to \r\n alone -- any C0 control character or DEL is
+    # equally invalid inside a header field body. \x00 is excluded here: the
+    # OS itself rejects a NUL byte in an env var value (ValueError on
+    # setenv), so it can never reach our validator in the first place --
+    # \x0b (vertical tab) exercises the same C0-control-character branch
+    # without that unrelated OS-level restriction getting in the way.
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "Digest\x0bName")
+
+    with pytest.raises(ConfigError, match="DIGEST_FROM_NAME must not contain control characters"):
+        Config.from_env()
+
+
+def test_digest_from_name_error_does_not_echo_the_offending_value(monkeypatch):
+    # Unlike CLAUDE_EFFORT's ConfigError, the raw value (which may contain
+    # control characters) must never be echoed back into the error message.
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_FROM_NAME", "Digest\r\nX-Injected: evil")
+
+    with pytest.raises(ConfigError) as exc_info:
+        Config.from_env()
+
+    assert "X-Injected" not in str(exc_info.value)
+
+
 # --- NEWS_FEEDS ---
 
 

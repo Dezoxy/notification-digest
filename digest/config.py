@@ -7,6 +7,7 @@ os.getenv. Every other module receives configuration values passed in.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -25,6 +26,15 @@ class ConfigError(Exception):
 # update if the CLI ever adds or removes a level.
 _CLAUDE_EFFORT_CHOICES = ("low", "medium", "high", "xhigh", "max")
 
+# Matches any C0 control character (0x00-0x1F) or DEL (0x7F) -- used to reject
+# header-injection-shaped values for DIGEST_FROM_NAME (see _optional_str).
+# CR/LF are the specific concern (an embedded one breaks RFC 5322 header
+# folding and email.utils.formataddr/Generator raise HeaderParseError at
+# message-serialization time), but every other control character is equally
+# invalid inside a header field body, so the check is not narrowed to \r\n
+# alone.
+_HEADER_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -38,6 +48,7 @@ class Config:
     smtp_password: str
     digest_from: str
     digest_to: str
+    digest_from_name: str = "Digest"
     state_db_path: str = "./state.db"
     x_enabled: bool = False
     x_cookies_path: str | None = None
@@ -65,6 +76,7 @@ class Config:
         smtp_password = _require_str("SMTP_PASSWORD")
         digest_from = _require_str("DIGEST_FROM")
         digest_to = _require_str("DIGEST_TO")
+        digest_from_name = _optional_str("DIGEST_FROM_NAME", default="Digest")
 
         state_db_path = os.environ.get("STATE_DB_PATH", "./state.db")
         x_enabled = _parse_bool(os.environ.get("X_ENABLED", "false"))
@@ -93,6 +105,7 @@ class Config:
             smtp_password=smtp_password,
             digest_from=digest_from,
             digest_to=digest_to,
+            digest_from_name=digest_from_name,
             state_db_path=state_db_path,
             x_enabled=x_enabled,
             x_cookies_path=x_cookies_path,
@@ -225,6 +238,37 @@ def _optional_choice(name: str, *, default: str, choices: tuple[str, ...]) -> st
         raise ConfigError(
             f"{name} must be one of {', '.join(choices)}, got {value!r}"
         )
+    return value
+
+
+def _optional_str(name: str, *, default: str) -> str:
+    """Read an optional string env var, falling back to `default` if unset/blank.
+
+    Used for DIGEST_FROM_NAME, purely cosmetic display text for the email
+    From header (see emailer.send_digest, which hands it to
+    email.utils.formataddr). It is not handed to a subprocess argv or a URL
+    fetch, but it IS embedded into an RFC 5322 header field body, and that
+    is its own unsafe shape: an embedded CR or LF (Codex review finding on
+    PR #20) makes formataddr build a header value that Python's own email
+    Generator refuses to serialize, raising HeaderParseError deep inside
+    send_digest -- AFTER create_digest has already durably recorded the
+    digest row (PLAN.md §4.1), so every subsequent run's
+    get_pending_digest retry branch hits the identical failure and the
+    digest is stuck retrying forever, never sending. Validating here at
+    startup instead means a value with control characters fails fast,
+    before any collector runs, with a clear error -- rather than bricking
+    delivery only once a real digest tries to go out. Unlike ConfigError's
+    usual contract, the offending value is NOT echoed: unlike CLAUDE_EFFORT,
+    the actionable detail here is just "which characters", not the value
+    itself, and echoing raw control characters back into a log/error message
+    is its own minor hygiene problem.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip()
+    if _HEADER_CONTROL_CHAR_RE.search(value):
+        raise ConfigError(f"{name} must not contain control characters")
     return value
 
 

@@ -87,6 +87,7 @@ def _cfg() -> Config:
         smtp_user="user@example.com",
         smtp_password="app-password",
         digest_from="digest@4rgus.com",
+        digest_from_name="Digest",
         digest_to="me@toomhorvath.com",
         anthropic_model="claude-opus-5",
         archive_dir="./archive",
@@ -125,7 +126,17 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
     sent = {}
 
     def fake_send_digest(
-        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+        host,
+        port,
+        user,
+        password,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
     ):
         sent["body_md"] = body_md
         sent["allowed_urls"] = allowed_urls
@@ -201,7 +212,17 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     sent = {}
 
     def fake_send_digest(
-        host, port, user, pw, from_, to, subject, body_md, allowed_urls, generated_at_label
+        host,
+        port,
+        user,
+        pw,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
     ):
         sent.update(
             subject=subject,
@@ -252,7 +273,17 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
     sends = []
 
     def fake_send_digest(
-        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+        host,
+        port,
+        user,
+        password,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
     ):
         sends.append(body_md)
 
@@ -436,7 +467,17 @@ def test_send_and_finalize_passes_the_digests_stamped_item_urls_to_send_digest(
     captured = {}
 
     def fake_send_digest(
-        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+        host,
+        port,
+        user,
+        password,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
     ):
         captured["allowed_urls"] = allowed_urls
 
@@ -467,7 +508,17 @@ def test_send_and_finalize_recovers_urls_for_a_pending_resend_from_a_prior_run(
     captured = {}
 
     def fake_send_digest(
-        host, port, user, password, from_, to, subject, body_md, allowed_urls, generated_at_label
+        host,
+        port,
+        user,
+        password,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
     ):
         captured["allowed_urls"] = allowed_urls
 
