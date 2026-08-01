@@ -717,7 +717,16 @@ def send_digest(
     """
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = formataddr((digest_from_name, digest_from))
+    # digest_from may already be in "Display Name <addr@domain>" form (DIGEST_FROM
+    # is a free-text env var with no format enforcement in config.py, and
+    # _message_id_domain below already anticipates this shape). Passing it to
+    # formataddr as-is would nest it -- "Digest <Existing Name <addr@domain>>" --
+    # which email.utils.getaddresses parses as an EMPTY sender, so smtplib would
+    # submit with a null envelope sender and a broken From header instead of
+    # rejecting outright. parseaddr first extracts just the addr-spec, so
+    # formataddr always combines a bare address with the one display name we
+    # actually want.
+    msg["From"] = formataddr((digest_from_name, parseaddr(digest_from)[1]))
     msg["To"] = digest_to
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=_message_id_domain(digest_from))

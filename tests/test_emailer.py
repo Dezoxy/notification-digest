@@ -791,6 +791,41 @@ def test_send_digest_from_header_carries_display_name_with_comma_safely_quoted(m
     assert parseaddr(msg["From"]) == ("Digest, Personal", "digest@4rgus.com")
 
 
+def test_send_digest_from_header_extracts_addr_when_digest_from_already_has_a_name(
+    monkeypatch,
+):
+    # Codex P2: DIGEST_FROM is free-text (config.py enforces only non-empty),
+    # so it may already arrive in "Display Name <addr@domain>" form (the same
+    # shape _message_id_domain already anticipates). Passing that straight to
+    # formataddr nests it -- "Digest <Existing Name <addr@domain>>" -- which
+    # email.utils.getaddresses parses as an EMPTY sender, so smtplib would
+    # submit with a null envelope sender instead of rejecting outright. The
+    # addr-spec must be extracted first so only ONE display name ends up in
+    # the header: the caller-supplied digest_from_name, never the one
+    # embedded in digest_from.
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", FakeSMTP)
+
+    send_digest(
+        "smtp.mail.me.com",
+        587,
+        "user@example.com",
+        "app-specific-password",
+        "Existing Name <digest@tomhorvath.me>",
+        "Digest",
+        "me@toomhorvath.com",
+        "subject",
+        "body",
+        set(),
+        _WHEN,
+    )
+
+    msg = FakeSMTP.instances[0].sent_message
+    assert parseaddr(msg["From"]) == ("Digest", "digest@tomhorvath.me")
+    # The header must be a single well-formed mailbox, not a nested one that
+    # getaddresses would parse as empty.
+    assert email.utils.getaddresses([msg["From"]]) == [("Digest", "digest@tomhorvath.me")]
+
+
 def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, caplog):
     # A non-221 QUIT response (or any teardown error) must not surface as an
     # exception once send_message() has already succeeded -- the mail is
