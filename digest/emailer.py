@@ -15,6 +15,7 @@ from collections.abc import Collection
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 
 import markdown
@@ -639,6 +640,24 @@ def render_html(body_md: str, allowed_urls: Collection[str], generated_at_label:
     return _HTML_TEMPLATE.format(body=sanitized, generated_at=generated_at_label)
 
 
+def _message_id_domain(digest_from: str) -> str | None:
+    """Extract the domain to stamp on the Message-ID from a From address.
+
+    ``parseaddr`` handles both a bare address and the ``Display Name
+    <addr@domain>`` form, so this doesn't need its own address-grammar
+    parsing. Returns None -- rather than raising or building a malformed
+    domain -- when the address has no usable "@"-delimited domain (a
+    parseaddr miss, or a trailing-bare "user@"); the caller then falls back
+    to make_msgid()'s own hostname-based default, since a missing-but-
+    intentional domain there is strictly better than a broken Message-ID,
+    and send_digest must not start failing over a header nicety.
+    """
+    _, addr = parseaddr(digest_from)
+    if "@" not in addr:
+        return None
+    return addr.rsplit("@", 1)[1] or None
+
+
 def send_digest(
     smtp_host: str,
     smtp_port: int,
@@ -676,11 +695,25 @@ def send_digest(
     logged and swallowed rather than raised -- otherwise a caller would see
     an exception for an already-sent digest, mark it unsent, and re-send a
     duplicate on the next run.
+
+    ``Date`` and ``Message-ID`` are set explicitly rather than left for the
+    relay to synthesize: `Date` is required by RFC 5322, and a missing
+    `Message-ID` is a routine spam-scoring signal. iCloud's submission
+    server currently patches both in on the way out, so mail still flows
+    without this -- but a message that already carries them from the sender
+    reads as materially more legitimate to spam filters, and a relay
+    patching up your headers isn't something to depend on. The Message-ID's
+    domain is derived from ``digest_from`` (see _message_id_domain) rather
+    than left to default to the container's hostname, which is a random
+    Docker hex string with no relation to the sending domain -- exactly the
+    opposite of the legitimacy signal this is for.
     """
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = digest_from
     msg["To"] = digest_to
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=_message_id_domain(digest_from))
     msg.attach(MIMEText(body_md, "plain"))
     msg.attach(MIMEText(render_html(body_md, allowed_urls, generated_at_label), "html"))
 

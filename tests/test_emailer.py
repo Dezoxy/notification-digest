@@ -1,3 +1,4 @@
+import email.utils
 import smtplib
 import ssl
 from pathlib import Path
@@ -664,6 +665,99 @@ def test_send_digest_drives_smtp_in_order_with_correct_headers(monkeypatch):
     content_types = {part.get_content_type() for part in msg.walk()}
     assert "text/plain" in content_types
     assert "text/html" in content_types
+
+
+def test_send_digest_sets_a_parseable_date_header(monkeypatch):
+    # RFC 5322 requires a Date header; relying on the relay (iCloud) to
+    # patch one in on the way out is not something to depend on.
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", FakeSMTP)
+
+    send_digest(
+        "smtp.mail.me.com",
+        587,
+        "user@example.com",
+        "app-specific-password",
+        "digest@tomhorvath.me",
+        "me@toomhorvath.com",
+        "subject",
+        "body",
+        set(),
+        _WHEN,
+    )
+
+    msg = FakeSMTP.instances[0].sent_message
+    assert msg["Date"] is not None
+    email.utils.parsedate_to_datetime(msg["Date"])  # must not raise
+
+
+def test_send_digest_message_id_domain_matches_bare_from_address(monkeypatch):
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", FakeSMTP)
+
+    send_digest(
+        "smtp.mail.me.com",
+        587,
+        "user@example.com",
+        "app-specific-password",
+        "digest@tomhorvath.me",
+        "me@toomhorvath.com",
+        "subject",
+        "body",
+        set(),
+        _WHEN,
+    )
+
+    message_id = FakeSMTP.instances[0].sent_message["Message-ID"]
+    assert message_id is not None
+    assert message_id.startswith("<")
+    assert message_id.endswith("@tomhorvath.me>")
+
+
+def test_send_digest_message_id_domain_matches_display_name_from_address(monkeypatch):
+    # "Display Name <addr@domain>" form must still yield the right domain --
+    # parseaddr(), not a bare "@" split, is what makes this work.
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", FakeSMTP)
+
+    send_digest(
+        "smtp.mail.me.com",
+        587,
+        "user@example.com",
+        "app-specific-password",
+        "Digest <digest@tomhorvath.me>",
+        "me@toomhorvath.com",
+        "subject",
+        "body",
+        set(),
+        _WHEN,
+    )
+
+    message_id = FakeSMTP.instances[0].sent_message["Message-ID"]
+    assert message_id.startswith("<")
+    assert message_id.endswith("@tomhorvath.me>")
+
+
+def test_send_digest_message_id_falls_back_when_from_has_no_at_sign(monkeypatch):
+    # A malformed From with no "@" must not raise -- a missing-but-valid
+    # Message-ID (make_msgid()'s own hostname default) is strictly better
+    # than a broken one, and send_digest must not fail over a header nicety.
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", FakeSMTP)
+
+    send_digest(
+        "smtp.mail.me.com",
+        587,
+        "user@example.com",
+        "app-specific-password",
+        "not-an-email-address",
+        "me@toomhorvath.com",
+        "subject",
+        "body",
+        set(),
+        _WHEN,
+    )  # must not raise
+
+    message_id = FakeSMTP.instances[0].sent_message["Message-ID"]
+    assert message_id is not None
+    assert message_id.startswith("<")
+    assert message_id.endswith(">")
 
 
 def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, caplog):
