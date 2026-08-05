@@ -1,0 +1,6 @@
+# wrangler local cache/state
+.wrangler/
+# Local copies of the reader token / ingest key (generated at deploy time,
+# destined for Worker secrets + the digest service secret store). Never commit.
+.site-token.local
+.ingest-key.local
