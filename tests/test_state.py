@@ -12,11 +12,14 @@ from digest.state import (
     create_digest,
     get_cursors,
     get_pending_digest,
+    get_pending_digests,
     get_polymarket_probs,
     get_recent_digests,
     get_unsummarized_items,
     init_db,
     mark_digest_sent,
+    mark_digest_site_published,
+    mark_digest_telegram_sent,
 )
 
 
@@ -890,3 +893,221 @@ def test_init_db_migrates_pre_polymarket_source_check_with_preexisting_rows(tmp_
     assert get_polymarket_probs(old_conn, ["m1"]) == {"m1": 0.6}
 
     old_conn.close()
+
+
+# --- site_published / telegram_sent columns (delivery-channels feature) ---
+
+
+def test_fresh_db_has_site_published_and_telegram_sent_defaulting_to_zero(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    row = conn.execute(
+        "SELECT site_published, telegram_sent FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row == (0, 0)
+
+
+def test_mark_digest_site_published_flips_only_that_flag(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    mark_digest_site_published(conn, digest_id)
+
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    assert row == (0, 1, 0)
+
+
+def test_mark_digest_telegram_sent_flips_only_that_flag(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    mark_digest_telegram_sent(conn, digest_id)
+
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    assert row == (0, 0, 1)
+
+
+def test_init_db_migrates_pre_delivery_channels_digests_table_missing_new_columns(
+    tmp_path: Path,
+):
+    # Simulate a database created before the multi-channel delivery refactor
+    # (predates site_published/telegram_sent -- mirrors the body_md/
+    # chat_title migration test precedents above).
+    old_conn = connect(str(tmp_path / "legacy_channels.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news', 'polymarket')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            chat_title  TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+
+        CREATE INDEX idx_items_digest_id ON items(digest_id);
+        """
+    )
+    old_conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) "
+        "VALUES ('2026-07-29T09:00:00+00:00', 1, 1, 'body')"
+    )
+    old_conn.commit()
+
+    # Must not raise sqlite3.OperationalError: no such column: site_published
+    init_db(old_conn)
+    # Idempotent: a second call must not raise or alter the schema again.
+    init_db(old_conn)
+
+    row = old_conn.execute(
+        "SELECT site_published, telegram_sent FROM digests"
+    ).fetchone()
+    assert row == (0, 0)  # pre-existing row defaults to not-yet-delivered on both new channels
+
+    mark_digest_site_published(old_conn, 1)
+    mark_digest_telegram_sent(old_conn, 1)
+    row = old_conn.execute(
+        "SELECT site_published, telegram_sent FROM digests"
+    ).fetchone()
+    assert row == (1, 1)
+
+    old_conn.close()
+
+
+# --- get_pending_digests (multi-channel delivery refactor) ---
+
+
+def _digest_row(
+    conn: sqlite3.Connection,
+    body_md: str,
+    *,
+    email_sent: int = 0,
+    site_published: int = 0,
+    telegram_sent: int = 0,
+) -> int:
+    """Insert a `digests` row directly with explicit per-channel flags -- these
+    tests only care about get_pending_digests' own filtering/ordering, not
+    item stamping (mirrors _insert_digest's role for get_recent_digests
+    above)."""
+    conn.execute(
+        "INSERT INTO digests "
+        "(created_at, item_count, email_sent, site_published, telegram_sent, body_md) "
+        "VALUES ('2026-07-29T10:00:00+00:00', 0, ?, ?, ?, ?)",
+        (email_sent, site_published, telegram_sent, body_md),
+    )
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def test_get_pending_digests_all_channels_done_is_not_pending(conn):
+    _digest_row(conn, "done", email_sent=1, site_published=1, telegram_sent=1)
+
+    assert get_pending_digests(conn, True, True, True) == []
+
+
+def test_get_pending_digests_any_enabled_channel_incomplete_is_pending(conn):
+    email_only = _digest_row(conn, "email pending", email_sent=0, site_published=1, telegram_sent=1)
+    site_only = _digest_row(conn, "site pending", email_sent=1, site_published=0, telegram_sent=1)
+    telegram_only = _digest_row(
+        conn, "telegram pending", email_sent=1, site_published=1, telegram_sent=0
+    )
+
+    result = get_pending_digests(conn, True, True, True)
+
+    assert [row[0] for row in result] == [email_only, site_only, telegram_only]
+
+
+def test_get_pending_digests_disabled_channel_ignored_for_pendingness(conn):
+    # The core semantic this function exists for: a legacy row with
+    # email_sent = 0 must NOT be pending once EMAIL_ENABLED is turned off,
+    # as long as every OTHER enabled channel is already done. Turning a
+    # channel off must never resurrect its old unset flags as eternal
+    # pending work.
+    _digest_row(conn, "email off, others done", email_sent=0, site_published=1, telegram_sent=1)
+
+    result = get_pending_digests(
+        conn, email_enabled=False, site_enabled=True, telegram_enabled=True
+    )
+    assert result == []
+
+
+def test_get_pending_digests_disabled_channel_ignored_for_retry_but_others_still_pending(conn):
+    digest_id = _digest_row(
+        conn, "email off, site still pending", email_sent=0, site_published=0, telegram_sent=1
+    )
+
+    result = get_pending_digests(
+        conn, email_enabled=False, site_enabled=True, telegram_enabled=True
+    )
+
+    assert [row[0] for row in result] == [digest_id]
+    _, _, done = result[0]
+    # `done` reflects the ACTUAL stored flags, unfiltered by which channels
+    # are enabled -- email_sent is still False here even though the email
+    # channel is disabled (the caller, not this function, ignores it).
+    assert done == {"email": False, "site": False, "telegram": True}
+
+
+def test_get_pending_digests_orders_oldest_first(conn):
+    newer = _digest_row(conn, "newer", email_sent=0)
+    older_created_at_but_inserted_second = _digest_row(conn, "also pending", email_sent=0)
+
+    result = get_pending_digests(conn, True, False, False)
+
+    # Insertion (and thus id) order is oldest-first here, matching the
+    # function's own ORDER BY id ASC contract.
+    assert [row[0] for row in result] == [newer, older_created_at_but_inserted_second]
+
+
+def test_get_pending_digests_no_channels_enabled_returns_empty_without_querying(conn):
+    _digest_row(conn, "irrelevant", email_sent=0, site_published=0, telegram_sent=0)
+
+    assert get_pending_digests(conn, False, False, False) == []
+
+
+def test_get_pending_digest_wrapper_ignores_site_and_telegram_flags(conn):
+    # Backward-compatible wrapper: a digest whose email already went out but
+    # whose site/telegram channels are still pending must NOT show up via
+    # the old single-channel get_pending_digest -- it only ever asked about
+    # email_sent.
+    _digest_row(conn, "email done, others pending", email_sent=1, site_published=0, telegram_sent=0)
+
+    assert get_pending_digest(conn) is None
+
+
+def test_get_pending_digest_wrapper_still_finds_newest_email_unsent(conn):
+    first_id = _digest_row(conn, "first", email_sent=0)
+    second_id = _digest_row(conn, "second", email_sent=0)
+
+    assert get_pending_digest(conn) == (second_id, "second")
+
+    mark_digest_sent(conn, second_id)
+    assert get_pending_digest(conn) == (first_id, "first")

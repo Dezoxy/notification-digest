@@ -10,6 +10,7 @@ import asyncio
 import logging
 import sqlite3
 import sys
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -24,7 +25,8 @@ from digest.collectors import x as x_collector
 from digest.collectors.polymarket import PolymarketCollectResult
 from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
-from digest.emailer import archive, send_digest
+from digest.emailer import archive, render_body_html, send_digest
+from digest.publish import publish_to_site, send_telegram_tldr
 from digest.state import (
     commit_new_items,
     connect,
@@ -32,12 +34,14 @@ from digest.state import (
     create_digest,
     get_cursors,
     get_digest_item_urls,
-    get_pending_digest,
+    get_pending_digests,
     get_polymarket_probs,
     get_recent_digests,
     get_unsummarized_items,
     init_db,
     mark_digest_sent,
+    mark_digest_site_published,
+    mark_digest_telegram_sent,
 )
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
@@ -93,30 +97,258 @@ async def _client_ready(client: TelegramClient) -> bool:
         return False
 
 
+def _digest_meta(conn: sqlite3.Connection, digest_id: int) -> tuple[int, str]:
+    """Fetch (item_count, created_at) for an existing digest row.
+
+    Used only by the pending-resend path in `_deliver`: `get_pending_digests`
+    returns just `(digest_id, body_md, done)` (see its docstring), so a
+    pending digest's item_count/created_at -- needed for the email subject
+    and the site/Telegram channels' payloads respectively -- have to be
+    read back separately. The fresh-digest path never calls this: it already
+    has both values on hand (`len(items)` and the row `create_digest` just
+    inserted).
+    """
+    row = conn.execute(
+        "SELECT item_count, created_at FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    return row[0], row[1]
+
+
+def _deliver_email(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    digest_id: int,
+    body_md: str,
+    item_count: int,
+    allowed_urls: Collection[str],
+) -> bool:
+    """Render+send the email channel for one digest. Returns True on success.
+
+    Subject and the HTML masthead's `generated_at_label` are both rendered
+    from THIS RUN's own clock (`datetime.now(UTC)`), not the digest's
+    `created_at` -- exactly like the pre-multi-channel `_send_and_finalize`
+    did, including for a pending resend: the reader should see when the
+    email actually went out, not when the digest was originally summarized.
+    Both are converted to Europe/Budapest at this render-time boundary per
+    CLAUDE.md (storage stays UTC).
+
+    On failure the digest row is left `email_sent = 0` (the caller never
+    marks this channel), so the next run's `get_pending_digests` pass
+    retries EXACTLY this channel -- site/Telegram, if also enabled, are
+    unaffected either way (see `_deliver_channels`). Only the exception's
+    type name is logged, never its message: SMTP errors can echo
+    credentials or message content.
+    """
+    now_local = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest"))
+    subject = f"digest: {item_count} items · {now_local:%Y-%m-%d %H:%M}"
+    # %-d (no leading zero) is a glibc/BSD strftime extension, not POSIX --
+    # but it's the same extension on both macOS (BSD libc) and the Linux
+    # container this actually deploys to (glibc), so it's safe here despite
+    # not being portable in general.
+    generated_at_label = f"{now_local:%a, %b %-d · %H:%M}"
+    try:
+        send_digest(
+            cfg.smtp_host,
+            cfg.smtp_port,
+            cfg.smtp_user,
+            cfg.smtp_password,
+            cfg.digest_from,
+            cfg.digest_from_name,
+            cfg.digest_to,
+            subject,
+            body_md,
+            allowed_urls,
+            generated_at_label,
+        )
+    except Exception as exc:
+        logger.error("email delivery failed for digest %d: %s", digest_id, type(exc).__name__)
+        return False
+
+    mark_digest_sent(conn, digest_id)
+    return True
+
+
+def _deliver_site(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    digest_id: int,
+    body_md: str,
+    item_count: int,
+    created_at: str,
+    allowed_urls: Collection[str],
+) -> bool:
+    """Render+publish the site channel for one digest. Returns True on success.
+
+    `render_body_html` is called here (not passed in) so the site channel
+    always gets HTML rendered against ITS OWN correctly-scoped
+    `allowed_urls` -- the digest's own stamped item URLs, identical to what
+    the email channel's HTML part uses (see digest/emailer.py's
+    `render_body_html` docstring: both channels must show the same
+    sanitized content, byte-for-byte).
+
+    On failure the digest row is left `site_published = 0`, so the next
+    run's `get_pending_digests` pass retries exactly this channel -- and,
+    per `_deliver_channels`'s ordering contract, Telegram is skipped THIS
+    run for this digest too (it links to the site page this call just
+    failed to publish). Only the exception's type name is logged, never its
+    message or the request URL/response body (digest/publish.py's
+    `publish_to_site` never logs either itself).
+    """
+    body_html = render_body_html(body_md, allowed_urls)
+    try:
+        publish_to_site(
+            digest_id,
+            body_md,
+            body_html,
+            created_at,
+            item_count,
+            cfg.site_publish_url,
+            cfg.site_ingest_key,
+        )
+    except Exception as exc:
+        logger.error("site publish failed for digest %d: %s", digest_id, type(exc).__name__)
+        return False
+
+    mark_digest_site_published(conn, digest_id)
+    return True
+
+
+def _deliver_telegram(
+    conn: sqlite3.Connection, cfg: Config, digest_id: int, body_md: str, created_at: str
+) -> bool:
+    """Send the Telegram TL;DR channel for one digest. Returns True on success.
+
+    On failure the digest row is left `telegram_sent = 0`, retried by a
+    later run's `get_pending_digests` pass exactly like the other two
+    channels. `send_telegram_tldr` already guarantees its own raised message
+    (and any log line it emits) never includes the response body or the
+    bot-token-bearing request URL -- this function additionally only logs
+    the exception's TYPE NAME, never `str(exc)`, as one more layer against
+    that secret ever reaching a log line.
+    """
+    try:
+        send_telegram_tldr(
+            digest_id,
+            body_md,
+            created_at,
+            cfg.telegram_notify_bot_token,
+            cfg.telegram_notify_chat_id,
+            cfg.telegram_notify_thread_id,
+            cfg.site_public_base,
+        )
+    except Exception as exc:
+        logger.error("telegram notify failed for digest %d: %s", digest_id, type(exc).__name__)
+        return False
+
+    mark_digest_telegram_sent(conn, digest_id)
+    return True
+
+
+def _deliver_channels(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    digest_id: int,
+    body_md: str,
+    item_count: int,
+    created_at: str,
+    done: dict[str, bool],
+) -> bool:
+    """Attempt every ENABLED, not-yet-done channel for one digest, independently.
+
+    `done` is the digest's current per-channel completion state (from
+    `get_pending_digests`, or `{"email": False, "site": False, "telegram":
+    False}` for a brand-new digest -- see `_deliver`). A channel that is
+    DISABLED (per `cfg`) or already `done` is skipped entirely: it is never
+    attempted, never logged as a failure, and never counted against this
+    digest's overall success.
+
+    Each attempted channel gets its own try/except (`_deliver_email`/
+    `_deliver_site`/`_deliver_telegram`) and, on success, marks its OWN flag
+    immediately via its own `mark_digest_*` call -- each of which is its own
+    tiny commit (see digest/state.py). This is what makes the three channels
+    independent: email failing can never roll back a site publish that
+    already succeeded moments earlier in this same call, because that
+    success was already durably committed before email was even attempted.
+    A failure only logs (exception type name only, never a message that
+    could carry credentials or a bot-token-bearing URL) and this function
+    moves on to the next channel.
+
+    Ordering: site is attempted BEFORE Telegram. This is a real dependency,
+    not an arbitrary choice -- the Telegram message links to the site's own
+    page for this digest (`f"{public_base}/d/{digest_id}"`,
+    digest/publish.py's `send_telegram_tldr`). If the site channel is
+    ENABLED for this run and still NOT done after its own attempt above
+    (either it just failed, or it was already pending from an earlier run
+    and this call didn't even reach it because it's disabled -- see below),
+    Telegram is skipped for this digest THIS RUN rather than sending a link
+    to a page that doesn't exist yet; it will be retried automatically next
+    run once site publish succeeds. This skip does NOT apply when the site
+    channel is disabled entirely (`cfg.site_publish_url` unset) -- an
+    intentionally site-less deployment must not have Telegram permanently
+    blocked by a channel it never intended to use.
+
+    Returns True iff every ENABLED channel for this digest is done (already
+    was, or just succeeded) by the time this returns -- a disabled channel
+    trivially counts as "done" for this purpose, since there is nothing left
+    for it to accomplish.
+    """
+    email_enabled = cfg.email_enabled
+    site_enabled = cfg.site_publish_url is not None
+    telegram_enabled = cfg.telegram_notify_bot_token is not None
+
+    email_done = done["email"] or not email_enabled
+    site_done = done["site"] or not site_enabled
+    telegram_done = done["telegram"] or not telegram_enabled
+
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    if email_enabled and not email_done:
+        email_done = _deliver_email(conn, cfg, digest_id, body_md, item_count, allowed_urls)
+
+    if site_enabled and not site_done:
+        site_done = _deliver_site(
+            conn, cfg, digest_id, body_md, item_count, created_at, allowed_urls
+        )
+
+    if telegram_enabled and not telegram_done:
+        if site_enabled and not site_done:
+            logger.info(
+                "digest %d: skipping telegram this run, site publish not done", digest_id
+            )
+        else:
+            telegram_done = _deliver_telegram(conn, cfg, digest_id, body_md, created_at)
+
+    return email_done and site_done and telegram_done
+
+
 def _deliver(
     conn: sqlite3.Connection, cfg: Config, failed_sources: list[str]
 ) -> bool:
-    """Post-collection delivery: retry any pending send, then summarize+send new items.
+    """Post-collection delivery: retry every pending digest, then summarize+deliver new items.
 
-    (a) A pending unsent digest (crash/SMTP failure on a previous run) is
-        resent as-is -- summarize is never called twice for the same items.
-        If that resend FAILS, we return False immediately without touching
-        this run's own items: there is no point attempting a second send on
-        a broken SMTP path, and the freshly collected items remain
-        unsummarized for a later run to pick up. If it SUCCEEDS, we do NOT
-        return -- we fall through to the normal path below so this run's
-        own collection (and its own `failed_sources` state) still gets
-        summarized and sent as a second email in the same run. Without this
-        fallthrough, this run's items would sit unsummarized until a later
-        run summarizes them with a fresh (possibly healthy) failed_sources,
-        silently dropping the partial-collection warning this run should
-        have carried.
+    (a) Every digest with at least one ENABLED channel still undelivered
+        (`get_pending_digests`, oldest first -- crash/API failure on a
+        previous run) has `_deliver_channels` retried for it. Unlike the
+        pre-multi-channel version of this function, a failure here does NOT
+        short-circuit the rest of this function: channels are independent
+        by design (a broken SMTP path must not stop a healthy site/Telegram
+        channel from delivering a DIFFERENT pending digest, or this run's
+        own freshly summarized one), so every pending digest is attempted
+        and the overall result is the AND of every attempt.
     (b) No unsummarized items -- nothing left to send, this is a normal
-        empty-window run (or the pending resend already covered everything).
+        empty-window run (or the pending pass already covered everything).
     (c) Otherwise: summarize with the CURRENT run's failed_sources, durably
-        record the digest (BEFORE sending, so a crash after this point
-        retries the send next run instead of re-summarizing), send, mark
-        sent, archive.
+        record the digest and archive it (BEFORE attempting any channel --
+        see below), then attempt all its channels.
+
+    Archiving: `archive()` is called exactly once, immediately after
+    `create_digest` durably records a NEW digest -- never on the
+    pending-resend path (that digest was already archived when it was first
+    created, in a previous run) and never gated on any channel's success or
+    failure. This is a deliberate decoupling from the old single-channel
+    behavior, where archiving only happened after a successful email send:
+    with EMAIL_ENABLED=false a digest could otherwise never be archived at
+    all, even though the site/Telegram channels delivered it just fine.
 
     `failed_sources` is a list of collector names (e.g. `["telegram"]`,
     `["x"]`, or `["telegram", "x"]`) built by the caller from each
@@ -124,36 +356,34 @@ def _deliver(
     Telegram-only failure and an X-only failure produce distinct banner
     text (PLAN.md §5) instead of collapsing to one undifferentiated flag.
 
-    Returns True if delivery succeeded or wasn't needed. Deliberately does
-    NOT factor in whether `failed_sources` is non-empty -- the caller
-    combines this with the collectors' own failure flags, because ANY
-    collector failure must surface as a non-zero exit (the sole signal for
-    the Loki alert on digest.service) even on a run that sends no email at
-    all, e.g. zero collected items with no pending/unsummarized backlog to
-    fall back on.
+    Returns True iff every enabled channel of every digest handled this run
+    (pending and freshly created alike) succeeded. Deliberately does NOT
+    factor in whether `failed_sources` is non-empty -- the caller combines
+    this with the collectors' own failure flags, because ANY collector
+    failure must surface as a non-zero exit (the sole signal for the Loki
+    alert on digest.service) even on a run that delivers nothing at all.
     """
-    pending = get_pending_digest(conn)
-    if pending is not None:
-        digest_id, body_md = pending
-        logger.info("retrying send of digest %d", digest_id)
-        item_count = conn.execute(
-            "SELECT item_count FROM digests WHERE id = ?", (digest_id,)
-        ).fetchone()[0]
-        if not _send_and_finalize(conn, cfg, digest_id, body_md, item_count):
-            return False
-        # Pending resend succeeded -- fall through so this run's own
-        # collection still gets summarized and sent, instead of discarding
-        # this run's failed_sources state.
+    email_enabled = cfg.email_enabled
+    site_enabled = cfg.site_publish_url is not None
+    telegram_enabled = cfg.telegram_notify_bot_token is not None
+
+    all_ok = True
+    pending = get_pending_digests(conn, email_enabled, site_enabled, telegram_enabled)
+    for digest_id, body_md, done in pending:
+        logger.info("retrying delivery of digest %d", digest_id)
+        item_count, created_at = _digest_meta(conn, digest_id)
+        ok = _deliver_channels(conn, cfg, digest_id, body_md, item_count, created_at, done)
+        all_ok = all_ok and ok
 
     items = get_unsummarized_items(conn, limit=_MAX_ITEMS_PER_DIGEST)
     if not items:
         logger.info("no unsummarized items, nothing to send")
-        return True
+        return all_ok
 
     # "Recently covered" continuity context (digest/summarize.py's
     # format_recent_coverage): every digest created in the last
     # _RECENT_COVERAGE_WINDOW, INCLUDING an unsent one still awaiting the
-    # pending-resend retry above -- see get_recent_digests' docstring for why
+    # pending pass above -- see get_recent_digests' docstring for why
     # email_sent is deliberately not part of the filter. `now`/`since` are
     # both UTC, per CLAUDE.md's storage-stays-UTC convention (created_at is
     # stored as `datetime.now(UTC).isoformat()`, see state.py's create_digest
@@ -194,8 +424,12 @@ def _deliver(
         return False
 
     digest_id = create_digest(conn, body_md, items)
-    if not _send_and_finalize(conn, cfg, digest_id, body_md, len(items)):
-        return False
+    archive(body_md, cfg.archive_dir, digest_id)
+
+    item_count, created_at = _digest_meta(conn, digest_id)
+    done = {"email": False, "site": False, "telegram": False}
+    ok = _deliver_channels(conn, cfg, digest_id, body_md, item_count, created_at, done)
+    all_ok = all_ok and ok
 
     # One Opus call per run keeps cost and runtime bounded -- do NOT loop
     # summarize here even if a remainder is left; the 3-hourly timer is the
@@ -203,60 +437,7 @@ def _deliver(
     remaining = count_unsummarized_items(conn)
     if remaining:
         logger.info("%d unsummarized items remain, will ship in the next digest", remaining)
-    return True
-
-
-def _send_and_finalize(
-    conn: sqlite3.Connection, cfg: Config, digest_id: int, body_md: str, item_count: int
-) -> bool:
-    """Send the digest, mark it sent, and archive it.
-
-    On SMTP failure the digest row is deliberately left email_sent=0 so the
-    next run's `get_pending_digest` branch retries the send (PLAN.md §4.1).
-    Email subject time, and the HTML masthead's `generated_at_label`, are
-    both rendered in Europe/Budapest per CLAUDE.md (storage stays UTC; only
-    render/email time converts) -- emailer.render_html itself does no
-    timezone conversion, it just displays whatever pre-formatted string it's
-    given.
-
-    The HTML link-provenance allowlist passed to send_digest is fetched
-    fresh from the digest's own stamped items (get_digest_item_urls), not
-    threaded through from an in-memory Item list -- that's what makes this
-    work identically for both callers of _send_and_finalize: the
-    fresh-digest path (create_digest just stamped these items in this same
-    call to _deliver) and the pending-resend path (the items were stamped
-    by create_digest in a PREVIOUS run; this run never built an Item list
-    at all, only read digest_id/body_md back off the `digests` table).
-    """
-    now_local = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest"))
-    subject = f"digest: {item_count} items · {now_local:%Y-%m-%d %H:%M}"
-    # %-d (no leading zero) is a glibc/BSD strftime extension, not POSIX --
-    # but it's the same extension on both macOS (BSD libc) and the Linux
-    # container this actually deploys to (glibc), so it's safe here despite
-    # not being portable in general.
-    generated_at_label = f"{now_local:%a, %b %-d · %H:%M}"
-    allowed_urls = get_digest_item_urls(conn, digest_id)
-    try:
-        send_digest(
-            cfg.smtp_host,
-            cfg.smtp_port,
-            cfg.smtp_user,
-            cfg.smtp_password,
-            cfg.digest_from,
-            cfg.digest_from_name,
-            cfg.digest_to,
-            subject,
-            body_md,
-            allowed_urls,
-            generated_at_label,
-        )
-    except Exception as exc:
-        logger.error("email send failed for digest %d: %s", digest_id, type(exc).__name__)
-        return False
-
-    mark_digest_sent(conn, digest_id)
-    archive(body_md, cfg.archive_dir, digest_id)
-    return True
+    return all_ok
 
 
 async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResult:

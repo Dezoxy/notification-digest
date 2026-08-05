@@ -412,3 +412,167 @@ def test_polymarket_swing_threshold_out_of_range_raises_config_error(monkeypatch
 
     with pytest.raises(ConfigError, match="POLYMARKET_SWING_THRESHOLD"):
         Config.from_env()
+
+
+# --- EMAIL_ENABLED / SITE_PUBLISH_URL / SITE_INGEST_KEY / SITE_PUBLIC_BASE /
+#     TELEGRAM_NOTIFY_BOT_TOKEN / TELEGRAM_NOTIFY_CHAT_ID /
+#     TELEGRAM_NOTIFY_THREAD_ID (delivery-channels feature) ---
+
+
+def _clear_delivery_channel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "EMAIL_ENABLED",
+        "SITE_PUBLISH_URL",
+        "SITE_INGEST_KEY",
+        "SITE_PUBLIC_BASE",
+        "TELEGRAM_NOTIFY_BOT_TOKEN",
+        "TELEGRAM_NOTIFY_CHAT_ID",
+        "TELEGRAM_NOTIFY_THREAD_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_delivery_channel_defaults_email_only(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+
+    config = Config.from_env()
+
+    assert config.email_enabled is True
+    assert config.site_publish_url is None
+    assert config.site_ingest_key is None
+    assert config.site_public_base is None
+    assert config.telegram_notify_bot_token is None
+    assert config.telegram_notify_chat_id is None
+    assert config.telegram_notify_thread_id == 0
+
+
+def test_email_enabled_false_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+    # Some other channel must stay enabled, or the all-disabled guard fires
+    # (see test_all_channels_disabled_raises_config_error below).
+    monkeypatch.setenv("SITE_PUBLISH_URL", "https://news-site.example.workers.dev")
+    monkeypatch.setenv("SITE_INGEST_KEY", "ingest-secret")
+
+    config = Config.from_env()
+
+    assert config.email_enabled is False
+
+
+def test_all_channels_disabled_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    with pytest.raises(ConfigError, match="all delivery channels disabled"):
+        Config.from_env()
+
+
+def test_site_publish_url_without_ingest_key_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("SITE_PUBLISH_URL", "https://news-site.example.workers.dev")
+
+    with pytest.raises(ConfigError, match="SITE_INGEST_KEY is required"):
+        Config.from_env()
+
+
+def test_site_publish_url_with_ingest_key_is_ok(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("SITE_PUBLISH_URL", "https://news-site.example.workers.dev/")
+    monkeypatch.setenv("SITE_INGEST_KEY", "ingest-secret")
+
+    config = Config.from_env()
+
+    assert config.site_publish_url == "https://news-site.example.workers.dev"  # trailing / stripped
+    assert config.site_ingest_key == "ingest-secret"
+
+
+def test_site_publish_url_non_http_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("SITE_PUBLISH_URL", "ftp://news-site.example.com")
+    monkeypatch.setenv("SITE_INGEST_KEY", "ingest-secret")
+
+    with pytest.raises(ConfigError, match="SITE_PUBLISH_URL"):
+        Config.from_env()
+
+
+def test_telegram_bot_token_without_chat_id_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+
+    with pytest.raises(ConfigError, match="TELEGRAM_NOTIFY_CHAT_ID is required"):
+        Config.from_env()
+
+
+def test_telegram_bot_token_without_site_public_base_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+
+    with pytest.raises(ConfigError, match="SITE_PUBLIC_BASE is required"):
+        Config.from_env()
+
+
+def test_telegram_channel_fully_configured_is_ok(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok/")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_THREAD_ID", "42")
+
+    config = Config.from_env()
+
+    assert config.telegram_notify_bot_token == "bot-token"
+    assert config.telegram_notify_chat_id == "-100123"
+    assert config.site_public_base == "https://news.example.com/t/tok"  # trailing / stripped
+    assert config.telegram_notify_thread_id == 42
+
+
+def test_telegram_notify_thread_id_defaults_to_zero(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+
+    config = Config.from_env()
+
+    assert config.telegram_notify_thread_id == 0
+
+
+def test_telegram_notify_thread_id_negative_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_THREAD_ID", "-1")
+
+    with pytest.raises(ConfigError, match="TELEGRAM_NOTIFY_THREAD_ID must be a non-negative"):
+        Config.from_env()
+
+
+def test_site_and_telegram_secrets_excluded_from_repr(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("SITE_PUBLISH_URL", "https://news-site.example.workers.dev")
+    monkeypatch.setenv("SITE_INGEST_KEY", "super-secret-ingest-key")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "super-secret-bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/super-secret-token")
+
+    config = Config.from_env()
+
+    text = repr(config)
+    assert "super-secret-ingest-key" not in text
+    assert "super-secret-bot-token" not in text
+    assert "super-secret-token" not in text

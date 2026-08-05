@@ -28,11 +28,13 @@ CREATE TABLE IF NOT EXISTS items (
 );
 
 CREATE TABLE IF NOT EXISTS digests (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at  TEXT NOT NULL,
-    item_count  INTEGER NOT NULL,
-    email_sent  INTEGER NOT NULL DEFAULT 0,
-    body_md     TEXT NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      TEXT NOT NULL,
+    item_count      INTEGER NOT NULL,
+    email_sent      INTEGER NOT NULL DEFAULT 0,
+    site_published  INTEGER NOT NULL DEFAULT 0,
+    telegram_sent   INTEGER NOT NULL DEFAULT 0,
+    body_md         TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -114,6 +116,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_add_chat_title_column(conn)
     _migrate_expand_source_check_for_news(conn)
     _migrate_expand_source_check_for_polymarket(conn)
+    _migrate_add_site_published_column(conn)
+    _migrate_add_telegram_sent_column(conn)
 
 
 def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
@@ -146,6 +150,40 @@ def _migrate_add_chat_title_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
     if "chat_title" not in columns:
         conn.execute("ALTER TABLE items ADD COLUMN chat_title TEXT")
+        conn.commit()
+
+
+def _migrate_add_site_published_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.site_published` on databases predating the multi-channel delivery refactor.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_body_md_column`/`_migrate_add_chat_title_column` above --
+    `CREATE TABLE IF NOT EXISTS` never alters an existing table, so an
+    upgraded pre-refactor database would otherwise be missing this column
+    and every read/write touching it would crash with
+    "sqlite3.OperationalError: no such column: site_published". `DEFAULT 0`
+    means every pre-existing row is treated as "not yet published to the
+    site" -- correct, since the site channel didn't exist when those rows
+    were written, so they are exactly as pending on it as a brand-new row
+    with the channel enabled.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "site_published" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN site_published INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+
+
+def _migrate_add_telegram_sent_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.telegram_sent` on databases predating the multi-channel delivery refactor.
+
+    Sibling of `_migrate_add_site_published_column` immediately above --
+    see its docstring for the full rationale (identical pattern, identical
+    "pre-existing rows default to not-yet-delivered" reasoning), just for
+    the Telegram channel's own flag instead.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "telegram_sent" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN telegram_sent INTEGER NOT NULL DEFAULT 0")
         conn.commit()
 
 
@@ -639,19 +677,118 @@ def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
     return {row[0] for row in rows}
 
 
+def get_pending_digests(
+    conn: sqlite3.Connection,
+    email_enabled: bool,
+    site_enabled: bool,
+    telegram_enabled: bool,
+) -> list[tuple[int, str, dict[str, bool]]]:
+    """Return every digest with at least one ENABLED channel still undelivered, oldest first.
+
+    Replaces the old single-channel `get_pending_digest` (kept below as a
+    thin backward-compatible wrapper) now that delivery has three
+    independent channels (digest/main.py's `_deliver_channels`): email
+    (`email_sent`), site (`site_published`), and Telegram (`telegram_sent`).
+    A digest is "pending" here iff at least one of its ENABLED channels'
+    flags is still 0 -- a DISABLED channel's flag is ignored entirely, both
+    for deciding pendingness and (by the caller, which only retries flags it
+    reads out of the returned `done` map) for retries. This is what keeps
+    turning a channel off from making its old unset-flag rows eternally
+    pending: e.g. a digest sent by email before EMAIL_ENABLED was ever
+    turned off has `email_sent = 0` forever, but with `email_enabled=False`
+    that flag is never consulted, so the row is not pending unless some
+    OTHER enabled channel is also incomplete.
+
+    Each returned tuple is `(digest_id, body_md, done)`, where `done` is a
+    `{"email": bool, "site": bool, "telegram": bool}` map of the digest's
+    ACTUAL stored flags (not filtered by which channels are enabled) --
+    `_deliver_channels` needs the raw per-channel completion state to know
+    which of the enabled-and-incomplete channels to attempt, and passing the
+    unfiltered map (rather than pre-masking it here) keeps this function a
+    pure read of stored state, with the enabled/disabled policy decision
+    left entirely to the caller.
+
+    Ordered oldest first (`ORDER BY id ASC`) -- unlike the old
+    `get_pending_digest`'s "newest unsent wins" ordering, multiple pending
+    digests here must be retried in the order they were created, since a
+    later digest's "recently covered" continuity context
+    (digest/summarize.py's format_recent_coverage) depends on earlier ones
+    having already gone out.
+
+    If none of the three channels are enabled, the WHERE clause would be
+    empty (no channel to check pendingness against); returns `[]`
+    immediately in that case without querying -- this should never actually
+    happen in production, since `Config.from_env` raises a ConfigError when
+    every channel is disabled, but it keeps this function's own contract
+    total rather than relying on that caller-side guarantee.
+    """
+    conditions = []
+    if email_enabled:
+        conditions.append("email_sent = 0")
+    if site_enabled:
+        conditions.append("site_published = 0")
+    if telegram_enabled:
+        conditions.append("telegram_sent = 0")
+    if not conditions:
+        return []
+
+    where_sql = " OR ".join(conditions)
+    rows = conn.execute(
+        "SELECT id, body_md, email_sent, site_published, telegram_sent "
+        f"FROM digests WHERE {where_sql} ORDER BY id ASC"
+    ).fetchall()
+    return [
+        (
+            digest_id,
+            body_md,
+            {
+                "email": bool(email_sent),
+                "site": bool(site_published),
+                "telegram": bool(telegram_sent),
+            },
+        )
+        for digest_id, body_md, email_sent, site_published, telegram_sent in rows
+    ]
+
+
 def get_pending_digest(conn: sqlite3.Connection) -> tuple[int, str] | None:
-    """Return (id, body_md) of the newest unsent digest, or None if none is pending."""
-    row = conn.execute(
-        "SELECT id, body_md FROM digests WHERE email_sent = 0 ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    if row is None:
+    """Return (id, body_md) of the newest unsent digest, or None if none is pending.
+
+    Thin backward-compatible wrapper around `get_pending_digests`, kept for
+    any single-channel-only caller (and the pre-multi-channel test suite)
+    that only ever cared about email. Defined with `site_enabled=False,
+    telegram_enabled=False` so "pending" here means EXACTLY `email_sent =
+    0`, byte-for-byte the same condition this function checked before the
+    multi-channel refactor -- site_published/telegram_sent never factor in.
+    `get_pending_digests` returns oldest-first; this takes the LAST entry
+    (highest id) to preserve this function's own historical "newest unsent
+    wins" contract. digest/main.py's `_deliver` no longer calls this
+    directly -- it calls `get_pending_digests` for all three channels.
+    """
+    pending = get_pending_digests(
+        conn, email_enabled=True, site_enabled=False, telegram_enabled=False
+    )
+    if not pending:
         return None
-    return (row[0], row[1])
+    digest_id, body_md, _done = pending[-1]
+    return (digest_id, body_md)
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
     """Flip a digest's email_sent flag to 1 after SMTP confirms delivery."""
     conn.execute("UPDATE digests SET email_sent = 1 WHERE id = ?", (digest_id,))
+    conn.commit()
+
+
+def mark_digest_site_published(conn: sqlite3.Connection, digest_id: int) -> None:
+    """Flip a digest's site_published flag to 1 after publish_to_site confirms the PUT."""
+    conn.execute("UPDATE digests SET site_published = 1 WHERE id = ?", (digest_id,))
+    conn.commit()
+
+
+def mark_digest_telegram_sent(conn: sqlite3.Connection, digest_id: int) -> None:
+    """Flip a digest's telegram_sent flag to 1 after send_telegram_tldr confirms delivery."""
+    conn.execute("UPDATE digests SET telegram_sent = 1 WHERE id = ?", (digest_id,))
     conn.commit()
 
 
