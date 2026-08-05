@@ -10,7 +10,7 @@ import asyncio
 import logging
 import sqlite3
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -31,11 +31,29 @@ from digest.state import (
     get_cursors,
     get_digest_item_urls,
     get_pending_digest,
+    get_recent_digests,
     get_unsummarized_items,
     init_db,
     mark_digest_sent,
 )
-from digest.summarize import _MAX_PROMPT_BYTES, SummarizeError, select_items_for_prompt, summarize
+from digest.summarize import (
+    _MAX_PROMPT_BYTES,
+    SummarizeError,
+    format_recent_coverage,
+    select_items_for_prompt,
+    summarize,
+)
+
+# How far back _deliver looks for prior digests when building the
+# {{RECENT_COVERAGE}} prompt block (digest/summarize.py's
+# format_recent_coverage) -- the "running story memory" that lets the
+# summarizer write delta-only updates for stories it already covered instead
+# of re-explaining them every 3 hours. 24 hours is a full day's worth of
+# briefings (8 runs at the 3-hourly cadence) -- long enough that a story
+# spanning a slow news day is still recognized as "already covered" on its
+# second or third mention, short enough that genuinely stale coverage
+# eventually ages out and stops suppressing a fresh full write-up.
+_RECENT_COVERAGE_WINDOW = timedelta(hours=24)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,6 +147,18 @@ def _deliver(
         logger.info("no unsummarized items, nothing to send")
         return True
 
+    # "Recently covered" continuity context (digest/summarize.py's
+    # format_recent_coverage): every digest created in the last
+    # _RECENT_COVERAGE_WINDOW, INCLUDING an unsent one still awaiting the
+    # pending-resend retry above -- see get_recent_digests' docstring for why
+    # email_sent is deliberately not part of the filter. `now`/`since` are
+    # both UTC, per CLAUDE.md's storage-stays-UTC convention (created_at is
+    # stored as `datetime.now(UTC).isoformat()`, see state.py's create_digest
+    # -- comparing against a UTC `since` keeps that comparison meaningful).
+    now = datetime.now(UTC)
+    since = now - _RECENT_COVERAGE_WINDOW
+    recent_coverage = format_recent_coverage(get_recent_digests(conn, since.isoformat()), now)
+
     # Shrink to whatever actually fits in one prompt BEFORE both summarize()
     # and create_digest(): the item-count cap above (_MAX_ITEMS_PER_DIGEST)
     # bounds source characters, but json.dumps(ensure_ascii=False) still lets
@@ -141,13 +171,17 @@ def _deliver(
     # pre-shrink `items`, the untrimmed remainder would be marked summarized
     # without ever actually being sent to the model. Keeping the shrink in
     # _deliver and passing its result to both calls keeps the summarized set
-    # and the stamped set identical by construction.
-    items = select_items_for_prompt(items, failed_sources, _MAX_PROMPT_BYTES)
+    # and the stamped set identical by construction. `recent_coverage` is
+    # passed through here too: it is embedded in every built prompt exactly
+    # like the items are, so its bytes count toward _MAX_PROMPT_BYTES
+    # automatically (see select_items_for_prompt's docstring).
+    items = select_items_for_prompt(items, failed_sources, recent_coverage, _MAX_PROMPT_BYTES)
 
     try:
         body_md = summarize(
             items,
             failed_sources,
+            recent_coverage,
             cfg.anthropic_model,
             cfg.claude_timeout_seconds,
             cfg.claude_effort,

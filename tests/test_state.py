@@ -11,6 +11,7 @@ from digest.state import (
     create_digest,
     get_cursors,
     get_pending_digest,
+    get_recent_digests,
     get_unsummarized_items,
     init_db,
     mark_digest_sent,
@@ -610,3 +611,71 @@ def test_create_digest_raises_and_rolls_back_on_snapshot_mismatch(conn):
 
     assert conn.execute("SELECT COUNT(*) FROM digests").fetchone()[0] == 0
     assert get_unsummarized_items(conn) == [real_item]
+
+
+# --- get_recent_digests (running-story-memory / "recent coverage" feature) ---
+
+
+def _insert_digest(
+    conn: sqlite3.Connection, created_at: str, body_md: str, email_sent: int = 1
+) -> None:
+    """Insert a `digests` row directly, bypassing create_digest -- these tests only
+    care about get_recent_digests' own filtering/ordering, not item stamping."""
+    conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) VALUES (?, 0, ?, ?)",
+        (created_at, email_sent, body_md),
+    )
+    conn.commit()
+
+
+def test_get_recent_digests_excludes_rows_older_than_the_window(conn):
+    _insert_digest(conn, "2026-07-28T10:00:00+00:00", "outside")  # 26h before `since` below
+    _insert_digest(conn, "2026-07-29T09:00:00+00:00", "inside")
+
+    since_iso = "2026-07-29T00:00:00+00:00"
+    result = get_recent_digests(conn, since_iso)
+
+    assert result == [("2026-07-29T09:00:00+00:00", "inside")]
+
+
+def test_get_recent_digests_includes_a_row_exactly_at_the_window_boundary(conn):
+    since_iso = "2026-07-29T00:00:00+00:00"
+    _insert_digest(conn, since_iso, "on the boundary")
+
+    result = get_recent_digests(conn, since_iso)
+
+    assert result == [(since_iso, "on the boundary")]
+
+
+def test_get_recent_digests_includes_unsent_rows(conn):
+    # P1 spec requirement: get_recent_digests must deliberately IGNORE
+    # email_sent -- a digest created but not yet sent (e.g. pending SMTP
+    # retry) still reaches the reader, so it counts as coverage exactly like
+    # a sent one.
+    _insert_digest(conn, "2026-07-29T10:00:00+00:00", "pending unsent", email_sent=0)
+
+    result = get_recent_digests(conn, "2026-07-29T00:00:00+00:00")
+
+    assert result == [("2026-07-29T10:00:00+00:00", "pending unsent")]
+
+
+def test_get_recent_digests_orders_newest_first(conn):
+    _insert_digest(conn, "2026-07-29T08:00:00+00:00", "oldest")
+    _insert_digest(conn, "2026-07-29T12:00:00+00:00", "newest")
+    _insert_digest(conn, "2026-07-29T10:00:00+00:00", "middle")
+
+    result = get_recent_digests(conn, "2026-07-29T00:00:00+00:00")
+
+    assert result == [
+        ("2026-07-29T12:00:00+00:00", "newest"),
+        ("2026-07-29T10:00:00+00:00", "middle"),
+        ("2026-07-29T08:00:00+00:00", "oldest"),
+    ]
+
+
+def test_get_recent_digests_empty_when_nothing_in_window(conn):
+    _insert_digest(conn, "2026-07-01T00:00:00+00:00", "ancient history")
+
+    result = get_recent_digests(conn, "2026-07-29T00:00:00+00:00")
+
+    assert result == []

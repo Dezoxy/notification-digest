@@ -471,3 +471,35 @@ def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
     """Flip a digest's email_sent flag to 1 after SMTP confirms delivery."""
     conn.execute("UPDATE digests SET email_sent = 1 WHERE id = ?", (digest_id,))
     conn.commit()
+
+
+def get_recent_digests(conn: sqlite3.Connection, since_iso: str) -> list[tuple[str, str]]:
+    """Return (created_at, body_md) for every digest created at or after `since_iso`, newest first.
+
+    Feeds digest/summarize.py's format_recent_coverage, which is how the
+    summarizer learns what it already told the reader in the last 24 hours
+    (see that function's docstring for the "recently covered" prompt
+    feature this supports).
+
+    Deliberately does NOT filter on `email_sent`: a digest row with
+    email_sent = 0 is not abandoned content -- it is either about to be
+    retried by _deliver's pending-resend path (see digest/main.py) or was
+    already retried and delivered by the time this query runs on a later
+    invocation. Either way, that digest's body reaches the reader, so its
+    headings are exactly as much "already covered" as a digest that shows
+    email_sent = 1 here. Filtering on email_sent = 1 would let the
+    summarizer re-explain a story that is sitting in a pending-resend
+    digest the reader is about to receive (or already has).
+
+    `since_iso` is compared lexicographically against `created_at` in SQL,
+    which is safe here because both are ISO8601 UTC strings produced by
+    `datetime.isoformat()` (see create_digest): ISO8601's fixed-width,
+    most-significant-field-first layout makes lexicographic order and
+    chronological order coincide, so no parsing is needed to filter
+    correctly in the query itself.
+    """
+    rows = conn.execute(
+        "SELECT created_at, body_md FROM digests WHERE created_at >= ? ORDER BY created_at DESC",
+        (since_iso,),
+    ).fetchall()
+    return [(row[0], row[1]) for row in rows]
