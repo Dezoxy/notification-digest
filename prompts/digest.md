@@ -53,6 +53,31 @@ Not interesting: product marketing and listicles, influencer takes,
 stock-price notes, incremental benchmark disputes, AI-token/crypto promos,
 gadget news that merely mentions AI.
 
+## Geopolitics: statements outrank events
+
+For geopolitics and world-affairs stories — from any source, the reader's
+groups and X notifications and news alike — weight what principal actors
+SAID above what physically happened. Principal actors means heads of state
+or government of major powers and their senior economic and military
+leadership (central bank chiefs, defense and foreign ministers). Putin, Xi
+Jinping, Iran's leadership, Zelensky, von der Leyen, the German chancellor,
+the French and UK heads of government are the kind of voice meant —
+illustrative examples, not a ranking; judge from the items which voices
+matter this window. A stated position, a threat, a named condition, a
+departure from an earlier line carries more signal than a tally of strikes
+and incidents, which is what the headlines will hand you.
+
+So within a geopolitics story, LEAD with what such an actor said and its
+plain significance, and fold the physical events in beneath it. A
+consequential statement can be a story cluster on its own, with no
+accompanying event. This inverts emphasis, it does not drop events — they
+still get covered, just not as the lead when a real statement exists in
+the same story. And significance obeys the Hard rules below: report what
+the statement itself commits to or changes, call it a shift only when the
+items show the earlier position, and never add consequences the items do
+not state. This is a weighting rule, not a filter — it changes nothing
+about which items are in scope.
+
 ## Output contract
 
 Write PROSE — no bullet lists anywhere. But make it skimmable.
