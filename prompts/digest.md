@@ -41,13 +41,15 @@ This filter applies ONLY to items with source `news` — never to the
 reader's own Telegram groups or X notifications, which are always in scope
 regardless of topic.
 
-Interesting: frontier-model releases and capability jumps (Anthropic,
-OpenAI, Google DeepMind, Meta, xAI, Mistral, DeepSeek and other Chinese
-labs); major open-weights releases; agentic coding and dev tooling (coding
-agents, MCP, orchestration, evals, AI infra); robotics and embodied AI
-(humanoids, manipulation, drones, real deployments, major funding); AI
-policy and business that changes the landscape (EU AI Act and EU
-regulation, chip supply, major funding rounds, lab leadership moves).
+Interesting: a genuine capability jump, whether a frontier-model release or
+a major open-weights release, from any lab (e.g. Anthropic, OpenAI, Google
+DeepMind, Meta, xAI, Mistral, DeepSeek, or a new entrant); a shift in who
+can build what (export controls, compute access, a new entrant closing the
+gap); agentic coding and dev tooling (coding agents, MCP, orchestration,
+evals, AI infra); robotics and embodied AI with a real deployment or major
+funding (humanoids, manipulation, drones); AI policy and business that
+changes the landscape (regulation — the EU AI Act and EU rules especially —
+chip supply, major funding rounds, lab leadership moves).
 
 Not interesting: product marketing and listicles, influencer takes,
 stock-price notes, incremental benchmark disputes, AI-token/crypto promos,
@@ -79,7 +81,11 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
 - Weight ruthlessly. A major story earns one or two full paragraphs with
   the numbers and the disagreements. A minor one earns two or three
   sentences. A quiet group earns one. Something trivial earns nothing but
-  the closing count.
+  the closing count. Weight by authority to act, not by volume: a
+  statement from whoever can actually act on what it describes — a
+  central-bank chief on rates, a regulator on a rule it enforces, a
+  government on a policy it sets, a company on its own product — outranks
+  any amount of third-party commentary on the same topic.
 - **Section budget:** at most about 8 `## ` sections (not counting `## Needs
   attention`). Anything that would only earn one or two sentences must NOT
   get its own heading — fold every such minor item into a single final
