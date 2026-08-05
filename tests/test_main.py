@@ -200,7 +200,7 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         # cfg.claude_effort must reach summarize() unchanged -- the only hop
         # between Config.claude_effort and the eventual `--effort` argv flag
         # in digest/summarize.py's run_claude.
@@ -253,6 +253,37 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert archived["id"] == 1
 
 
+def test_deliver_threads_real_recent_coverage_from_prior_digests(conn, monkeypatch):
+    # Wiring test: _deliver must DERIVE recent_coverage from the digests
+    # table (get_recent_digests -> format_recent_coverage), not just accept
+    # the parameter. Without this, a regression that always passes "" (or
+    # drops the get_recent_digests call) would leave every signature-level
+    # test green while silently disabling the running-story-memory feature.
+    prior_items = [_item("90")]
+    commit_new_items(conn, prior_items, {("telegram", "123"): "90"})
+    create_digest(conn, "## Prior story headline\n\nOld coverage.", prior_items)
+
+    commit_new_items(conn, [_item("91")], {("telegram", "123"): "91"})
+
+    captured = {}
+
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+        captured["recent_coverage"] = recent_coverage
+        return "## Needs attention\n..."
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), [])
+
+    assert ok is True
+    # The prior digest was created moments ago by this test, so it is inside
+    # the 24h window and its heading must appear with an age label.
+    assert "Prior story headline" in captured["recent_coverage"]
+    assert "<1h ago: " in captured["recent_coverage"]
+
+
 def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monkeypatch):
     # A pending digest from a previous run plus freshly collected items that
     # are still unsummarized: the pending resend must not swallow this run's
@@ -266,7 +297,7 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append((items, failed_sources))
         return "## Needs attention\n...new..."
 
@@ -318,7 +349,7 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append(failed_sources)
         return "## Needs attention\n...new..."
 
@@ -379,7 +410,7 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append(items)
         return "## Needs attention\n...batch..."
 
@@ -417,12 +448,12 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
 
     selected_subset = [i for i in full_batch if i.source_id == "2"]
 
-    def fake_select_items_for_prompt(items, failed_sources, max_prompt_bytes):
+    def fake_select_items_for_prompt(items, failed_sources, recent_coverage, max_prompt_bytes):
         return selected_subset
 
     summarize_received = {}
 
-    def fake_summarize(items, failed_sources, model, timeout_seconds, effort):
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_received["items"] = items
         return "## Needs attention\n...selected..."
 

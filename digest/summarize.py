@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Collection
+from datetime import UTC, datetime
 from pathlib import Path
 
 from digest.config import claude_subprocess_env
@@ -73,8 +74,13 @@ def _truncate_item_text(text: str) -> str:
     return text[:_MAX_ITEM_TEXT_CHARS] + _TRUNCATION_MARKER
 
 
-def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
-    """Load prompts/digest.md and substitute the items JSON and status placeholders."""
+def build_prompt(items: list[Item], failed_sources: list[str], recent_coverage: str) -> str:
+    """Load prompts/digest.md and substitute the coverage, status, and items-JSON placeholders.
+
+    `recent_coverage` is the pre-rendered {{RECENT_COVERAGE}} block (see
+    format_recent_coverage) -- this function does no formatting or
+    sanitization of it itself, it only substitutes the string it's given.
+    """
     template = _PROMPT_PATH.read_text()
 
     payload = [
@@ -120,8 +126,8 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
     else:
         collector_status = "Collector status: all collectors succeeded this run."
 
-    # Substitute {{COLLECTOR_STATUS}} before {{ITEMS_JSON}}, and always
-    # substitute {{ITEMS_JSON}} last: str.replace scans its input left to
+    # Substitution order is {{COLLECTOR_STATUS}}, then {{RECENT_COVERAGE}},
+    # then {{ITEMS_JSON}} strictly LAST: str.replace scans its input left to
     # right looking for the placeholder, and that scan does not distinguish
     # template text from text just inserted by an earlier .replace() call.
     # If ITEMS_JSON went first and an item's text happened to contain the
@@ -129,18 +135,55 @@ def build_prompt(items: list[Item], failed_sources: list[str]) -> str:
     # match INSIDE the just-inserted JSON and silently rewrite collected
     # message content. Doing ITEMS_JSON last means no subsequent .replace()
     # ever rescans data it inserted.
-    return template.replace("{{COLLECTOR_STATUS}}", collector_status).replace(
-        "{{ITEMS_JSON}}", items_json
+    #
+    # {{RECENT_COVERAGE}} carries the identical hazard, for the identical
+    # reason, and so goes before {{ITEMS_JSON}} for the same reason ITEMS_JSON
+    # itself goes last: `recent_coverage` (built by format_recent_coverage,
+    # digest/state.py's get_recent_digests) is not static template text --
+    # its lines are `## ` headings the MODEL wrote into a PAST digest, and
+    # those past headings were themselves generated from the same scraped,
+    # untrusted Telegram/X/news text this run's items come from. A prompt
+    # injection that survived into a prior heading is exactly as capable of
+    # embedding a literal "{{COLLECTOR_STATUS}}" or "{{ITEMS_JSON}}" as a
+    # hostile item's raw text is -- so it must never be substituted into a
+    # position some LATER .replace() call would rescan. Substituting it
+    # before ITEMS_JSON (mirroring COLLECTOR_STATUS's position) means only
+    # the deterministic, code-generated COLLECTOR_STATUS line is inserted
+    # earlier still, and nothing here ever rescans text this function itself
+    # inserted.
+    #
+    # This is defense in depth on top of a sanitization pass one layer down:
+    # format_recent_coverage already neutralizes any "{{" sequence inside a
+    # heading (replacing it with "{ {") before this function ever sees
+    # `recent_coverage`, so even a successfully-injected past heading cannot
+    # smuggle a live "{{...}}" placeholder into the built prompt at all --
+    # the ordering rule above is what protects the *item* text from being
+    # rescanned, this sanitization is what stops `recent_coverage` itself
+    # from ever containing a working placeholder in the first place.
+    return (
+        template.replace("{{COLLECTOR_STATUS}}", collector_status)
+        .replace("{{RECENT_COVERAGE}}", recent_coverage)
+        .replace("{{ITEMS_JSON}}", items_json)
     )
 
 
 def select_items_for_prompt(
-    items: list[Item], failed_sources: list[str], max_prompt_bytes: int
+    items: list[Item], failed_sources: list[str], recent_coverage: str, max_prompt_bytes: int
 ) -> list[Item]:
     """Return the longest OLDEST-first prefix of `items` whose built prompt fits.
 
+    `recent_coverage` is threaded straight through to every build_prompt call
+    this function makes (the full-list check and every binary-search
+    candidate alike): it is embedded in the built prompt exactly like the
+    items and the collector-status line are, so its byte length counts
+    toward `max_prompt_bytes` automatically -- a large recent_coverage block
+    (e.g. a run with an unusually busy last 24 hours) can itself reduce how
+    many items fit in this run's prompt, the same way a bigger
+    failed_sources banner would.
+
     The bound is checked against the BUILT prompt's UTF-8 BYTE length (via
-    `len(build_prompt(candidate, failed_sources).encode("utf-8"))`), not its
+    `len(build_prompt(candidate, failed_sources, recent_coverage).encode(
+    "utf-8"))`), not its
     Python character count and not the sum of the items' text lengths.
     Bytes, not characters, are what correlates with the model's token
     budget: json.dumps(ensure_ascii=False) serializes each item's text as
@@ -201,7 +244,10 @@ def select_items_for_prompt(
         return items
 
     n = len(items)
-    if len(build_prompt(items, failed_sources).encode("utf-8")) <= max_prompt_bytes:
+    if (
+        len(build_prompt(items, failed_sources, recent_coverage).encode("utf-8"))
+        <= max_prompt_bytes
+    ):
         return items
 
     if n == 1:
@@ -211,7 +257,10 @@ def select_items_for_prompt(
     while lo < hi:
         mid = (lo + hi + 1) // 2
         candidate = items[:mid]
-        if len(build_prompt(candidate, failed_sources).encode("utf-8")) <= max_prompt_bytes:
+        if (
+            len(build_prompt(candidate, failed_sources, recent_coverage).encode("utf-8"))
+            <= max_prompt_bytes
+        ):
             lo = mid
         else:
             hi = mid - 1
@@ -341,6 +390,71 @@ def _leading_whitespace_column(line: str) -> int:
     return col
 
 
+def _real_heading_lines(markdown_text: str) -> list[str]:
+    """Return the raw text (original case, merely stripped) of every real ATX `## ` heading line.
+
+    This is the exact CommonMark-aware scanning logic validate_output has
+    always used to decide what counts as a "real" `## ` heading -- fence
+    tracking (backtick and tilde, matching delimiter character, closer run
+    length >= opener run length, no info string on a closer) and
+    column-based, tab-aware indentation exclusion. It was pulled out of
+    validate_output verbatim, not reimplemented, specifically so a second
+    caller (format_recent_coverage, below) can reuse the identical notion of
+    "real heading" without the two ever being able to silently drift apart.
+    See validate_output's docstring for the full CommonMark reasoning behind
+    every rule enforced here; it is not repeated a second time in this
+    docstring.
+
+    Returns heading text in ORIGINAL case, with only surrounding whitespace
+    stripped -- callers that need case-insensitive comparison (validate_output,
+    to normalize before its emptiness check; format_recent_coverage, to match
+    the "Needs attention" routing label case-insensitively) lowercase it
+    themselves. This function makes no assumption about how its caller will
+    use the text, so it doesn't discard case information the caller might
+    need (format_recent_coverage renders the heading verbatim, in its
+    original case, into the "recently covered" list).
+    """
+    heading_lines = []
+    in_fence = False
+    fence_char = None
+    fence_len = 0
+    for line in markdown_text.splitlines():
+        # CommonMark: leading whitespace reaching column 4 or more makes
+        # this an indented code block -- neither a heading nor a fence
+        # delimiter can start here, regardless of what follows the
+        # indentation. Computed via CommonMark tab-expansion rules (see
+        # _leading_whitespace_column), not pattern-matched, so mixed
+        # space+tab indentation that reaches column 4 is caught too.
+        if _leading_whitespace_column(line) >= 4:
+            continue
+        stripped = line.strip()
+        if in_fence:
+            # CommonMark fence-closing rule: a closer must (1) start with a
+            # run of the SAME delimiter character that opened the fence,
+            # (2) that run must be AT LEAST as long as the opening run, and
+            # (3) nothing but whitespace may follow the run -- unlike an
+            # opener, a closer may not carry an info string. A ``` line
+            # inside a ~~~ fence never matches (wrong character); a 3-tick
+            # line inside a 4-tick fence matches too short a run and is just
+            # content; "``` python" has trailing non-whitespace and is also
+            # just content, not a closer.
+            run_len = len(stripped) - len(stripped.lstrip(fence_char))
+            remainder = stripped[run_len:]
+            if run_len >= fence_len and remainder.strip() == "":
+                in_fence = False
+                fence_char = None
+                fence_len = 0
+            continue
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence_char = stripped[0]
+            fence_len = len(stripped) - len(stripped.lstrip(fence_char))
+            in_fence = True
+            continue
+        if stripped.startswith("## "):
+            heading_lines.append(stripped[3:].strip())
+    return heading_lines
+
+
 def validate_output(markdown_text: str) -> None:
     """Enforce that the briefing markdown carries at least one real `## ` heading.
 
@@ -439,48 +553,224 @@ def validate_output(markdown_text: str) -> None:
     spaces) -- letting a mixed space+tab-indented refusal template slip
     past this check as if it were a real heading line. See
     _leading_whitespace_column.
+
+    The scanning itself (fence tracking, indentation exclusion) lives in the
+    shared helper _real_heading_lines, not here -- it was pulled out
+    verbatim so format_recent_coverage (which needs the actual heading TEXT,
+    not just a yes/no) can reuse the identical CommonMark logic rather than
+    risk a second, subtly different implementation drifting out of sync with
+    this one. This function's own job is just the two things layered on top:
+    lowercase for case-insensitive emptiness checking, and raising when
+    nothing real is left.
     """
-    heading_lines = []
-    in_fence = False
-    fence_char = None
-    fence_len = 0
-    for line in markdown_text.splitlines():
-        # CommonMark: leading whitespace reaching column 4 or more makes
-        # this an indented code block -- neither a heading nor a fence
-        # delimiter can start here, regardless of what follows the
-        # indentation. Computed via CommonMark tab-expansion rules (see
-        # _leading_whitespace_column), not pattern-matched, so mixed
-        # space+tab indentation that reaches column 4 is caught too.
-        if _leading_whitespace_column(line) >= 4:
-            continue
-        stripped = line.strip()
-        if in_fence:
-            # CommonMark fence-closing rule: a closer must (1) start with a
-            # run of the SAME delimiter character that opened the fence,
-            # (2) that run must be AT LEAST as long as the opening run, and
-            # (3) nothing but whitespace may follow the run -- unlike an
-            # opener, a closer may not carry an info string. A ``` line
-            # inside a ~~~ fence never matches (wrong character); a 3-tick
-            # line inside a 4-tick fence matches too short a run and is just
-            # content; "``` python" has trailing non-whitespace and is also
-            # just content, not a closer.
-            run_len = len(stripped) - len(stripped.lstrip(fence_char))
-            remainder = stripped[run_len:]
-            if run_len >= fence_len and remainder.strip() == "":
-                in_fence = False
-                fence_char = None
-                fence_len = 0
-            continue
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            fence_char = stripped[0]
-            fence_len = len(stripped) - len(stripped.lstrip(fence_char))
-            in_fence = True
-            continue
-        if stripped.startswith("## "):
-            heading_lines.append(stripped[3:].strip().lower())
+    heading_lines = [h.lower() for h in _real_heading_lines(markdown_text) if h]
 
     if not heading_lines:
         raise SummarizeError("digest output has no real '## ' heading line")
+
+
+# format_recent_coverage's routing-label skip: "## Needs attention" is not a
+# story, it's the prompt's own routing mechanism for "this needs the
+# reader's action" (see prompts/digest.md's "Needs attention" section) --
+# every digest that has anything urgent gets one, so treating it as "already
+# covered" would suppress a FUTURE window's own Needs attention section just
+# because a past one happened to exist, for a completely unrelated reason.
+# Compared case-insensitively against _real_heading_lines' output, which
+# preserves original case.
+_NEEDS_ATTENTION_HEADING = "needs attention"
+
+# format_recent_coverage caps the number of "recently covered" lines it will
+# ever render, regardless of how many digests or headings are available.
+# This is a hard ceiling on how much of the prompt budget the coverage block
+# can consume: at 24h of history and an 8-section-ish briefing every 3 hours,
+# a healthy run produces on the order of 8 runs * ~8 headings = ~64 candidate
+# lines even before the "Needs attention" skip -- close enough to this cap
+# that an unusually busy day (or a pathological run that somehow emits far
+# more headings than the prompt's own ~8-section budget asks for) could
+# otherwise make this block grow open-endedly every single run. 50 keeps the
+# coverage block bounded and cheap relative to _MAX_PROMPT_BYTES's other
+# consumers (items, collector status) without needing to special-case why a
+# particular day's history was unusually large.
+_MAX_RECENT_COVERAGE_LINES = 50
+
+# format_recent_coverage truncates any single sanitized heading longer than
+# this many characters. A real `## ` heading (prompts/digest.md's own
+# contract) is a short topic label ("Missile strike in Poland", "ASI
+# Alliance: token migration questions") -- normal headings are nowhere near
+# this length. This exists purely to bound a pathological or hostile model
+# output (e.g. a heading that somehow ballooned to paragraph length) so one
+# bad past digest can't blow up this run's prompt budget on its own; it is
+# not expected to ever trigger on a well-formed heading.
+_MAX_RECENT_COVERAGE_HEADING_CHARS = 160
+
+_NO_RECENT_COVERAGE = "(no prior briefings in the last 24 hours)"
+
+
+def _sanitize_recent_coverage_heading(heading: str) -> str:
+    """Neutralize a past heading's three hazards before it is rendered into this run's prompt.
+
+    `heading` came out of _real_heading_lines applied to a PAST digest's
+    body_md -- text the model itself generated, but generated FROM the same
+    untrusted, scraped Telegram/X/news material this run's items come from
+    (see format_recent_coverage's docstring for the full threat model). Three
+    specific things are neutralized here, each for a distinct reason:
+
+    1. Backticks are stripped entirely. The recent-coverage block is
+       embedded in the prompt inside a fenced ```text block (see
+       prompts/digest.md's "Recently covered" section) exactly like the
+       items JSON is embedded in a fenced ```json block -- and exactly the
+       same hazard build_prompt's backtick-escaping of item text defends
+       against applies here: a literal ``` sequence surviving into a past
+       heading could make the model perceive the fence as closed early,
+       exposing whatever coverage lines follow (or the prompt text after
+       them) as if they were outside the "this is data" boundary rather than
+       inside it. Removing every backtick (rather than escaping it, the way
+       build_prompt does for JSON-embedded text) is enough here because,
+       unlike the JSON payload, this text is never parsed back out of the
+       fence programmatically -- it only has to read sensibly as plain
+       prose, and a topic heading missing a backtick reads identically to a
+       reader either way.
+    2. Every "{{" is broken into "{ {" (a literal space inserted between the
+       braces). RECENT_COVERAGE is substituted into the prompt template via
+       str.replace BEFORE {{ITEMS_JSON}} (see build_prompt's ordering
+       comment) specifically so that this text is never itself rescanned by
+       a LATER .replace() call -- but that ordering rule alone only protects
+       against str.replace's own rescanning behavior. This sanitization is
+       the complementary, second layer: even if some future refactor changed
+       that ordering, or another consumer read this rendered coverage block
+       and ran its own placeholder substitution over it, a real
+       "{{COLLECTOR_STATUS}}" or "{{ITEMS_JSON}}" token could never have
+       survived into the string in the first place, because any "{{" was
+       already broken before this function returns.
+    3. The heading is truncated to _MAX_RECENT_COVERAGE_HEADING_CHARS. This
+       bounds one pathological or hostile heading's contribution to this
+       run's prompt size -- see that constant's own comment for why a real
+       heading is never expected to be anywhere near this long.
+
+    Returns the sanitized heading with leading/trailing whitespace stripped
+    (truncation, in particular, can leave trailing whitespace at the cut
+    point). Order matters: backticks are removed and "{{" is broken BEFORE
+    truncating, so the final length bound applies to the text that actually
+    reaches the prompt, not to a pre-sanitization length that sanitization
+    would then shrink further.
+    """
+    sanitized = heading.replace("`", "")
+    # Lookahead, not a plain replace("{{", "{ {"): a plain replace is a
+    # single non-overlapping left-to-right pass, so a brace RUN of three or
+    # more defeats it -- "{{{COLLECTOR_STATUS}}}" becomes
+    # "{ {{COLLECTOR_STATUS}}}", which still contains the live
+    # "{{COLLECTOR_STATUS}}" placeholder (the pass consumed the first two
+    # braces and never re-examined the pair formed by the second and third).
+    # The lookahead consumes only the FIRST brace of each adjacent pair, so
+    # every pair in a run of any length gets a space inserted in one pass:
+    # "{{{" -> "{ { {". No brace adjacency can survive, of any run length.
+    sanitized = re.sub(r"\{(?=\{)", "{ ", sanitized)
+    if len(sanitized) > _MAX_RECENT_COVERAGE_HEADING_CHARS:
+        sanitized = sanitized[:_MAX_RECENT_COVERAGE_HEADING_CHARS]
+    return sanitized.strip()
+
+
+def _format_digest_age(created_at: str, now: datetime) -> str:
+    """Render `created_at` (ISO8601 UTC) as a whole-hour age relative to `now`, e.g. "3h ago".
+
+    Floors to whole hours (via integer division of the elapsed seconds) --
+    the reader-facing "recently covered" list only needs a coarse sense of
+    how stale a story is ("this was covered a few hours ago" vs "just now"),
+    not minute-level precision. Ages under one full hour render as "<1h ago"
+    rather than "0h ago", since "0h ago" reads as if no time at all has
+    passed, which is misleading for e.g. a digest created 55 minutes ago.
+    """
+    created = datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        # Every created_at this codebase writes is timezone-aware UTC
+        # (datetime.now(UTC).isoformat(), see state.py's create_digest) --
+        # this fallback only guards a hypothetically naive timestamp (e.g.
+        # from a hand-edited test fixture or a pre-migration row) so
+        # subtraction against an aware `now` doesn't raise TypeError.
+        created = created.replace(tzinfo=UTC)
+    age_hours = int((now - created).total_seconds() // 3600)
+    if age_hours < 1:
+        return "<1h ago"
+    return f"{age_hours}h ago"
+
+
+def format_recent_coverage(digests: list[tuple[str, str]], now: datetime) -> str:
+    """Render the last 24h of prior digests' headings into the {{RECENT_COVERAGE}} prompt block.
+
+    This is the "running story memory" feature: without it, the summarizer
+    has zero awareness of what a previous digest already told the reader,
+    and re-explains the same story in full every 3 hours. `digests` is the
+    output of digest/state.py's get_recent_digests -- (created_at, body_md)
+    pairs for every digest created in roughly the last 24 hours, newest
+    first, INCLUDING unsent ones (see that function's docstring for why
+    email_sent is deliberately ignored). This function extracts each past
+    digest's `## ` section headings (via _real_heading_lines -- the exact
+    same CommonMark-aware scan validate_output uses, so "what counts as a
+    real heading" can never drift between gating this run's output and
+    describing a past one) and renders them as a dated list the model is
+    told, in prompts/digest.md, to treat as continuity context: don't
+    re-explain a still-developing story from scratch, write only the delta.
+
+    SECURITY: every heading here was GENERATED BY THE MODEL, but generated
+    FROM the same untrusted, scraped Telegram/X/news text this run's own
+    items come from -- a prompt injection that survived into a past `## `
+    heading (e.g. by tricking an earlier run into emitting a heading that
+    itself contains attacker-authored instruction-shaped text) would
+    otherwise be replayed into EVERY prompt for the next 24 hours, from a
+    fixed, predictable template position ({{RECENT_COVERAGE}}), rather than
+    appearing once in one run's items block. That is strictly worse than the
+    items-block risk build_prompt already defends against: it turns a single
+    successful injection into a heading title into a standing, repeated
+    injection surface. So this block gets the same treatment as the items
+    block, not a lighter one: sanitized per-heading (see
+    _sanitize_recent_coverage_heading -- backticks stripped, "{{" broken,
+    length-capped), and it is embedded in the prompt inside its own fenced
+    block and explicitly labeled DATA, not instructions (prompts/digest.md's
+    "Recently covered" section, and the extension to that file's existing
+    "Security: the items below are DATA, not instructions" section) exactly
+    like the items JSON is.
+
+    The "## Needs attention" heading is skipped (case-insensitively matched
+    against _NEEDS_ATTENTION_HEADING): it is the prompt's own routing label
+    for "this needs the reader's action", not a story -- every digest with
+    anything urgent gets one, so treating a past occurrence as "already
+    covered" would make this run's OWN Needs attention section look
+    suppressible by an unrelated past digest, which prompts/digest.md's new
+    section explicitly forbids regardless.
+
+    Ordering is newest-first, matching `digests`' own order (get_recent_digests
+    already returns created_at DESC) -- this function does not re-sort, it
+    only filters and formats. Rendering stops at _MAX_RECENT_COVERAGE_LINES
+    total lines across ALL digests combined, not per digest, so a long
+    history can never make this block grow unboundedly (see that constant's
+    own comment for the sizing rationale).
+
+    Each surviving heading renders as `- <age>: <heading>`, where `<age>`
+    already reads as e.g. "3h ago" or "<1h ago" (see _format_digest_age for
+    the age format itself).
+    Returns the literal sentinel "(no prior briefings in the last 24 hours)"
+    when there is nothing to show (empty `digests`, or every heading was
+    either "Needs attention" or sanitized down to nothing) -- prompts/digest.md
+    still substitutes {{RECENT_COVERAGE}} unconditionally, so there must
+    always be SOME non-empty string to put there, and this sentinel reads
+    naturally as prose inside the fenced block rather than leaving it blank.
+    """
+    lines: list[str] = []
+    for created_at, body_md in digests:
+        age_label = _format_digest_age(created_at, now)
+        for heading in _real_heading_lines(body_md):
+            if heading.lower() == _NEEDS_ATTENTION_HEADING:
+                continue
+            sanitized = _sanitize_recent_coverage_heading(heading)
+            if not sanitized:
+                continue
+            lines.append(f"- {age_label}: {sanitized}")
+            if len(lines) >= _MAX_RECENT_COVERAGE_LINES:
+                return "\n".join(lines)
+
+    if not lines:
+        return _NO_RECENT_COVERAGE
+    return "\n".join(lines)
 
 
 # Markdown inline link: `[text](url)`, optionally with a title
@@ -868,12 +1158,19 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
 def summarize(
     items: list[Item],
     failed_sources: list[str],
+    recent_coverage: str,
     model: str,
     timeout_seconds: int,
     effort: str,
 ) -> str:
     """Build the prompt, run it through Claude, validate and repair the
     contract, and deterministically prepend the collector-failure banner.
+
+    `recent_coverage` is passed straight through to build_prompt (see that
+    function's docstring for the substitution-ordering hazard it addresses,
+    and format_recent_coverage's own docstring, above, for how this string
+    is produced and why it must already be sanitized by the time it reaches
+    here).
 
     `effort` is threaded straight through to run_claude's `--effort` flag
     (see that function's docstring for why it's set explicitly and why
@@ -912,7 +1209,7 @@ def summarize(
     failed source, in the given order, followed by a blank line, then the
     (validated) model output unchanged.
     """
-    prompt = build_prompt(items, failed_sources)
+    prompt = build_prompt(items, failed_sources, recent_coverage)
     output = run_claude(prompt, model, timeout_seconds, effort)
     validate_output(output)
     # The TL;DR opener is checked SOFTLY, unlike the heading requirement: a
