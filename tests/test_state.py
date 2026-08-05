@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from digest.state import (
     create_digest,
     get_cursors,
     get_pending_digest,
+    get_polymarket_probs,
     get_recent_digests,
     get_unsummarized_items,
     init_db,
@@ -679,3 +681,212 @@ def test_get_recent_digests_empty_when_nothing_in_window(conn):
     result = get_recent_digests(conn, "2026-07-29T00:00:00+00:00")
 
     assert result == []
+
+
+# --- polymarket_probs (swing-anchor state, digest/collectors/polymarket.py) ---
+
+
+def test_get_polymarket_probs_empty_ids_returns_empty_dict_without_querying(conn):
+    assert get_polymarket_probs(conn, []) == {}
+
+
+def test_get_polymarket_probs_returns_only_requested_ids(conn):
+    commit_new_items(
+        conn,
+        [],
+        {},
+        polymarket_prob_updates={
+            "m1": (0.60, "Will X happen?"),
+            "m2": (0.30, "Will Y happen?"),
+        },
+    )
+
+    assert get_polymarket_probs(conn, ["m1"]) == {"m1": 0.60}
+    assert get_polymarket_probs(conn, ["m1", "m2"]) == {"m1": 0.60, "m2": 0.30}
+    assert get_polymarket_probs(conn, ["m3"]) == {}
+
+
+def test_commit_new_items_with_empty_items_list_is_a_supported_baseline_call(conn):
+    # Baseline recordings (a market's first sighting) go through
+    # commit_new_items with items=[] -- must not raise, and must still
+    # upsert the anchor.
+    inserted = commit_new_items(
+        conn, [], {}, polymarket_prob_updates={"m1": (0.55, "Will X happen?")}
+    )
+
+    assert inserted == 0
+    assert get_polymarket_probs(conn, ["m1"]) == {"m1": 0.55}
+
+
+def test_commit_new_items_polymarket_prob_updates_upsert_overwrites_on_repeat(conn):
+    commit_new_items(conn, [], {}, polymarket_prob_updates={"m1": (0.40, "Q")})
+    assert get_polymarket_probs(conn, ["m1"]) == {"m1": 0.40}
+
+    commit_new_items(conn, [], {}, polymarket_prob_updates={"m1": (0.60, "Q")})
+    assert get_polymarket_probs(conn, ["m1"]) == {"m1": 0.60}
+
+
+def test_commit_new_items_polymarket_prob_updates_defaults_to_none_unaffected(conn):
+    # Every pre-existing call shape (no polymarket_prob_updates kwarg at
+    # all) must remain completely unaffected -- the parameter is
+    # keyword-only with a None default specifically so this stays true.
+    inserted = commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    assert inserted == 1
+    assert (
+        conn.execute("SELECT COUNT(*) FROM polymarket_probs").fetchone()[0] == 0
+    )
+
+
+def test_commit_new_items_rolls_back_polymarket_prob_updates_on_item_insert_failure(conn):
+    good_item = _item("1")
+    bad_item = _item("2", source="not-a-real-source")  # violates CHECK(source IN (...))
+
+    with pytest.raises(sqlite3.IntegrityError):
+        commit_new_items(
+            conn,
+            [good_item, bad_item],
+            {("telegram", "123"): "2"},
+            polymarket_prob_updates={"m1": (0.60, "Will X happen?")},
+        )
+
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+    assert get_polymarket_probs(conn, ["m1"]) == {}
+
+
+def test_commit_new_items_prunes_polymarket_probs_older_than_30_days(conn):
+    stale_updated_at = (datetime.now(UTC) - timedelta(days=31)).isoformat()
+    fresh_updated_at = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    conn.execute(
+        "INSERT INTO polymarket_probs (market_id, probability, question, updated_at) "
+        "VALUES ('stale', 0.5, 'Old market', ?)",
+        (stale_updated_at,),
+    )
+    conn.execute(
+        "INSERT INTO polymarket_probs (market_id, probability, question, updated_at) "
+        "VALUES ('fresh', 0.5, 'Recent market', ?)",
+        (fresh_updated_at,),
+    )
+    conn.commit()
+
+    # Pruning happens inside commit_new_items regardless of whether this
+    # particular call carries any polymarket_prob_updates of its own.
+    commit_new_items(conn, [], {})
+
+    remaining = {
+        row[0] for row in conn.execute("SELECT market_id FROM polymarket_probs").fetchall()
+    }
+    assert remaining == {"fresh"}
+
+
+# --- items CHECK expanded to accept 'polymarket' ---
+
+
+def test_fresh_db_accepts_polymarket_source_item(conn):
+    item = _item(
+        "m1:2026-07-29T10:00:00+00:00",
+        source="polymarket",
+        chat_id=None,
+        chat_title="Polymarket",
+        author=None,
+        url="https://polymarket.com/market/will-x-happen",
+    )
+    inserted = commit_new_items(conn, [item], {})
+
+    assert inserted == 1
+    items = get_unsummarized_items(conn)
+    assert items[0].source == "polymarket"
+    assert items[0].chat_title == "Polymarket"
+
+
+def test_init_db_migrates_pre_polymarket_source_check_with_preexisting_rows(tmp_path: Path):
+    # Build a legacy DB with the news-era three-value CHECK (predates the
+    # polymarket_probs table and the four-value CHECK), then run init_db,
+    # which must apply the news-CHECK migration FIRST (a no-op here, since
+    # this fixture is already past it) and the polymarket-CHECK migration
+    # LAST. Seed a stamped telegram item and an unstamped x item so the
+    # rebuild's row-preservation is exercised, matching the news migration
+    # test's precedent.
+    old_conn = connect(str(tmp_path / "legacy_polymarket.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            chat_title  TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+
+        CREATE INDEX idx_items_digest_id ON items(digest_id);
+        """
+    )
+    old_conn.commit()
+
+    old_conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) "
+        "VALUES ('2026-07-29T09:00:00+00:00', 1, 1, 'body')"
+    )
+    digest_id = old_conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    old_conn.execute(
+        """
+        INSERT INTO items (source, source_id, chat_id, chat_title, author, text, url,
+                            fetched_at, digest_id)
+        VALUES ('telegram', '111:1', '111', 'Group', 'alice', 'hi', 'https://t.me/c/111/1',
+                '2026-07-29T09:00:00+00:00', ?)
+        """,
+        (digest_id,),
+    )
+    old_conn.commit()
+
+    tg_id = old_conn.execute("SELECT id FROM items WHERE source_id = '111:1'").fetchone()[0]
+
+    init_db(old_conn)  # applies (no-op) news migration, then the polymarket-CHECK migration
+
+    # polymarket insert now works, via commit_new_items with an accompanying
+    # anchor update -- exercising the full new-feature path post-migration.
+    commit_new_items(
+        old_conn,
+        [
+            _item(
+                "m1:2026-07-29T11:00:00+00:00",
+                source="polymarket",
+                chat_id=None,
+                chat_title="Polymarket",
+                author=None,
+                url="https://polymarket.com/market/will-x-happen",
+            )
+        ],
+        {},
+        polymarket_prob_updates={"m1": (0.6, "Will X happen?")},
+    )
+
+    rows = {
+        row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()
+    }
+    assert rows[tg_id] == "telegram"  # pre-existing row preserved, same id
+    assert get_polymarket_probs(old_conn, ["m1"]) == {"m1": 0.6}
+
+    old_conn.close()

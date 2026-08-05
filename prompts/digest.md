@@ -55,6 +55,17 @@ Not interesting: product marketing and listicles, influencer takes,
 stock-price notes, incremental benchmark disputes, AI-token/crypto promos,
 gadget news that merely mentions AI.
 
+## Prediction-market swings
+
+Items with source `polymarket` are money-weighted probability swings — the
+collector already did the filtering (including excluding sports/esports
+markets entirely); a large swing reached you because it crossed a real
+threshold, not because it's routine noise. Treat the swing itself, with its
+numbers, as an event worth reporting. When another item in this same window
+plausibly explains the move, fold the swing and its cause into one passage
+rather than two. Never invent a cause: if nothing in this window explains
+it, say the move is unexplained in this window.
+
 ## Geopolitics: statements outrank events
 
 For geopolitics and world-affairs stories — from any source, the reader's

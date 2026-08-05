@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class ConfigError(Exception):
@@ -62,6 +62,24 @@ class Config:
     # An empty tuple is the natural "not configured" default, so a second
     # on/off switch would just be a way for the two to disagree.
     news_feeds: tuple[str, ...] = ()
+    # Polymarket collector (see digest/collectors/polymarket.py). Like
+    # x_enabled, this IS a separate on/off flag rather than an
+    # empty-means-disabled sentinel (contrast news_feeds above) -- there is
+    # no natural "unconfigured" shape for a single base URL + threshold the
+    # way an empty feed list naturally means "no feeds", so an explicit flag
+    # is the only unambiguous way to represent "collector present but off".
+    polymarket_enabled: bool = False
+    polymarket_api_base: str = "https://gamma-api.polymarket.com"
+    # SECRET: authenticates to the owner's own Cloudflare Worker proxy
+    # (polymarket.com is ISP-blocked in Hungary, per this feature's network
+    # context) -- never logged. repr=False keeps it out of any accidental
+    # `repr(cfg)`/dataclass-default log line the way smtp_password/x_cookies
+    # are NOT currently protected for elsewhere in this dataclass; this is a
+    # newly added field, so it gets the protection from day one rather than
+    # inheriting the older fields' gap.
+    polymarket_proxy_key: str | None = field(default=None, repr=False)
+    polymarket_top_n: int = 30
+    polymarket_swing_threshold: float = 0.15
 
     @classmethod
     def from_env(cls) -> Config:
@@ -94,6 +112,18 @@ class Config:
         )
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
 
+        polymarket_enabled = _parse_bool(os.environ.get("POLYMARKET_ENABLED", "false"))
+        polymarket_api_base = _optional_url(
+            "POLYMARKET_API_BASE", default="https://gamma-api.polymarket.com"
+        )
+        polymarket_proxy_key = _optional_secret("POLYMARKET_PROXY_KEY")
+        polymarket_top_n = _optional_int_in_range(
+            "POLYMARKET_TOP_N", default=30, minimum=1, maximum=100
+        )
+        polymarket_swing_threshold = _optional_float_exclusive_range(
+            "POLYMARKET_SWING_THRESHOLD", default=0.15, minimum=0.0, maximum=1.0
+        )
+
         return cls(
             tg_api_id=tg_api_id,
             tg_api_hash=tg_api_hash,
@@ -115,6 +145,11 @@ class Config:
             claude_timeout_seconds=claude_timeout_seconds,
             claude_effort=claude_effort,
             news_feeds=news_feeds,
+            polymarket_enabled=polymarket_enabled,
+            polymarket_api_base=polymarket_api_base,
+            polymarket_proxy_key=polymarket_proxy_key,
+            polymarket_top_n=polymarket_top_n,
+            polymarket_swing_threshold=polymarket_swing_threshold,
         )
 
 
@@ -297,6 +332,95 @@ def _optional_url_tuple(name: str) -> tuple[str, ...]:
         if not url.startswith("http://") and not url.startswith("https://"):
             raise ConfigError(f"{name} entries must each start with http:// or https://")
     return urls
+
+
+def _optional_url(name: str, *, default: str) -> str:
+    """Read an optional http(s) URL env var, falling back to `default`, trailing slash stripped.
+
+    Used for POLYMARKET_API_BASE, which digest/collectors/polymarket.py
+    interpolates directly into a request URL as f"{base}/markets?...". A
+    typo'd or non-URL value there would surface as an opaque request
+    failure deep inside a scheduled run instead of a clear startup error --
+    validating the scheme here catches that early, mirroring
+    _optional_url_tuple's rationale for NEWS_FEEDS. The trailing slash is
+    stripped so that interpolation can never accidentally produce a
+    double-slash path ("host//markets") if the owner's env var happens to
+    include one -- collectors are written assuming a bare, slash-free base.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip()
+    if not value.startswith("http://") and not value.startswith("https://"):
+        raise ConfigError(f"{name} must start with http:// or https://")
+    return value.rstrip("/")
+
+
+def _optional_secret(name: str) -> str | None:
+    """Read an optional secret env var, defaulting to None. Blank counts as unset.
+
+    Used for POLYMARKET_PROXY_KEY -- an opaque shared-secret header value
+    the collector sends to the owner's own Cloudflare Worker proxy
+    (digest/collectors/polymarket.py). Unlike every other _optional_*
+    helper in this module there is no format to validate (it's an arbitrary
+    bearer-style string) and, being a secret, its value must never be
+    echoed in any ConfigError -- there is also no failure mode for a plain
+    optional string, so no ConfigError path exists here at all.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    return raw.strip()
+
+
+def _optional_int_in_range(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    """Read an optional int env var, falling back to `default`, constrained to [minimum, maximum].
+
+    Used for POLYMARKET_TOP_N — the POST-filter cut applied by
+    digest/collectors/polymarket.py's `collect` after sports/non-binary
+    filtering (it never appears in the request itself; the request always
+    fetches that module's fixed _OVERFETCH_LIMIT). A value outside a sane
+    range would silently distort how many markets each run can report, so
+    it is validated here at startup instead of surfacing as a confusing
+    collector-level symptom.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer between {minimum} and {maximum}") from exc
+    if not (minimum <= value <= maximum):
+        raise ConfigError(f"{name} must be an integer between {minimum} and {maximum}")
+    return value
+
+
+def _optional_float_exclusive_range(
+    name: str, *, default: float, minimum: float, maximum: float
+) -> float:
+    """Read an optional float env var, falling back to `default`, strictly between minimum/maximum.
+
+    Used for POLYMARKET_SWING_THRESHOLD, an absolute probability-point delta
+    (digest/collectors/polymarket.py's swing check). The bounds are
+    exclusive on purpose: 0 would make every observed market a "swing"
+    every run (the anchor would never actually anchor anything), and 1 (or
+    above) could never trigger at all since probabilities are bounded to
+    [0, 1] -- both ends are degenerate configurations, not merely unusual
+    ones, so they are rejected rather than merely discouraged.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{name} must be a number strictly between {minimum} and {maximum}"
+        ) from exc
+    if not (minimum < value < maximum):
+        raise ConfigError(f"{name} must be a number strictly between {minimum} and {maximum}")
+    return value
 
 
 def claude_subprocess_env() -> dict[str, str]:
