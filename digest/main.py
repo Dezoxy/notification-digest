@@ -17,9 +17,11 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from digest.collectors import polymarket as polymarket_collector
 from digest.collectors import rss as rss_collector
 from digest.collectors import telegram as telegram_collector
 from digest.collectors import x as x_collector
+from digest.collectors.polymarket import PolymarketCollectResult
 from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
 from digest.emailer import archive, send_digest
@@ -31,6 +33,7 @@ from digest.state import (
     get_cursors,
     get_digest_item_urls,
     get_pending_digest,
+    get_polymarket_probs,
     get_recent_digests,
     get_unsummarized_items,
     init_db,
@@ -330,6 +333,55 @@ def _run_news_collector(cfg: Config) -> CollectResult:
         return CollectResult(failed=True)
 
 
+def _run_polymarket_collector(
+    conn: sqlite3.Connection, cfg: Config
+) -> PolymarketCollectResult:
+    """Run one Polymarket swing-detection pass, if `cfg.polymarket_enabled`.
+
+    No-ops entirely (returns a fresh, unfailed PolymarketCollectResult)
+    when the flag is off -- mirrors `_run_x_collector`'s own flag check,
+    not `_run_news_collector`'s empty-tuple-means-disabled shape, because
+    Polymarket has no natural "unconfigured" sentinel the way an empty feed
+    list does (see Config.polymarket_enabled's own comment).
+
+    The stored-anchor lookup is injected as a closure over `conn`
+    (`digest.collectors.polymarket.collect`'s `get_stored_probs` parameter)
+    rather than handing the collector the connection directly -- keeps that
+    module testable purely against a fake urllib, with no real database in
+    the loop, exactly like `get_cursors` is pre-fetched and handed to
+    `x_collector.collect` above (the difference here is Polymarket can only
+    know WHICH market ids to look up after the fetch, so the lookup itself,
+    not just its result, has to be passed through).
+
+    Plain `def`, called synchronously from inside this `async def _run` --
+    not `await`ed, matching `_run_news_collector`'s own rationale
+    (collectors already run one at a time; there's nothing else in flight
+    for an executor wrapper to protect against blocking).
+
+    `polymarket_collector.collect` already never raises past its own
+    try/except around the single network request (module docstring's
+    "Failure semantics"), but this call is wrapped in a catch-all here too
+    as a second line of defense, mirroring every other collector wrapper in
+    this module: a not-yet-anticipated bug must not take down the whole run
+    (and the other collectors' already-collected items) before
+    `commit_new_items` gets a chance to persist them.
+    """
+    if not cfg.polymarket_enabled:
+        return PolymarketCollectResult()
+
+    try:
+        return polymarket_collector.collect(
+            cfg.polymarket_api_base,
+            cfg.polymarket_proxy_key,
+            cfg.polymarket_top_n,
+            cfg.polymarket_swing_threshold,
+            lambda market_ids: get_polymarket_probs(conn, market_ids),
+        )
+    except Exception as exc:
+        logger.warning("polymarket collection crashed unexpectedly: %s", type(exc).__name__)
+        return PolymarketCollectResult(failed=True)
+
+
 async def _run(cfg: Config) -> bool:
     """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
@@ -353,20 +405,41 @@ async def _run(cfg: Config) -> bool:
 
         x_result = await _run_x_collector(conn, cfg)
         news_result = _run_news_collector(cfg)
+        polymarket_result = _run_polymarket_collector(conn, cfg)
 
-        items = tg_result.items + x_result.items + news_result.items
+        items = tg_result.items + x_result.items + news_result.items + polymarket_result.items
         # news never contributes cursor_updates (it has no cursor axis, see
         # digest/collectors/rss.py's module docstring) -- merging its
         # (always-empty) dict in here anyway keeps this line generic over
         # every collector rather than special-casing the one with nothing
-        # to add.
+        # to add. polymarket ALSO has no cursor axis (its own state lives in
+        # the polymarket_probs table, see digest/collectors/polymarket.py's
+        # module docstring), but unlike news it doesn't even have a
+        # cursor_updates field on its result type -- PolymarketCollectResult
+        # is a distinct type carrying `prob_updates` instead (handled below,
+        # not here).
         cursor_updates = {
             **tg_result.cursor_updates,
             **x_result.cursor_updates,
             **news_result.cursor_updates,
         }
 
-        inserted = commit_new_items(conn, items, cursor_updates)
+        # `polymarket_prob_updates` is only passed as a keyword argument when
+        # non-empty: commit_new_items' signature already defaults it to None
+        # for every other caller, but keeping this call itself two-shaped
+        # (rather than always passing the kwarg, even as `{}` or `None`)
+        # means a run where the collector is disabled or found nothing to
+        # anchor is byte-for-byte the same call this function made before
+        # Polymarket existed.
+        if polymarket_result.prob_updates:
+            inserted = commit_new_items(
+                conn,
+                items,
+                cursor_updates,
+                polymarket_prob_updates=polymarket_result.prob_updates,
+            )
+        else:
+            inserted = commit_new_items(conn, items, cursor_updates)
         logger.info(
             "collected %d new items (%d inserted), cursors advanced for %d scopes",
             len(items),
@@ -380,6 +453,7 @@ async def _run(cfg: Config) -> bool:
                 ("telegram", tg_result.failed),
                 ("x", x_result.failed),
                 ("news", news_result.failed),
+                ("polymarket", polymarket_result.failed),
             )
             if failed
         ]

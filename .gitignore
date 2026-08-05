@@ -21,3 +21,6 @@ local-data/
 # os / build
 dist/
 .DS_Store
+
+# Claude Code agent worktrees (session-local, never part of the repo)
+.claude/worktrees/

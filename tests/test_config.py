@@ -299,3 +299,116 @@ def test_news_feeds_non_http_entry_raises_config_error_naming_the_variable(monke
 
     with pytest.raises(ConfigError, match="NEWS_FEEDS"):
         Config.from_env()
+
+
+# --- POLYMARKET_ENABLED / POLYMARKET_API_BASE / POLYMARKET_PROXY_KEY /
+#     POLYMARKET_TOP_N / POLYMARKET_SWING_THRESHOLD ---
+
+
+def test_polymarket_defaults_when_unset(monkeypatch):
+    _set_base_env(monkeypatch)
+    for name in (
+        "POLYMARKET_ENABLED",
+        "POLYMARKET_API_BASE",
+        "POLYMARKET_PROXY_KEY",
+        "POLYMARKET_TOP_N",
+        "POLYMARKET_SWING_THRESHOLD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config = Config.from_env()
+
+    assert config.polymarket_enabled is False
+    assert config.polymarket_api_base == "https://gamma-api.polymarket.com"
+    assert config.polymarket_proxy_key is None
+    assert config.polymarket_top_n == 30
+    assert config.polymarket_swing_threshold == 0.15
+
+
+def test_polymarket_enabled_true_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_ENABLED", "true")
+
+    config = Config.from_env()
+
+    assert config.polymarket_enabled is True
+
+
+def test_polymarket_api_base_custom_value_strips_trailing_slash(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_API_BASE", "https://proxy.example.com/gamma/")
+
+    config = Config.from_env()
+
+    assert config.polymarket_api_base == "https://proxy.example.com/gamma"
+
+
+def test_polymarket_api_base_non_http_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_API_BASE", "ftp://proxy.example.com")
+
+    with pytest.raises(ConfigError, match="POLYMARKET_API_BASE"):
+        Config.from_env()
+
+
+def test_polymarket_proxy_key_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_PROXY_KEY", "super-secret-key")
+
+    config = Config.from_env()
+
+    assert config.polymarket_proxy_key == "super-secret-key"
+
+
+def test_polymarket_proxy_key_excluded_from_repr(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_PROXY_KEY", "super-secret-key")
+
+    config = Config.from_env()
+
+    assert "super-secret-key" not in repr(config)
+
+
+def test_polymarket_top_n_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_TOP_N", "50")
+
+    config = Config.from_env()
+
+    assert config.polymarket_top_n == 50
+
+
+@pytest.mark.parametrize("value", ["0", "101", "not-a-number"])
+def test_polymarket_top_n_out_of_range_raises_config_error(monkeypatch, value):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_TOP_N", value)
+
+    with pytest.raises(ConfigError, match="POLYMARKET_TOP_N"):
+        Config.from_env()
+
+
+def test_polymarket_top_n_boundary_values_are_accepted(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_TOP_N", "1")
+    assert Config.from_env().polymarket_top_n == 1
+
+    monkeypatch.setenv("POLYMARKET_TOP_N", "100")
+    assert Config.from_env().polymarket_top_n == 100
+
+
+def test_polymarket_swing_threshold_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_SWING_THRESHOLD", "0.2")
+
+    config = Config.from_env()
+
+    assert config.polymarket_swing_threshold == 0.2
+
+
+@pytest.mark.parametrize("value", ["0", "1", "1.5", "-0.1", "not-a-number"])
+def test_polymarket_swing_threshold_out_of_range_raises_config_error(monkeypatch, value):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_SWING_THRESHOLD", value)
+
+    with pytest.raises(ConfigError, match="POLYMARKET_SWING_THRESHOLD"):
+        Config.from_env()

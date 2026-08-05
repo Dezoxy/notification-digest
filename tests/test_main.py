@@ -5,12 +5,14 @@ from pathlib import Path
 import pytest
 
 import digest.main as main_mod
+from digest.collectors.polymarket import PolymarketCollectResult
 from digest.collectors.telegram import CollectResult
 from digest.config import Config
 from digest.main import (
     _client_ready,
     _deliver,
     _run_news_collector,
+    _run_polymarket_collector,
     _run_x_collector,
     _send_and_finalize,
 )
@@ -905,4 +907,192 @@ def test_run_news_collector_failure_surfaces_in_failed_sources(monkeypatch, tmp_
     ok = asyncio.run(main_mod._run(cfg))
 
     assert captured["failed_sources"] == ["news"]
+    assert ok is False
+
+
+# --- _run_polymarket_collector (Polymarket collector, Config.polymarket_enabled-gated) ---
+
+
+def test_run_polymarket_disabled_never_calls_collector(conn):
+    cfg = replace(_cfg(), polymarket_enabled=False)
+
+    result = _run_polymarket_collector(conn, cfg)
+
+    assert result == PolymarketCollectResult()
+
+
+def test_run_polymarket_disabled_collect_function_untouched(monkeypatch, conn):
+    cfg = replace(_cfg(), polymarket_enabled=False)
+
+    def boom_collect(*a, **k):
+        raise AssertionError("polymarket_collector.collect must not be called when disabled")
+
+    monkeypatch.setattr(main_mod.polymarket_collector, "collect", boom_collect)
+
+    result = _run_polymarket_collector(conn, cfg)
+
+    assert result == PolymarketCollectResult()
+
+
+def test_run_polymarket_enabled_delegates_to_collect_with_configured_params(monkeypatch, conn):
+    cfg = replace(
+        _cfg(),
+        polymarket_enabled=True,
+        polymarket_api_base="https://proxy.example.com",
+        polymarket_proxy_key="secret123",
+        polymarket_top_n=10,
+        polymarket_swing_threshold=0.2,
+    )
+    expected = PolymarketCollectResult(
+        items=[
+            Item(
+                source="polymarket",
+                source_id="m1:2026-07-29T10:00:00+00:00",
+                chat_id=None,
+                chat_title="Polymarket",
+                author=None,
+                text="swing",
+                url="https://polymarket.com/market/will-x-happen",
+                fetched_at="2026-07-29T10:00:00+00:00",
+            )
+        ],
+        prob_updates={"m1": (0.6, "Will X happen?")},
+    )
+
+    captured = {}
+
+    def fake_collect(api_base, proxy_key, top_n, threshold, get_stored_probs):
+        captured["api_base"] = api_base
+        captured["proxy_key"] = proxy_key
+        captured["top_n"] = top_n
+        captured["threshold"] = threshold
+        # The injected closure must actually reach the real conn/state layer.
+        assert get_stored_probs(["m1"]) == {}
+        return expected
+
+    monkeypatch.setattr(main_mod.polymarket_collector, "collect", fake_collect)
+
+    result = _run_polymarket_collector(conn, cfg)
+
+    assert result is expected
+    assert captured == {
+        "api_base": "https://proxy.example.com",
+        "proxy_key": "secret123",
+        "top_n": 10,
+        "threshold": 0.2,
+    }
+
+
+def test_run_polymarket_collector_crash_is_caught_returns_failed_result(monkeypatch, conn):
+    cfg = replace(_cfg(), polymarket_enabled=True)
+
+    def boom_collect(*a, **k):
+        raise RuntimeError("gamma api shape changed")
+
+    monkeypatch.setattr(main_mod.polymarket_collector, "collect", boom_collect)
+
+    result = _run_polymarket_collector(conn, cfg)
+
+    assert result.failed is True
+    assert result.items == []
+    assert result.prob_updates == {}
+
+
+# --- _run: polymarket wiring end to end (merge into commit, prob updates, failed_sources) ---
+
+
+def test_run_merges_polymarket_items_and_prob_updates_into_commit(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), polymarket_enabled=True
+    )
+
+    tg_item = _item("1")
+    polymarket_item = Item(
+        source="polymarket",
+        source_id="m1:2026-07-29T10:00:00+00:00",
+        chat_id=None,
+        chat_title="Polymarket",
+        author=None,
+        text="swing",
+        url="https://polymarket.com/market/will-x-happen",
+        fetched_at="2026-07-29T10:00:00+00:00",
+    )
+
+    _patch_telegram_client(
+        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
+    )
+
+    def fake_polymarket_collect(api_base, proxy_key, top_n, threshold, get_stored_probs):
+        return PolymarketCollectResult(
+            items=[polymarket_item], prob_updates={"m1": (0.6, "Will X happen?")}
+        )
+
+    monkeypatch.setattr(main_mod.polymarket_collector, "collect", fake_polymarket_collect)
+
+    captured = {}
+
+    def fake_commit_new_items(conn, items, cursor_updates, *, polymarket_prob_updates=None):
+        captured["items"] = items
+        captured["cursor_updates"] = cursor_updates
+        captured["polymarket_prob_updates"] = polymarket_prob_updates
+        return len(items)
+
+    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+    assert captured["items"] == [tg_item, polymarket_item]
+    # polymarket never contributes a cursor_update -- its state axis is
+    # prob_updates, handled separately.
+    assert captured["cursor_updates"] == {("telegram", "123"): "1"}
+    assert captured["polymarket_prob_updates"] == {"m1": (0.6, "Will X happen?")}
+
+
+def test_run_polymarket_disabled_commit_call_shape_is_unaffected(monkeypatch, tmp_path):
+    # Regression: when polymarket contributes no prob_updates (disabled, or
+    # enabled but nothing to anchor), commit_new_items must be called
+    # WITHOUT the polymarket_prob_updates kwarg at all -- existing callers/
+    # test doubles with the pre-polymarket 3-argument signature must keep
+    # working unmodified.
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), polymarket_enabled=False
+    )
+    _patch_telegram_client(monkeypatch, CollectResult())
+
+    def fake_commit_new_items(conn, items, cursor_updates):
+        return len(items)
+
+    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+
+
+def test_run_polymarket_failure_surfaces_in_failed_sources(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), polymarket_enabled=True
+    )
+
+    _patch_telegram_client(monkeypatch, CollectResult())
+    monkeypatch.setattr(
+        main_mod.polymarket_collector,
+        "collect",
+        lambda *a, **k: PolymarketCollectResult(failed=True),
+    )
+
+    captured = {}
+
+    def fake_deliver(conn, cfg, failed_sources):
+        captured["failed_sources"] = failed_sources
+        return True
+
+    monkeypatch.setattr(main_mod, "_deliver", fake_deliver)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert captured["failed_sources"] == ["polymarket"]
     assert ok is False
