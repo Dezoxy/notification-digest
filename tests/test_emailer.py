@@ -14,11 +14,45 @@ from digest.emailer import (
     _wrap_banner_paragraph,
     _wrap_needs_attention_section,
     archive,
+    render_body_html,
     render_html,
     send_digest,
 )
 
 _WHEN = "Thu, Jul 31 · 18:07"
+
+# --- render_body_html (multi-channel delivery refactor: shared render core) ---
+
+
+def test_render_body_html_has_no_masthead_or_html_wrapper():
+    html = render_body_html("## Worth knowing\n\nstuff", allowed_urls=set())
+
+    assert "<html>" not in html
+    assert "masthead" not in html
+    assert "<h2>Worth knowing</h2>" in html
+
+
+def test_render_body_html_output_matches_render_html_content_exactly():
+    # The whole point of factoring render_body_html out: the site channel
+    # (via render_body_html) and the email channel's HTML part (via
+    # render_html) must show byte-for-byte identical rendered content, not
+    # two independently-maintained copies of the sanitize/style pipeline.
+    body_md = "## Worth knowing\n\n- [see it](https://t.me/c/123/1)\n"
+    allowed_urls = {"https://t.me/c/123/1"}
+
+    body_html = render_body_html(body_md, allowed_urls)
+    full_html = render_html(body_md, allowed_urls, generated_at_label=_WHEN)
+
+    assert body_html in full_html
+
+
+def test_render_body_html_still_applies_security_sanitization():
+    body_md = "## Worth knowing\n\n<img src=x onerror=alert(1)>\n"
+
+    html = render_body_html(body_md, allowed_urls=set())
+
+    assert "<img" not in html
+
 
 # --- render_html ---
 

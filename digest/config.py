@@ -80,6 +80,51 @@ class Config:
     polymarket_proxy_key: str | None = field(default=None, repr=False)
     polymarket_top_n: int = 30
     polymarket_swing_threshold: float = 0.15
+    # Delivery channels (see digest/main.py's _deliver_channels and
+    # digest/publish.py). Each channel has its own enabled-ness and its own
+    # per-digest sent flag (digest/state.py's digests.email_sent/
+    # site_published/telegram_sent) so one channel failing never blocks or
+    # duplicates another. email_enabled defaults True (parsed like
+    # x_enabled/polymarket_enabled, not news_feeds' empty-tuple sentinel --
+    # email has always been unconditionally on, so a boolean OFF switch is
+    # the natural shape for turning it off, not an emptiness convention).
+    email_enabled: bool = True
+    # site_publish_url is None/unset = the site channel is disabled --
+    # mirrors news_feeds' empty-means-disabled shape (there is no sane
+    # non-empty default for "which Worker to PUT to"), not
+    # polymarket_enabled's explicit-flag shape.
+    site_publish_url: str | None = None
+    # SECRET: sent as the x-ingest-key header on every site publish PUT
+    # (digest/publish.py's publish_to_site) -- never logged. Required
+    # (ConfigError at startup) whenever site_publish_url is set: an
+    # unauthenticated publish attempt against the owner's own ingest
+    # endpoint is a misconfiguration, not a runtime failure to degrade
+    # into.
+    site_ingest_key: str | None = field(default=None, repr=False)
+    # SECRET (repr=False): embeds a capability token in its own path (e.g.
+    # "https://news.toomhorvath.com/t/<token>"), used ONLY to build the
+    # reader-facing link in the Telegram TL;DR message
+    # (f"{base}/d/{digest_id}") -- never sent anywhere itself, never part of
+    # the site-publish PUT. Required when the Telegram channel is enabled:
+    # a TL;DR notification whose entire purpose is "here's the link" is
+    # useless without one.
+    site_public_base: str | None = field(default=None, repr=False)
+    # SECRET (repr=False): authenticates to the Telegram Bot API
+    # (digest/publish.py's send_telegram_tldr). Empty/unset = the Telegram
+    # channel is disabled -- mirrors site_publish_url's empty-means-
+    # disabled shape, not polymarket_enabled's explicit flag, for the same
+    # reason: there is no sane non-empty default for "which bot".
+    telegram_notify_bot_token: str | None = field(default=None, repr=False)
+    # The target group/channel id (e.g. "-1001234567890"). Not a secret --
+    # a chat id alone grants no access -- but required (ConfigError) when
+    # telegram_notify_bot_token is set: a bot with nowhere to post is a
+    # misconfiguration, not a runtime failure.
+    telegram_notify_chat_id: str | None = None
+    # Forum-topic thread id within telegram_notify_chat_id. 0 (the default)
+    # means "post to the group root" -- send_telegram_tldr omits
+    # message_thread_id entirely in that case rather than sending a
+    # would-be-invalid 0.
+    telegram_notify_thread_id: int = 0
 
     @classmethod
     def from_env(cls) -> Config:
@@ -124,6 +169,39 @@ class Config:
             "POLYMARKET_SWING_THRESHOLD", default=0.15, minimum=0.0, maximum=1.0
         )
 
+        email_enabled = _parse_bool(os.environ.get("EMAIL_ENABLED", "true"))
+
+        site_publish_url = _optional_url_or_none("SITE_PUBLISH_URL")
+        site_ingest_key = _optional_secret("SITE_INGEST_KEY")
+        if site_publish_url is not None and site_ingest_key is None:
+            raise ConfigError("SITE_INGEST_KEY is required when SITE_PUBLISH_URL is set")
+
+        telegram_notify_bot_token = _optional_secret("TELEGRAM_NOTIFY_BOT_TOKEN")
+        telegram_notify_chat_id = _optional_str_or_none("TELEGRAM_NOTIFY_CHAT_ID")
+        if telegram_notify_bot_token is not None and telegram_notify_chat_id is None:
+            raise ConfigError(
+                "TELEGRAM_NOTIFY_CHAT_ID is required when TELEGRAM_NOTIFY_BOT_TOKEN is set"
+            )
+        telegram_notify_thread_id = _optional_nonnegative_int(
+            "TELEGRAM_NOTIFY_THREAD_ID", default=0
+        )
+
+        # site_public_base is validated against the TELEGRAM channel (not the
+        # site channel): its only consumer is send_telegram_tldr's reader
+        # link (see the field's own comment) -- publish_to_site never reads
+        # it, so a site-only deployment (no Telegram) has no need to set it.
+        site_public_base = _optional_url_or_none("SITE_PUBLIC_BASE")
+        telegram_enabled = telegram_notify_bot_token is not None
+        if telegram_enabled and site_public_base is None:
+            raise ConfigError("SITE_PUBLIC_BASE is required when the Telegram channel is enabled")
+
+        site_enabled = site_publish_url is not None
+        if not (email_enabled or site_enabled or telegram_enabled):
+            raise ConfigError(
+                "all delivery channels disabled: enable EMAIL_ENABLED, SITE_PUBLISH_URL, "
+                "or TELEGRAM_NOTIFY_BOT_TOKEN"
+            )
+
         return cls(
             tg_api_id=tg_api_id,
             tg_api_hash=tg_api_hash,
@@ -150,6 +228,13 @@ class Config:
             polymarket_proxy_key=polymarket_proxy_key,
             polymarket_top_n=polymarket_top_n,
             polymarket_swing_threshold=polymarket_swing_threshold,
+            email_enabled=email_enabled,
+            site_publish_url=site_publish_url,
+            site_ingest_key=site_ingest_key,
+            site_public_base=site_public_base,
+            telegram_notify_bot_token=telegram_notify_bot_token,
+            telegram_notify_chat_id=telegram_notify_chat_id,
+            telegram_notify_thread_id=telegram_notify_thread_id,
         )
 
 
@@ -420,6 +505,70 @@ def _optional_float_exclusive_range(
         ) from exc
     if not (minimum < value < maximum):
         raise ConfigError(f"{name} must be a number strictly between {minimum} and {maximum}")
+    return value
+
+
+def _optional_url_or_none(name: str) -> str | None:
+    """Read an optional http(s) URL env var, defaulting to None, trailing slash stripped.
+
+    Unlike `_optional_url` (which falls back to a caller-supplied non-empty
+    default string, e.g. POLYMARKET_API_BASE's real default), an unset/blank
+    value here means the feature it configures is simply not turned on --
+    used for SITE_PUBLISH_URL (site channel: no sane non-empty default for
+    "which Worker to PUT to", mirroring NEWS_FEEDS' empty-means-disabled
+    shape) and SITE_PUBLIC_BASE (the reader-link base for the Telegram
+    channel, required only when that channel is enabled -- see its own
+    ConfigError in from_env). Trailing slash is stripped for the same
+    double-slash-avoidance reason as `_optional_url`.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip()
+    if not value.startswith("http://") and not value.startswith("https://"):
+        raise ConfigError(f"{name} must start with http:// or https://")
+    return value.rstrip("/")
+
+
+def _optional_str_or_none(name: str) -> str | None:
+    """Read an optional string env var, defaulting to None. Blank counts as unset.
+
+    Used for TELEGRAM_NOTIFY_CHAT_ID -- an opaque group/channel identifier
+    with no format this module can usefully validate (Telegram chat ids are
+    negative integers for groups/supergroups, but treating this as a bare
+    string keeps the config layer agnostic to that detail, which belongs to
+    digest/publish.py's Bot API call, not here). Structurally identical to
+    `_optional_secret` below, but kept as its own function: this value is
+    not a secret (a bare chat id grants no access on its own), whereas
+    `_optional_secret` exists specifically to mark ITS callers' values as
+    things that must never be echoed -- keeping the two separate documents
+    that intent at the call site even though today's implementations match.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    return raw.strip()
+
+
+def _optional_nonnegative_int(name: str, *, default: int) -> int:
+    """Read an optional int env var, falling back to `default`, rejecting negative values.
+
+    Used for TELEGRAM_NOTIFY_THREAD_ID -- a forum-topic thread id, where 0
+    is a legitimate, meaningful value (see the field's own comment: 0 means
+    "post to the group root", not "unset"), unlike CLAUDE_TIMEOUT_SECONDS/
+    SMTP_PORT where 0 is nonsensical and rejected by `_optional_positive_int`.
+    Only negative values (which Telegram's API could never accept as a
+    thread id) are rejected here.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a non-negative integer") from exc
+    if value < 0:
+        raise ConfigError(f"{name} must be a non-negative integer")
     return value
 
 

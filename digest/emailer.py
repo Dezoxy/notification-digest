@@ -550,8 +550,20 @@ def _style_footer_line(sanitized_html: str) -> str:
     return _FOOTER_PARAGRAPH_RE.sub(_replace, sanitized_html, count=1)
 
 
-def render_html(body_md: str, allowed_urls: Collection[str], generated_at_label: str) -> str:
-    """Convert digest markdown to a self-contained HTML document.
+def render_body_html(body_md: str, allowed_urls: Collection[str]) -> str:
+    """Convert digest markdown to sanitized HTML CONTENT ONLY -- no `<html>`/masthead wrapper.
+
+    This is the shared security-and-styling pipeline both of this
+    function's callers need: `render_html` below wraps this output in
+    `_HTML_TEMPLATE` (the masthead + `<html>`/`<style>` shell) for the email
+    channel, and digest/main.py's `_deliver_channels` calls this directly to
+    get the identical sanitized HTML for the site channel's `body_html`
+    field (digest/publish.py's `publish_to_site`) -- factored out
+    specifically so the escape/markdown/nh3/anchor-provenance/cosmetic
+    pipeline is never duplicated: the site and the email must show the same
+    rendered content, byte-for-byte, and the only way to guarantee that is
+    for both to call through this one function rather than each running
+    their own copy of it.
 
     Three distinct threats are neutralized here, in three different layers:
 
@@ -608,13 +620,6 @@ def render_html(body_md: str, allowed_urls: Collection[str], generated_at_label:
     _style_citation_anchors's own docstring for why the ordering enforces
     this by construction rather than by convention.
 
-    ``generated_at_label`` is a pre-formatted, already-localized display
-    string for the masthead timestamp (e.g. "Thu, Jul 31 · 18:07"). This
-    function does no timezone conversion of its own -- per CLAUDE.md,
-    storage stays UTC and only render/email time converts, and the actual
-    conversion happens in the caller (digest/main.py's _send_and_finalize),
-    which is what has access to the run's local clock in the first place.
-
     Earlier revisions also injected colored Telegram/X source chips (one
     pass for a per-source h3 subgroup heading, one for an inline
     `**[Source/Name]**` bullet tag). The current briefing contract
@@ -637,6 +642,25 @@ def render_html(body_md: str, allowed_urls: Collection[str], generated_at_label:
     sanitized = _highlight_tldr_paragraph(sanitized)
     sanitized = _style_citation_anchors(sanitized)
     sanitized = _style_footer_line(sanitized)
+    return sanitized
+
+
+def render_html(body_md: str, allowed_urls: Collection[str], generated_at_label: str) -> str:
+    """Wrap `render_body_html`'s sanitized content in the full masthead/`<html>` document.
+
+    All of the security-critical and cosmetic rendering work happens in
+    `render_body_html` (see its docstring for the full three-layer threat
+    model and cosmetic-pass ordering) -- this function's only remaining job
+    is gluing that content into `_HTML_TEMPLATE` alongside the masthead.
+
+    ``generated_at_label`` is a pre-formatted, already-localized display
+    string for the masthead timestamp (e.g. "Thu, Jul 31 · 18:07"). This
+    function does no timezone conversion of its own -- per CLAUDE.md,
+    storage stays UTC and only render/email time converts, and the actual
+    conversion happens in the caller (digest/main.py's `_deliver_email`),
+    which is what has access to the run's local clock in the first place.
+    """
+    sanitized = render_body_html(body_md, allowed_urls)
     return _HTML_TEMPLATE.format(body=sanitized, generated_at=generated_at_label)
 
 

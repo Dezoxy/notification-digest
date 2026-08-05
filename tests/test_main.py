@@ -11,10 +11,13 @@ from digest.config import Config
 from digest.main import (
     _client_ready,
     _deliver,
+    _deliver_channels,
+    _deliver_email,
+    _deliver_site,
+    _deliver_telegram,
     _run_news_collector,
     _run_polymarket_collector,
     _run_x_collector,
-    _send_and_finalize,
 )
 from digest.state import (
     Item,
@@ -22,10 +25,13 @@ from digest.state import (
     connect,
     count_unsummarized_items,
     create_digest,
+    get_digest_item_urls,
     get_pending_digest,
     get_unsummarized_items,
     init_db,
 )
+
+_NO_CHANNELS_DONE = {"email": False, "site": False, "telegram": False}
 
 
 class FakeReadyClient:
@@ -120,7 +126,7 @@ def conn(tmp_path: Path):
 
 def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    digest_id = create_digest(conn, "## Needs attention\n...", get_unsummarized_items(conn))
+    create_digest(conn, "## Needs attention\n...", get_unsummarized_items(conn))
 
     def boom_summarize(*args, **kwargs):
         raise AssertionError("summarize must not be called when a digest is pending resend")
@@ -143,21 +149,21 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
         sent["body_md"] = body_md
         sent["allowed_urls"] = allowed_urls
 
-    archived = {}
-
-    def fake_archive(body_md, archive_dir, digest_id):
-        archived["digest_id"] = digest_id
+    def boom_archive(*args, **kwargs):
+        raise AssertionError(
+            "archive must not run on a pending resend -- it already ran once, "
+            "at this digest's original creation in a previous run"
+        )
 
     monkeypatch.setattr(main_mod, "summarize", boom_summarize)
     monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
-    monkeypatch.setattr(main_mod, "archive", fake_archive)
+    monkeypatch.setattr(main_mod, "archive", boom_archive)
 
     ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
     assert sent["body_md"] == "## Needs attention\n..."
     assert sent["allowed_urls"] == {"https://t.me/c/123/1"}
-    assert archived["digest_id"] == digest_id
     assert get_pending_digest(conn) is None  # marked sent
 
 
@@ -194,7 +200,10 @@ def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
     assert pending is not None
     digest_id, body_md = pending
     assert body_md == "## Needs attention\n..."
-    assert archived["called"] is False  # never reached on send failure
+    # P1 spec change: archive() now runs once, unconditionally, right after
+    # create_digest -- it is no longer gated on any channel's delivery
+    # succeeding (a channel failing must not also lose the archive copy).
+    assert archived["called"] is True
 
 
 def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn, monkeypatch):
@@ -335,7 +344,10 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
     assert sends[1] == "## Needs attention\n...new..."
     assert len(summarize_calls) == 1  # only for the new items, never the pending digest
     assert get_pending_digest(conn) is None
-    assert pending_digest_id in archived
+    # The pending digest was archived when IT was created, in a (simulated)
+    # previous run -- only the freshly created digest is archived here.
+    assert pending_digest_id not in archived
+    assert archived == [pending_digest_id + 1]
 
 
 def test_deliver_pending_digest_sent_then_current_collection_failed_passes_failed_sources(
@@ -365,29 +377,50 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
     assert summarize_calls == [["telegram"]]
 
 
-def test_deliver_pending_digest_send_fails_no_summarize_and_returns_false(conn, monkeypatch):
-    # If the pending resend itself fails, we must not attempt to summarize
-    # or send a second email on what's evidently a broken SMTP path.
+def test_deliver_pending_digest_send_fails_new_items_still_summarized_and_delivered(
+    conn, monkeypatch
+):
+    # P1 spec change (multi-channel delivery refactor): channels -- and,
+    # by extension, DIGESTS -- are independent. A broken SMTP path on one
+    # pending digest must not stop this run from summarizing and attempting
+    # delivery of its own freshly collected items; the old single-channel
+    # behavior bailed out early here specifically because there was only
+    # ever one channel and no point in a second doomed send. That
+    # early-bail no longer applies: this run now summarizes and attempts
+    # the new digest too (its email attempt fails the same way, since
+    # send_digest is broken for the whole run either way), and the overall
+    # result is False because BOTH digests are left pending.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    create_digest(conn, "## Needs attention\n...pending...", get_unsummarized_items(conn))
+    pending_digest_id = create_digest(
+        conn, "## Needs attention\n...pending...", get_unsummarized_items(conn)
+    )
 
     commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
 
-    def boom_summarize(*args, **kwargs):
-        raise AssertionError("summarize must not be called when the pending resend fails")
+    summarize_calls = []
+
+    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+        summarize_calls.append(items)
+        return "## Needs attention\n...new..."
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
 
-    monkeypatch.setattr(main_mod, "summarize", boom_summarize)
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(main_mod, "send_digest", failing_send)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
     ok = _deliver(conn, _cfg(), [])
 
     assert ok is False
+    assert len(summarize_calls) == 1  # the new item WAS summarized despite the pending failure
     pending = get_pending_digest(conn)
     assert pending is not None  # still unsent, left for the next run's retry
+    # Both the original pending digest and the newly created one remain
+    # pending -- neither one's email attempt succeeded.
+    row_count = conn.execute("SELECT COUNT(*) FROM digests WHERE email_sent = 0").fetchone()[0]
+    assert row_count == 2
+    assert pending_digest_id != pending[0]  # the newest-pending id is the freshly created one
 
 
 def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummarized(
@@ -476,19 +509,18 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     assert [i.source_id for i in get_unsummarized_items(conn)] == ["1"]
 
 
-# --- _send_and_finalize (link-provenance allowlist wiring, P1 fix) ---
+# --- _deliver_email / _deliver_channels (link-provenance allowlist wiring, P1 fix) ---
 
 
-def test_send_and_finalize_passes_the_digests_stamped_item_urls_to_send_digest(
-    conn, monkeypatch
-):
-    # P1 fix: send_digest's HTML link-provenance allowlist must come from
-    # the digest's own stamped items (get_digest_item_urls), fetched fresh
-    # off the `items` table rather than threaded through from an in-memory
-    # Item list -- that's what makes the same code path work for a fresh
-    # digest and a later pending resend alike (see get_digest_item_urls's
-    # docstring in digest/state.py). Seeded against a real tmp DB so the
-    # stamping performed by create_digest is exercised for real, not faked.
+def test_deliver_email_passes_the_digests_stamped_item_urls_to_send_digest(conn, monkeypatch):
+    # P1 fix (pre-multi-channel-refactor): send_digest's HTML link-provenance
+    # allowlist must come from the digest's own stamped items
+    # (get_digest_item_urls), not threaded through from an in-memory Item
+    # list -- that's what makes the same code path work for a fresh digest
+    # and a later pending resend alike (see get_digest_item_urls's docstring
+    # in digest/state.py). _deliver_channels is what fetches this now (see
+    # the test below); _deliver_email just takes whatever it's given, which
+    # this test verifies is passed straight through to send_digest.
     commit_new_items(
         conn,
         [_item("1"), _item("2")],
@@ -496,6 +528,7 @@ def test_send_and_finalize_passes_the_digests_stamped_item_urls_to_send_digest(
     )
     items = get_unsummarized_items(conn)
     digest_id = create_digest(conn, "## Needs attention\n...", items)
+    allowed_urls = get_digest_item_urls(conn, digest_id)
 
     captured = {}
 
@@ -515,24 +548,23 @@ def test_send_and_finalize_passes_the_digests_stamped_item_urls_to_send_digest(
         captured["allowed_urls"] = allowed_urls
 
     monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
-    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
-    ok = _send_and_finalize(conn, _cfg(), digest_id, "## Needs attention\n...", len(items))
+    ok = _deliver_email(
+        conn, _cfg(), digest_id, "## Needs attention\n...", len(items), allowed_urls
+    )
 
     assert ok is True
     assert captured["allowed_urls"] == {"https://t.me/c/123/1", "https://t.me/c/123/2"}
 
 
-def test_send_and_finalize_recovers_urls_for_a_pending_resend_from_a_prior_run(
-    conn, monkeypatch
-):
-    # Simulates the pending-resend path: this call has no in-memory Item
-    # list at all (unlike the fresh-digest path) -- it only has digest_id
-    # and body_md read back off the `digests` table, exactly like
-    # get_pending_digest returns in _deliver. The allowlist must still be
+def test_deliver_channels_recovers_urls_for_a_pending_resend_from_a_prior_run(conn, monkeypatch):
+    # Simulates the pending-resend path: _deliver_channels has no in-memory
+    # Item list at all (unlike the fresh-digest path) -- only digest_id and
+    # body_md read back off the `digests` table, exactly like
+    # get_pending_digests returns in _deliver. The allowlist must still be
     # recoverable purely from the digest_id, via the items already stamped
     # by a create_digest call that ran in a "previous run" (here, earlier
-    # in this test, but nothing about _send_and_finalize depends on that).
+    # in this test, but nothing about _deliver_channels depends on that).
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     digest_id = create_digest(
         conn, "## Needs attention\n...pending...", get_unsummarized_items(conn)
@@ -556,12 +588,318 @@ def test_send_and_finalize_recovers_urls_for_a_pending_resend_from_a_prior_run(
         captured["allowed_urls"] = allowed_urls
 
     monkeypatch.setattr(main_mod, "send_digest", fake_send_digest)
-    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
-    ok = _send_and_finalize(conn, _cfg(), digest_id, "## Needs attention\n...pending...", 1)
+    ok = _deliver_channels(
+        conn,
+        _cfg(),
+        digest_id,
+        "## Needs attention\n...pending...",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        _NO_CHANNELS_DONE,
+    )
 
     assert ok is True
     assert captured["allowed_urls"] == {"https://t.me/c/123/1"}
+
+
+def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+
+    def fake_publish(digest_id_, body_md_, body_html, created_at, item_count, publish_url, key):
+        captured.update(
+            digest_id=digest_id_,
+            body_html=body_html,
+            created_at=created_at,
+            item_count=item_count,
+            publish_url=publish_url,
+            ingest_key=key,
+        )
+
+    monkeypatch.setattr(main_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+    )
+
+    assert ok is True
+    assert captured["digest_id"] == digest_id
+    assert "<h2>Worth knowing</h2>" in captured["body_html"]
+    assert captured["created_at"] == "2026-07-29T10:00:00+00:00"
+    assert captured["item_count"] == 1
+    assert captured["publish_url"] == cfg.site_publish_url
+    assert captured["ingest_key"] == cfg.site_ingest_key
+    row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)
+
+
+def test_deliver_telegram_delegates_with_configured_params_and_marks_telegram_sent(
+    conn, monkeypatch
+):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+
+    captured = {}
+
+    def fake_send(digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base):
+        captured.update(
+            digest_id=digest_id_,
+            created_at=created_at,
+            bot_token=bot_token,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            public_base=public_base,
+        )
+
+    monkeypatch.setattr(main_mod, "send_telegram_tldr", fake_send)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_telegram(conn, cfg, digest_id, body_md, "2026-07-29T10:00:00+00:00")
+
+    assert ok is True
+    assert captured["digest_id"] == digest_id
+    assert captured["bot_token"] == cfg.telegram_notify_bot_token
+    assert captured["chat_id"] == cfg.telegram_notify_chat_id
+    assert captured["thread_id"] == cfg.telegram_notify_thread_id
+    assert captured["public_base"] == cfg.site_public_base
+    row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)
+
+
+# --- _deliver_channels: multi-channel independence (delivery-channels feature) ---
+
+
+def _multichannel_cfg(**overrides) -> Config:
+    """_cfg() plus all three channels turned on, for independence tests below."""
+    return replace(
+        _cfg(),
+        site_publish_url="https://news-site.example.workers.dev",
+        site_ingest_key="ingest-secret",
+        site_public_base="https://news.example.com/t/tok",
+        telegram_notify_bot_token="bot-token",
+        telegram_notify_chat_id="-100123",
+        **overrides,
+    )
+
+
+def test_deliver_channels_email_failure_does_not_block_site_or_telegram(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    monkeypatch.setattr(
+        main_mod, "send_digest", lambda *a, **k: (_ for _ in ()).throw(OSError("smtp down"))
+    )
+    site_calls = []
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "publish_to_site", lambda *a, **k: site_calls.append(a[0])
+    )
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
+    )
+
+    ok = _deliver_channels(
+        conn,
+        _multichannel_cfg(),
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        _NO_CHANNELS_DONE,
+    )
+
+    assert ok is False  # email never succeeded
+    assert site_calls == [digest_id]
+    assert telegram_calls == [digest_id]
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    assert row == (0, 1, 1)
+
+
+def test_deliver_channels_site_failure_skips_telegram_this_run(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(
+        main_mod, "publish_to_site", lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
+    )
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
+    )
+
+    ok = _deliver_channels(
+        conn,
+        _multichannel_cfg(),
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        _NO_CHANNELS_DONE,
+    )
+
+    assert ok is False
+    assert telegram_calls == []  # never attempted -- site publish isn't done yet
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    assert row == (1, 0, 0)
+
+
+def test_deliver_channels_second_run_only_retries_the_failed_channel(conn, monkeypatch):
+    # Simulates a partial success persisting across two runs: email and
+    # telegram succeeded on "run 1" (site failed), so "run 2" must retry
+    # ONLY site -- email/telegram must not be attempted (and thus not
+    # duplicated) a second time.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    email_calls = []
+    telegram_calls = []
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: email_calls.append(1))
+    monkeypatch.setattr(
+        main_mod, "publish_to_site", lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
+    )
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(1)
+    )
+
+    cfg = _multichannel_cfg()
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+
+    ok_run1 = _deliver_channels(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", _NO_CHANNELS_DONE
+    )
+    assert ok_run1 is False
+    assert email_calls == [1]
+    assert telegram_calls == []  # site wasn't done yet, so telegram was skipped run 1
+
+    # Run 2: fix the site publish, re-derive `done` the way _deliver does.
+    def working_publish(*a, **k):
+        return None
+
+    monkeypatch.setattr(main_mod, "publish_to_site", working_publish)
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    done = {"email": bool(row[0]), "site": bool(row[1]), "telegram": bool(row[2])}
+
+    ok_run2 = _deliver_channels(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", done
+    )
+
+    assert ok_run2 is True
+    assert email_calls == [1]  # not attempted again -- already done
+    assert telegram_calls == [1]  # attempted exactly once, now that site is done
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    assert row == (1, 1, 1)
+
+
+def test_deliver_channels_telegram_not_blocked_when_site_channel_disabled(conn, monkeypatch):
+    # Telegram enabled, site channel NOT configured at all: the "skip
+    # telegram until site publish succeeds" rule must not apply when this
+    # run never intended to publish to a site in the first place.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    cfg = replace(
+        _cfg(),
+        telegram_notify_bot_token="bot-token",
+        telegram_notify_chat_id="-100123",
+        site_public_base="https://news.example.com/t/tok",
+    )
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(1)
+    )
+
+    ok = _deliver_channels(
+        conn,
+        cfg,
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        _NO_CHANNELS_DONE,
+    )
+
+    assert ok is True
+    assert telegram_calls == [1]
+
+
+def test_deliver_email_disabled_site_only_completes_the_digest(conn, monkeypatch):
+    # EMAIL_ENABLED=false end-to-end: site publish success alone must
+    # complete the digest -- email must never be attempted at all.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    monkeypatch.setattr(
+        main_mod, "send_digest", lambda *a, **k: (_ for _ in ()).throw(AssertionError("boom"))
+    )
+    monkeypatch.setattr(main_mod, "publish_to_site", lambda *a, **k: None)
+
+    cfg = replace(
+        _cfg(),
+        email_enabled=False,
+        site_publish_url="https://news-site.example.workers.dev",
+        site_ingest_key="ingest-secret",
+    )
+
+    ok = _deliver_channels(
+        conn,
+        cfg,
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        _NO_CHANNELS_DONE,
+    )
+
+    assert ok is True
+    row = conn.execute(
+        "SELECT email_sent, site_published FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row == (0, 1)  # email left at its default 0 -- never attempted
+
+
+def test_deliver_run_failure_propagates_from_a_single_failed_channel(conn, monkeypatch):
+    # Run-success semantics: a failed channel must keep the overall _deliver
+    # result False, the same way an SMTP failure does today, so the
+    # systemd OnFailure alert still fires.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "**TL;DR:** hi\n\n## Section")
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(
+        main_mod, "publish_to_site", lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
+    )
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = replace(
+        _cfg(),
+        site_publish_url="https://news-site.example.workers.dev",
+        site_ingest_key="ingest-secret",
+    )
+
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is False
 
 
 # --- _run: Phase 3 collector orchestration (Telegram + X merge, failed_sources) ---
