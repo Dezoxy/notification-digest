@@ -407,6 +407,7 @@ function brandParts(host) {
 const CSS = `
   :root {
     --bg: #ffffff;
+    --page-bg: #e9e9f2;
     --text: #1f2430;
     --muted: #8a8f9e;
     --accent: #4f46e5;
@@ -423,6 +424,7 @@ const CSS = `
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #17181c;
+      --page-bg: #0f0d17;
       --text: #e6e6ea;
       --muted: #8a8f9e;
       --accent: #a5b4fc;
@@ -524,6 +526,23 @@ const CSS = `
     color: var(--muted); font-size: 0.8em;
   }
   footer.site p { margin: 0.3em 0; }
+
+  /* Desktop: the content column becomes a rounded "bubble" card hugging the
+     42em text measure, floating on a darker, purple-tinted page background.
+     Mobile keeps the full-bleed layout above untouched — the card chrome
+     only exists from 52em up. * { box-sizing: border-box } is set globally,
+     so max-width 48em with 3em side padding keeps the text at the same
+     42em measure it has on mobile. */
+  @media (min-width: 52em) {
+    body { background: var(--page-bg); padding: 2.5em 1.5em; }
+    .wrap {
+      background: var(--bg);
+      max-width: 48em;
+      padding: 0.4em 3em 3.5em;
+      border-radius: 28px;
+      border: 1px solid var(--hairline);
+    }
+  }
 `;
 
 function pageChrome(host, token, bodyHtml) {
