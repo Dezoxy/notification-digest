@@ -403,12 +403,22 @@ def send_telegram_tldr(
     header = _local_header_label(created_at)
     tldr = extract_tldr(body_md)
     link = f"{public_base}/d/{digest_id}"
-    text = f"{header}\n\n{tldr}\n\n{link}"
+    text = f"{header}\n\n{tldr}"
 
+    # The link rides as an INLINE KEYBOARD BUTTON, not as a URL in the text:
+    # the raw link is long (it embeds the site's capability token) and reads
+    # as noise in the topic — and a button needs NO parse_mode, so the
+    # message text stays plain and unparseable-proof exactly as before
+    # (an owner-requested change after seeing the first live messages).
+    # Telegram renders the button below the message; tapping it opens the
+    # digest page in the browser.
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
+        "reply_markup": {
+            "inline_keyboard": [[{"text": "Open the digest →", "url": link}]]
+        },
     }
     if thread_id:
         payload["message_thread_id"] = thread_id

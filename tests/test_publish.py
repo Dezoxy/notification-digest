@@ -283,7 +283,13 @@ def test_send_telegram_tldr_sends_expected_payload_and_headers(monkeypatch):
     assert body["disable_web_page_preview"] is True
     assert body["message_thread_id"] == 99
     assert "big news" in body["text"]
-    assert "https://news.example.com/t/tok/d/7" in body["text"]
+    # The link is an inline-keyboard BUTTON, never raw text: the URL embeds
+    # the site's capability token and reads as noise in the topic, and a
+    # button needs no parse_mode.
+    assert "https://news.example.com/t/tok/d/7" not in body["text"]
+    button = body["reply_markup"]["inline_keyboard"][0][0]
+    assert button["url"] == "https://news.example.com/t/tok/d/7"
+    assert button["text"] == "Open the digest →"
     # PLAIN TEXT only -- no parse_mode, ever.
     assert "parse_mode" not in body
 
