@@ -63,6 +63,39 @@ def test_extract_tldr_drops_superscript_citation_chips():
     assert "also" in result
 
 
+def test_extract_tldr_strips_bold_emphasis_inside_the_tldr_sentence():
+    # Production finding (live site index, digest #54): the model can put
+    # bold markdown INSIDE the TL;DR paragraph itself, not just as the
+    # `**TL;DR:**` marker -- that inner `**...**` must not reach the site
+    # excerpt or Telegram message as literal asterisks.
+    body_md = (
+        "**TL;DR:** Revenue could hit **$100B ARR by year end**, analysts say.\n\n## S\n\nx\n"
+    )
+
+    result = extract_tldr(body_md)
+
+    assert "*" not in result
+    assert result == "Revenue could hit $100B ARR by year end, analysts say."
+
+
+def test_extract_tldr_preserves_underscore_handles():
+    # A lone `_` inside a Telegram/X handle or snake_case identifier must
+    # survive untouched -- only the bold `__...__` form and single `*...*`
+    # emphasis are stripped, never a single underscore.
+    body_md = "**TL;DR:** Big update from @user_name on the platform.\n\n## S\n\nx\n"
+
+    assert extract_tldr(body_md) == "Big update from @user_name on the platform."
+
+
+def test_extract_tldr_strips_single_asterisk_emphasis():
+    body_md = "**TL;DR:** The *actual* number surprised everyone.\n\n## S\n\nx\n"
+
+    result = extract_tldr(body_md)
+
+    assert "*" not in result
+    assert result == "The actual number surprised everyone."
+
+
 def test_extract_tldr_needs_attention_section_before_tldr_is_skipped():
     # The prompt contract places "## Needs attention" ABOVE the TL;DR
     # paragraph -- extract_tldr must search past it, not stop at the first
@@ -298,6 +331,7 @@ def test_send_telegram_tldr_http_error_raises_sanitized_error_without_url_or_bod
     message = str(exc_info.value)
     assert "SECRET-TOKEN" not in message
     assert "401" in message
+    assert exc_info.value.status == 401
 
 
 def test_send_telegram_tldr_network_error_raises_sanitized_error(monkeypatch):
@@ -313,6 +347,25 @@ def test_send_telegram_tldr_network_error_raises_sanitized_error(monkeypatch):
         )
 
     assert "SECRET-TOKEN" not in str(exc_info.value)
+    assert exc_info.value.status is None
+
+
+def test_send_telegram_tldr_status_matches_http_error_code_for_429_specifically(monkeypatch):
+    # digest/main.py's per-run circuit breaker checks exactly `status == 429`
+    # to decide whether to trip -- this pins the attribute for the specific
+    # code that guard cares about, not just "some status was set."
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(TelegramSendError) as exc_info:
+        send_telegram_tldr(
+            7, "**TL;DR:** hi\n\n## S\n\nx\n", "2026-07-29T10:00:00+00:00",
+            "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+        )
+
+    assert exc_info.value.status == 429
 
 
 def test_send_telegram_tldr_header_uses_europe_budapest_local_time(monkeypatch):
