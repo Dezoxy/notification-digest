@@ -567,7 +567,6 @@ function tzAbbr(date) {
 const STRINGS = {
   en: {
     locale: "en-GB",
-    cadence: "every 3 hours · private link",
     attention: "needs attention",
     itemsWord: "items",
     sectionsWord: "sections",
@@ -586,7 +585,6 @@ const STRINGS = {
   },
   hu: {
     locale: "hu-HU",
-    cadence: "3 óránként · privát link",
     attention: "figyelmet igényel",
     itemsWord: "elem",
     sectionsWord: "szakasz",
@@ -714,6 +712,12 @@ const CSS = `
   }
 
   * { box-sizing: border-box; }
+  /* Reserve the scrollbar's gutter even when the page is too short to
+     scroll: the All view scrolls, a near-empty Daily view doesn't, and
+     without this the viewport width changes on switch — sliding the
+     centered bubble sideways by half a scrollbar (owner-reported). A
+     no-op on overlay-scrollbar platforms, which never had the shift. */
+  html { scrollbar-gutter: stable; }
   body {
     margin: 0;
     background: var(--bg);
@@ -733,43 +737,30 @@ const CSS = `
   .mast .brand { font-weight: 700; font-size: 1.05em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
   .mast .brand .tld { color: var(--accent); }
   /* Switchers (EN | HU, All | Daily) sit top-right in the masthead, paired
-     on one row via .switchers; the cadence line stacks right below them,
+     on one row via .switchers,
      both right-aligned — same markup at both breakpoints, .switchers'
      own flex-wrap (not header.mast's) is what keeps two small switchers
      from crowding the brand on narrow viewports: they wrap onto their own
      line under mastright rather than squeezing the header itself. */
   .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; }
 
-  /* Mobile: the EN cadence line is longer than the HU one, so on narrow
-     screens the flex-wrap masthead broke differently per language — after
-     switching to EN the right cluster wrapped into a centered-looking
-     stack (owner-reported). Below 40em the masthead becomes a
-     deterministic two-line block in BOTH languages: brand on its own
-     line, then "EN | HU · cadence" inline, left-aligned. The body font
-     also steps down a notch (17px -> 16px) — phone-size type was a bit
-     large (owner request); the 42em measure is desktop's concern. */
+  /* Mobile masthead + phone font size (owner-tuned). */
   @media (max-width: 40em) {
     /* 15px: phone type ran large even at 16 (owner feedback, twice). */
     body { font-size: 15px; }
-    /* Line 1: brand left, EN|HU right (owner: the selector belongs on the
-       right). Line 2: the cadence, right-aligned, on its own full-width
-       row — display:contents promotes the mastright children to flex
-       items of the masthead so space-between can seat them, and the
-       full-basis cadence can never force a language-dependent wrap (the
-       original bug: EN's longer cadence line wrapped differently than
-       HU's). */
+    /* Brand left, EN|HU right on one line (owner: the selector belongs
+       on the right; the cadence line was removed entirely at the owner's
+       request — the footer already carries the private-link warning). */
     header.mast {
       display: flex; flex-wrap: wrap; justify-content: space-between;
       align-items: baseline;
     }
     .mast .mastright { display: contents; }
-    .mast .cadence { flex-basis: 100%; text-align: right; margin-top: 0.1em; }
   }
   .mast .switchers { display: flex; gap: 0.6em; align-items: baseline; flex-wrap: wrap; justify-content: flex-end; }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
-  .mast .cadence { color: var(--muted); font-size: 0.8em; }
 
   .dayhead {
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
@@ -948,7 +939,6 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml) {
     <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
     <div class="mastright">
       ${switchersHtml}
-      <span class="cadence">${esc(strings.cadence)}</span>
     </div>
   </header>
   ${viewTabsHtml}
