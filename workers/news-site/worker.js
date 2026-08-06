@@ -20,14 +20,20 @@
  *   Worker. Neither secret lives in source or wrangler.jsonc; both are set
  *   with `wrangler secret put`.
  *
- * Routes:
- *   GET  /robots.txt          -> disallow everything, no token needed
- *   PUT  /ingest/:id          -> upsert a digest (x-ingest-key required)
- *   GET  /t/:token/           -> index (EN), newest-first, grouped by day
- *   GET  /t/:token/d/:id      -> single digest (EN), with prev/next nav
- *   GET  /t/:token/hu/        -> same index, Hungarian chrome + translations
- *   GET  /t/:token/hu/d/:id   -> same digest page, Hungarian chrome + translations
- *   anything else             -> plain 404, wrong token included
+ * Routes: URL grammar is /t/:token/(hu/)?(daily/)?( | d/:id) — the language
+ * segment always comes first, then an optional literal "daily/" view
+ * segment. No "daily/" segment is the ALL view (every digest, mixed).
+ *   GET  /robots.txt              -> disallow everything, no token needed
+ *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
+ *   GET  /t/:token/               -> index (EN, all view), newest-first, grouped by day
+ *   GET  /t/:token/d/:id          -> single digest (EN, all view), with prev/next nav
+ *   GET  /t/:token/daily/         -> same index, EN, filtered to kind='daily' only
+ *   GET  /t/:token/daily/d/:id    -> same digest page, EN, prev/next stays within kind='daily'
+ *   GET  /t/:token/hu/            -> same index, Hungarian chrome + translations, all view
+ *   GET  /t/:token/hu/d/:id       -> same digest page, Hungarian chrome + translations, all view
+ *   GET  /t/:token/hu/daily/      -> same index, Hungarian chrome, daily view
+ *   GET  /t/:token/hu/daily/d/:id -> same digest page, Hungarian chrome, daily view
+ *   anything else                 -> plain 404, wrong token included
  *
  * Hungarian support (EN | HU switcher in the masthead): this Worker only
  * STORES and SERVES translations — it never translates anything itself.
@@ -38,6 +44,18 @@
  * that happens. The /hu/ routes are parameterized variants of the same
  * handlers, same token check, same headers, same 404 philosophy — a wrong
  * token on a /hu/ path 404s byte-identically to a wrong token anywhere else.
+ *
+ * Daily-brief view (All | Daily switcher in the masthead, next to EN | HU):
+ * every digest carries a `kind` column, 'window' (the regular 3-hourly
+ * digest, the default) or 'daily' (the once-daily 20:00 synthesis). The
+ * "daily/" URL segment filters the index to kind='daily' and constrains a
+ * digest page's prev/next to kind='daily' too, so a reader in that view hops
+ * brief-to-brief instead of through every window digest in between. Since a
+ * window digest has no home in the daily view, the view switcher's "other
+ * view" link ALWAYS points at that view's index, never at a digest page —
+ * true on the index itself (index -> index, the obvious case) and also when
+ * switching view away from a digest page (digest -> that view's index,
+ * because the current digest may not exist in the target view).
  *
  * body_html and body_html_hu both arrive PRE-SANITIZED by the app (nh3) and
  * are stored/served verbatim — they are the only fields ever inserted into
@@ -95,21 +113,25 @@ export default {
       return handleIngest(request, env, ingestMatch[1]);
     }
 
-    // The optional "hu/" segment selects the Hungarian chrome/translations;
-    // everything else about the route (token check, id shape, 404s) is
-    // identical between the two languages — see handleIndexPage/
-    // handleDigestPage, which take `lang` as a plain parameter rather than
-    // being duplicated.
-    const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?d\/(\d+)$/);
+    // The optional "hu/" segment selects the Hungarian chrome/translations,
+    // and the optional "daily/" segment (only ever AFTER "hu/", never
+    // before) selects the daily-brief-only view; everything else about the
+    // route (token check, id shape, 404s) is identical across all four
+    // language×view combinations — see handleIndexPage/handleDigestPage,
+    // which take `lang` and `view` as plain parameters rather than being
+    // duplicated four times.
+    const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/)?d\/(\d+)$/);
     if (digestMatch && request.method === "GET") {
       const lang = digestMatch[2] ? "hu" : "en";
-      return handleDigestPage(env, digestMatch[1], digestMatch[3], url, lang);
+      const view = digestMatch[3] ? "daily" : "all";
+      return handleDigestPage(env, digestMatch[1], digestMatch[4], url, lang, view);
     }
 
-    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?$/);
+    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/)?$/);
     if (indexMatch && request.method === "GET") {
       const lang = indexMatch[2] ? "hu" : "en";
-      return handleIndexPage(env, indexMatch[1], url, lang);
+      const view = indexMatch[3] ? "daily" : "all";
+      return handleIndexPage(env, indexMatch[1], url, lang, view);
     }
 
     // Unknown path, or a token-gated route hit with the wrong method — same
@@ -164,8 +186,8 @@ async function handleIngest(request, env, idParam) {
   try {
     await env.DB.prepare(
       `INSERT INTO digests
-         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          created_at    = excluded.created_at,
          tldr          = excluded.tldr,
@@ -176,7 +198,8 @@ async function handleIngest(request, env, idParam) {
          body_md       = excluded.body_md,
          tldr_hu       = excluded.tldr_hu,
          body_html_hu  = excluded.body_html_hu,
-         body_md_hu    = excluded.body_md_hu`,
+         body_md_hu    = excluded.body_md_hu,
+         kind          = excluded.kind`,
     )
       .bind(
         id,
@@ -194,6 +217,7 @@ async function handleIngest(request, env, idParam) {
         d.tldr_hu,
         d.body_html_hu,
         d.body_md_hu,
+        d.kind,
       )
       .run();
   } catch {
@@ -203,7 +227,7 @@ async function handleIngest(request, env, idParam) {
   return json({ ok: true }, 200);
 }
 
-async function handleIndexPage(env, token, url, lang) {
+async function handleIndexPage(env, token, url, lang, view) {
   if (!(await tokenMatches(env, token))) return notFound();
 
   // LIMIT 1000 = ~4 months of 3-hourly digests. Not pagination, a page-weight
@@ -212,41 +236,62 @@ async function handleIndexPage(env, token, url, lang) {
   // each digest page's prev/next chain; add real pagination if the cap is
   // ever actually felt. tldr_hu is always selected (cheap) even for the EN
   // page — only the HU renderer reads it.
+  //
+  // Order by created_at, not id: daily briefs get BACKFILLED for past days,
+  // so a backfilled row can have a high id but an old, historical
+  // created_at — id order and chronological order are no longer the same
+  // thing. `id DESC` stays only as a deterministic tiebreak for same-instant
+  // rows. groupByDay below relies on this ordering to put each row in its
+  // correct day bucket.
+  const kindFilter = view === "daily" ? "WHERE kind = 'daily' " : "";
   const { results } = await env.DB.prepare(
-    "SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention FROM digests ORDER BY id DESC LIMIT 1000",
+    `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind FROM digests ${kindFilter}ORDER BY created_at DESC, id DESC LIMIT 1000`,
   ).all();
 
-  return htmlResponse(renderIndexPage(results ?? [], token, url.hostname, lang));
+  return htmlResponse(
+    renderIndexPage(results ?? [], token, url.hostname, lang, view),
+  );
 }
 
-async function handleDigestPage(env, token, idParam, url, lang) {
+async function handleDigestPage(env, token, idParam, url, lang, view) {
   if (!(await tokenMatches(env, token))) return notFound();
 
   const id = Number(idParam);
   if (!Number.isInteger(id) || id <= 0) return notFound();
 
   const digest = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu FROM digests WHERE id = ?",
+    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind FROM digests WHERE id = ?",
   )
     .bind(id)
     .first();
   if (!digest) return notFound();
 
+  // In the daily view, prev/next stay within kind='daily' so a reader hops
+  // brief-to-brief rather than through every window digest in between — the
+  // all view keeps today's unconstrained chronological prev/next.
+  //
+  // Neighbor = adjacent by (created_at, id) tuple order, not by id: daily
+  // briefs get BACKFILLED for past days with historical created_at values,
+  // so a backfilled row's id says nothing about its chronological position.
+  // SQLite row-value comparison ((created_at, id) < (?, ?)) does the tuple
+  // compare/tiebreak in one expression — supported since SQLite 3.15, and
+  // D1's SQLite is far newer.
+  const kindFilter = view === "daily" ? " AND kind = 'daily'" : "";
   const [older, newer] = await Promise.all([
     env.DB.prepare(
-      "SELECT id, created_at FROM digests WHERE id < ? ORDER BY id DESC LIMIT 1",
+      `SELECT id, created_at FROM digests WHERE (created_at, id) < (?, ?)${kindFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
     )
-      .bind(id)
+      .bind(digest.created_at, id)
       .first(),
     env.DB.prepare(
-      "SELECT id, created_at FROM digests WHERE id > ? ORDER BY id ASC LIMIT 1",
+      `SELECT id, created_at FROM digests WHERE (created_at, id) > (?, ?)${kindFilter} ORDER BY created_at ASC, id ASC LIMIT 1`,
     )
-      .bind(id)
+      .bind(digest.created_at, id)
       .first(),
   ]);
 
   return htmlResponse(
-    renderDigestPage(digest, older, newer, token, url.hostname, lang),
+    renderDigestPage(digest, older, newer, token, url.hostname, lang, view),
   );
 }
 
@@ -275,6 +320,7 @@ function validateDigestPayload(payload) {
     tldr_hu,
     body_html_hu,
     body_md_hu,
+    kind,
   } = payload;
 
   if (
@@ -317,6 +363,15 @@ function validateDigestPayload(payload) {
     byteLength(body_md) > MAX_BODY_FIELD_BYTES
   ) {
     return { ok: false, error: "body_md must be a non-empty string within size limits" };
+  }
+
+  // `kind` is optional and backward-compatible: the pre-daily-brief app
+  // version never sends it, and that must keep working unchanged, so absence
+  // defaults to "window" rather than failing. Presence is strict, though —
+  // anything other than the two known values is a caller bug, not a value to
+  // silently coerce.
+  if (kind !== undefined && kind !== "window" && kind !== "daily") {
+    return { ok: false, error: 'kind must be "window" or "daily"' };
   }
 
   // Hungarian translation fields are entirely optional (older/untranslated
@@ -372,6 +427,7 @@ function validateDigestPayload(payload) {
       tldr_hu: huEnabled ? tldr_hu : null,
       body_html_hu: huEnabled ? body_html_hu : null,
       body_md_hu: huEnabled ? body_md_hu : null,
+      kind: kind ?? "window",
     },
   };
 }
@@ -502,8 +558,11 @@ function tzAbbr(date) {
 // else Hungarian-language on a /hu/ page is either digest content the app
 // already translated (body_html_hu/tldr_hu) or a handful of untranslated
 // micro-labels ("TL;DR:", "digest #N") left as-is; see README/PR notes for
-// the reasoning. Owner: please read these for correctness, they're the only
-// hardcoded Hungarian text in the codebase.
+// the reasoning. dailyBrief is the one exception on the stamp line: for
+// kind="daily" it replaces the untranslated "digest" label, so the HU stamp
+// reads "napi összefoglaló #N" instead of "digest #N". Owner: please read
+// these for correctness, they're the only hardcoded Hungarian text in the
+// codebase.
 const STRINGS = {
   en: {
     locale: "en-GB",
@@ -513,10 +572,14 @@ const STRINGS = {
     sectionsWord: "sections",
     allDigests: "← All digests",
     noDigests: "No digests yet.",
+    noDailyBriefs: "No daily briefs yet.",
     footerPrivate:
       "Private link — anyone with this URL can read. Don't share it outside the group.",
     footerNotIndexed: "Not indexed · generated by the digest service, every 3 hours",
     enOnlyNote: null,
+    dailyBrief: "daily brief",
+    viewAll: "All",
+    viewDaily: "Daily",
   },
   hu: {
     locale: "hu-HU",
@@ -526,34 +589,63 @@ const STRINGS = {
     sectionsWord: "szakasz",
     allDigests: "← Minden hírlevél",
     noDigests: "Még nincs hírlevél.",
+    noDailyBriefs: "Még nincs napi összefoglaló.",
     footerPrivate:
       "Privát link — bárki olvashatja, akinél megvan ez az URL. Ne oszd meg a csoporton kívül.",
     footerNotIndexed: "Nem indexelt · a digest szolgáltatás generálja, 3 óránként",
     enOnlyNote: "Csak angolul elérhető",
+    dailyBrief: "napi összefoglaló",
+    viewAll: "Minden",
+    viewDaily: "Napi",
   },
 };
 
-// ── language-space path helpers (keep every internal link inside the
-// current language space: index↔index, digest↔digest, EN pages never link
-// into /hu/ and vice versa except via the explicit switcher) ────────────
+// ── language/view-space path helpers (keep every internal link inside the
+// current language×view space: index↔index, digest↔digest, EN pages never
+// link into /hu/ and vice versa, all-view pages never link into daily/ and
+// vice versa, except via the two explicit switchers) ────────────────────
 
-function indexHref(token, lang) {
-  return `/t/${encodeURIComponent(token)}/${lang === "hu" ? "hu/" : ""}`;
+function indexHref(token, lang, view) {
+  const langSeg = lang === "hu" ? "hu/" : "";
+  const viewSeg = view === "daily" ? "daily/" : "";
+  return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}`;
 }
 
-function digestHref(token, lang, id) {
-  return `/t/${encodeURIComponent(token)}/${lang === "hu" ? "hu/" : ""}d/${esc(id)}`;
+function digestHref(token, lang, view, id) {
+  const langSeg = lang === "hu" ? "hu/" : "";
+  const viewSeg = view === "daily" ? "daily/" : "";
+  return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}d/${esc(id)}`;
 }
 
-function renderLangSwitcher(token, lang, kind, id) {
-  const enHref = kind === "index" ? indexHref(token, "en") : digestHref(token, "en", id);
-  const huHref = kind === "index" ? indexHref(token, "hu") : digestHref(token, "hu", id);
+// `pageKind` ("index" | "digest") picks index vs. digest href — distinct
+// from a digest row's own `kind` column (window/daily) used elsewhere.
+function renderLangSwitcher(token, lang, view, pageKind, id) {
+  const enHref = pageKind === "index" ? indexHref(token, "en", view) : digestHref(token, "en", view, id);
+  const huHref = pageKind === "index" ? indexHref(token, "hu", view) : digestHref(token, "hu", view, id);
   // Current language: plain bold text, not a link (nothing to switch to).
   // Other language: a link to the SAME page (same index row / same digest
-  // id) in the other language space.
+  // id) in the other language space, same view.
   const en = lang === "en" ? "<strong>EN</strong>" : `<a href="${enHref}">EN</a>`;
   const hu = lang === "hu" ? "<strong>HU</strong>" : `<a href="${huHref}">HU</a>`;
   return `<span class="langswitch">${en} | ${hu}</span>`;
+}
+
+// The view switcher's "other view" link is ALWAYS an index href, on both
+// index and digest pages — see the file-header comment ("Daily-brief view")
+// for why a digest page can't link into the other view's own digest.
+function renderViewSwitcher(token, lang, view) {
+  const strings = STRINGS[lang];
+  const allHref = indexHref(token, lang, "all");
+  const dailyHref = indexHref(token, lang, "daily");
+  const all = view === "all" ? `<strong>${esc(strings.viewAll)}</strong>` : `<a href="${allHref}">${esc(strings.viewAll)}</a>`;
+  const daily = view === "daily" ? `<strong>${esc(strings.viewDaily)}</strong>` : `<a href="${dailyHref}">${esc(strings.viewDaily)}</a>`;
+  return `<span class="viewswitch">${all} | ${daily}</span>`;
+}
+
+// Composes both switchers into one masthead block — see the .switchers CSS
+// rule for how they stay paired without crowding the brand on mobile.
+function renderSwitchers(token, lang, view, pageKind, id) {
+  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id)}${renderViewSwitcher(token, lang, view)}</div>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -629,13 +721,17 @@ const CSS = `
   }
   .mast .brand { font-weight: 700; font-size: 1.05em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
   .mast .brand .tld { color: var(--accent); }
-  /* Switcher (EN | HU) sits top-right in the masthead; the cadence line
-     stacks right below it, both right-aligned — same markup at both
-     breakpoints, header.mast's own flex-wrap handles narrow viewports. */
+  /* Switchers (EN | HU, All | Daily) sit top-right in the masthead, paired
+     on one row via .switchers; the cadence line stacks right below them,
+     both right-aligned — same markup at both breakpoints, .switchers'
+     own flex-wrap (not header.mast's) is what keeps two small switchers
+     from crowding the brand on narrow viewports: they wrap onto their own
+     line under mastright rather than squeezing the header itself. */
   .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; }
-  .mast .langswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
-  .mast .langswitch a { text-decoration: none; }
-  .mast .langswitch strong { color: var(--text); }
+  .mast .switchers { display: flex; gap: 0.6em; align-items: baseline; flex-wrap: wrap; justify-content: flex-end; }
+  .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
+  .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
+  .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
   .mast .cadence { color: var(--muted); font-size: 0.8em; }
 
   .dayhead {
@@ -653,6 +749,10 @@ const CSS = `
     font-variant-numeric: tabular-nums;
   }
   .entry .time { font-weight: 700; font-size: 0.95em; }
+  /* Daily-brief entries carry the indigo accent on their time instead of the
+     default text color — the "slightly heavier presence" this one entry
+     type gets in an otherwise undifferentiated list. */
+  .entry .time.time-accent { color: var(--accent); }
   .entry .count { color: var(--muted); font-size: 0.8em; }
   .entry .flag {
     font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
@@ -662,10 +762,18 @@ const CSS = `
      index entries — deliberately NOT the amber attention colors, this isn't
      a warning, just a language note. Reuses .flag's shape/sizing. */
   .entry .flag.flag-muted { background: var(--chip-bg); color: var(--chip-text); }
+  /* Daily-brief badge — same indigo chip-bg/chip-text tokens as .flag-muted,
+     but filled/inverted (solid indigo, not the soft pastel) so it reads as
+     its own distinct badge rather than the muted EN language note, and
+     stays clearly apart from the amber attention pill. */
+  .entry .flag.flag-daily { background: var(--chip-text); color: var(--chip-bg); }
   .entry .excerpt {
     margin: 0; color: var(--muted); font-size: 0.93em;
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
+  /* Daily-brief entries summarize a whole day, not a 3-hour window — one
+     extra clamped line of excerpt room. */
+  .entry .excerpt.excerpt-daily { -webkit-line-clamp: 4; }
   .entry .excerpt strong { color: var(--text); }
 
   nav.digestnav {
@@ -729,7 +837,7 @@ const CSS = `
   }
 `;
 
-function pageChrome(host, token, lang, switcherHtml, bodyHtml) {
+function pageChrome(host, token, lang, view, switchersHtml, bodyHtml) {
   const { first, rest } = brandParts(host);
   const strings = STRINGS[lang];
   return `<!doctype html>
@@ -744,9 +852,9 @@ function pageChrome(host, token, lang, switcherHtml, bodyHtml) {
 <body>
 <div class="wrap">
   <header class="mast">
-    <a class="brand" href="${indexHref(token, lang)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
+    <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
     <div class="mastright">
-      ${switcherHtml}
+      ${switchersHtml}
       <span class="cadence">${esc(strings.cadence)}</span>
     </div>
   </header>
@@ -778,9 +886,16 @@ function groupByDay(rows, locale) {
   return groups;
 }
 
-function renderIndexEntry(row, token, lang) {
+function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
   const time = formatTime(new Date(row.created_at), strings.locale);
+  const isDaily = row.kind === "daily";
+  // The badge is redundant in the daily view itself (every row there is
+  // already a daily brief) — only the all view needs it to tell the two
+  // kinds apart at a glance.
+  const dailyFlag = isDaily && view !== "daily"
+    ? `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>`
+    : "";
   const flag = row.has_attention
     ? `<span class="flag">${esc(strings.attention)}</span>`
     : "";
@@ -799,23 +914,26 @@ function renderIndexEntry(row, token, lang) {
   }
 
   const counts = `${esc(row.item_count)} ${esc(strings.itemsWord)} · ${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
+  const timeClass = isDaily ? "time time-accent" : "time";
+  const excerptClass = isDaily ? "excerpt excerpt-daily" : "excerpt";
 
-  return `<a class="entry" href="${digestHref(token, lang, row.id)}">
-    <span class="meta"><span class="time">${esc(time)}</span><span class="count">${counts}</span>${flag}${langChip}</span>
-    <p class="excerpt"><strong>TL;DR:</strong> ${excerptHtml}</p>
+  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}">
+    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${dailyFlag}${flag}${langChip}</span>
+    <p class="${excerptClass}"><strong>TL;DR:</strong> ${excerptHtml}</p>
   </a>`;
 }
 
-function renderIndexPage(rows, token, host, lang) {
+function renderIndexPage(rows, token, host, lang, view) {
   const strings = STRINGS[lang];
   const groups = groupByDay(rows, strings.locale);
+  const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
   const body =
     groups.length === 0
-      ? `<p class="stamp">${esc(strings.noDigests)}</p>`
+      ? `<p class="stamp">${esc(emptyMessage)}</p>`
       : groups
           .map(
             (group) => `<div class="dayhead">${esc(group.label)}</div>
-${group.items.map((row) => renderIndexEntry(row, token, lang)).join("\n")}`,
+${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}`,
           )
           .join("\n");
 
@@ -823,30 +941,35 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang)).join("\n")}`,
     host,
     token,
     lang,
-    renderLangSwitcher(token, lang, "index"),
+    view,
+    renderSwitchers(token, lang, view, "index"),
     `<section>${body}</section>`,
   );
 }
 
-function renderDigestPage(digest, older, newer, token, host, lang) {
+function renderDigestPage(digest, older, newer, token, host, lang, view) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
-  const stamp = `${formatDayHeader(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · digest #${digest.id}`;
+  // "digest" itself stays an untranslated literal (see the STRINGS comment
+  // above) — only the daily-brief label is real HU vocabulary, swapped in
+  // for kind="daily".
+  const kindLabel = digest.kind === "daily" ? strings.dailyBrief : "digest";
+  const stamp = `${formatDayHeader(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${kindLabel} #${digest.id}`;
 
   const navLinks = [
-    `<a href="${indexHref(token, lang)}">${esc(strings.allDigests)}</a>`,
+    `<a href="${indexHref(token, lang, view)}">${esc(strings.allDigests)}</a>`,
     '<span class="spacer"></span>',
   ];
   // Hide the link entirely at each end (oldest has no older, newest has no
   // newer) rather than showing a disabled placeholder.
   if (older) {
     navLinks.push(
-      `<a href="${digestHref(token, lang, older.id)}">← ${esc(formatTime(new Date(older.created_at), strings.locale))}</a>`,
+      `<a href="${digestHref(token, lang, view, older.id)}">← ${esc(formatTime(new Date(older.created_at), strings.locale))}</a>`,
     );
   }
   if (newer) {
     navLinks.push(
-      `<a href="${digestHref(token, lang, newer.id)}">${esc(formatTime(new Date(newer.created_at), strings.locale))} →</a>`,
+      `<a href="${digestHref(token, lang, view, newer.id)}">${esc(formatTime(new Date(newer.created_at), strings.locale))} →</a>`,
     );
   }
 
@@ -873,7 +996,8 @@ ${articleHtml}
     host,
     token,
     lang,
-    renderLangSwitcher(token, lang, "digest", digest.id),
+    view,
+    renderSwitchers(token, lang, view, "digest", digest.id),
     body,
   );
 }

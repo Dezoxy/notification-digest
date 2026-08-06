@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS digests (
   -- ingest validation in worker.js.
   tldr_hu       TEXT,
   body_html_hu  TEXT,
-  body_md_hu    TEXT
+  body_md_hu    TEXT,
+  -- Distinguishes the once-daily 20:00 synthesis ("daily") from the regular
+  -- 3-hourly window digest ("window", the default). Same ingest path, same
+  -- table — see the ingest validation in worker.js for the allowed values.
+  kind          TEXT NOT NULL DEFAULT 'window'
 );
 CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at DESC);
