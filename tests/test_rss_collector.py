@@ -15,10 +15,29 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import digest.collectors.rss as rss_module
-from digest.collectors.rss import _MAX_ENTRIES_PER_FEED, _MAX_SUMMARY_CHARS, collect
+from digest.collectors.rss import (
+    _MAX_ENTRIES_PER_FEED,
+    _MAX_SUMMARY_CHARS,
+    _MIN_SECONDS_BETWEEN_SAME_HOST,
+    collect,
+)
 
 _NOW = datetime.now(UTC)
 
+
+@pytest.fixture(autouse=True)
+def _never_really_sleep(monkeypatch):
+    """Neutralize the per-host pacing sleep for every test in this module.
+
+    `_MIN_SECONDS_BETWEEN_SAME_HOST` is 45 REAL seconds in production (see
+    rss.py) -- correct there, ruinous here: any test whose feed list hits one
+    host twice would otherwise add 45s of genuine wall-clock to the suite
+    (two such tests already existed, and they took the suite from 6s to 94s
+    before this fixture). Autouse so a future same-host test can never
+    silently reintroduce that tax. The two tests that ASSERT pacing patch
+    `time.sleep` themselves afterwards, which wins over this one.
+    """
+    monkeypatch.setattr(rss_module.time, "sleep", lambda _seconds: None)
 
 def _rfc822(dt: datetime) -> str:
     return dt.strftime("%a, %d %b %Y %H:%M:%S GMT")
@@ -463,3 +482,172 @@ def test_no_cursor_updates_ever(monkeypatch: pytest.MonkeyPatch) -> None:
     result = collect(["https://feed.example/rss"])
 
     assert result.cursor_updates == {}
+
+
+# --- per-host pacing ---
+
+
+def test_pacing_sleeps_for_repeated_host_but_not_distinct_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second feed on the SAME host sleeps the remainder of the pacing window; a
+    third feed on a distinct host never sleeps at all, even though it's fetched
+    right after."""
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(rss_module.time, "sleep", lambda s: sleep_calls.append(s))
+
+    elapsed = 5.0
+    # Call order: feed 1 (new host) stashes t=1000; feed 2 (same host) reads
+    # elapsed-since-last-fetch at t=1005 (5s elapsed) then stashes its own
+    # t=1005 after sleeping; feed 3 (a distinct host) stashes t=2000 with no
+    # elapsed check at all, since its host has no prior entry.
+    monotonic_values = iter([1000.0, 1000.0 + elapsed, 1000.0 + elapsed, 2000.0])
+    monkeypatch.setattr(rss_module.time, "monotonic", lambda: next(monotonic_values))
+
+    body = _rss("")
+    urls = {
+        "https://reddit.com/r/one/.rss": body,
+        "https://reddit.com/r/two/.rss": body,
+        "https://example.com/feed": body,
+    }
+    _patch_urlopen(monkeypatch, urls)
+
+    result = collect(list(urls))
+
+    assert result.failed is False
+    assert sleep_calls == [_MIN_SECONDS_BETWEEN_SAME_HOST - elapsed]
+
+
+def test_pacing_state_does_not_leak_between_collect_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-host last-fetch tracking is local to one collect() call -- calling
+    collect() again for the same host must never see a stale timestamp from a
+    prior call and sleep because of it."""
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(rss_module.time, "sleep", lambda s: sleep_calls.append(s))
+    monkeypatch.setattr(rss_module.time, "monotonic", lambda: 1000.0)
+
+    body = _rss("")
+    _patch_urlopen(monkeypatch, {"https://reddit.com/r/one/.rss": body})
+
+    collect(["https://reddit.com/r/one/.rss"])
+    collect(["https://reddit.com/r/one/.rss"])
+
+    assert sleep_calls == []
+
+
+# --- reddit chat_title normalization ---
+
+
+def test_reddit_feed_url_chat_title_overridden_to_r_slash_sub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"""
+        <item>
+          <title>Some Post</title>
+          <link>https://example.com/post</link>
+          <guid>guid-post</guid>
+          <pubDate>{recent}</pubDate>
+        </item>
+        """,
+        feed_title="top scoring links : hungary",
+    )
+    _patch_urlopen(monkeypatch, {"https://www.reddit.com/r/hungary/.rss": body})
+
+    result = collect(["https://www.reddit.com/r/hungary/.rss"])
+
+    assert len(result.items) == 1
+    assert result.items[0].chat_title == "r/hungary"
+
+
+def test_reddit_feed_url_preserves_mixed_case_subreddit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"""
+        <item>
+          <title>Some Post</title>
+          <link>https://example.com/post2</link>
+          <guid>guid-post2</guid>
+          <pubDate>{recent}</pubDate>
+        </item>
+        """,
+        feed_title="top scoring links : AskReddit",
+    )
+    _patch_urlopen(monkeypatch, {"https://www.reddit.com/r/AskReddit/.rss": body})
+
+    result = collect(["https://www.reddit.com/r/AskReddit/.rss"])
+
+    assert len(result.items) == 1
+    assert result.items[0].chat_title == "r/AskReddit"
+
+
+def test_reddit_feed_url_trailing_slash_and_query_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"""
+        <item>
+          <title>Some Post</title>
+          <link>https://example.com/post3</link>
+          <guid>guid-post3</guid>
+          <pubDate>{recent}</pubDate>
+        </item>
+        """,
+        feed_title="top scoring links : hungary",
+    )
+    _patch_urlopen(monkeypatch, {"https://www.reddit.com/r/hungary/?limit=25": body})
+
+    result = collect(["https://www.reddit.com/r/hungary/?limit=25"])
+
+    assert len(result.items) == 1
+    assert result.items[0].chat_title == "r/hungary"
+
+
+def test_reddit_host_with_no_sub_segment_falls_back_to_feed_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"""
+        <item>
+          <title>Some Post</title>
+          <link>https://example.com/post4</link>
+          <guid>guid-post4</guid>
+          <pubDate>{recent}</pubDate>
+        </item>
+        """,
+        feed_title="reddit.com front page",
+    )
+    _patch_urlopen(monkeypatch, {"https://www.reddit.com/.rss": body})
+
+    result = collect(["https://www.reddit.com/.rss"])
+
+    assert len(result.items) == 1
+    assert result.items[0].chat_title == "reddit.com front page"
+
+
+def test_non_reddit_feed_keeps_its_own_feed_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"""
+        <item>
+          <title>Some Post</title>
+          <link>https://example.com/post5</link>
+          <guid>guid-post5</guid>
+          <pubDate>{recent}</pubDate>
+        </item>
+        """,
+        feed_title="Regular News Feed",
+    )
+    _patch_urlopen(monkeypatch, {"https://news.example/rss": body})
+
+    result = collect(["https://news.example/rss"])
+
+    assert len(result.items) == 1
+    assert result.items[0].chat_title == "Regular News Feed"
