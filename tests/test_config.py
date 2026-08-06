@@ -675,3 +675,30 @@ def test_translate_model_override_is_used(monkeypatch):
     config = Config.from_env()
 
     assert config.translate_model == "claude-haiku-5"
+
+
+def test_translate_model_fallback_defaults_to_claude_sonnet_4_6(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("TRANSLATE_MODEL_FALLBACK", raising=False)
+
+    config = Config.from_env()
+
+    assert config.translate_model_fallback == "claude-sonnet-4-6"
+
+
+def test_translate_model_fallback_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TRANSLATE_MODEL_FALLBACK", "claude-haiku-5")
+
+    config = Config.from_env()
+
+    assert config.translate_model_fallback == "claude-haiku-5"
+
+
+def test_translate_model_fallback_empty_string_disables_it(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TRANSLATE_MODEL_FALLBACK", "")
+
+    config = Config.from_env()
+
+    assert config.translate_model_fallback == ""

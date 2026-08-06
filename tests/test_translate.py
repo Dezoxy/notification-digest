@@ -1,5 +1,5 @@
 import digest.translate as translate_mod
-from digest.summarize import SummarizeError
+from digest.summarize import SafeguardsRefusalError, SummarizeError
 from digest.translate import build_translate_prompt, translate_digest
 
 _VALID_HU_OUTPUT = "**TL;DR:** Valami történt.\n\n## Egy szakasz\n\nSzöveg.\n"
@@ -182,3 +182,93 @@ def test_translate_digest_passes_allowed_urls_through_unmodified(monkeypatch):
     translate_digest("body", allowed_urls=urls, model="sonnet", timeout_seconds=60)
 
     assert captured["allowed_urls"] == urls
+
+
+# --- fallback_model on SafeguardsRefusalError ---
+
+
+def test_translate_digest_refusal_retries_with_fallback_model_same_prompt(monkeypatch):
+    calls = []
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        calls.append((prompt, model, timeout_seconds, effort))
+        if model == "sonnet":
+            raise SafeguardsRefusalError("claude -p exited 1: API safety classifier flagged")
+        return _VALID_HU_OUTPUT
+
+    monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
+
+    result = translate_digest(
+        "body",
+        allowed_urls=set(),
+        model="sonnet",
+        timeout_seconds=60,
+        fallback_model="claude-sonnet-4-6",
+    )
+
+    assert result == _VALID_HU_OUTPUT
+    assert len(calls) == 2
+    first_prompt, first_model, _, _ = calls[0]
+    second_prompt, second_model, _, _ = calls[1]
+    assert first_model == "sonnet"
+    assert second_model == "claude-sonnet-4-6"
+    # The fallback call must use the IDENTICAL prompt as the primary call --
+    # this is a same-content, different-model retry, not a rebuilt prompt.
+    assert second_prompt == first_prompt
+
+
+def test_translate_digest_refusal_with_no_fallback_model_returns_none(monkeypatch, caplog):
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        raise SafeguardsRefusalError("claude -p exited 1: API safety classifier flagged")
+
+    monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
+
+    with caplog.at_level("WARNING"):
+        result = translate_digest(
+            "body", allowed_urls=set(), model="sonnet", timeout_seconds=60, fallback_model=None
+        )
+
+    assert result is None
+    assert "SafeguardsRefusalError" in caplog.text
+
+
+def test_translate_digest_refusal_on_both_primary_and_fallback_returns_none(monkeypatch):
+    calls = []
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        calls.append(model)
+        raise SafeguardsRefusalError("claude -p exited 1: API safety classifier flagged")
+
+    monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
+
+    result = translate_digest(
+        "body",
+        allowed_urls=set(),
+        model="sonnet",
+        timeout_seconds=60,
+        fallback_model="claude-sonnet-4-6",
+    )
+
+    assert result is None
+    assert calls == ["sonnet", "claude-sonnet-4-6"]
+
+
+def test_translate_digest_plain_summarize_error_does_not_trigger_fallback(monkeypatch):
+    calls = []
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        calls.append(model)
+        raise SummarizeError("claude -p returned empty output")
+
+    monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
+
+    result = translate_digest(
+        "body",
+        allowed_urls=set(),
+        model="sonnet",
+        timeout_seconds=60,
+        fallback_model="claude-sonnet-4-6",
+    )
+
+    assert result is None
+    assert calls == ["sonnet"]  # run_claude called exactly once -- no fallback attempt
