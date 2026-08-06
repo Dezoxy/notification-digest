@@ -1,0 +1,171 @@
+"""Builds the Hungarian translation prompt and invokes the Claude CLI.
+
+A thin sibling of digest/summarize.py, kept as its own module rather than
+folded into that one: translation is a distinct, optional, soft-failing
+PRODUCTION step (see translate_digest's docstring) with its own prompt
+contract (prompts/translate-hu.md), not another summarization concern. It
+reuses summarize.py's `run_claude`, `validate_output`, and
+`enforce_link_allowlist` rather than re-implementing any of them -- the
+translated output is still "briefing markdown that must have a real `## `
+heading" and "a markdown document whose links must be checked for
+provenance", exactly the same two contracts the English output already has
+to satisfy, so the identical enforcement functions apply unchanged.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections.abc import Collection
+from pathlib import Path
+
+from digest.summarize import (
+    enforce_link_allowlist,
+    run_claude,
+    validate_output,
+)
+
+logger = logging.getLogger(__name__)
+
+_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "translate-hu.md"
+
+# Fixed at `medium`, not threaded through from Config the way
+# digest/summarize.py's `run_claude` effort is (CLAUDE_EFFORT): translation
+# is mechanically easier than summarization -- there is no editorial
+# judgment to exercise (clustering stories, weighting significance, deciding
+# what to cut), only a faithful rewrite of already-finished prose into
+# Hungarian while leaving structure/links/numbers untouched -- so a lower,
+# fixed effort level is the right default and not worth a second config knob
+# on top of CLAUDE_EFFORT.
+_TRANSLATE_EFFORT = "medium"
+
+
+def build_translate_prompt(body_md: str) -> str:
+    """Load prompts/translate-hu.md and substitute the {{DIGEST_MD}} placeholder.
+
+    `body_md` gets the identical fencing discipline digest/summarize.py's
+    `build_prompt` applies to ITEMS_JSON, for the identical reason: it rides
+    inside its own fenced ```markdown block below (prompts/translate-hu.md),
+    and a literal ``` surviving inside it could make the model perceive that
+    fence as closed early, exposing whatever follows as if it were outside
+    the "this is data" boundary rather than inside it. `body_md` is this
+    codebase's OWN prior summarization output, not raw scraped text -- but it
+    is derived from the same untrusted Telegram/X/news material as
+    everything else in this pipeline (a prompt injection that survived
+    summarize()'s own defenses would ride straight through here otherwise),
+    so it gets full fencing discipline rather than an assumption that our own
+    prior output is automatically safe to embed unescaped.
+
+    Every backtick is escaped to its JSON unicode-escape form (`` ` `` ->
+    `\\u0060`), exactly the token build_prompt substitutes for ITEMS_JSON.
+    Unlike ITEMS_JSON, this text is never run back through `json.loads` --
+    there is no parser on the other end to silently undo the escape -- so a
+    translation model asked to preserve structure exactly is expected to
+    reproduce the literal `\\u0060` token verbatim (it has no special meaning
+    to a model reading surrounding Hungarian prose, so there's nothing to
+    tempt it into "helpfully" altering it). `translate_digest` reverses this
+    exact substitution on the model's output before it does anything else
+    with it, so the reader never sees a raw `\\u0060` in a delivered digest --
+    see that function's docstring for why the reversal has to be explicit
+    here, unlike the JSON case.
+
+    Every "{{" is also neutralized the same way
+    `_sanitize_recent_coverage_heading` neutralizes it for a past digest
+    heading (digest/summarize.py) -- broken into "{ {" via the same
+    lookahead-based substitution, so a run of 3+ braces can't leave a live
+    pair behind. `{{DIGEST_MD}}` is the only placeholder this template
+    defines, so there is no LATER `.replace()` call here for an untouched
+    "{{" to be rescanned by the way build_prompt's ordering comment worries
+    about -- this neutralization is pure defense in depth, for the same
+    reason `_sanitize_recent_coverage_heading` applies it to text that also
+    derives from untrusted material: never leave a live-looking placeholder
+    token sitting in text this codebase generated from someone else's input,
+    regardless of whether the CURRENT code path happens to rescan it.
+    Unlike the backtick escape, this one is never reversed -- a stray "{ {"
+    instead of "{{" is not a visible defect in translated prose (no reader
+    would ever type doubled braces in the first place), so there's nothing
+    to restore.
+    """
+    template = _PROMPT_PATH.read_text()
+    escaped = body_md.replace("`", "\\u0060")
+    escaped = re.sub(r"\{(?=\{)", "{ ", escaped)
+    return template.replace("{{DIGEST_MD}}", escaped)
+
+
+def translate_digest(
+    body_md: str,
+    allowed_urls: Collection[str],
+    model: str,
+    timeout_seconds: int,
+) -> str | None:
+    """Translate a validated English digest to Hungarian. Never raises; None on any failure.
+
+    This is a PRODUCTION step run on the VM after summarize() has already
+    produced and validated the English `body_md` (digest/main.py's
+    `_deliver`) -- it is deliberately soft-failing and NEVER a delivery
+    channel of its own: a translation failure must never block, delay, or
+    degrade the English digest, which has already been fully handled by the
+    time this is called. Callers (see digest/main.py) treat `None` as "this
+    digest stays English-only, forever" -- there is no retry mechanism, on
+    purpose: unlike a transient SMTP or HTTP failure, a rerun of the exact
+    same prompt against the exact same model has no natural convergence
+    guarantee (nothing about a second `claude -p` call makes it more likely
+    to produce valid output than the first), so retrying would just spend
+    another model call per attempt for no expected improvement in odds. And
+    the failure mode is genuinely cosmetic, not a lost delivery: the site
+    (digest/publish.py's `publish_to_site`) always has the English body/HTML
+    to fall back to when the Hungarian fields are absent from the ingest
+    payload -- a missing translation is invisible to the reader unless they
+    specifically look for the Hungarian version, whereas a lost English
+    digest would be a real gap in the record.
+
+    Pipeline: build the prompt (`build_translate_prompt`), run it through
+    `claude -p` at a fixed `medium` effort (see `_TRANSLATE_EFFORT`'s
+    comment -- translation is mechanically easier than summarization, no
+    editorial judgment involved), then apply the IDENTICAL two-stage
+    contract enforcement digest/summarize.py's `summarize()` applies to the
+    English output: `validate_output` (at least one real `## ` heading -- a
+    refusal or empty output must not be mistaken for a translated briefing)
+    and `enforce_link_allowlist` (every link's URL checked against
+    `allowed_urls`, exactly the same set of stamped item URLs the English
+    digest was checked against). The translator can mangle or hallucinate a
+    URL exactly as readily as the summarizer can -- prompts/translate-hu.md's
+    contract asks it not to, but that's a request, not a guarantee, so the
+    translated markdown gets the identical provenance pass rather than an
+    assumption that "just translating" is a lower-risk operation than
+    summarizing.
+
+    `run_claude`'s own failure (a non-zero exit, empty stdout, or a timeout)
+    and `validate_output`'s failure both raise `SummarizeError`, but the
+    catch below is deliberately broader than that one type -- see its
+    inline comment: the NEVER-raises contract has to hold for failure
+    shapes nobody anticipated, too. Only the exception's TYPE NAME is
+    logged (a WARNING), never its message or the prompt/output content --
+    identical secrecy posture to every other error path touching this
+    pipeline's model calls (see SummarizeError's own docstring).
+
+    Backtick un-escaping runs BEFORE `enforce_link_allowlist`: the escape
+    `build_translate_prompt` applies (backtick -> `\\u0060`) has no `json
+    .loads` on this side to reverse it automatically, so this function does
+    it explicitly -- a straight string replace back to a literal backtick --
+    so a delivered Hungarian digest never shows the raw escape token to the
+    reader. Doing this before the allowlist pass (rather than after) means
+    `enforce_link_allowlist`'s markdown-link/autolink/bare-URL regexes see
+    the digest's REAL final shape, not a shape still carrying an artifact
+    from the fencing defense.
+    """
+    try:
+        prompt = build_translate_prompt(body_md)
+        output = run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+        validate_output(output)
+    # Broad on purpose, not just SummarizeError: this function's contract is
+    # NEVER raises -- translation is cosmetic, and an unanticipated failure
+    # shape (an unreadable prompt file, a pathological template, anything
+    # future) must degrade to English-only exactly like an anticipated one,
+    # never take down the run that already produced a valid English digest.
+    except Exception as exc:
+        logger.warning("translate_digest: translation failed: %s", type(exc).__name__)
+        return None
+
+    output = output.replace("\\u0060", "`")
+    return enforce_link_allowlist(output, allowed_urls)

@@ -1111,3 +1111,99 @@ def test_get_pending_digest_wrapper_still_finds_newest_email_unsent(conn):
 
     mark_digest_sent(conn, second_id)
     assert get_pending_digest(conn) == (first_id, "first")
+
+
+# --- body_md_hu column (Hungarian translation feature) ---
+
+
+def test_create_digest_stores_and_is_readable_body_md_hu(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    items = get_unsummarized_items(conn)
+
+    digest_id = create_digest(conn, "english body", items, body_md_hu="magyar szöveg")
+
+    row = conn.execute(
+        "SELECT body_md, body_md_hu FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row == ("english body", "magyar szöveg")
+
+
+def test_create_digest_defaults_body_md_hu_to_null(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    items = get_unsummarized_items(conn)
+
+    digest_id = create_digest(conn, "english body", items)
+
+    row = conn.execute(
+        "SELECT body_md_hu FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row == (None,)
+
+
+def test_init_db_migrates_pre_translation_digests_table_missing_body_md_hu(tmp_path: Path):
+    # Simulate a database created before the Hungarian translation feature --
+    # predates body_md_hu (mirrors the site_published/telegram_sent migration
+    # test precedent above).
+    old_conn = connect(str(tmp_path / "legacy_translation.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news', 'polymarket')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            chat_title  TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at      TEXT NOT NULL,
+            item_count      INTEGER NOT NULL,
+            email_sent      INTEGER NOT NULL DEFAULT 0,
+            site_published  INTEGER NOT NULL DEFAULT 0,
+            telegram_sent   INTEGER NOT NULL DEFAULT 0,
+            body_md         TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+
+        CREATE INDEX idx_items_digest_id ON items(digest_id);
+        """
+    )
+    old_conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) "
+        "VALUES ('2026-07-29T09:00:00+00:00', 1, 1, 'body')"
+    )
+    old_conn.commit()
+
+    # Must not raise sqlite3.OperationalError: no such column: body_md_hu
+    init_db(old_conn)
+    # Idempotent: a second call must not raise or alter the schema again.
+    init_db(old_conn)
+
+    row = old_conn.execute("SELECT body_md_hu FROM digests").fetchone()
+    assert row == (None,)  # pre-existing row has no translation, correctly NULL not ''
+
+    # The column is fully usable post-migration.
+    commit_new_items(old_conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(
+        old_conn, "second body", get_unsummarized_items(old_conn), body_md_hu="fordítás"
+    )
+    row = old_conn.execute(
+        "SELECT body_md_hu FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row == ("fordítás",)
+
+    old_conn.close()

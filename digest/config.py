@@ -57,6 +57,21 @@ class Config:
     archive_dir: str = "./archive"
     claude_timeout_seconds: int = 300
     claude_effort: str = "high"
+    # Hungarian translation step (digest/translate.py), run after summarize()
+    # succeeds -- a soft-failing production step, never a delivery channel of
+    # its own (see translate_digest's docstring). Parsed like x_enabled/
+    # polymarket_enabled (an explicit on/off flag), not news_feeds' empty-
+    # means-disabled shape: there's no natural "unconfigured" sentinel for a
+    # pure feature toggle with no accompanying required value.
+    translate_hu_enabled: bool = False
+    # The summarizer runs the bigger cfg.anthropic_model (editorial judgment:
+    # clustering, weighting, cutting); translation is a faithful structural
+    # rewrite with no editorial judgment involved, so it deliberately runs a
+    # cheaper model tier by default rather than inheriting anthropic_model.
+    # "sonnet" is a model ALIAS the `claude` CLI itself resolves (see
+    # run_claude in digest/summarize.py) -- not a full model id, mirroring
+    # anthropic_model's own default of a bare alias-shaped string.
+    translate_model: str = "sonnet"
     # The news collector has no separate NEWS_ENABLED flag -- it is enabled
     # iff this tuple is non-empty (see digest/main.py's _run_news_collector).
     # An empty tuple is the natural "not configured" default, so a second
@@ -157,6 +172,9 @@ class Config:
         )
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
 
+        translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
+        translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
+
         polymarket_enabled = _parse_bool(os.environ.get("POLYMARKET_ENABLED", "false"))
         polymarket_api_base = _optional_url(
             "POLYMARKET_API_BASE", default="https://gamma-api.polymarket.com"
@@ -222,6 +240,8 @@ class Config:
             archive_dir=archive_dir,
             claude_timeout_seconds=claude_timeout_seconds,
             claude_effort=claude_effort,
+            translate_hu_enabled=translate_hu_enabled,
+            translate_model=translate_model,
             news_feeds=news_feeds,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,

@@ -14,6 +14,7 @@ from digest.emailer import (
     _wrap_banner_paragraph,
     _wrap_needs_attention_section,
     archive,
+    localize_tldr_label_hu,
     render_body_html,
     render_html,
     send_digest,
@@ -379,6 +380,48 @@ def test_highlight_tldr_paragraph_skips_past_a_leading_banner_paragraph():
     assert "background-color:#eef2ff" in result
     # The banner paragraph itself must be untouched by this pass.
     assert "<p>⚠ telegram collection failed this run</p>" in result
+
+
+# --- localize_tldr_label_hu (Hungarian site display-time label swap) ---
+
+
+def test_localize_tldr_label_hu_swaps_the_callout_label():
+    html = _highlight_tldr_paragraph(
+        "<p><strong>TL;DR:</strong> szia, nyugis nap.</p><h2>Sz</h2>"
+    )
+    assert 'class="tldr-label"' in html  # sanity: the callout was built
+
+    result = localize_tldr_label_hu(html)
+
+    assert ">Röviden</span>" in result
+    # The label span's visible text must no longer be the bare "TL;DR" --
+    # only the swapped Hungarian label may sit inside it.
+    assert '>TL;DR</span>' not in result
+    assert '>Röviden</span>' in result
+    assert "<h2>Sz</h2>" in result
+
+
+def test_localize_tldr_label_hu_does_not_touch_a_later_mention_in_prose():
+    # A digest whose own translated prose happens to mention "TL;DR" again
+    # later (outside the callout) must be left completely untouched -- this
+    # is a targeted swap of the one known label span, never a blanket
+    # string replace over the whole document.
+    html = _highlight_tldr_paragraph(
+        "<p><strong>TL;DR:</strong> szia.</p><h2>Sz</h2><p>Mint a TL;DR is mondta.</p>"
+    )
+
+    result = localize_tldr_label_hu(html)
+
+    assert result.count(">Röviden</span>") == 1
+    assert "Mint a TL;DR is mondta." in result
+
+
+def test_localize_tldr_label_hu_absent_is_a_noop():
+    html = "<p>just a regular paragraph</p><h2>Sz</h2>"
+
+    result = localize_tldr_label_hu(html)
+
+    assert result == html
 
 
 # --- banner + TL;DR + attention coexisting (ordering) ---

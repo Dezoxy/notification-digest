@@ -272,6 +272,9 @@ def publish_to_site(
     item_count: int,
     publish_url: str,
     ingest_key: str,
+    *,
+    body_md_hu: str | None = None,
+    body_html_hu: str | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -290,6 +293,22 @@ def publish_to_site(
     structured fields alongside the full markdown/HTML bodies, not
     re-derived by the Worker itself.
 
+    `body_md_hu`/`body_html_hu` (keyword-only, both default None) are the
+    optional Hungarian translation's markdown and its caller-rendered HTML
+    (digest/emailer.py's `render_body_html`, rendered by `_deliver_site`
+    exactly like `body_html` is -- this function never renders HTML itself,
+    for either language). When BOTH are given, this function additionally
+    derives `tldr_hu` from `body_md_hu` (via `extract_tldr`, with the
+    identical `"(no summary)"` fallback the English `tldr` field gets) and
+    adds `tldr_hu`/`body_html_hu`/`body_md_hu` to the payload -- all three or
+    none, never a partial set, because the Worker's ingest validator 400s a
+    request that carries only some of them. Deliberately no `section_count
+    _hu`/`has_attention_hu`: those two fields describe the digest's
+    STRUCTURE (how many topic sections, whether anything needs the reader's
+    attention), which translation cannot change -- the English-derived
+    values already describe the Hungarian body just as accurately, so
+    duplicating them would only be redundant, never more correct.
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -304,7 +323,7 @@ def publish_to_site(
     pass Cloudflare's Browser Integrity Check in front of the Worker (see
     _USER_AGENT's module-level comment).
     """
-    payload = {
+    payload: dict[str, Any] = {
         "created_at": created_at,
         # `or "(no summary)"`: the Worker's ingest validator rejects an empty
         # tldr with a 400, and extract_tldr can legitimately return "" on a
@@ -319,6 +338,10 @@ def publish_to_site(
         "body_html": body_html,
         "body_md": body_md,
     }
+    if body_md_hu is not None and body_html_hu is not None:
+        payload["tldr_hu"] = extract_tldr(body_md_hu) or "(no summary)"
+        payload["body_html_hu"] = body_html_hu
+        payload["body_md_hu"] = body_md_hu
     data = json.dumps(payload).encode("utf-8")
     url = f"{publish_url}/ingest/{digest_id}"
     headers = {

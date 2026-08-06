@@ -452,6 +452,70 @@ def _highlight_tldr_paragraph(sanitized_html: str) -> str:
     return _TLDR_PARAGRAPH_RE.sub(_replace, sanitized_html, count=1)
 
 
+# Matches the TL;DR callout's label span EXACTLY as _highlight_tldr_paragraph
+# emits it above (`<span class="tldr-label" style="...">TL;DR</span>`),
+# captured as two groups (the opening tag, the closing tag) so only the
+# visible text BETWEEN them is ever swapped -- never any other occurrence of
+# the string "TL;DR" elsewhere in the document, e.g. a digest whose own
+# prose happens to mention it again later. The `style="..."` attribute value
+# is matched generically (`[^>]*`) rather than spelled out verbatim, so this
+# stays correct even if that inline style string is ever tweaked, as long as
+# the `class="tldr-label"` anchor and the span's literal text content stay
+# the same.
+_TLDR_LABEL_RE = re.compile(r'(<span class="tldr-label"[^>]*>)TL;DR(</span>)')
+
+
+def localize_tldr_label_hu(sanitized_html: str) -> str:
+    """Swap the TL;DR callout's visible label to "Röviden:" -- for the HUNGARIAN site body ONLY.
+
+    Owner decision: the Hungarian site page must read fully Hungarian,
+    including the visible "TL;DR" label on the callout card -- but the
+    underlying MARKDOWN keeps the literal "**TL;DR:**" marker completely
+    unchanged. prompts/translate-hu.md explicitly mandates the translator
+    preserve that literal marker, and three separate things key off it
+    exactly as written: digest/publish.py's `extract_tldr` (which strips the
+    marker to build the site/Telegram summary text), this module's own
+    `_highlight_tldr_paragraph` (which finds the TL;DR paragraph by that
+    exact prefix to build the callout in the first place), and
+    digest/summarize.py's `summarize()` soft TL;DR-opener check. Touching
+    the markdown marker would break all three; this function does not touch
+    it, or the markdown at all -- it operates on the RENDERED HTML, strictly
+    AFTER `render_body_html` has already produced the styled callout, and
+    only ever touches the label text inside it.
+
+    Callers must call this ONLY for the Hungarian body_html_hu, never for
+    the English body_html -- the English site page, the email, and the
+    Telegram TL;DR message all keep the literal English "TL;DR" label/marker
+    untouched (see digest/main.py's `_deliver_site` for the one call site,
+    and digest/publish.py's `send_telegram_tldr`, which reads `extract_tldr`
+    off the ENGLISH `body_md` regardless of whether a Hungarian translation
+    exists for this digest at all).
+
+    The replacement is anchored to the EXACT span `_highlight_tldr_paragraph`
+    emits for the label (see `_TLDR_LABEL_RE`), matched as two groups (open
+    tag, close tag) so only the text sitting BETWEEN them is ever touched --
+    a targeted swap of one specific, known element, never a blanket string
+    replace over the whole document. `count=1` is defense in depth on top of
+    that: `_highlight_tldr_paragraph` already only ever emits one such span
+    per document (its own substitution is already `count=1`), so there
+    should never be a second one to touch, but this keeps that guarantee
+    explicit here too rather than relying solely on the upstream invariant.
+
+    A no-op (returns the input unchanged) when there is no such span -- e.g.
+    a translated digest whose validate_output passed but that happened to
+    omit a TL;DR paragraph (soft-checked, never hard-gated -- see
+    `summarize()`'s own docstring for why a missing TL;DR never fails a run),
+    so this must degrade gracefully rather than assume the span always
+    exists.
+    """
+    # "Röviden" WITHOUT a colon: the callout label is an uppercase eyebrow
+    # (text-transform:uppercase, its own line) and the English original is
+    # "TL;DR" with no colon either -- the colon belongs to the inline
+    # index-excerpt prefix (the Worker's STRINGS.tldrLabel), not to this
+    # standalone label element.
+    return _TLDR_LABEL_RE.sub(r"\1Röviden\2", sanitized_html, count=1)
+
+
 # A citation's ENTIRE visible text is one or more superscript-digit
 # characters and nothing else (prompts/digest.md: `[¹](url)`, `[¹⁰](url)`,
 # etc.) -- `fullmatch` against this (not `search`/`match`) is what makes
