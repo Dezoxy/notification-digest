@@ -576,3 +576,42 @@ def test_site_and_telegram_secrets_excluded_from_repr(monkeypatch):
     assert "super-secret-ingest-key" not in text
     assert "super-secret-bot-token" not in text
     assert "super-secret-token" not in text
+
+
+# --- TRANSLATE_HU_ENABLED / TRANSLATE_MODEL (Hungarian translation step) ---
+
+
+def test_translate_hu_enabled_defaults_to_false(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("TRANSLATE_HU_ENABLED", raising=False)
+
+    config = Config.from_env()
+
+    assert config.translate_hu_enabled is False
+
+
+def test_translate_hu_enabled_true_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TRANSLATE_HU_ENABLED", "true")
+
+    config = Config.from_env()
+
+    assert config.translate_hu_enabled is True
+
+
+def test_translate_model_defaults_to_sonnet(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("TRANSLATE_MODEL", raising=False)
+
+    config = Config.from_env()
+
+    assert config.translate_model == "sonnet"
+
+
+def test_translate_model_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TRANSLATE_MODEL", "claude-haiku-5")
+
+    config = Config.from_env()
+
+    assert config.translate_model == "claude-haiku-5"

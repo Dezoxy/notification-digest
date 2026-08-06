@@ -250,6 +250,122 @@ def test_publish_to_site_raises_on_network_error(monkeypatch):
         )
 
 
+# --- publish_to_site: optional Hungarian fields (all three or none) ---
+
+
+def test_publish_to_site_includes_hu_fields_when_both_hu_args_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        42,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        "<p>hi</p>",
+        "2026-07-29T10:00:00+00:00",
+        3,
+        "https://news-site.example.workers.dev",
+        "ingest-secret",
+        body_md_hu="**TL;DR:** szia\n\n## Érdemes tudni\n\ndolog",
+        body_html_hu="<p>szia</p>",
+    )
+
+    body = captured["body"]
+    assert body["tldr_hu"] == "szia"
+    assert body["body_html_hu"] == "<p>szia</p>"
+    assert body["body_md_hu"] == "**TL;DR:** szia\n\n## Érdemes tudni\n\ndolog"
+    # No duplicated structural fields for the Hungarian body -- translation
+    # cannot change section count or attention-flag, so the English-derived
+    # values already describe it.
+    assert "section_count_hu" not in body
+    assert "has_attention_hu" not in body
+
+
+def test_publish_to_site_omits_hu_fields_when_neither_hu_arg_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        42,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
+    )
+
+    body = captured["body"]
+    assert "tldr_hu" not in body
+    assert "body_html_hu" not in body
+    assert "body_md_hu" not in body
+
+
+def test_publish_to_site_omits_hu_fields_when_only_body_md_hu_given(monkeypatch):
+    # Guards the "all three or none" contract at the boundary: a caller bug
+    # that supplies only one of the pair must not leak a partial set into
+    # the payload (the Worker 400s a partial set).
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        42,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
+        body_md_hu="magyar szöveg",
+    )
+
+    body = captured["body"]
+    assert "tldr_hu" not in body
+    assert "body_html_hu" not in body
+    assert "body_md_hu" not in body
+
+
+def test_publish_to_site_hu_tldr_falls_back_to_no_summary_placeholder(monkeypatch):
+    # Mirrors the English tldr's own "(no summary)" fallback -- a
+    # pathological Hungarian body that extract_tldr can't find a TL;DR line
+    # in must not fail the Worker's ingest validator.
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        42,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
+        body_md_hu="\n\n\n",
+        body_html_hu="<p></p>",
+    )
+
+    assert captured["body"]["tldr_hu"] == "(no summary)"
+
+
 # --- send_telegram_tldr ---
 
 

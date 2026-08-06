@@ -25,7 +25,7 @@ from digest.collectors import x as x_collector
 from digest.collectors.polymarket import PolymarketCollectResult
 from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
-from digest.emailer import archive, render_body_html, send_digest
+from digest.emailer import archive, localize_tldr_label_hu, render_body_html, send_digest
 from digest.publish import TelegramSendError, publish_to_site, send_telegram_tldr
 from digest.state import (
     commit_new_items,
@@ -50,6 +50,7 @@ from digest.summarize import (
     select_items_for_prompt,
     summarize,
 )
+from digest.translate import translate_digest
 
 # How far back _deliver looks for prior digests when building the
 # {{RECENT_COVERAGE}} prompt block (digest/summarize.py's
@@ -120,21 +121,30 @@ async def _client_ready(client: TelegramClient) -> bool:
         return False
 
 
-def _digest_meta(conn: sqlite3.Connection, digest_id: int) -> tuple[int, str]:
-    """Fetch (item_count, created_at) for an existing digest row.
+def _digest_meta(conn: sqlite3.Connection, digest_id: int) -> tuple[int, str, str | None]:
+    """Fetch (item_count, created_at, body_md_hu) for an existing digest row.
 
-    Used only by the pending-resend path in `_deliver`: `get_pending_digests`
+    Used by the pending-resend path in `_deliver`: `get_pending_digests`
     returns just `(digest_id, body_md, done)` (see its docstring), so a
-    pending digest's item_count/created_at -- needed for the email subject
-    and the site/Telegram channels' payloads respectively -- have to be
-    read back separately. The fresh-digest path never calls this: it already
-    has both values on hand (`len(items)` and the row `create_digest` just
-    inserted).
+    pending digest's item_count/created_at/body_md_hu -- needed for the email
+    subject, the site/Telegram channels' payloads, and the site channel's
+    optional Hungarian fields respectively -- have to be read back
+    separately. This is also how a pending resend automatically carries its
+    Hungarian translation forward with no extra wiring: `body_md_hu` was
+    already durably stored by `create_digest` at this digest's original
+    creation (or is NULL if translation was disabled/failed then), so simply
+    reading the row back here reproduces it exactly, without this function
+    needing to know anything about `translate_digest` or TRANSLATE_HU_ENABLED
+    itself. The fresh-digest path also calls this (after `create_digest`) to
+    read back `created_at` on the SAME clock convention pending digests use,
+    even though it already computed `body_md_hu` moments earlier -- reading
+    it back here rather than threading the local variable through keeps both
+    paths going through one code path for this data.
     """
     row = conn.execute(
-        "SELECT item_count, created_at FROM digests WHERE id = ?", (digest_id,)
+        "SELECT item_count, created_at, body_md_hu FROM digests WHERE id = ?", (digest_id,)
     ).fetchone()
-    return row[0], row[1]
+    return row[0], row[1], row[2]
 
 
 def _deliver_email(
@@ -199,6 +209,7 @@ def _deliver_site(
     item_count: int,
     created_at: str,
     allowed_urls: Collection[str],
+    body_md_hu: str | None = None,
 ) -> bool:
     """Render+publish the site channel for one digest. Returns True on success.
 
@@ -209,6 +220,29 @@ def _deliver_site(
     `render_body_html` docstring: both channels must show the same
     sanitized content, byte-for-byte).
 
+    `body_md_hu`, when not None, is rendered to HTML here too (same
+    `render_body_html` call, same `allowed_urls` -- a translation must not
+    invent new links, so it is checked for provenance against the identical
+    URL set the English body is) and both are handed to `publish_to_site`,
+    which decides whether to include them in the ingest payload (see that
+    function's "all three or none" contract). This mirrors the English
+    body's own division of labor exactly: THIS function renders HTML for
+    both languages, `publish_to_site` derives the summary fields
+    (tldr/tldr_hu, section_count, has_attention) from whichever markdown
+    bodies it's given -- there is no markdown rendering inside
+    digest/publish.py at all, for either language.
+
+    The Hungarian HTML additionally gets `localize_tldr_label_hu` applied
+    (digest/emailer.py) -- owner decision: the Hungarian site page must read
+    fully Hungarian, including the TL;DR callout's visible label, even
+    though the underlying MARKDOWN keeps the literal English "**TL;DR:**"
+    marker unchanged (see that function's own docstring for why the marker
+    itself must never be touched). This is applied ONLY to `body_html_hu`,
+    never to the English `body_html` above -- the English site page, the
+    email, and the Telegram TL;DR message (which reads `extract_tldr` off
+    the ENGLISH `body_md` regardless of whether a translation exists at all,
+    see `_deliver_telegram`) all keep the English label untouched.
+
     On failure the digest row is left `site_published = 0`, so the next
     run's `get_pending_digests` pass retries exactly this channel -- and,
     per `_deliver_channels`'s ordering contract, Telegram is skipped THIS
@@ -218,6 +252,11 @@ def _deliver_site(
     `publish_to_site` never logs either itself).
     """
     body_html = render_body_html(body_md, allowed_urls)
+    body_html_hu = (
+        localize_tldr_label_hu(render_body_html(body_md_hu, allowed_urls))
+        if body_md_hu is not None
+        else None
+    )
     try:
         publish_to_site(
             digest_id,
@@ -227,6 +266,8 @@ def _deliver_site(
             item_count,
             cfg.site_publish_url,
             cfg.site_ingest_key,
+            body_md_hu=body_md_hu,
+            body_html_hu=body_html_hu,
         )
     except Exception as exc:
         logger.error("site publish failed for digest %d: %s", digest_id, type(exc).__name__)
@@ -357,8 +398,16 @@ def _deliver_channels(
     created_at: str,
     done: dict[str, bool],
     telegram_state: _TelegramRunState,
+    body_md_hu: str | None = None,
 ) -> bool:
     """Attempt every ENABLED, not-yet-done channel for one digest, independently.
+
+    `body_md_hu`, when not None, is passed straight through to
+    `_deliver_site` -- the only channel that carries a Hungarian field (see
+    that function's docstring). Email and Telegram are unaffected: email
+    only ever sends the English body, and Telegram's message is a short
+    TL;DR pointer to the site page, not a full body -- there is no Hungarian
+    variant of either.
 
     `telegram_state` is purely passed through to `_deliver_telegram` -- see
     `_TelegramRunState`'s docstring for why it has to be the SAME instance
@@ -417,7 +466,7 @@ def _deliver_channels(
 
     if site_enabled and not site_done:
         site_done = _deliver_site(
-            conn, cfg, digest_id, body_md, item_count, created_at, allowed_urls
+            conn, cfg, digest_id, body_md, item_count, created_at, allowed_urls, body_md_hu
         )
 
     if telegram_enabled and not telegram_done:
@@ -449,9 +498,12 @@ def _deliver(
         and the overall result is the AND of every attempt.
     (b) No unsummarized items -- nothing left to send, this is a normal
         empty-window run (or the pending pass already covered everything).
-    (c) Otherwise: summarize with the CURRENT run's failed_sources, durably
-        record the digest and archive it (BEFORE attempting any channel --
-        see below), then attempt all its channels.
+    (c) Otherwise: summarize with the CURRENT run's failed_sources, attempt
+        the optional Hungarian translation (digest/translate.py's
+        translate_digest, soft-failing -- see its own docstring), durably
+        record the digest (English body plus whatever translation resulted,
+        possibly None) and archive it (BEFORE attempting any channel -- see
+        below), then attempt all its channels.
 
     Archiving: `archive()` is called exactly once, immediately after
     `create_digest` durably records a NEW digest -- never on the
@@ -492,9 +544,9 @@ def _deliver(
     pending = get_pending_digests(conn, email_enabled, site_enabled, telegram_enabled)
     for digest_id, body_md, done in pending:
         logger.info("retrying delivery of digest %d", digest_id)
-        item_count, created_at = _digest_meta(conn, digest_id)
+        item_count, created_at, body_md_hu = _digest_meta(conn, digest_id)
         ok = _deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state
+            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu
         )
         all_ok = all_ok and ok
 
@@ -546,13 +598,31 @@ def _deliver(
         logger.error("summarization failed: %s", exc)
         return False
 
-    digest_id = create_digest(conn, body_md, items)
+    # Hungarian translation: a soft-failing PRODUCTION step, run AFTER
+    # summarize() succeeds and BEFORE create_digest so the translation (or
+    # its absence) is captured in the same durable insert as everything
+    # else about this digest -- never a delivery channel of its own, and
+    # never allowed to block or delay the English digest (see
+    # digest/translate.py's translate_digest docstring). `None` on failure
+    # or when the flag is off simply means this digest stays English-only
+    # forever; translate_digest already logs its own WARNING on failure, so
+    # nothing further is logged here.
+    body_md_hu: str | None = None
+    if cfg.translate_hu_enabled:
+        body_md_hu = translate_digest(
+            body_md,
+            {item.url for item in items},
+            cfg.translate_model,
+            cfg.claude_timeout_seconds,
+        )
+
+    digest_id = create_digest(conn, body_md, items, body_md_hu=body_md_hu)
     archive(body_md, cfg.archive_dir, digest_id)
 
-    item_count, created_at = _digest_meta(conn, digest_id)
+    item_count, created_at, body_md_hu = _digest_meta(conn, digest_id)
     done = {"email": False, "site": False, "telegram": False}
     ok = _deliver_channels(
-        conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state
+        conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu
     )
     all_ok = all_ok and ok
 

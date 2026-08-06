@@ -291,6 +291,128 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert archived["id"] == 1
 
 
+def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypatch):
+    # TRANSLATE_HU_ENABLED=false (the default, via plain _cfg()) must mean
+    # translate_digest -- and by extension the run_claude call inside it --
+    # is never even invoked.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    def boom_translate(*args, **kwargs):
+        raise AssertionError("translate_digest must not be called when TRANSLATE_HU_ENABLED=false")
+
+    monkeypatch.setattr(main_mod, "translate_digest", boom_translate)
+
+    cfg = _cfg()
+    assert cfg.translate_hu_enabled is False
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    row = conn.execute("SELECT body_md_hu FROM digests").fetchone()
+    assert row == (None,)
+
+
+def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "**TL;DR:** hi\n\n## S\n\nx")
+    monkeypatch.setattr(main_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    translate_calls = []
+
+    def fake_translate(body_md, allowed_urls, model, timeout_seconds):
+        translate_calls.append((body_md, allowed_urls, model, timeout_seconds))
+        return "**TL;DR:** szia\n\n## Sz\n\ny"
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    cfg = replace(_cfg(), translate_hu_enabled=True, translate_model="sonnet")
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert len(translate_calls) == 1
+    body_md, allowed_urls, model, timeout_seconds = translate_calls[0]
+    assert body_md == "**TL;DR:** hi\n\n## S\n\nx"
+    assert allowed_urls == {"https://t.me/c/123/1"}
+    assert model == "sonnet"
+    assert timeout_seconds == cfg.claude_timeout_seconds
+
+    row = conn.execute("SELECT body_md_hu FROM digests").fetchone()
+    assert row == ("**TL;DR:** szia\n\n## Sz\n\ny",)
+
+
+def test_deliver_translate_hu_failure_leaves_body_md_hu_null_english_still_ships(
+    conn, monkeypatch
+):
+    # Soft-fail contract: translate_digest returning None must not affect
+    # the English digest's own success at all.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    sent = {}
+    monkeypatch.setattr(
+        main_mod, "send_digest", lambda *a, **k: sent.update(called=True) or None
+    )
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "translate_digest", lambda *a, **k: None)
+
+    cfg = replace(_cfg(), translate_hu_enabled=True)
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert sent["called"] is True
+    row = conn.execute("SELECT body_md_hu FROM digests").fetchone()
+    assert row == (None,)
+
+
+def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
+    # A digest already carrying a stored translation (from an earlier run)
+    # must have that translation reach the site payload on a pending resend,
+    # with zero extra wiring -- _digest_meta simply reads it back off the row.
+    items = [_item("1")]
+    commit_new_items(conn, items, {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## S\n\nx"
+    body_md_hu = "**TL;DR:** szia\n\n## Sz\n\ny"
+    create_digest(conn, body_md, get_unsummarized_items(conn), body_md_hu=body_md_hu)
+
+    captured = {}
+
+    def fake_publish(
+        digest_id_,
+        body_md_,
+        body_html,
+        created_at,
+        item_count,
+        publish_url,
+        key,
+        *,
+        body_md_hu=None,
+        body_html_hu=None,
+    ):
+        captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
+
+    monkeypatch.setattr(main_mod, "publish_to_site", fake_publish)
+
+    def boom_summarize(*args, **kwargs):
+        raise AssertionError("summarize must not be called on a pending resend")
+
+    monkeypatch.setattr(main_mod, "summarize", boom_summarize)
+
+    cfg = replace(
+        _cfg(),
+        email_enabled=False,
+        site_publish_url="https://news-site.example.workers.dev",
+        site_ingest_key="ingest-secret",
+    )
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["body_md_hu"] == body_md_hu
+    assert "<h2>Sz</h2>" in captured["body_html_hu"]
+    assert ">Röviden</span>" in captured["body_html_hu"]
+
+
 def test_deliver_threads_real_recent_coverage_from_prior_digests(conn, monkeypatch):
     # Wiring test: _deliver must DERIVE recent_coverage from the digests
     # table (get_recent_digests -> format_recent_coverage), not just accept
@@ -639,7 +761,18 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
 
     captured = {}
 
-    def fake_publish(digest_id_, body_md_, body_html, created_at, item_count, publish_url, key):
+    def fake_publish(
+        digest_id_,
+        body_md_,
+        body_html,
+        created_at,
+        item_count,
+        publish_url,
+        key,
+        *,
+        body_md_hu=None,
+        body_html_hu=None,
+    ):
         captured.update(
             digest_id=digest_id_,
             body_html=body_html,
@@ -647,6 +780,8 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
             item_count=item_count,
             publish_url=publish_url,
             ingest_key=key,
+            body_md_hu=body_md_hu,
+            body_html_hu=body_html_hu,
         )
 
     monkeypatch.setattr(main_mod, "publish_to_site", fake_publish)
@@ -663,8 +798,54 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
     assert captured["item_count"] == 1
     assert captured["publish_url"] == cfg.site_publish_url
     assert captured["ingest_key"] == cfg.site_ingest_key
+    assert captured["body_md_hu"] is None
+    assert captured["body_html_hu"] is None
+    # English body_html must never get the Hungarian display-time label
+    # swap -- localize_tldr_label_hu is only ever applied to body_html_hu.
+    assert "Röviden" not in captured["body_html"]
     row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)
+
+
+def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    body_md_hu = "**TL;DR:** szia\n\n## Érdemes tudni\n\ndolog"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn), body_md_hu=body_md_hu)
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+
+    def fake_publish(
+        digest_id_,
+        body_md_,
+        body_html,
+        created_at,
+        item_count,
+        publish_url,
+        key,
+        *,
+        body_md_hu=None,
+        body_html_hu=None,
+    ):
+        captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
+
+    monkeypatch.setattr(main_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls, body_md_hu
+    )
+
+    assert ok is True
+    assert captured["body_md_hu"] == body_md_hu
+    assert "<h2>Érdemes tudni</h2>" in captured["body_html_hu"]
+    # The rendered HTML the site displays gets the Hungarian callout label
+    # swap applied -- the underlying markdown (asserted above via
+    # captured["body_md_hu"] == body_md_hu) keeps the literal "**TL;DR:**"
+    # marker completely untouched.
+    assert ">Röviden</span>" in captured["body_html_hu"]
+    assert ">TL;DR</span>" not in captured["body_html_hu"]
 
 
 def test_deliver_telegram_delegates_with_configured_params_and_marks_telegram_sent(

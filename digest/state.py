@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS digests (
     email_sent      INTEGER NOT NULL DEFAULT 0,
     site_published  INTEGER NOT NULL DEFAULT 0,
     telegram_sent   INTEGER NOT NULL DEFAULT 0,
-    body_md         TEXT NOT NULL
+    body_md         TEXT NOT NULL,
+    body_md_hu      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -118,6 +119,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_expand_source_check_for_polymarket(conn)
     _migrate_add_site_published_column(conn)
     _migrate_add_telegram_sent_column(conn)
+    _migrate_add_body_md_hu_column(conn)
 
 
 def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
@@ -184,6 +186,27 @@ def _migrate_add_telegram_sent_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
     if "telegram_sent" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN telegram_sent INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+
+
+def _migrate_add_body_md_hu_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.body_md_hu` on databases predating the Hungarian translation feature.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_site_published_column`/`_migrate_add_telegram_sent_column`
+    immediately above -- `CREATE TABLE IF NOT EXISTS` never alters an
+    existing table, so an upgraded pre-translation database would otherwise
+    be missing this column and every read/write touching it would crash with
+    "sqlite3.OperationalError: no such column: body_md_hu". Nullable, no
+    default value: unlike `site_published`/`telegram_sent` (booleans with an
+    obvious "not yet done" default of 0), a missing translation has no
+    equivalent sentinel -- NULL means exactly what it means for a
+    freshly-created row with TRANSLATE_HU_ENABLED off or a failed
+    translation: no Hungarian text exists for this digest, full stop.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "body_md_hu" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN body_md_hu TEXT")
         conn.commit()
 
 
@@ -599,11 +622,17 @@ def count_unsummarized_items(conn: sqlite3.Connection) -> int:
     ).fetchone()[0]
 
 
-def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item]) -> int:
+def create_digest(
+    conn: sqlite3.Connection,
+    body_md: str,
+    items: Sequence[Item],
+    *,
+    body_md_hu: str | None = None,
+) -> int:
     """Durably record a digest and stamp its items, in one transaction.
 
     Inserts a `digests` row (created_at = now UTC, item_count = len(items),
-    email_sent = 0, body_md) and stamps exactly the given `items` snapshot
+    email_sent = 0, body_md, body_md_hu) and stamps exactly the given `items` snapshot
     with the new digest's id — one `UPDATE ... WHERE source = ? AND
     source_id = ? AND digest_id IS NULL` per item. We deliberately do NOT use
     an unqualified `WHERE digest_id IS NULL` update: `items` is a snapshot
@@ -625,6 +654,16 @@ def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item])
     re-summarizing (avoids double-billing the Claude call). On any failure
     the whole transaction is rolled back so a digest row never exists
     without its items stamped, and vice versa.
+
+    `body_md_hu` (keyword-only, default None) is the optional Hungarian
+    translation (digest/translate.py's `translate_digest`) -- None means
+    either the TRANSLATE_HU_ENABLED flag is off or the translation attempt
+    for this digest failed (a soft failure, never raised back to this
+    caller). Stored as-is, with no validation: by the time this function is
+    called, `translate_digest` has already run the digest through the same
+    validate_output/enforce_link_allowlist contract enforcement the English
+    body_md was subject to, so there is nothing left for create_digest to
+    check.
     """
     now = datetime.now(UTC).isoformat()
     try:
@@ -632,10 +671,10 @@ def create_digest(conn: sqlite3.Connection, body_md: str, items: Sequence[Item])
         cur.execute("BEGIN")
         cur.execute(
             """
-            INSERT INTO digests (created_at, item_count, email_sent, body_md)
-            VALUES (?, ?, 0, ?)
+            INSERT INTO digests (created_at, item_count, email_sent, body_md, body_md_hu)
+            VALUES (?, ?, 0, ?, ?)
             """,
-            (now, len(items), body_md),
+            (now, len(items), body_md, body_md_hu),
         )
         digest_id = cur.lastrowid
         stamped = 0
