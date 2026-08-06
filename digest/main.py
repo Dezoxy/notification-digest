@@ -26,7 +26,7 @@ from digest.collectors.polymarket import PolymarketCollectResult
 from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
 from digest.emailer import archive, render_body_html, send_digest
-from digest.publish import publish_to_site, send_telegram_tldr
+from digest.publish import TelegramSendError, publish_to_site, send_telegram_tldr
 from digest.state import (
     commit_new_items,
     connect,
@@ -61,6 +61,29 @@ from digest.summarize import (
 # second or third mention, short enough that genuinely stale coverage
 # eventually ages out and stops suppressing a fresh full write-up.
 _RECENT_COVERAGE_WINDOW = timedelta(hours=24)
+
+# A Telegram TL;DR notification is a REAL-TIME ping, not an archive record --
+# announcing a stale digest is pure noise. This is not hypothetical: on
+# 2026-08-06 the first run after the multi-channel delivery cutover found
+# ~50 pre-cutover digests with telegram_sent=0 (the ALTER TABLE migration in
+# state.py's `_migrate_add_telegram_sent_column` defaults the new column to
+# 0 for every pre-existing row -- correct for site publish, which SHOULD
+# backfill, but wrong for a live notification channel), attempted a Telegram
+# sendMessage for every one of them oldest-first, and got rate-limited by
+# Telegram (HTTP 429) after about 20 messages -- flooding the group topic
+# with hours-old TL;DRs across two consecutive runs, both of which then
+# exited non-zero on top of it. Any backlog scenario can reproduce this
+# shape: a column-add migration defaulting old rows to unsent (exactly what
+# happened here), a restored DB backup, the Telegram channel re-enabled
+# after a pause, or a long site outage queueing up retries -- none of them
+# should ever flood the topic with old news. 12h = 4 digest windows at the
+# 3-hourly cadence: generous for ordinary retry-after-a-failed-run catch-up,
+# far below "archive dump" territory. Site and email are deliberately NOT
+# windowed -- the site is an archive and SHOULD backfill every pending
+# digest regardless of age (that was correct and desirable in this very same
+# incident: only Telegram flooded, because only Telegram is a live-ping
+# channel, not an archive).
+_TELEGRAM_MAX_AGE = timedelta(hours=12)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -213,19 +236,92 @@ def _deliver_site(
     return True
 
 
+class _TelegramRunState:
+    """Run-scoped Telegram circuit-breaker flag, shared by every digest one `_deliver` call handles.
+
+    GUARD 2 of the 2026-08-06 incident (see `_TELEGRAM_MAX_AGE`'s neighboring
+    comment): once ANY Telegram send in a run hits HTTP 429, every remaining
+    Telegram send for the REST OF THAT RUN must be skipped -- across both the
+    pending-digests retry loop and the freshly-summarized digest in the same
+    `_deliver` call, not just the rest of whichever loop iteration tripped
+    it. That requires state that outlives a single `_deliver_telegram` call
+    and is visible to every later one in the same run, without resorting to
+    a module-level global (which would leak across runs/tests and isn't
+    thread/asyncio-reentrancy-safe). A single `_deliver`-scoped instance,
+    created fresh at the top of that function and threaded down through
+    `_deliver_channels` into `_deliver_telegram`, gives exactly that lifetime
+    with none of a global's downsides. Deliberately a plain mutable object
+    (not a frozen dataclass, not a bool return-value threaded back up): every
+    call site needs to both read and write the SAME flag, and passing a bool
+    by value around a loop would lose the mutation the moment it happened
+    inside one `_deliver_telegram` call.
+    """
+
+    def __init__(self) -> None:
+        self.rate_limited = False
+
+
 def _deliver_telegram(
-    conn: sqlite3.Connection, cfg: Config, digest_id: int, body_md: str, created_at: str
+    conn: sqlite3.Connection,
+    cfg: Config,
+    digest_id: int,
+    body_md: str,
+    created_at: str,
+    telegram_state: _TelegramRunState,
 ) -> bool:
     """Send the Telegram TL;DR channel for one digest. Returns True on success.
 
-    On failure the digest row is left `telegram_sent = 0`, retried by a
-    later run's `get_pending_digests` pass exactly like the other two
+    Two guards run BEFORE any network call is attempted, both added after
+    the 2026-08-06 flood incident (see `_TELEGRAM_MAX_AGE`'s comment for the
+    full story):
+
+    GUARD 1 -- freshness window: if `created_at` is older than
+    `_TELEGRAM_MAX_AGE`, this digest is never sent to Telegram at all. It is
+    instead marked `telegram_sent` directly (skipping `send_telegram_tldr`
+    entirely) and this function returns True -- a stale digest silently
+    "catching up" is exactly the failure mode this guard exists to prevent,
+    so the channel is treated as successfully done, not failed, once this
+    decision is made. `created_at` is parsed the same way
+    digest/summarize.py's `_format_digest_age` does (including its
+    naive-timestamp-treated-as-UTC fallback), since every `created_at` this
+    codebase writes is the identical `datetime.now(UTC).isoformat()` shape
+    (state.py's `create_digest`).
+
+    GUARD 2 -- per-run 429 circuit breaker: if `telegram_state.rate_limited`
+    is already set (an EARLIER digest in this same run hit a 429), this
+    digest's send is skipped without even attempting it, and this function
+    returns False -- unlike GUARD 1, this is a real failure: the digest
+    still needs to go out, just not this run, so the caller's overall result
+    must reflect that (the incident's non-zero exit / OnFailure alert must
+    still fire). If THIS digest's own send is the one that comes back with a
+    429 (`TelegramSendError.status == 429`), `telegram_state.rate_limited` is
+    flipped here so every LATER digest in this run also skips, and a single
+    WARNING is logged at the moment the breaker trips -- never once per
+    skipped digest afterward, since this branch is unreachable once the flag
+    is already set (see the early-return above).
+
+    On any other failure the digest row is left `telegram_sent = 0`, retried
+    by a later run's `get_pending_digests` pass exactly like the other two
     channels. `send_telegram_tldr` already guarantees its own raised message
     (and any log line it emits) never includes the response body or the
     bot-token-bearing request URL -- this function additionally only logs
     the exception's TYPE NAME, never `str(exc)`, as one more layer against
     that secret ever reaching a log line.
     """
+    created = datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    if datetime.now(UTC) - created > _TELEGRAM_MAX_AGE:
+        logger.info(
+            "digest %d too old for telegram announcement, marking sent without notifying",
+            digest_id,
+        )
+        mark_digest_telegram_sent(conn, digest_id)
+        return True
+
+    if telegram_state.rate_limited:
+        return False
+
     try:
         send_telegram_tldr(
             digest_id,
@@ -236,6 +332,14 @@ def _deliver_telegram(
             cfg.telegram_notify_thread_id,
             cfg.site_public_base,
         )
+    except TelegramSendError as exc:
+        if exc.status == 429:
+            telegram_state.rate_limited = True
+            logger.warning(
+                "telegram rate limited (429); skipping remaining telegram sends this run"
+            )
+        logger.error("telegram notify failed for digest %d: %s", digest_id, type(exc).__name__)
+        return False
     except Exception as exc:
         logger.error("telegram notify failed for digest %d: %s", digest_id, type(exc).__name__)
         return False
@@ -252,8 +356,14 @@ def _deliver_channels(
     item_count: int,
     created_at: str,
     done: dict[str, bool],
+    telegram_state: _TelegramRunState,
 ) -> bool:
     """Attempt every ENABLED, not-yet-done channel for one digest, independently.
+
+    `telegram_state` is purely passed through to `_deliver_telegram` -- see
+    `_TelegramRunState`'s docstring for why it has to be the SAME instance
+    across every digest `_deliver` handles in one run, not a fresh one per
+    call here.
 
     `done` is the digest's current per-channel completion state (from
     `get_pending_digests`, or `{"email": False, "site": False, "telegram":
@@ -316,7 +426,9 @@ def _deliver_channels(
                 "digest %d: skipping telegram this run, site publish not done", digest_id
             )
         else:
-            telegram_done = _deliver_telegram(conn, cfg, digest_id, body_md, created_at)
+            telegram_done = _deliver_telegram(
+                conn, cfg, digest_id, body_md, created_at, telegram_state
+            )
 
     return email_done and site_done and telegram_done
 
@@ -362,17 +474,28 @@ def _deliver(
     this with the collectors' own failure flags, because ANY collector
     failure must surface as a non-zero exit (the sole signal for the Loki
     alert on digest.service) even on a run that delivers nothing at all.
+
+    `telegram_state` (a single `_TelegramRunState`, see its docstring) is
+    created once here and threaded through EVERY `_deliver_channels` call
+    this function makes -- both the pending-digests loop below and the
+    freshly-summarized digest further down -- so GUARD 2's circuit breaker
+    (main.py's per-run 429 handling) sees every Telegram send this run makes
+    as one shared sequence, not a fresh breaker per digest.
     """
     email_enabled = cfg.email_enabled
     site_enabled = cfg.site_publish_url is not None
     telegram_enabled = cfg.telegram_notify_bot_token is not None
+
+    telegram_state = _TelegramRunState()
 
     all_ok = True
     pending = get_pending_digests(conn, email_enabled, site_enabled, telegram_enabled)
     for digest_id, body_md, done in pending:
         logger.info("retrying delivery of digest %d", digest_id)
         item_count, created_at = _digest_meta(conn, digest_id)
-        ok = _deliver_channels(conn, cfg, digest_id, body_md, item_count, created_at, done)
+        ok = _deliver_channels(
+            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state
+        )
         all_ok = all_ok and ok
 
     items = get_unsummarized_items(conn, limit=_MAX_ITEMS_PER_DIGEST)
@@ -428,7 +551,9 @@ def _deliver(
 
     item_count, created_at = _digest_meta(conn, digest_id)
     done = {"email": False, "site": False, "telegram": False}
-    ok = _deliver_channels(conn, cfg, digest_id, body_md, item_count, created_at, done)
+    ok = _deliver_channels(
+        conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state
+    )
     all_ok = all_ok and ok
 
     # One Opus call per run keeps cost and runtime bounded -- do NOT loop

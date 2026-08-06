@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,9 @@ from digest.main import (
     _run_news_collector,
     _run_polymarket_collector,
     _run_x_collector,
+    _TelegramRunState,
 )
+from digest.publish import TelegramSendError
 from digest.state import (
     Item,
     commit_new_items,
@@ -32,6 +35,30 @@ from digest.state import (
 )
 
 _NO_CHANNELS_DONE = {"email": False, "site": False, "telegram": False}
+
+
+def _fresh_telegram_state() -> _TelegramRunState:
+    """A brand-new, untripped circuit breaker -- most tests below want one call's worth."""
+    return _TelegramRunState()
+
+
+def _recent_created_at(hours_ago: float = 1) -> str:
+    """An ISO8601 UTC created_at `hours_ago` in the past, relative to the real wall clock.
+
+    Used (instead of a fixed historical literal like "2026-07-29T...") by
+    every test that exercises a Telegram SEND path: digest/main.py's GUARD 1
+    freshness window (`_TELEGRAM_MAX_AGE`) compares `created_at` against
+    `datetime.now(UTC)` at call time, so a fixed literal would eventually
+    age out of the window and start failing these tests for a reason that
+    has nothing to do with the behavior under test. Default of 1 hour ago is
+    comfortably inside the 12h window.
+    """
+    return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
+
+
+def _stale_created_at(hours_ago: float = 13) -> str:
+    """An ISO8601 UTC created_at `hours_ago` ago -- outside GUARD 1's 12h window by default."""
+    return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
 
 
 class FakeReadyClient:
@@ -597,6 +624,7 @@ def test_deliver_channels_recovers_urls_for_a_pending_resend_from_a_prior_run(co
         1,
         "2026-07-29T10:00:00+00:00",
         _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
     )
 
     assert ok is True
@@ -661,7 +689,9 @@ def test_deliver_telegram_delegates_with_configured_params_and_marks_telegram_se
     monkeypatch.setattr(main_mod, "send_telegram_tldr", fake_send)
 
     cfg = _multichannel_cfg()
-    ok = _deliver_telegram(conn, cfg, digest_id, body_md, "2026-07-29T10:00:00+00:00")
+    ok = _deliver_telegram(
+        conn, cfg, digest_id, body_md, _recent_created_at(), _fresh_telegram_state()
+    )
 
     assert ok is True
     assert captured["digest_id"] == digest_id
@@ -711,8 +741,9 @@ def test_deliver_channels_email_failure_does_not_block_site_or_telegram(conn, mo
         digest_id,
         "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
         1,
-        "2026-07-29T10:00:00+00:00",
+        _recent_created_at(),
         _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
     )
 
     assert ok is False  # email never succeeded
@@ -746,6 +777,7 @@ def test_deliver_channels_site_failure_skips_telegram_this_run(conn, monkeypatch
         1,
         "2026-07-29T10:00:00+00:00",
         _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
     )
 
     assert ok is False
@@ -779,7 +811,8 @@ def test_deliver_channels_second_run_only_retries_the_failed_channel(conn, monke
     body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
 
     ok_run1 = _deliver_channels(
-        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", _NO_CHANNELS_DONE
+        conn, cfg, digest_id, body_md, 1, _recent_created_at(),
+        _NO_CHANNELS_DONE, _fresh_telegram_state(),
     )
     assert ok_run1 is False
     assert email_calls == [1]
@@ -797,7 +830,8 @@ def test_deliver_channels_second_run_only_retries_the_failed_channel(conn, monke
     done = {"email": bool(row[0]), "site": bool(row[1]), "telegram": bool(row[2])}
 
     ok_run2 = _deliver_channels(
-        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", done
+        conn, cfg, digest_id, body_md, 1, _recent_created_at(),
+        done, _fresh_telegram_state(),
     )
 
     assert ok_run2 is True
@@ -835,8 +869,9 @@ def test_deliver_channels_telegram_not_blocked_when_site_channel_disabled(conn, 
         digest_id,
         "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
         1,
-        "2026-07-29T10:00:00+00:00",
+        _recent_created_at(),
         _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
     )
 
     assert ok is True
@@ -869,6 +904,7 @@ def test_deliver_email_disabled_site_only_completes_the_digest(conn, monkeypatch
         1,
         "2026-07-29T10:00:00+00:00",
         _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
     )
 
     assert ok is True
@@ -900,6 +936,182 @@ def test_deliver_run_failure_propagates_from_a_single_failed_channel(conn, monke
     ok = _deliver(conn, cfg, [])
 
     assert ok is False
+
+
+# --- GUARD 1 (freshness window) + GUARD 2 (per-run 429 circuit breaker) --
+# See _TELEGRAM_MAX_AGE's module-level comment in digest/main.py for the
+# 2026-08-06 incident these two guards exist to make unrepeatable.
+
+
+def _telegram_only_cfg(**overrides) -> Config:
+    """_cfg() with ONLY the Telegram channel enabled -- email and site both off.
+
+    Isolates the guard tests below from the site-must-publish-first ordering
+    rule in `_deliver_channels` (which has its own dedicated tests above) and
+    from email's own retry semantics -- neither is what GUARD 1/GUARD 2 are
+    about.
+    """
+    return replace(
+        _cfg(),
+        email_enabled=False,
+        telegram_notify_bot_token="bot-token",
+        telegram_notify_chat_id="-100123",
+        site_public_base="https://news.example.com/t/tok",
+        **overrides,
+    )
+
+
+def test_deliver_channels_telegram_freshness_window_skips_old_digest_without_sending(
+    conn, monkeypatch
+):
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
+    )
+
+    ok = _deliver_channels(
+        conn,
+        _telegram_only_cfg(),
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        _stale_created_at(),
+        _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
+    )
+
+    assert ok is True  # a too-old digest counts as done -- the run can be fully green
+    assert telegram_calls == []  # send_telegram_tldr NEVER called
+    row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)  # mark_digest_telegram_sent was still called
+
+
+def test_deliver_channels_telegram_freshness_window_still_sends_a_fresh_digest(
+    conn, monkeypatch
+):
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
+    )
+
+    ok = _deliver_channels(
+        conn,
+        _telegram_only_cfg(),
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        _recent_created_at(),
+        _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
+    )
+
+    assert ok is True
+    assert telegram_calls == [digest_id]
+    row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)
+
+
+def test_deliver_incident_replay_stale_backlog_all_skip_telegram_only_fresh_one_sends(
+    conn, monkeypatch
+):
+    # Replays the 2026-08-06 incident shape at the `_deliver` level: a
+    # backlog of ~10 pre-cutover digests with telegram_sent=0 (standing in
+    # for the ALTER TABLE migration's DEFAULT 0 on every pre-existing row)
+    # plus one genuinely fresh digest. GUARD 1 must mark every stale one
+    # sent WITHOUT ever calling send_telegram_tldr, and still deliver the
+    # fresh one normally -- and the whole run must come back green.
+    stale_ids = []
+    for i in range(10):
+        digest_id = create_digest(conn, f"**TL;DR:** old {i}\n\n## Worth knowing\n\nstuff", [])
+        conn.execute(
+            "UPDATE digests SET created_at = ? WHERE id = ?", (_stale_created_at(), digest_id)
+        )
+        conn.commit()
+        stale_ids.append(digest_id)
+
+    fresh_id = create_digest(conn, "**TL;DR:** fresh\n\n## Worth knowing\n\nstuff", [])
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?", (_recent_created_at(), fresh_id)
+    )
+    conn.commit()
+
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
+    )
+    monkeypatch.setattr(
+        main_mod,
+        "summarize",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no new items expected")),
+    )
+
+    ok = _deliver(conn, _telegram_only_cfg(), [])
+
+    assert ok is True
+    assert telegram_calls == [fresh_id]  # exactly one real send, for the fresh digest
+    telegram_sent_by_id = dict(
+        conn.execute("SELECT id, telegram_sent FROM digests ORDER BY id").fetchall()
+    )
+    for digest_id in stale_ids:
+        assert telegram_sent_by_id[digest_id] == 1  # marked sent without ever notifying
+    assert telegram_sent_by_id[fresh_id] == 1
+
+
+def test_deliver_circuit_breaker_429_skips_remaining_telegram_sends_this_run(conn, monkeypatch):
+    digest_ids = []
+    for i in range(3):
+        digest_id = create_digest(conn, f"**TL;DR:** item {i}\n\n## Worth knowing\n\nstuff", [])
+        conn.execute(
+            "UPDATE digests SET created_at = ? WHERE id = ?", (_recent_created_at(), digest_id)
+        )
+        conn.commit()
+        digest_ids.append(digest_id)
+
+    send_calls = []
+
+    def fake_send(digest_id_, *args, **kwargs):
+        send_calls.append(digest_id_)
+        raise TelegramSendError("telegram sendMessage failed with status 429", status=429)
+
+    monkeypatch.setattr(main_mod, "send_telegram_tldr", fake_send)
+
+    ok = _deliver(conn, _telegram_only_cfg(), [])
+
+    assert ok is False  # a 429-triggered skip still counts as a failure for the run
+    assert send_calls == [digest_ids[0]]  # remaining two never attempted
+    telegram_sent_by_id = dict(
+        conn.execute("SELECT id, telegram_sent FROM digests ORDER BY id").fetchall()
+    )
+    for digest_id in digest_ids:
+        assert telegram_sent_by_id[digest_id] == 0  # left unsent, will retry next run
+
+
+def test_deliver_non_429_telegram_error_does_not_trip_circuit_breaker(conn, monkeypatch):
+    digest_ids = []
+    for i in range(2):
+        digest_id = create_digest(conn, f"**TL;DR:** item {i}\n\n## Worth knowing\n\nstuff", [])
+        conn.execute(
+            "UPDATE digests SET created_at = ? WHERE id = ?", (_recent_created_at(), digest_id)
+        )
+        conn.commit()
+        digest_ids.append(digest_id)
+
+    send_calls = []
+
+    def fake_send(digest_id_, *args, **kwargs):
+        send_calls.append(digest_id_)
+        raise TelegramSendError("telegram sendMessage failed: URLError")  # status=None
+
+    monkeypatch.setattr(main_mod, "send_telegram_tldr", fake_send)
+
+    ok = _deliver(conn, _telegram_only_cfg(), [])
+
+    assert ok is False
+    assert send_calls == digest_ids  # BOTH attempted -- a non-429 failure never trips it
 
 
 # --- _run: Phase 3 collector orchestration (Telegram + X merge, failed_sources) ---

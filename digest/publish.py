@@ -93,6 +93,14 @@ _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 # visible (superscript) text.
 _SUPERSCRIPT_RE = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
 
+# Single `*text*` markdown emphasis -- `**`/`__` (bold) are stripped by a
+# plain string replace in _plain_text (see there for why), but a lone `*`
+# still needs a real regex: a stray, unpaired `*` must survive untouched
+# (deleting every `*` blindly would corrupt one), so this only matches a
+# genuine PAIR wrapping some non-asterisk, non-newline text, and _plain_text
+# replaces the whole match with just the inner text (group 1).
+_SINGLE_EMPHASIS_RE = re.compile(r"\*([^*\n]+)\*")
+
 
 class TelegramSendError(Exception):
     """Raised when send_telegram_tldr's Bot API call fails.
@@ -102,21 +110,60 @@ class TelegramSendError(Exception):
     and a token-bearing string reaching a log line (or Loki) is exactly the
     kind of secret leak CLAUDE.md's hard rules forbid. Only a status code or
     an exception type name is ever included.
+
+    `status` carries the same HTTP status code structured (not just baked
+    into the message string) so a caller can act on it programmatically --
+    specifically digest/main.py's per-run circuit breaker (see
+    `_TELEGRAM_MAX_AGE`'s neighboring comment for the incident this guards
+    against): a 429 from Telegram's Bot API means "you are being rate
+    limited, stop sending for now," and the breaker needs to check for
+    exactly that code without re-parsing it back out of the message string.
+    `None` for every non-HTTPError failure shape (network error, timeout,
+    ...), which has no status code to report at all -- never confused with a
+    429 by a caller that checks `exc.status == 429`.
     """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def _plain_text(text: str) -> str:
-    """Reduce a short markdown snippet to plain text: links -> their text, citation chips dropped.
+    """Reduce a short markdown snippet to plain text: links/emphasis stripped, citations dropped.
 
     `[text](url)` becomes `text`; a citation whose entire visible text is
     superscript digits (e.g. the `¹` left behind by `[¹](url)` after the
     link-stripping pass) is removed outright rather than kept as bare text,
-    per extract_tldr's contract. Only these two constructs are touched --
-    this is intentionally narrow, not a general markdown-to-plaintext
+    per extract_tldr's contract.
+
+    `**bold**`/`__bold__` and `*italic*` markers are removed, keeping their
+    inner text -- found in production on the live site index for digest #54:
+    the model had written "**$100B ARR by year end**" INSIDE the TL;DR
+    paragraph itself (not just as the `**TL;DR:**` marker _TLDR_MARKER_RE
+    already strips off separately), so the literal `**` reached both the
+    site excerpt and the Telegram message verbatim. `**`/`__` pairs are
+    unambiguous -- neither ever appears in ordinary prose -- so they're
+    deleted with a plain string replace, cheaper and safer than a regex for
+    a construct that can't be confused with anything else.
+
+    Single `*text*` emphasis gets its own regex (`_SINGLE_EMPHASIS_RE`)
+    instead of a blanket `.replace("*", "")`, and single underscores are not
+    touched AT ALL (only the doubled `__` form is stripped, identically to
+    `**`, above) -- deliberately conservative: a lone `_` is extremely common
+    inside a Telegram/X handle or a snake_case identifier (`@user_name`), and
+    blindly deleting every `_` would corrupt those into `@username`. `*` has
+    no equivalent collision (not a normal English- or handle-character), so
+    a regex that only matches a genuine `*...*` PAIR (never a lone `*`) is
+    safe to apply unconditionally.
+
+    Otherwise intentionally narrow, not a general markdown-to-plaintext
     converter, since the TL;DR sentence the prompt contract produces never
-    contains anything else link-shaped.
+    contains anything else link- or emphasis-shaped beyond what's handled
+    here.
     """
     text = _MARKDOWN_LINK_RE.sub(lambda m: m.group(1), text)
+    text = text.replace("**", "").replace("__", "")
+    text = _SINGLE_EMPHASIS_RE.sub(r"\1", text)
     text = _SUPERSCRIPT_RE.sub("", text)
     # Removing a citation chip can leave a doubled space (" word  ." where
     # the chip used to sit) or trailing space before punctuation -- collapse
@@ -356,12 +403,22 @@ def send_telegram_tldr(
     header = _local_header_label(created_at)
     tldr = extract_tldr(body_md)
     link = f"{public_base}/d/{digest_id}"
-    text = f"{header}\n\n{tldr}\n\n{link}"
+    text = f"{header}\n\n{tldr}"
 
+    # The link rides as an INLINE KEYBOARD BUTTON, not as a URL in the text:
+    # the raw link is long (it embeds the site's capability token) and reads
+    # as noise in the topic — and a button needs NO parse_mode, so the
+    # message text stays plain and unparseable-proof exactly as before
+    # (an owner-requested change after seeing the first live messages).
+    # Telegram renders the button below the message; tapping it opens the
+    # digest page in the browser.
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
+        "reply_markup": {
+            "inline_keyboard": [[{"text": "Open the digest →", "url": link}]]
+        },
     }
     if thread_id:
         payload["message_thread_id"] = thread_id
@@ -379,7 +436,9 @@ def send_telegram_tldr(
             response.read()
     except urllib.error.HTTPError as exc:
         logger.warning("telegram sendMessage failed with status %d", exc.code)
-        raise TelegramSendError(f"telegram sendMessage failed with status {exc.code}") from None
+        raise TelegramSendError(
+            f"telegram sendMessage failed with status {exc.code}", status=exc.code
+        ) from None
     except Exception as exc:
         logger.warning("telegram sendMessage failed: %s", type(exc).__name__)
         raise TelegramSendError(f"telegram sendMessage failed: {type(exc).__name__}") from None
