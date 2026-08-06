@@ -728,6 +728,7 @@ def _deliver(
             {item.url for item in items},
             cfg.translate_model,
             cfg.claude_timeout_seconds,
+            fallback_model=cfg.translate_model_fallback,
         )
 
     digest_id = create_digest(conn, body_md, items, body_md_hu=body_md_hu)
@@ -1063,6 +1064,7 @@ def run_daily(cfg: Config) -> bool:
                 allowed_urls,
                 cfg.translate_model,
                 cfg.claude_timeout_seconds,
+                fallback_model=cfg.translate_model_fallback,
             )
 
         total_items = sum(item_count for _, _, item_count, _ in rows)

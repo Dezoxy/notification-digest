@@ -60,6 +60,27 @@ class SummarizeError(Exception):
     """
 
 
+class SafeguardsRefusalError(SummarizeError):
+    """Raised when the CLI's non-zero exit was an API-side safety-classifier refusal.
+
+    Distinct from the generic SummarizeError a non-zero exit otherwise
+    raises: live incident (digests 20 and 60, 2026-08-01, verified by manual
+    reproduction against `claude` CLI 2.1.220) showed a security-heavy
+    digest can trip the target model's real-time safety classifier
+    ("Sonnet 5's safeguards flagged this message"), and that refusal is
+    DETERMINISTIC for a given (content, model) pair -- retrying the exact
+    same model against the exact same prompt can never succeed, so a caller
+    catching this specifically (rather than the generic SummarizeError) can
+    skip straight to a different model instead of wasting a call on a
+    same-model retry. A different model -- in particular one that predates
+    that classifier -- has independent odds and may well succeed on the
+    identical content; see digest/translate.py's translate_digest for the
+    caller that acts on this distinction.
+
+    The message carries no prompt content, same rule as SummarizeError.
+    """
+
+
 def _truncate_item_text(text: str) -> str:
     """Truncate a single item's text to _MAX_ITEM_TEXT_CHARS for the prompt payload.
 
@@ -267,6 +288,19 @@ def select_items_for_prompt(
     return items[:lo]
 
 
+# The fixed, content-free marker run_claude checks a non-zero exit's stdout
+# against to recognize an API-side safety-classifier refusal (live-verified
+# against `claude` CLI 2.1.220 -- see run_claude's docstring for the
+# incident this was reproduced from). Checked only against the lstripped
+# HEAD of stdout, not scanned anywhere in the body: an actual refusal always
+# opens with "API Error: ..." as its very first line, so anchoring to the
+# head avoids ever matching a coincidental occurrence of this text inside
+# scraped Telegram/X content the model might otherwise echo mid-output.
+_SAFEGUARDS_REFUSAL_HEAD_CHARS = 300
+_SAFEGUARDS_REFUSAL_PREFIX = "API Error:"
+_SAFEGUARDS_REFUSAL_MARKER = "safeguards flagged"
+
+
 def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> str:
     """Invoke `claude -p` headless and return its stripped stdout.
 
@@ -305,11 +339,26 @@ def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> st
     debug a run of unusually poor quality) without a code change.
 
     Raises SummarizeError on a non-zero exit, empty/whitespace-only stdout,
-    or a timeout. On a non-zero exit, stderr is suppressed entirely (only its
-    length is reported) rather than included in the error message: the CLI
-    can echo submitted text -- which contains scraped Telegram/X message
-    content -- in its diagnostics, and that error message gets logged and
-    shipped to Loki.
+    or a timeout. On a non-zero exit, both streams are suppressed entirely
+    from the error message (only their lengths are reported) rather than
+    included: the CLI can echo submitted text -- which contains scraped
+    Telegram/X message content -- in its diagnostics, and that error message
+    gets logged and shipped to Loki.
+
+    Live-verified against `claude` CLI 2.1.220 (production incident,
+    digests 20 and 60, 2026-08-01): an API-level error -- including a
+    real-time safety-classifier refusal ("Sonnet 5's safeguards flagged this
+    message...") -- is written to STDOUT with exit 1 and EMPTY stderr, the
+    reverse of what the original error message here assumed. A non-zero
+    exit is therefore checked against a fixed, content-free marker (stdout's
+    head starting with "API Error:" and containing "safeguards flagged") to
+    tell a deterministic safety-classifier refusal apart from every other
+    non-zero-exit failure shape, and raises SafeguardsRefusalError instead
+    of the generic SummarizeError when it matches -- so callers can tell
+    "retrying this exact model is pointless" from "this may just be
+    transient" without parsing the (secret-bearing) output themselves. The
+    marker is checked, never logged or echoed: only its match/no-match
+    verdict crosses into the raised exception.
     """
     try:
         # cwd is a fresh empty directory: the CLI auto-ingests workspace
@@ -353,9 +402,20 @@ def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> st
         raise SummarizeError(f"claude -p timed out after {timeout_seconds}s") from exc
 
     if result.returncode != 0:
+        stdout_head = result.stdout.lstrip()[:_SAFEGUARDS_REFUSAL_HEAD_CHARS]
+        if (
+            stdout_head.startswith(_SAFEGUARDS_REFUSAL_PREFIX)
+            and _SAFEGUARDS_REFUSAL_MARKER in stdout_head
+        ):
+            raise SafeguardsRefusalError(
+                f"claude -p exited {result.returncode}: API safety classifier flagged "
+                "the prompt content (deterministic refusal — a same-model retry cannot "
+                "succeed)"
+            )
         raise SummarizeError(
-            f"claude -p exited {result.returncode} (stderr suppressed, "
-            f"{len(result.stderr)} chars — rerun manually to inspect)"
+            f"claude -p exited {result.returncode} (stdout suppressed, "
+            f"{len(result.stdout)} chars; stderr suppressed, {len(result.stderr)} "
+            "chars — rerun manually to inspect)"
         )
 
     stdout = result.stdout.strip()

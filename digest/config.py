@@ -72,6 +72,18 @@ class Config:
     # run_claude in digest/summarize.py) -- not a full model id, mirroring
     # anthropic_model's own default of a bare alias-shaped string.
     translate_model: str = "sonnet"
+    # Used only when the primary TRANSLATE_MODEL is refused by the API
+    # safety classifier (digest/summarize.py's SafeguardsRefusalError; see
+    # digest/translate.py's translate_digest for the fallback call itself).
+    # Default is claude-sonnet-4-6 because it predates Sonnet 5's real-time
+    # cyber safeguards, is still an active model, and translation needs no
+    # frontier capability (see _TRANSLATE_EFFORT's own comment in
+    # digest/translate.py) -- an older Sonnet is an acceptable quality
+    # trade for keeping the Hungarian channel alive on content the primary
+    # model won't touch. Set to an empty string to disable the fallback
+    # entirely (translate_digest treats a falsy fallback_model as "none
+    # configured" and re-raises the refusal instead of retrying).
+    translate_model_fallback: str = "claude-sonnet-4-6"
     # The news collector has no separate NEWS_ENABLED flag -- it is enabled
     # iff this tuple is non-empty (see digest/main.py's _run_news_collector).
     # An empty tuple is the natural "not configured" default, so a second
@@ -188,6 +200,9 @@ class Config:
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
         translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
+        translate_model_fallback = os.environ.get(
+            "TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6"
+        )
 
         polymarket_enabled = _parse_bool(os.environ.get("POLYMARKET_ENABLED", "false"))
         polymarket_api_base = _optional_url(
@@ -257,6 +272,7 @@ class Config:
             claude_effort=claude_effort,
             translate_hu_enabled=translate_hu_enabled,
             translate_model=translate_model,
+            translate_model_fallback=translate_model_fallback,
             news_feeds=news_feeds,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,

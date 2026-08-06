@@ -20,6 +20,7 @@ from collections.abc import Collection
 from pathlib import Path
 
 from digest.summarize import (
+    SafeguardsRefusalError,
     enforce_link_allowlist,
     run_claude,
     validate_output,
@@ -97,6 +98,7 @@ def translate_digest(
     allowed_urls: Collection[str],
     model: str,
     timeout_seconds: int,
+    fallback_model: str | None = None,
 ) -> str | None:
     """Translate a validated English digest to Hungarian. Never raises; None on any failure.
 
@@ -119,6 +121,24 @@ def translate_digest(
     specifically look for the Hungarian version, whereas a lost English
     digest would be a real gap in the record.
 
+    That "no retry, no convergence guarantee" rationale explicitly does NOT
+    apply to `fallback_model`: live incident (digests 20 and 60,
+    2026-08-01) showed `model` (TRANSLATE_MODEL, typically the "sonnet"
+    alias resolving to the newest Sonnet) can deterministically REFUSE a
+    security-heavy digest's content, because that model ships a real-time
+    safety classifier the content trips (see
+    digest/summarize.py's `SafeguardsRefusalError`). A same-model retry
+    against that exact refusal genuinely has zero expected improvement in
+    odds, which is exactly why `run_claude` is not simply called twice with
+    `model` here -- but `fallback_model` is a DIFFERENT model, one without
+    that classifier, so its odds of succeeding on the identical content are
+    independent of the first call's outcome, not a repeat of the same
+    doomed bet. Translation needs no frontier capability -- it is a
+    faithful structural rewrite, not an editorial judgment call (see
+    `_TRANSLATE_EFFORT`'s own comment) -- so falling back to an older Sonnet
+    is an acceptable quality trade for keeping the Hungarian channel alive
+    on content the primary model won't touch.
+
     Pipeline: build the prompt (`build_translate_prompt`), run it through
     `claude -p` at a fixed `medium` effort (see `_TRANSLATE_EFFORT`'s
     comment -- translation is mechanically easier than summarization, no
@@ -135,14 +155,30 @@ def translate_digest(
     assumption that "just translating" is a lower-risk operation than
     summarizing.
 
+    If the `model` call raises `SafeguardsRefusalError` specifically, this
+    is not folded into the generic failure path below: when `fallback_model`
+    is falsy, it is re-raised (the broad `except Exception` below still
+    catches it and returns `None`, exactly like any other failure -- there
+    is simply no fallback configured). When `fallback_model` is set, a
+    WARNING is logged (naming both models -- these are operator config, a
+    handful of fixed model-alias strings, not scraped content, so logging
+    them carries none of the secrecy concern the rest of this pipeline's
+    error paths are built around) and `run_claude` is called a second time
+    with `fallback_model`, the identical prompt/timeout_seconds/effort. Any
+    failure of that fallback call -- another refusal, a timeout, a
+    validation failure, anything -- falls straight through to the same
+    broad `except Exception` below and returns `None`, exactly like a
+    single-attempt failure always has.
+
     `run_claude`'s own failure (a non-zero exit, empty stdout, or a timeout)
-    and `validate_output`'s failure both raise `SummarizeError`, but the
-    catch below is deliberately broader than that one type -- see its
-    inline comment: the NEVER-raises contract has to hold for failure
-    shapes nobody anticipated, too. Only the exception's TYPE NAME is
-    logged (a WARNING), never its message or the prompt/output content --
-    identical secrecy posture to every other error path touching this
-    pipeline's model calls (see SummarizeError's own docstring).
+    and `validate_output`'s failure both raise `SummarizeError` (of which
+    `SafeguardsRefusalError` is a subclass), but the catch below is
+    deliberately broader than that one type -- see its inline comment: the
+    NEVER-raises contract has to hold for failure shapes nobody
+    anticipated, too. Only the exception's TYPE NAME is logged (a WARNING),
+    never its message or the prompt/output content -- identical secrecy
+    posture to every other error path touching this pipeline's model calls
+    (see SummarizeError's own docstring).
 
     Backtick un-escaping runs BEFORE `enforce_link_allowlist`: the escape
     `build_translate_prompt` applies (backtick -> `\\u0060`) has no `json
@@ -156,7 +192,20 @@ def translate_digest(
     """
     try:
         prompt = build_translate_prompt(body_md)
-        output = run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+        try:
+            output = run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+        except SafeguardsRefusalError:
+            if not fallback_model:
+                raise
+            logger.warning(
+                "translate_digest: %s refused by the API safety classifier; "
+                "retrying with fallback model %s",
+                model,
+                fallback_model,
+            )
+            output = run_claude(
+                prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT
+            )
         validate_output(output)
     # Broad on purpose, not just SummarizeError: this function's contract is
     # NEVER raises -- translation is cosmetic, and an unanticipated failure

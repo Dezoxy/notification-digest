@@ -326,8 +326,8 @@ def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, m
 
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds):
-        translate_calls.append((body_md, allowed_urls, model, timeout_seconds))
+    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+        translate_calls.append((body_md, allowed_urls, model, timeout_seconds, fallback_model))
         return "**TL;DR:** szia\n\n## Sz\n\ny"
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
@@ -337,11 +337,14 @@ def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, m
 
     assert ok is True
     assert len(translate_calls) == 1
-    body_md, allowed_urls, model, timeout_seconds = translate_calls[0]
+    body_md, allowed_urls, model, timeout_seconds, fallback_model = translate_calls[0]
     assert body_md == "**TL;DR:** hi\n\n## S\n\nx"
     assert allowed_urls == {"https://t.me/c/123/1"}
     assert model == "sonnet"
     assert timeout_seconds == cfg.claude_timeout_seconds
+    # _deliver must thread cfg.translate_model_fallback through to
+    # translate_digest's fallback_model kwarg.
+    assert fallback_model == cfg.translate_model_fallback
 
     row = conn.execute("SELECT body_md_hu FROM digests").fetchone()
     assert row == ("**TL;DR:** szia\n\n## Sz\n\ny",)
@@ -2030,8 +2033,8 @@ def test_run_daily_translation_enabled_threads_hu_body_to_site(conn, monkeypatch
     )
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds):
-        translate_calls.append(body_md)
+    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+        translate_calls.append((body_md, fallback_model))
         return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
@@ -2049,6 +2052,8 @@ def test_run_daily_translation_enabled_threads_hu_body_to_site(conn, monkeypatch
     assert ok is True
     assert len(translate_calls) == 1
     assert site_calls[0]["body_md_hu"] == "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
+    # run_daily must thread cfg.translate_model_fallback through too.
+    assert translate_calls[0][1] == cfg.translate_model_fallback
 
 
 def test_run_daily_summarize_failure_returns_false(conn, monkeypatch, tmp_path):

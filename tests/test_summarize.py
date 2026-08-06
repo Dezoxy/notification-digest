@@ -11,6 +11,7 @@ import digest.summarize as summarize_mod
 from digest.emailer import render_html
 from digest.state import Item
 from digest.summarize import (
+    SafeguardsRefusalError,
     SummarizeError,
     _real_heading_lines,
     build_prompt,
@@ -483,6 +484,70 @@ def test_run_claude_error_never_includes_the_prompt(monkeypatch):
         run_claude(secret_prompt, model="claude-opus-5", timeout_seconds=300, effort="high")
 
     assert secret_prompt not in str(exc_info.value)
+
+
+# Realistic sample of the live-verified refusal text (production incident,
+# digests 20 and 60, 2026-08-01, reproduced against `claude` CLI 2.1.220):
+# an API-level error written to stdout with exit 1 and empty stderr.
+_SAFEGUARDS_REFUSAL_STDOUT = (
+    "API Error: Sonnet 5's safeguards flagged this message. Our intentionally "
+    "broad safeguards allow us to deliver more capabilities faster, but can "
+    "sometimes flag legitimate cybersecurity work. Apply to the Cyber "
+    "Verification Program to reduce these interruptions. Learn more: "
+    "https://support.claude.com/en/articles/example\n\n"
+    "Request ID: req_011CTestRequestId1234567890abcdef\n"
+)
+
+
+def test_run_claude_safeguards_refusal_raises_safeguards_refusal_error(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return _fake_completed(returncode=1, stdout=_SAFEGUARDS_REFUSAL_STDOUT, stderr="")
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    with pytest.raises(SafeguardsRefusalError) as exc_info:
+        run_claude("the prompt", model="sonnet", timeout_seconds=300, effort="medium")
+
+    message = str(exc_info.value)
+    # The exception message must be the fixed, content-free template only --
+    # none of the live refusal text (which could in principle vary, or in a
+    # different incident could echo submitted content) may leak into it.
+    assert "safeguards flagged this message" not in message
+    assert "Cyber Verification Program" not in message
+    assert "Request ID" not in message
+    assert "exited 1" in message
+
+
+def test_run_claude_nonrefusal_nonzero_exit_raises_plain_summarize_error(monkeypatch):
+    # Some other API/CLI failure that happens to also produce non-empty
+    # stdout must NOT be misclassified as a safeguards refusal -- only the
+    # fixed marker (stdout head starting with "API Error:" AND containing
+    # "safeguards flagged") should trigger SafeguardsRefusalError.
+    def fake_run(cmd, **kwargs):
+        return _fake_completed(
+            returncode=1, stdout="API Error: rate limit exceeded, try again later\n", stderr=""
+        )
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    with pytest.raises(SummarizeError) as exc_info:
+        run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
+
+    assert not isinstance(exc_info.value, SafeguardsRefusalError)
+
+
+def test_run_claude_generic_nonzero_exit_reports_both_stream_lengths(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return _fake_completed(returncode=1, stdout="some stdout output", stderr="some stderr")
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    with pytest.raises(SummarizeError) as exc_info:
+        run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
+
+    message = str(exc_info.value)
+    assert f"stdout suppressed, {len('some stdout output')} chars" in message
+    assert f"stderr suppressed, {len('some stderr')} chars" in message
 
 
 # --- validate_output ---
