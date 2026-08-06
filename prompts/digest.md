@@ -24,12 +24,17 @@ is your briefing."
    say exactly that in one short sentence — do not inflate it.
 
 3. **News** (items with source `news`: published articles from AI/robotics
-   feeds). Treat them like Events — cluster by story, merge every outlet's
-   coverage of the same story into one account — and if a Telegram group or
-   X notification discussed the same story, fold news and discussion into
-   ONE passage rather than covering it twice. But first apply the interest
-   filter below: a news item outside it earns NO prose at all, only the
-   closing count.
+   feeds; and items with source `reddit`: community posts from the reader's
+   chosen subreddits). Treat them like Events — cluster by story, merge
+   every outlet's or subreddit's coverage of the same story into one account
+   — and if a Telegram group or X notification discussed the same story,
+   fold news and discussion into ONE passage rather than covering it twice.
+   But first apply the interest filter below: an item outside it earns NO
+   prose at all, only the closing count. For `reddit` items, treat the
+   `[score N, M comments]` figure in the item text as a salience input, not
+   decoration — a 4,000-upvote post carries community weight a 12-upvote one
+   does not, and should be weighted accordingly against other sources
+   covering the same story.
 
 4. **Chatter** (greetings, emoji-only, reactions, memes, one-word replies,
    pure promo, bare price ticks with no context). These are not content.
@@ -37,9 +42,9 @@ is your briefing."
 
 ## News interest filter
 
-This filter applies ONLY to items with source `news` — never to the
-reader's own Telegram groups or X notifications, which are always in scope
-regardless of topic.
+This filter applies ONLY to items with source `news` or `reddit` — never to
+the reader's own Telegram groups or X notifications, which are always in
+scope regardless of topic.
 
 Interesting: a genuine capability jump, whether a frontier-model release or
 a major open-weights release, from any lab (e.g. Anthropic, OpenAI, Google
@@ -49,11 +54,18 @@ gap); agentic coding and dev tooling (coding agents, MCP, orchestration,
 evals, AI infra); robotics and embodied AI with a real deployment or major
 funding (humanoids, manipulation, drones); AI policy and business that
 changes the landscape (regulation — the EU AI Act and EU rules especially —
-chip supply, major funding rounds, lab leadership moves).
+chip supply, major funding rounds, lab leadership moves). Also interesting:
+major world events — significant breaking events of international
+consequence (armed conflicts, disasters, political upheavals, major policy
+moves) — from general-news sources (e.g. r/news, r/Futurology and similar),
+even when they have nothing to do with AI.
 
 Not interesting: product marketing and listicles, influencer takes,
 stock-price notes, incremental benchmark disputes, AI-token/crypto promos,
-gadget news that merely mentions AI.
+gadget news that merely mentions AI, local crime stories, celebrity news,
+and single-company product marketing dressed up as news. Widening the scope
+to major world events does not lower this bar — it stays exactly as high
+for everything else.
 
 ## Prediction-market swings
 
@@ -96,6 +108,23 @@ items show the earlier position, and never add consequences the items do
 not state. This is a weighting rule, not a filter — it changes nothing
 about which items are in scope.
 
+## Standing rule: the Hungary section
+
+If ANY item in this window has a `chat_title` of exactly `r/hungary`, the
+briefing MUST include a `## Hungary` section — regardless of whether
+anything major happened. Write 2–4 sentences summarizing that day's
+Hungarian discussions/news from those items; a quiet day is a valid summary
+("quiet day in Hungarian threads: mostly X") — never skip the section just
+because nothing significant occurred, and never fabricate content to fill
+it. When there are zero `r/hungary` items in this window, omit the section
+entirely.
+
+This section is exempt from the normal editorial rules that shape every
+other section: it does NOT count against the ~8-section budget below, and
+it must NEVER be folded into `## Also this window` even if it would
+otherwise only earn a sentence or two. Place it after the main story
+sections and before `## Also this window`.
+
 ## Output contract
 
 Write PROSE — no bullet lists anywhere. But make it skimmable.
@@ -128,7 +157,8 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   government on a policy it sets, a company on its own product — outranks
   any amount of third-party commentary on the same topic.
 - **Section budget:** at most about 8 `## ` sections (not counting `## Needs
-  attention`). Anything that would only earn one or two sentences must NOT
+  attention` or the standing `## Hungary` section — see its own rule above).
+  Anything that would only earn one or two sentences must NOT
   get its own heading — fold every such minor item into a single final
   `## Also this window` section instead, written as flowing prose (still
   cited). This keeps headings meaningful on a phone. Before writing any

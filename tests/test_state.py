@@ -914,6 +914,119 @@ def test_init_db_migrates_pre_polymarket_source_check_with_preexisting_rows(tmp_
     old_conn.close()
 
 
+# --- items CHECK expanded to accept 'reddit' ---
+
+
+def test_fresh_db_accepts_reddit_source_item(conn):
+    item = _item(
+        "h1",
+        source="reddit",
+        chat_id=None,
+        chat_title="r/hungary",
+        author="bob",
+        url="https://www.reddit.com/r/hungary/comments/h1/napi/",
+    )
+    inserted = commit_new_items(conn, [item], {})
+
+    assert inserted == 1
+    items = get_unsummarized_items(conn)
+    assert items[0].source == "reddit"
+    assert items[0].chat_title == "r/hungary"
+
+
+def test_init_db_migrates_pre_reddit_source_check_with_preexisting_rows(tmp_path: Path):
+    # Same precedent as test_init_db_migrates_pre_polymarket_source_check_with_preexisting_rows:
+    # build a legacy DB with the four-value (pre-reddit) CHECK, then run
+    # init_db, which must apply the news and polymarket CHECK migrations
+    # first (both no-ops here, since this fixture is already past them) and
+    # the reddit-CHECK migration last. Seed a stamped telegram item so the
+    # rebuild's row-preservation is exercised.
+    old_conn = connect(str(tmp_path / "legacy_reddit.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL
+                        CHECK (source IN ('telegram', 'x', 'news', 'polymarket')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            chat_title  TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+
+        CREATE INDEX idx_items_digest_id ON items(digest_id);
+        """
+    )
+    old_conn.commit()
+
+    old_conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) "
+        "VALUES ('2026-07-29T09:00:00+00:00', 1, 1, 'body')"
+    )
+    digest_id = old_conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    old_conn.execute(
+        """
+        INSERT INTO items (source, source_id, chat_id, chat_title, author, text, url,
+                            fetched_at, digest_id)
+        VALUES ('telegram', '111:1', '111', 'Group', 'alice', 'hi', 'https://t.me/c/111/1',
+                '2026-07-29T09:00:00+00:00', ?)
+        """,
+        (digest_id,),
+    )
+    old_conn.commit()
+
+    tg_id = old_conn.execute("SELECT id FROM items WHERE source_id = '111:1'").fetchone()[0]
+
+    init_db(old_conn)  # applies (no-op) news/polymarket migrations, then the reddit-CHECK one
+
+    commit_new_items(
+        old_conn,
+        [
+            _item(
+                "h1",
+                source="reddit",
+                chat_id=None,
+                chat_title="r/hungary",
+                author="bob",
+                url="https://www.reddit.com/r/hungary/comments/h1/napi/",
+            )
+        ],
+        {},
+    )
+
+    rows = {
+        row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()
+    }
+    assert rows[tg_id] == "telegram"  # pre-existing row preserved, same id
+    reddit_sources = [
+        row[0] for row in old_conn.execute("SELECT source FROM items WHERE source_id = 'h1'")
+    ]
+    assert reddit_sources == ["reddit"]
+
+    old_conn.close()
+
+
 # --- site_published / telegram_sent columns (delivery-channels feature) ---
 
 

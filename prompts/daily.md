@@ -63,6 +63,12 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   sentence each but not their own arc — written as flowing prose, still
   cited. Pick the handful genuinely worth keeping and drop the rest; this is
   not a place to compress everything left over.
+- **Standing rule — `## Hungary`:** if any of the day's briefings carry a
+  `## Hungary` section, this brief includes one too: 2–4 sentences distilling
+  the day's Hungarian threads across those briefings. It does not count
+  against the section cap and is never folded into `## Also today`; place it
+  after the main arcs, before `## Also today`. When no input briefing has a
+  Hungary section, omit it — never fabricate one.
 - **Length:** target 600–900 words total. A quiet day with only one or two
   real arcs should come in near the bottom of that range — never pad to
   reach it. A genuinely eventful day may run a little past 900 if the arcs
