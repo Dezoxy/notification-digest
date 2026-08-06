@@ -16,6 +16,7 @@ from digest.state import (
     get_polymarket_probs,
     get_recent_digests,
     get_unsummarized_items,
+    get_window_digests_since,
     init_db,
     mark_digest_sent,
     mark_digest_site_published,
@@ -622,13 +623,18 @@ def test_create_digest_raises_and_rolls_back_on_snapshot_mismatch(conn):
 
 
 def _insert_digest(
-    conn: sqlite3.Connection, created_at: str, body_md: str, email_sent: int = 1
+    conn: sqlite3.Connection,
+    created_at: str,
+    body_md: str,
+    email_sent: int = 1,
+    kind: str = "window",
 ) -> None:
     """Insert a `digests` row directly, bypassing create_digest -- these tests only
     care about get_recent_digests' own filtering/ordering, not item stamping."""
     conn.execute(
-        "INSERT INTO digests (created_at, item_count, email_sent, body_md) VALUES (?, 0, ?, ?)",
-        (created_at, email_sent, body_md),
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md, kind) "
+        "VALUES (?, 0, ?, ?, ?)",
+        (created_at, email_sent, body_md, kind),
     )
     conn.commit()
 
@@ -684,6 +690,19 @@ def test_get_recent_digests_empty_when_nothing_in_window(conn):
     result = get_recent_digests(conn, "2026-07-29T00:00:00+00:00")
 
     assert result == []
+
+
+def test_get_recent_digests_excludes_daily_kind_rows(conn):
+    # CORRECTNESS CONSTRAINT, not a preference: a daily brief's headings are
+    # a re-synthesis of the very window digests get_recent_digests already
+    # returns -- including them here would double-count every story a daily
+    # brief covers in the next window digest's "recently covered" context.
+    _insert_digest(conn, "2026-07-29T09:00:00+00:00", "window body", kind="window")
+    _insert_digest(conn, "2026-07-29T10:00:00+00:00", "daily body", kind="daily")
+
+    result = get_recent_digests(conn, "2026-07-29T00:00:00+00:00")
+
+    assert result == [("2026-07-29T09:00:00+00:00", "window body")]
 
 
 # --- polymarket_probs (swing-anchor state, digest/collectors/polymarket.py) ---
@@ -1069,7 +1088,7 @@ def test_get_pending_digests_disabled_channel_ignored_for_retry_but_others_still
     )
 
     assert [row[0] for row in result] == [digest_id]
-    _, _, done = result[0]
+    _, _, done, _kind = result[0]
     # `done` reflects the ACTUAL stored flags, unfiltered by which channels
     # are enabled -- email_sent is still False here even though the email
     # channel is disabled (the caller, not this function, ignores it).
@@ -1207,3 +1226,190 @@ def test_init_db_migrates_pre_translation_digests_table_missing_body_md_hu(tmp_p
     assert row == ("fordítás",)
 
     old_conn.close()
+
+
+# --- kind column (daily-brief feature) ---
+
+
+def test_create_digest_defaults_kind_to_window(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    row = conn.execute("SELECT kind FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == ("window",)
+
+
+def test_create_digest_stores_explicit_daily_kind(conn):
+    digest_id = create_digest(conn, "daily body", [], kind="daily")
+
+    row = conn.execute("SELECT kind FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == ("daily",)
+
+
+def test_create_digest_empty_items_list_is_a_supported_call_shape(conn):
+    # A daily brief consumes digests, not items -- create_digest must work
+    # with an empty items list and stamp nothing (mirrors the polymarket
+    # baseline-recording precedent for commit_new_items' own empty-items
+    # support).
+    digest_id = create_digest(conn, "daily body", [], kind="daily")
+
+    row = conn.execute(
+        "SELECT item_count, kind FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row == (0, "daily")
+
+
+def test_create_digest_item_count_override_is_used_when_given(conn):
+    # A daily brief's item_count is the SUM of its source window digests'
+    # own item_counts, not len(items) (which would be 0 -- a daily brief
+    # stamps no items at all). The override parameter is what lets that sum
+    # reach the stored row.
+    digest_id = create_digest(conn, "daily body", [], kind="daily", item_count=412)
+
+    row = conn.execute("SELECT item_count FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (412,)
+
+
+def test_create_digest_item_count_override_none_falls_back_to_len_items(conn):
+    commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn), item_count=None)
+
+    row = conn.execute("SELECT item_count FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (2,)
+
+
+def test_init_db_migrates_pre_daily_brief_digests_table_missing_kind_column(tmp_path: Path):
+    # Simulate a database created before the daily-brief feature -- predates
+    # `kind` (mirrors the body_md_hu/site_published migration test
+    # precedents above).
+    old_conn = connect(str(tmp_path / "legacy_kind.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news', 'polymarket')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            chat_title  TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at      TEXT NOT NULL,
+            item_count      INTEGER NOT NULL,
+            email_sent      INTEGER NOT NULL DEFAULT 0,
+            site_published  INTEGER NOT NULL DEFAULT 0,
+            telegram_sent   INTEGER NOT NULL DEFAULT 0,
+            body_md         TEXT NOT NULL,
+            body_md_hu      TEXT
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+
+        CREATE INDEX idx_items_digest_id ON items(digest_id);
+        """
+    )
+    old_conn.execute(
+        "INSERT INTO digests (created_at, item_count, email_sent, body_md) "
+        "VALUES ('2026-07-29T09:00:00+00:00', 1, 1, 'body')"
+    )
+    old_conn.commit()
+
+    # Must not raise sqlite3.OperationalError: no such column: kind
+    init_db(old_conn)
+    # Idempotent: a second call must not raise or alter the schema again.
+    init_db(old_conn)
+
+    # DEFAULT 'window' backfills every pre-existing row correctly -- it was
+    # a window digest before "daily" ever existed as a concept.
+    row = old_conn.execute("SELECT kind FROM digests").fetchone()
+    assert row == ("window",)
+
+    # The column is fully usable post-migration.
+    digest_id = create_digest(old_conn, "daily body", [], kind="daily")
+    row = old_conn.execute("SELECT kind FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == ("daily",)
+
+    old_conn.close()
+
+
+# --- get_pending_digests / get_pending_digest expose kind (daily-brief feature) ---
+
+
+def test_get_pending_digests_exposes_stored_kind(conn):
+    digest_id = create_digest(conn, "daily body", [], kind="daily")
+
+    result = get_pending_digests(
+        conn, email_enabled=True, site_enabled=False, telegram_enabled=False
+    )
+
+    assert [row[0] for row in result] == [digest_id]
+    assert result[0][3] == "daily"
+
+
+# --- get_window_digests_since (daily-brief feature) ---
+
+
+def test_get_window_digests_since_returns_only_window_kind(conn):
+    window_id = create_digest(conn, "window body", [])
+    create_digest(conn, "daily body", [], kind="daily")
+
+    result = get_window_digests_since(conn, "2020-01-01T00:00:00+00:00")
+
+    assert [row[0] for row in result] == [window_id]
+
+
+def test_get_window_digests_since_excludes_rows_older_than_since(conn):
+    _insert_digest(conn, "2026-07-28T10:00:00+00:00", "outside", kind="window")
+    _insert_digest(conn, "2026-07-29T09:00:00+00:00", "inside", kind="window")
+
+    result = get_window_digests_since(conn, "2026-07-29T00:00:00+00:00")
+
+    assert [row[3] for row in result] == ["inside"]
+
+
+def test_get_window_digests_since_orders_ascending_by_id(conn):
+    _insert_digest(conn, "2026-07-29T12:00:00+00:00", "newest", kind="window")
+    _insert_digest(conn, "2026-07-29T08:00:00+00:00", "oldest", kind="window")
+    _insert_digest(conn, "2026-07-29T10:00:00+00:00", "middle", kind="window")
+
+    result = get_window_digests_since(conn, "2026-07-29T00:00:00+00:00")
+
+    # Insertion order (ascending id), NOT created_at order -- ascending id is
+    # the function's own documented contract, matching build_daily_prompt's
+    # need to read each briefing chronologically.
+    assert [row[3] for row in result] == ["newest", "oldest", "middle"]
+
+
+def test_get_window_digests_since_returns_id_created_at_item_count_body_md(conn):
+    commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
+    digest_id = create_digest(conn, "body text", get_unsummarized_items(conn))
+
+    result = get_window_digests_since(conn, "2020-01-01T00:00:00+00:00")
+
+    assert len(result) == 1
+    row_id, created_at, item_count, body_md = result[0]
+    assert row_id == digest_id
+    assert item_count == 2
+    assert body_md == "body text"
+    assert isinstance(created_at, str)
+
+
+def test_get_window_digests_since_empty_when_nothing_in_window(conn):
+    _insert_digest(conn, "2026-07-01T00:00:00+00:00", "ancient", kind="window")
+
+    result = get_window_digests_since(conn, "2026-07-29T00:00:00+00:00")
+
+    assert result == []

@@ -14,12 +14,15 @@ from digest.main import (
     _deliver,
     _deliver_channels,
     _deliver_email,
+    _deliver_pending,
     _deliver_site,
     _deliver_telegram,
     _run_news_collector,
     _run_polymarket_collector,
     _run_x_collector,
+    _telegram_thread_id_for_kind,
     _TelegramRunState,
+    run_daily,
 )
 from digest.publish import TelegramSendError
 from digest.state import (
@@ -33,6 +36,7 @@ from digest.state import (
     get_unsummarized_items,
     init_db,
 )
+from digest.summarize import SummarizeError
 
 _NO_CHANNELS_DONE = {"email": False, "site": False, "telegram": False}
 
@@ -389,6 +393,7 @@ def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
         *,
         body_md_hu=None,
         body_html_hu=None,
+        kind="window",
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -772,6 +777,7 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
         *,
         body_md_hu=None,
         body_html_hu=None,
+        kind="window",
     ):
         captured.update(
             digest_id=digest_id_,
@@ -827,6 +833,7 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
         *,
         body_md_hu=None,
         body_html_hu=None,
+        kind="window",
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -1827,3 +1834,278 @@ def test_run_polymarket_failure_surfaces_in_failed_sources(monkeypatch, tmp_path
 
     assert captured["failed_sources"] == ["polymarket"]
     assert ok is False
+
+
+# --- _telegram_thread_id_for_kind / kind-aware Telegram thread selection
+#     (daily-brief feature) ---
+
+
+def test_telegram_thread_id_for_kind_daily_uses_configured_daily_thread():
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=1, telegram_daily_thread_id=555)
+
+    assert _telegram_thread_id_for_kind(cfg, "daily") == 555
+
+
+def test_telegram_thread_id_for_kind_daily_falls_back_when_unset(caplog):
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=42, telegram_daily_thread_id=None)
+
+    with caplog.at_level("INFO"):
+        thread_id = _telegram_thread_id_for_kind(cfg, "daily")
+
+    assert thread_id == 42
+    assert "TELEGRAM_DAILY_THREAD_ID" in caplog.text
+
+
+def test_telegram_thread_id_for_kind_daily_explicit_zero_is_honored():
+    # 0 is a legitimate real thread id -- it must NOT be treated the same as
+    # "unset" and trigger the fallback.
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=42, telegram_daily_thread_id=0)
+
+    assert _telegram_thread_id_for_kind(cfg, "daily") == 0
+
+
+def test_telegram_thread_id_for_kind_window_always_uses_notify_thread():
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=42, telegram_daily_thread_id=555)
+
+    assert _telegram_thread_id_for_kind(cfg, "window") == 42
+
+
+def test_deliver_telegram_daily_kind_uses_daily_thread(conn, monkeypatch):
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Section\n\nstuff", [], kind="daily")
+
+    captured = {}
+    monkeypatch.setattr(
+        main_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            captured.update(thread_id=thread_id)
+        ),
+    )
+
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=1, telegram_daily_thread_id=555)
+    ok = _deliver_telegram(
+        conn, cfg, digest_id, "**TL;DR:** hi\n\n## Section\n\nstuff",
+        _recent_created_at(), _fresh_telegram_state(), kind="daily",
+    )
+
+    assert ok is True
+    assert captured["thread_id"] == 555
+
+
+# --- run_daily / _deliver_pending (daily-brief feature) ---
+
+
+def _daily_cfg(**overrides) -> Config:
+    """_multichannel_cfg() plus a distinct daily Telegram thread, for run_daily tests.
+
+    email_enabled=False isolates these tests from the email channel entirely
+    (mirrors `_telegram_only_cfg`'s own isolation rationale) -- run_daily's
+    email behavior is identical to _deliver's own (EMAIL_ENABLED gates it
+    exactly the same way, see run_daily's docstring), so it doesn't need its
+    own coverage here.
+    """
+    return replace(
+        _multichannel_cfg(), email_enabled=False, telegram_daily_thread_id=555, **overrides
+    )
+
+
+def _window_digest(conn, body_md: str, item_count: int, created_at: str) -> int:
+    """Create a real, fully-delivered window digest with `item_count` stamped items.
+
+    run_daily's own item_count-sum and allowed_urls-union logic reads real
+    stamped item URLs and the real item_count column back off the digests
+    table (via get_window_digests_since / get_digest_item_urls) -- so these
+    tests need genuine window digests, not hand-inserted rows missing that
+    data. All three channel flags are marked done (as if a prior 3-hourly
+    run already delivered it) so run_daily's own `_deliver_pending` pass
+    finds nothing left to retry for it -- isolating these tests to run_daily's
+    OWN fresh daily-digest delivery, which is what they're checking.
+    """
+    items = [_item(f"{body_md}-{i}", fetched_at=created_at) for i in range(item_count)]
+    commit_new_items(conn, items, {})
+    digest_id = create_digest(conn, body_md, items)
+    conn.execute(
+        "UPDATE digests SET created_at = ?, email_sent = 1, site_published = 1, "
+        "telegram_sent = 1 WHERE id = ?",
+        (created_at, digest_id),
+    )
+    conn.commit()
+    return digest_id
+
+
+def test_run_daily_empty_window_is_a_no_op_returns_true(monkeypatch, tmp_path):
+    def boom(*args, **kwargs):
+        raise AssertionError("must not be called when there are no window digests to brief")
+
+    cfg = replace(_cfg(), state_db_path=str(tmp_path / "state.db"))
+    real_conn = connect(cfg.state_db_path)
+    init_db(real_conn)
+    real_conn.close()
+
+    monkeypatch.setattr(main_mod, "summarize_daily", boom)
+    monkeypatch.setattr(main_mod, "publish_to_site", boom)
+    monkeypatch.setattr(main_mod, "send_telegram_tldr", boom)
+    monkeypatch.setattr(main_mod, "archive", boom)
+
+    ok = run_daily(cfg)
+
+    assert ok is True
+
+
+def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=6))
+    _window_digest(real_conn, "window two", 5, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    daily_calls = []
+
+    def fake_summarize_daily(digest_rows, allowed_urls, model, timeout_seconds, effort):
+        daily_calls.append(
+            dict(
+                digest_rows=digest_rows,
+                allowed_urls=allowed_urls,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                effort=effort,
+            )
+        )
+        return "**TL;DR:** the day\n\n## An arc\n\nstuff"
+
+    monkeypatch.setattr(main_mod, "summarize_daily", fake_summarize_daily)
+
+    site_calls = []
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod, "publish_to_site", lambda *a, **k: site_calls.append((a, k))
+    )
+    monkeypatch.setattr(
+        main_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            telegram_calls.append(thread_id)
+        ),
+    )
+    archived = {}
+    monkeypatch.setattr(
+        main_mod, "archive", lambda body_md, archive_dir, digest_id: archived.update(id=digest_id)
+    )
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(daily_calls) == 1
+    call = daily_calls[0]
+    assert call["model"] == cfg.anthropic_model
+    assert call["timeout_seconds"] == cfg.claude_timeout_seconds
+    assert call["effort"] == cfg.claude_effort
+    # allowed_urls is the UNION of both source window digests' stamped item URLs.
+    assert len(call["allowed_urls"]) == 8
+
+    # The daily digest's own thread, not the window thread.
+    assert telegram_calls == [555]
+    assert len(site_calls) == 1
+    assert archived["id"] is not None
+
+    verify_conn = connect(db_path)
+    row = verify_conn.execute(
+        "SELECT kind, item_count FROM digests WHERE id = ?", (archived["id"],)
+    ).fetchone()
+    assert row == ("daily", 8)  # SUM of the two source digests' item_counts (3 + 5)
+    verify_conn.close()
+
+
+def test_run_daily_translation_enabled_threads_hu_body_to_site(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _window_digest(real_conn, "window one", 1, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## An arc\n\nstuff"
+    )
+    translate_calls = []
+
+    def fake_translate(body_md, allowed_urls, model, timeout_seconds):
+        translate_calls.append(body_md)
+        return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    site_calls = []
+    monkeypatch.setattr(
+        main_mod, "publish_to_site", lambda *a, **k: site_calls.append(k)
+    )
+    monkeypatch.setattr(main_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path, translate_hu_enabled=True)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(translate_calls) == 1
+    assert site_calls[0]["body_md_hu"] == "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
+
+
+def test_run_daily_summarize_failure_returns_false(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _window_digest(real_conn, "window one", 1, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    def boom(*args, **kwargs):
+        raise SummarizeError("claude -p exited 1")
+
+    monkeypatch.setattr(main_mod, "summarize_daily", boom)
+
+    def must_not_be_called(*args, **kwargs):
+        raise AssertionError("must not create/archive/deliver a digest on summarize failure")
+
+    monkeypatch.setattr(main_mod, "archive", must_not_be_called)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is False
+    verify_conn = connect(db_path)
+    count = verify_conn.execute("SELECT COUNT(*) FROM digests WHERE kind = 'daily'").fetchone()[0]
+    assert count == 0
+    verify_conn.close()
+
+
+def test_run_daily_retry_path_picks_daily_thread_from_stored_kind(conn, monkeypatch):
+    # A daily digest that was created and got its site publish through, but
+    # whose Telegram send failed in a PREVIOUS run, must be retried through
+    # the pending pass with its Telegram send going to the DAILY thread --
+    # not the default "window" thread -- because get_pending_digests/
+    # _digest_meta now expose the row's own stored kind.
+    digest_id = create_digest(
+        conn, "**TL;DR:** the day\n\n## An arc\n\nstuff", [], kind="daily"
+    )
+    conn.execute(
+        "UPDATE digests SET site_published = 1, created_at = ? WHERE id = ?",
+        (_recent_created_at(), digest_id),
+    )
+    conn.commit()
+
+    telegram_calls = []
+    monkeypatch.setattr(
+        main_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            telegram_calls.append(thread_id)
+        ),
+    )
+
+    cfg = _daily_cfg()
+    ok = _deliver_pending(conn, cfg, _fresh_telegram_state())
+
+    assert ok is True
+    assert telegram_calls == [555]
+    row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)

@@ -428,6 +428,7 @@ def _clear_delivery_channel_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "TELEGRAM_NOTIFY_BOT_TOKEN",
         "TELEGRAM_NOTIFY_CHAT_ID",
         "TELEGRAM_NOTIFY_THREAD_ID",
+        "TELEGRAM_DAILY_THREAD_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -558,6 +559,65 @@ def test_telegram_notify_thread_id_negative_raises_config_error(monkeypatch):
     monkeypatch.setenv("TELEGRAM_NOTIFY_THREAD_ID", "-1")
 
     with pytest.raises(ConfigError, match="TELEGRAM_NOTIFY_THREAD_ID must be a non-negative"):
+        Config.from_env()
+
+
+# --- TELEGRAM_DAILY_THREAD_ID (daily-brief feature) ---
+
+
+def test_telegram_daily_thread_id_defaults_to_none(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.delenv("TELEGRAM_DAILY_THREAD_ID", raising=False)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+
+    config = Config.from_env()
+
+    assert config.telegram_daily_thread_id is None
+
+
+def test_telegram_daily_thread_id_explicit_value_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+    monkeypatch.setenv("TELEGRAM_DAILY_THREAD_ID", "77")
+
+    config = Config.from_env()
+
+    assert config.telegram_daily_thread_id == 77
+
+
+def test_telegram_daily_thread_id_explicit_zero_is_distinguishable_from_unset(monkeypatch):
+    # 0 is a legitimate real thread id (post to the group root) here too --
+    # it must round-trip as 0, not collapse to the same None the unset case
+    # produces, since main.py's fallback-to-window-thread logic keys off
+    # exactly that distinction.
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+    monkeypatch.setenv("TELEGRAM_DAILY_THREAD_ID", "0")
+
+    config = Config.from_env()
+
+    assert config.telegram_daily_thread_id == 0
+    assert config.telegram_daily_thread_id is not None
+
+
+def test_telegram_daily_thread_id_negative_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_NOTIFY_CHAT_ID", "-100123")
+    monkeypatch.setenv("SITE_PUBLIC_BASE", "https://news.example.com/t/tok")
+    monkeypatch.setenv("TELEGRAM_DAILY_THREAD_ID", "-1")
+
+    with pytest.raises(ConfigError, match="TELEGRAM_DAILY_THREAD_ID must be a non-negative"):
         Config.from_env()
 
 

@@ -140,6 +140,20 @@ class Config:
     # message_thread_id entirely in that case rather than sending a
     # would-be-invalid 0.
     telegram_notify_thread_id: int = 0
+    # Optional SEPARATE forum-topic thread for the daily-brief feature
+    # (digest/main.py's `run_daily`): the daily brief goes to its own topic,
+    # not the window digests' TL;DR topic, so the two don't interleave.
+    # `None` (unset, the default) means "no separate topic configured" --
+    # main.py falls back to `telegram_notify_thread_id` with an INFO log,
+    # rather than a ConfigError, since a single-topic deployment (the
+    # pre-daily-brief norm) is a completely valid configuration, not a
+    # misconfiguration. This is deliberately `int | None`, NOT
+    # `telegram_notify_thread_id`'s own "0 means unset" convention: 0 is a
+    # legitimate EXPLICIT choice here too (post the daily brief to the group
+    # root while window TL;DRs go to a topic), and that must be
+    # distinguishable from "not configured at all" -- which a 0-means-unset
+    # convention could never represent.
+    telegram_daily_thread_id: int | None = None
 
     @classmethod
     def from_env(cls) -> Config:
@@ -203,6 +217,7 @@ class Config:
         telegram_notify_thread_id = _optional_nonnegative_int(
             "TELEGRAM_NOTIFY_THREAD_ID", default=0
         )
+        telegram_daily_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_DAILY_THREAD_ID")
 
         # site_public_base is validated against the TELEGRAM channel (not the
         # site channel): its only consumer is send_telegram_tldr's reader
@@ -255,6 +270,7 @@ class Config:
             telegram_notify_bot_token=telegram_notify_bot_token,
             telegram_notify_chat_id=telegram_notify_chat_id,
             telegram_notify_thread_id=telegram_notify_thread_id,
+            telegram_daily_thread_id=telegram_daily_thread_id,
         )
 
 
@@ -583,6 +599,31 @@ def _optional_nonnegative_int(name: str, *, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a non-negative integer") from exc
+    if value < 0:
+        raise ConfigError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _optional_nonnegative_int_or_none(name: str) -> int | None:
+    """Read an optional int env var, defaulting to None, rejecting negative values.
+
+    Used for TELEGRAM_DAILY_THREAD_ID, where -- unlike
+    TELEGRAM_NOTIFY_THREAD_ID's `_optional_nonnegative_int` (which folds
+    "unset" and "explicitly 0" into the same default) -- "unset" and
+    "explicitly 0" must be distinguishable: 0 is a legitimate real thread id
+    choice (post to the group root) here too, and main.py's fallback to
+    telegram_notify_thread_id must trigger only on genuine absence, never on
+    an owner who deliberately set this to 0. Only negative values (which
+    Telegram's API could never accept as a thread id) are rejected, mirroring
+    `_optional_nonnegative_int`'s own validation.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
     try:
         value = int(raw)
     except ValueError as exc:
