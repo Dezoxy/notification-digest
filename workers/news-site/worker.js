@@ -61,6 +61,20 @@ export default {
       });
     }
 
+    // Tokenless like robots.txt: an icon reveals nothing about the site's
+    // content (robots.txt already concedes "something is served here"), and
+    // browsers fetch favicons before any page-level auth context exists.
+    if (request.method === "GET" && path === "/favicon.svg") {
+      return new Response(FAVICON_SVG, {
+        headers: {
+          "content-type": "image/svg+xml",
+          // Icons are immutable-ish and requested constantly — long cache,
+          // unlike the no-store pages (the icon carries no private data).
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
+
     const ingestMatch = path.match(/^\/ingest\/(\d+)$/);
     if (ingestMatch) {
       if (request.method !== "PUT") return notFound();
@@ -398,6 +412,16 @@ function tzAbbr(date) {
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
 
+// The tab icon: the site's indigo accent as a rounded square, three white
+// "digest lines" of tapering width — reads as a summary/list at 16px, and
+// the indigo works against both light and dark browser chrome.
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="14" fill="#4f46e5"/>
+<rect x="14" y="18" width="36" height="6" rx="3" fill="#ffffff"/>
+<rect x="14" y="30" width="28" height="6" rx="3" fill="#ffffff" opacity="0.85"/>
+<rect x="14" y="42" width="20" height="6" rx="3" fill="#ffffff" opacity="0.7"/>
+</svg>`;
+
 function brandParts(host) {
   const idx = host.indexOf(".");
   if (idx === -1) return { first: host, rest: "" };
@@ -552,6 +576,7 @@ function pageChrome(host, token, bodyHtml) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${esc(host)}</title>
 <style>${CSS}</style>
 </head>
