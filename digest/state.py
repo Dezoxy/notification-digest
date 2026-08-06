@@ -35,7 +35,14 @@ CREATE TABLE IF NOT EXISTS digests (
     site_published  INTEGER NOT NULL DEFAULT 0,
     telegram_sent   INTEGER NOT NULL DEFAULT 0,
     body_md         TEXT NOT NULL,
-    body_md_hu      TEXT
+    body_md_hu      TEXT,
+    -- 'window' (the every-3-hours item digest, the only kind that ever
+    -- existed before the daily-brief feature) or 'daily' (the once-a-day
+    -- synthesis of a day's worth of window digests, digest/daily.py).
+    -- DEFAULT 'window' means every pre-existing row -- every digest this
+    -- codebase ever created before this column existed -- is correctly
+    -- classified as a window digest, with no separate backfill needed.
+    kind            TEXT NOT NULL DEFAULT 'window'
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -120,6 +127,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_add_site_published_column(conn)
     _migrate_add_telegram_sent_column(conn)
     _migrate_add_body_md_hu_column(conn)
+    _migrate_add_kind_column(conn)
 
 
 def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
@@ -207,6 +215,27 @@ def _migrate_add_body_md_hu_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
     if "body_md_hu" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN body_md_hu TEXT")
+        conn.commit()
+
+
+def _migrate_add_kind_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.kind` on databases predating the daily-brief feature.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_site_published_column`/`_migrate_add_telegram_sent_column`/
+    `_migrate_add_body_md_hu_column` above -- `CREATE TABLE IF NOT EXISTS`
+    never alters an existing table, so an upgraded pre-daily-brief database
+    would otherwise be missing this column and every read/write touching it
+    would crash with "sqlite3.OperationalError: no such column: kind".
+    `DEFAULT 'window'` is a correctness requirement, not just a convenient
+    placeholder: every digest ever created before this column existed WAS a
+    window digest (the daily kind didn't exist yet), so this default
+    correctly classifies every pre-existing row with no separate backfill
+    UPDATE needed.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "kind" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN kind TEXT NOT NULL DEFAULT 'window'")
         conn.commit()
 
 
@@ -628,12 +657,15 @@ def create_digest(
     items: Sequence[Item],
     *,
     body_md_hu: str | None = None,
+    kind: str = "window",
+    item_count: int | None = None,
 ) -> int:
     """Durably record a digest and stamp its items, in one transaction.
 
-    Inserts a `digests` row (created_at = now UTC, item_count = len(items),
-    email_sent = 0, body_md, body_md_hu) and stamps exactly the given `items` snapshot
-    with the new digest's id — one `UPDATE ... WHERE source = ? AND
+    Inserts a `digests` row (created_at = now UTC, item_count = len(items)
+    unless overridden -- see `item_count` below --, email_sent = 0, body_md,
+    body_md_hu, kind) and stamps exactly the given `items` snapshot with the
+    new digest's id — one `UPDATE ... WHERE source = ? AND
     source_id = ? AND digest_id IS NULL` per item. We deliberately do NOT use
     an unqualified `WHERE digest_id IS NULL` update: `items` is a snapshot
     taken by an earlier call to get_unsummarized_items(), and if a new item
@@ -664,17 +696,40 @@ def create_digest(
     validate_output/enforce_link_allowlist contract enforcement the English
     body_md was subject to, so there is nothing left for create_digest to
     check.
+
+    `kind` (keyword-only, default "window") distinguishes the every-3-hours
+    item digest (the only kind that existed before the daily-brief feature)
+    from a "daily" brief (digest/daily.py's `summarize_daily`, synthesized
+    from a day's worth of window digests, never from raw items). Stored
+    as-is; digest/state.py's `get_recent_digests` filters on it (a daily
+    row's headings must never pollute the window digests' own continuity
+    memory) and digest/main.py's delivery path reads it back to pick the
+    right Telegram thread (window vs daily) on both the fresh and
+    pending-retry paths.
+
+    `item_count` (keyword-only, default None) overrides the stored
+    `item_count` away from `len(items)` when given. A window digest always
+    wants `len(items)` (the items it actually stamps) -- the default covers
+    that case with zero call-site changes. A daily brief is different: it
+    stamps NO items at all (`items=[]`, since a daily brief consumes
+    *digests*, not items -- see the item-stamping note above), but its
+    `item_count` must still reflect something meaningful to the reader: the
+    SUM of the source window digests' own item_counts, which the site's "N
+    items" line and the closing-line count sanity both key off of. Passing
+    that sum here is the only way to get a non-zero, non-len(items)
+    `item_count` onto a kind="daily" row.
     """
     now = datetime.now(UTC).isoformat()
+    stored_item_count = item_count if item_count is not None else len(items)
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
         cur.execute(
             """
-            INSERT INTO digests (created_at, item_count, email_sent, body_md, body_md_hu)
-            VALUES (?, ?, 0, ?, ?)
+            INSERT INTO digests (created_at, item_count, email_sent, body_md, body_md_hu, kind)
+            VALUES (?, ?, 0, ?, ?, ?)
             """,
-            (now, len(items), body_md, body_md_hu),
+            (now, stored_item_count, body_md, body_md_hu, kind),
         )
         digest_id = cur.lastrowid
         stamped = 0
@@ -721,7 +776,7 @@ def get_pending_digests(
     email_enabled: bool,
     site_enabled: bool,
     telegram_enabled: bool,
-) -> list[tuple[int, str, dict[str, bool]]]:
+) -> list[tuple[int, str, dict[str, bool], str]]:
     """Return every digest with at least one ENABLED channel still undelivered, oldest first.
 
     Replaces the old single-channel `get_pending_digest` (kept below as a
@@ -738,14 +793,18 @@ def get_pending_digests(
     that flag is never consulted, so the row is not pending unless some
     OTHER enabled channel is also incomplete.
 
-    Each returned tuple is `(digest_id, body_md, done)`, where `done` is a
-    `{"email": bool, "site": bool, "telegram": bool}` map of the digest's
-    ACTUAL stored flags (not filtered by which channels are enabled) --
-    `_deliver_channels` needs the raw per-channel completion state to know
-    which of the enabled-and-incomplete channels to attempt, and passing the
-    unfiltered map (rather than pre-masking it here) keeps this function a
-    pure read of stored state, with the enabled/disabled policy decision
-    left entirely to the caller.
+    Each returned tuple is `(digest_id, body_md, done, kind)`, where `done`
+    is a `{"email": bool, "site": bool, "telegram": bool}` map of the
+    digest's ACTUAL stored flags (not filtered by which channels are
+    enabled) -- `_deliver_channels` needs the raw per-channel completion
+    state to know which of the enabled-and-incomplete channels to attempt,
+    and passing the unfiltered map (rather than pre-masking it here) keeps
+    this function a pure read of stored state, with the enabled/disabled
+    policy decision left entirely to the caller. `kind` ("window" or
+    "daily") is the digest's own stored kind -- the retry path needs it to
+    pick the right Telegram thread for a pending "daily" row (see
+    digest/main.py's `_deliver_telegram`), the same way the fresh-digest
+    path already knows its own kind at creation time.
 
     Ordered oldest first (`ORDER BY id ASC`) -- unlike the old
     `get_pending_digest`'s "newest unsent wins" ordering, multiple pending
@@ -773,7 +832,7 @@ def get_pending_digests(
 
     where_sql = " OR ".join(conditions)
     rows = conn.execute(
-        "SELECT id, body_md, email_sent, site_published, telegram_sent "
+        "SELECT id, body_md, email_sent, site_published, telegram_sent, kind "
         f"FROM digests WHERE {where_sql} ORDER BY id ASC"
     ).fetchall()
     return [
@@ -785,8 +844,9 @@ def get_pending_digests(
                 "site": bool(site_published),
                 "telegram": bool(telegram_sent),
             },
+            kind,
         )
-        for digest_id, body_md, email_sent, site_published, telegram_sent in rows
+        for digest_id, body_md, email_sent, site_published, telegram_sent, kind in rows
     ]
 
 
@@ -809,7 +869,7 @@ def get_pending_digest(conn: sqlite3.Connection) -> tuple[int, str] | None:
     )
     if not pending:
         return None
-    digest_id, body_md, _done = pending[-1]
+    digest_id, body_md, _done, _kind = pending[-1]
     return (digest_id, body_md)
 
 
@@ -849,6 +909,21 @@ def get_recent_digests(conn: sqlite3.Connection, since_iso: str) -> list[tuple[s
     summarizer re-explain a story that is sitting in a pending-resend
     digest the reader is about to receive (or already has).
 
+    CORRECTNESS CONSTRAINT, not a preference: this DOES filter on
+    `kind = 'window'`, excluding any "daily" brief row. A daily brief's `## `
+    headings are a SYNTHESIS of the very same window digests this query
+    already returns -- they name the same stories again, just re-clustered
+    into the day's arcs. Without this filter, every story a daily brief
+    covers would show up TWICE in the next window digest's "recently
+    covered" continuity context (once from the window digest that first
+    reported it, once more from the daily brief that re-told it hours
+    later), which is not additional information, just noise that makes the
+    coverage block bigger for nothing. Excluding daily rows here is what
+    keeps this "running story memory" scoped to what it was built for:
+    tracking which WINDOW-level stories the summarizer has already told the
+    reader, not re-deriving that from every level of this codebase's own
+    output.
+
     `since_iso` is compared lexicographically against `created_at` in SQL,
     which is safe here because both are ISO8601 UTC strings produced by
     `datetime.isoformat()` (see create_digest): ISO8601's fixed-width,
@@ -857,7 +932,45 @@ def get_recent_digests(conn: sqlite3.Connection, since_iso: str) -> list[tuple[s
     correctly in the query itself.
     """
     rows = conn.execute(
-        "SELECT created_at, body_md FROM digests WHERE created_at >= ? ORDER BY created_at DESC",
+        "SELECT created_at, body_md FROM digests "
+        "WHERE created_at >= ? AND kind = 'window' ORDER BY created_at DESC",
         (since_iso,),
     ).fetchall()
     return [(row[0], row[1]) for row in rows]
+
+
+def get_window_digests_since(
+    conn: sqlite3.Connection, since_iso: str
+) -> list[tuple[int, str, int, str]]:
+    """Return (id, created_at, item_count, body_md) for every WINDOW digest at/after `since_iso`.
+
+    Feeds digest/daily.py's `build_daily_prompt`/`summarize_daily`: a daily
+    brief is synthesized from the day's already-curated window briefings,
+    never from raw items (see digest/main.py's `run_daily`). Only
+    `kind = 'window'` rows are ever returned -- a "daily" row must never
+    feed a later daily brief as one of its own inputs, both because that
+    would be summarizing a summary of a summary (compounding information
+    loss for no benefit) and because a prior daily run failing mid-delivery
+    and being retried must not make it appear, to a LATER daily run, as one
+    more window digest to synthesize.
+
+    Ordered ASCENDING by id (oldest first) -- the opposite of
+    `get_recent_digests`' newest-first order. `get_recent_digests` feeds a
+    "here's what you already told the reader, newest first" list where
+    order barely matters beyond age labeling; `build_daily_prompt` instead
+    renders each briefing under a chronological separator so the model can
+    trace a story's ARC across the day ("X said A in the morning; by
+    evening B") -- that only reads correctly oldest-to-newest.
+
+    `since_iso` is compared lexicographically against `created_at`, safe for
+    the identical reason `get_recent_digests` relies on: both are ISO8601
+    UTC strings from `datetime.isoformat()`, whose fixed-width,
+    most-significant-field-first layout makes lexicographic and
+    chronological order coincide.
+    """
+    rows = conn.execute(
+        "SELECT id, created_at, item_count, body_md FROM digests "
+        "WHERE created_at >= ? AND kind = 'window' ORDER BY id ASC",
+        (since_iso,),
+    ).fetchall()
+    return [(row[0], row[1], row[2], row[3]) for row in rows]

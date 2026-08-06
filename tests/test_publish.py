@@ -221,6 +221,7 @@ def test_publish_to_site_sends_expected_payload_and_headers(monkeypatch):
         "has_attention": False,
         "body_html": "<p>hi</p>",
         "body_md": "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        "kind": "window",
     }
 
 
@@ -364,6 +365,44 @@ def test_publish_to_site_hu_tldr_falls_back_to_no_summary_placeholder(monkeypatc
     )
 
     assert captured["body"]["tldr_hu"] == "(no summary)"
+
+
+# --- publish_to_site: kind field (daily-brief feature) ---
+
+
+def test_publish_to_site_defaults_kind_to_window(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+    )
+
+    assert captured["body"]["kind"] == "window"
+
+
+def test_publish_to_site_forwards_explicit_daily_kind(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        kind="daily",
+    )
+
+    assert captured["body"]["kind"] == "daily"
 
 
 # --- send_telegram_tldr ---

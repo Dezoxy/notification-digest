@@ -275,6 +275,7 @@ def publish_to_site(
     *,
     body_md_hu: str | None = None,
     body_html_hu: str | None = None,
+    kind: str = "window",
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -309,6 +310,16 @@ def publish_to_site(
     values already describe the Hungarian body just as accurately, so
     duplicating them would only be redundant, never more correct.
 
+    `kind` (keyword-only, default "window") is the digest's own stored kind
+    (digest/state.py's `digests.kind`, "window" or "daily") -- sent
+    unconditionally as its own `kind` payload field so the Worker can badge a
+    daily brief distinctly on the site (a separate Worker change handles the
+    actual display; this function only ever needs to forward the field).
+    Threaded from the digest row by the caller on both the fresh-digest and
+    pending-retry delivery paths (digest/main.py's `_deliver_site`), so a
+    daily brief is labeled correctly however many runs it takes to actually
+    publish.
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -337,6 +348,7 @@ def publish_to_site(
         "has_attention": has_needs_attention(body_md),
         "body_html": body_html,
         "body_md": body_md,
+        "kind": kind,
     }
     if body_md_hu is not None and body_html_hu is not None:
         payload["tldr_hu"] = extract_tldr(body_md_hu) or "(no summary)"
