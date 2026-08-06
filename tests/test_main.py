@@ -19,6 +19,7 @@ from digest.main import (
     _deliver_telegram,
     _run_news_collector,
     _run_polymarket_collector,
+    _run_reddit_collector,
     _run_x_collector,
     _telegram_thread_id_for_kind,
     _TelegramRunState,
@@ -1833,6 +1834,148 @@ def test_run_polymarket_failure_surfaces_in_failed_sources(monkeypatch, tmp_path
     ok = asyncio.run(main_mod._run(cfg))
 
     assert captured["failed_sources"] == ["polymarket"]
+    assert ok is False
+
+
+# --- _run_reddit_collector (Reddit collector, Config.reddit_enabled-gated) ---
+
+
+def test_run_reddit_disabled_never_calls_collector():
+    cfg = replace(_cfg(), reddit_enabled=False)
+
+    result = _run_reddit_collector(cfg)
+
+    assert result == CollectResult()
+
+
+def test_run_reddit_disabled_collect_function_untouched(monkeypatch):
+    cfg = replace(_cfg(), reddit_enabled=False)
+
+    def boom_collect(*a, **k):
+        raise AssertionError("reddit_collector.collect must not be called when disabled")
+
+    monkeypatch.setattr(main_mod.reddit_collector, "collect", boom_collect)
+
+    result = _run_reddit_collector(cfg)
+
+    assert result == CollectResult()
+
+
+def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypatch):
+    cfg = replace(
+        _cfg(),
+        reddit_enabled=True,
+        reddit_client_id="id123",
+        reddit_client_secret="secret456",
+        reddit_subreddits=("news", "hungary"),
+        reddit_posts_per_sub=15,
+    )
+    expected = CollectResult(items=[_item("reddit-1")])
+
+    captured = {}
+
+    def fake_collect(client_id, client_secret, subreddits, posts_per_sub):
+        captured["client_id"] = client_id
+        captured["client_secret"] = client_secret
+        captured["subreddits"] = subreddits
+        captured["posts_per_sub"] = posts_per_sub
+        return expected
+
+    monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_collect)
+
+    result = _run_reddit_collector(cfg)
+
+    assert result is expected
+    assert captured == {
+        "client_id": "id123",
+        "client_secret": "secret456",
+        "subreddits": ("news", "hungary"),
+        "posts_per_sub": 15,
+    }
+
+
+def test_run_reddit_collector_crash_is_caught_returns_failed_result(monkeypatch):
+    cfg = replace(_cfg(), reddit_enabled=True)
+
+    def boom_collect(*a, **k):
+        raise RuntimeError("reddit api shape changed")
+
+    monkeypatch.setattr(main_mod.reddit_collector, "collect", boom_collect)
+
+    result = _run_reddit_collector(cfg)
+
+    assert result.failed is True
+    assert result.items == []
+
+
+# --- _run: reddit wiring end to end (merge into commit, failed_sources) ---
+
+
+def test_run_merges_reddit_items_into_commit_alongside_telegram(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), reddit_enabled=True
+    )
+
+    tg_item = _item("1")
+    reddit_item = Item(
+        source="reddit",
+        source_id="h1",
+        chat_id=None,
+        chat_title="r/hungary",
+        author="bob",
+        text="headline [score 100, 5 comments] body",
+        url="https://www.reddit.com/r/hungary/comments/h1/napi/",
+        fetched_at="2026-07-29T10:00:00+00:00",
+    )
+
+    _patch_telegram_client(
+        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
+    )
+
+    def fake_reddit_collect(client_id, client_secret, subreddits, posts_per_sub):
+        return CollectResult(items=[reddit_item])
+
+    monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_reddit_collect)
+
+    captured = {}
+
+    def fake_commit_new_items(conn, items, cursor_updates):
+        captured["items"] = items
+        captured["cursor_updates"] = cursor_updates
+        return len(items)
+
+    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+    assert captured["items"] == [tg_item, reddit_item]
+    # reddit never contributes a cursor_update -- only telegram's shows up.
+    assert captured["cursor_updates"] == {("telegram", "123"): "1"}
+
+
+def test_run_reddit_collector_failure_surfaces_in_failed_sources(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), reddit_enabled=True
+    )
+
+    _patch_telegram_client(monkeypatch, CollectResult())
+    monkeypatch.setattr(
+        main_mod.reddit_collector, "collect", lambda *a, **k: CollectResult(failed=True)
+    )
+
+    captured = {}
+
+    def fake_deliver(conn, cfg, failed_sources):
+        captured["failed_sources"] = failed_sources
+        return True
+
+    monkeypatch.setattr(main_mod, "_deliver", fake_deliver)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert captured["failed_sources"] == ["reddit"]
     assert ok is False
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news', 'polymarket')),
+    source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news', 'polymarket', 'reddit')),
     source_id   TEXT NOT NULL,
     chat_id     TEXT,
     chat_title  TEXT,
@@ -124,6 +124,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_add_chat_title_column(conn)
     _migrate_expand_source_check_for_news(conn)
     _migrate_expand_source_check_for_polymarket(conn)
+    _migrate_expand_source_check_for_reddit(conn)
     _migrate_add_site_published_column(conn)
     _migrate_add_telegram_sent_column(conn)
     _migrate_add_body_md_hu_column(conn)
@@ -417,6 +418,82 @@ def _migrate_expand_source_check_for_polymarket(conn: sqlite3.Connection) -> Non
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 source      TEXT NOT NULL
                             CHECK (source IN ('telegram', 'x', 'news', 'polymarket')),
+                source_id   TEXT NOT NULL,
+                chat_id     TEXT,
+                chat_title  TEXT,
+                author      TEXT,
+                text        TEXT,
+                url         TEXT NOT NULL,
+                fetched_at  TEXT NOT NULL,
+                digest_id   INTEGER REFERENCES digests(id),
+                UNIQUE (source, source_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO items_new
+                (id, source, source_id, chat_id, chat_title, author, text,
+                 url, fetched_at, digest_id)
+            SELECT id, source, source_id, chat_id, chat_title, author, text,
+                   url, fetched_at, digest_id
+            FROM items
+            """
+        )
+        cur.execute("DROP TABLE items")
+        cur.execute("ALTER TABLE items_new RENAME TO items")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _migrate_expand_source_check_for_reddit(conn: sqlite3.Connection) -> None:
+    """Rebuild `items` so its `source` CHECK constraint additionally accepts 'reddit'.
+
+    Same rebuild-in-place pattern as `_migrate_expand_source_check_for_polymarket`
+    immediately above (see its docstring, and `_migrate_expand_source_check_for_news`'s
+    for the full rationale -- SQLite has no `ALTER TABLE ... ALTER CONSTRAINT`,
+    so a CHECK can only be widened by rebuilding the table: create a new one
+    with the wider CHECK, copy every row across by explicit column name
+    (never `SELECT *` -- see the news migration's docstring for why), drop
+    the old table, rename the new one into place.
+
+    Only `items` is rebuilt here -- `cursors` is deliberately left at its
+    `('telegram', 'x', 'news')` CHECK, unchanged since the polymarket
+    migration. The Reddit collector has no cursor axis at all (see
+    digest/collectors/reddit.py's module docstring, "No cursor axis"): its
+    idempotency comes entirely from `UNIQUE(source, source_id)` on `items`
+    itself, exactly like rss.py's `news` source -- there is no reddit-specific
+    state table the way Polymarket has `polymarket_probs`, and no reason to
+    ever insert a 'reddit' row into `cursors`.
+
+    Idempotent via the same `_table_ddl` + substring check as the news and
+    polymarket migrations: does nothing if `items`' own stored DDL already
+    mentions 'reddit' (covers both "already migrated" and "freshly created
+    by _SCHEMA above", which already declares the five-value CHECK).
+
+    MUST run AFTER `_migrate_expand_source_check_for_polymarket` (see
+    init_db's call order): that migration's own docstring (and the news
+    migration's, transitively) explains why the column-add migrations must
+    run first (physical column order on a legacy table); this migration
+    inherits the identical requirement, since it rebuilds from whatever
+    shape `items` is in at the time it runs, using the same explicit,
+    order-independent column list.
+    """
+    ddl = _table_ddl(conn, "items")
+    if ddl is None or "'reddit'" in ddl:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            CREATE TABLE items_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                source      TEXT NOT NULL
+                            CHECK (source IN ('telegram', 'x', 'news', 'polymarket', 'reddit')),
                 source_id   TEXT NOT NULL,
                 chat_id     TEXT,
                 chat_title  TEXT,

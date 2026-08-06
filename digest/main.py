@@ -19,6 +19,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from digest.collectors import polymarket as polymarket_collector
+from digest.collectors import reddit as reddit_collector
 from digest.collectors import rss as rss_collector
 from digest.collectors import telegram as telegram_collector
 from digest.collectors import x as x_collector
@@ -873,6 +874,45 @@ def _run_polymarket_collector(
         return PolymarketCollectResult(failed=True)
 
 
+def _run_reddit_collector(cfg: Config) -> CollectResult:
+    """Run one Reddit top-of-day collect pass, if `cfg.reddit_enabled`.
+
+    No-ops entirely (returns a fresh, unfailed CollectResult) when the flag
+    is off -- mirrors `_run_polymarket_collector`'s own flag check, not
+    `_run_news_collector`'s empty-tuple-means-disabled shape: Reddit has no
+    natural "unconfigured" sentinel the way an empty feed list does (see
+    Config.reddit_enabled's own comment).
+
+    Plain `def`, called synchronously from inside this `async def _run` --
+    matching `_run_news_collector`/`_run_polymarket_collector`'s own
+    rationale (collectors already run one at a time; there's nothing else
+    in flight for an executor wrapper to protect against blocking).
+
+    `reddit_collector.collect` already never raises past its own try/except
+    around the token fetch and each per-subreddit request (module
+    docstring's "Failure semantics"), but this call is wrapped in a
+    catch-all here too as a second line of defense, mirroring every other
+    collector wrapper in this module: a not-yet-anticipated bug must not
+    take down the whole run (and the other collectors' already-collected
+    items) before `commit_new_items` gets a chance to persist them. Only the
+    exception's type name is logged -- the underlying error could otherwise
+    embed the client_id/secret from a malformed request.
+    """
+    if not cfg.reddit_enabled:
+        return CollectResult()
+
+    try:
+        return reddit_collector.collect(
+            cfg.reddit_client_id,
+            cfg.reddit_client_secret,
+            cfg.reddit_subreddits,
+            cfg.reddit_posts_per_sub,
+        )
+    except Exception as exc:
+        logger.warning("reddit collection crashed unexpectedly: %s", type(exc).__name__)
+        return CollectResult(failed=True)
+
+
 async def _run(cfg: Config) -> bool:
     """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
@@ -897,22 +937,31 @@ async def _run(cfg: Config) -> bool:
         x_result = await _run_x_collector(conn, cfg)
         news_result = _run_news_collector(cfg)
         polymarket_result = _run_polymarket_collector(conn, cfg)
+        reddit_result = _run_reddit_collector(cfg)
 
-        items = tg_result.items + x_result.items + news_result.items + polymarket_result.items
+        items = (
+            tg_result.items
+            + x_result.items
+            + news_result.items
+            + polymarket_result.items
+            + reddit_result.items
+        )
         # news never contributes cursor_updates (it has no cursor axis, see
         # digest/collectors/rss.py's module docstring) -- merging its
         # (always-empty) dict in here anyway keeps this line generic over
         # every collector rather than special-casing the one with nothing
-        # to add. polymarket ALSO has no cursor axis (its own state lives in
-        # the polymarket_probs table, see digest/collectors/polymarket.py's
-        # module docstring), but unlike news it doesn't even have a
-        # cursor_updates field on its result type -- PolymarketCollectResult
-        # is a distinct type carrying `prob_updates` instead (handled below,
-        # not here).
+        # to add. reddit is identical (see digest/collectors/reddit.py's
+        # module docstring, "No cursor axis"). polymarket ALSO has no cursor
+        # axis (its own state lives in the polymarket_probs table, see
+        # digest/collectors/polymarket.py's module docstring), but unlike
+        # news/reddit it doesn't even have a cursor_updates field on its
+        # result type -- PolymarketCollectResult is a distinct type carrying
+        # `prob_updates` instead (handled below, not here).
         cursor_updates = {
             **tg_result.cursor_updates,
             **x_result.cursor_updates,
             **news_result.cursor_updates,
+            **reddit_result.cursor_updates,
         }
 
         # `polymarket_prob_updates` is only passed as a keyword argument when
@@ -945,6 +994,7 @@ async def _run(cfg: Config) -> bool:
                 ("x", x_result.failed),
                 ("news", news_result.failed),
                 ("polymarket", polymarket_result.failed),
+                ("reddit", reddit_result.failed),
             )
             if failed
         ]
