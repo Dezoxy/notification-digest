@@ -54,6 +54,31 @@ than a broken one.
 (Python `nh3`) and is stored and served verbatim inside the article — it is
 the only field the Worker ever inserts into a page without HTML-escaping.
 Every other stored field (`tldr`, counts, etc.) is escaped on the way out.
+`body_html_hu` (see "Hungarian support" below) follows the exact same
+contract: pre-sanitized upstream, inserted raw only into the same article
+slot.
+
+## Hungarian support (EN | HU)
+
+The digest app can optionally push a Hungarian translation alongside the
+English digest. This Worker never translates anything itself — it only
+stores and serves whatever the app sends.
+
+- **Ingest**: `PUT /ingest/:id` accepts optional `tldr_hu`, `body_html_hu`,
+  and `body_md_hu` fields, validated with the same size/non-empty rules as
+  their English counterparts (`tldr_hu` ≤ 32KB, bodies ≤ 2MB). They must
+  either all be present or all be absent — a half-translation is rejected
+  with `400`. Omitting them entirely (the pre-Hungarian app version's
+  payload shape) keeps working unchanged. Re-ingesting a digest without hu
+  fields NULLs out any translation stored for it previously — upserts stay
+  idempotent and reflect the latest payload exactly, in both languages.
+- **Reading**: every reader route has a parameterized Hungarian twin —
+  `GET /t/:token/hu/` and `GET /t/:token/hu/d/:id` — with the same token
+  check, headers, and 404 philosophy as the English routes. A masthead
+  switcher (`EN | HU`) links between the same page in both language spaces.
+  If a digest has no Hungarian translation yet, the `/hu/` pages fall back
+  to the English `tldr`/`body_html` with a small in-page note rather than
+  erroring or showing nothing.
 
 ## Deploy
 
@@ -93,6 +118,22 @@ full URL (`https://news.toomhorvath.com/t/<value>/`). `INGEST_KEY` goes into
 the digest service's own secret path (Azure Key Vault → homelab deploy) as
 whatever env var its `emailer`/archive client reads — see that repo's
 `config.py` for the exact name.
+
+## Schema migrations
+
+`schema.sql` is only for fresh installs (`wrangler d1 execute ... --file
+schema.sql` against a brand-new, empty database). An already-deployed
+database needs its schema brought forward by hand — this Worker has no
+migration runner — via the numbered files in `migrations/`, applied once,
+in order, against the **remote** D1 database:
+
+```bash
+wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
+```
+
+| Migration | Adds |
+| --- | --- |
+| `0002-hu-columns.sql` | `tldr_hu`, `body_html_hu`, `body_md_hu` (nullable) on `digests`, for the Hungarian-translation feature. |
 
 ## Key rotation
 

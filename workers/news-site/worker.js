@@ -23,13 +23,26 @@
  * Routes:
  *   GET  /robots.txt          -> disallow everything, no token needed
  *   PUT  /ingest/:id          -> upsert a digest (x-ingest-key required)
- *   GET  /t/:token/           -> index, newest-first, grouped by day
- *   GET  /t/:token/d/:id      -> single digest, with prev/next nav
+ *   GET  /t/:token/           -> index (EN), newest-first, grouped by day
+ *   GET  /t/:token/d/:id      -> single digest (EN), with prev/next nav
+ *   GET  /t/:token/hu/        -> same index, Hungarian chrome + translations
+ *   GET  /t/:token/hu/d/:id   -> same digest page, Hungarian chrome + translations
  *   anything else             -> plain 404, wrong token included
  *
- * body_html arrives PRE-SANITIZED by the app (nh3) and is stored/served
- * verbatim — it is the only field ever inserted into a response without
- * HTML-escaping. Every other D1-sourced value goes through esc().
+ * Hungarian support (EN | HU switcher in the masthead): this Worker only
+ * STORES and SERVES translations — it never translates anything itself.
+ * The digest app optionally sends tldr_hu/body_html_hu/body_md_hu alongside
+ * the English fields on PUT /ingest/:id; all three are NULL together when
+ * the app didn't produce a translation for that digest, and the /hu/ pages
+ * fall back to the English tldr/body_html with a small in-page note when
+ * that happens. The /hu/ routes are parameterized variants of the same
+ * handlers, same token check, same headers, same 404 philosophy — a wrong
+ * token on a /hu/ path 404s byte-identically to a wrong token anywhere else.
+ *
+ * body_html and body_html_hu both arrive PRE-SANITIZED by the app (nh3) and
+ * are stored/served verbatim — they are the only fields ever inserted into
+ * a response without HTML-escaping, and only ever into the <article> slot.
+ * Every other D1-sourced value goes through esc().
  */
 
 // ── config ──────────────────────────────────────────────────────────────
@@ -38,7 +51,8 @@ const TIMEZONE = "Europe/Budapest";
 
 // Per-field caps ("sanely" bounded, not exact science): body_html/body_md are
 // full digest bodies and can legitimately run long; tldr is a one-paragraph
-// summary and should never approach that size.
+// summary and should never approach that size. The optional _hu translation
+// counterparts share these exact same caps.
 const MAX_BODY_FIELD_BYTES = 2 * 1024 * 1024; // 2MB
 const MAX_TLDR_BYTES = 32 * 1024; // 32KB
 
@@ -81,14 +95,21 @@ export default {
       return handleIngest(request, env, ingestMatch[1]);
     }
 
-    const digestMatch = path.match(/^\/t\/([^/]+)\/d\/(\d+)$/);
+    // The optional "hu/" segment selects the Hungarian chrome/translations;
+    // everything else about the route (token check, id shape, 404s) is
+    // identical between the two languages — see handleIndexPage/
+    // handleDigestPage, which take `lang` as a plain parameter rather than
+    // being duplicated.
+    const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?d\/(\d+)$/);
     if (digestMatch && request.method === "GET") {
-      return handleDigestPage(env, digestMatch[1], digestMatch[2], url);
+      const lang = digestMatch[2] ? "hu" : "en";
+      return handleDigestPage(env, digestMatch[1], digestMatch[3], url, lang);
     }
 
-    const indexMatch = path.match(/^\/t\/([^/]+)\/$/);
+    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?$/);
     if (indexMatch && request.method === "GET") {
-      return handleIndexPage(env, indexMatch[1], url);
+      const lang = indexMatch[2] ? "hu" : "en";
+      return handleIndexPage(env, indexMatch[1], url, lang);
     }
 
     // Unknown path, or a token-gated route hit with the wrong method — same
@@ -143,8 +164,8 @@ async function handleIngest(request, env, idParam) {
   try {
     await env.DB.prepare(
       `INSERT INTO digests
-         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          created_at    = excluded.created_at,
          tldr          = excluded.tldr,
@@ -152,7 +173,10 @@ async function handleIngest(request, env, idParam) {
          section_count = excluded.section_count,
          has_attention = excluded.has_attention,
          body_html     = excluded.body_html,
-         body_md       = excluded.body_md`,
+         body_md       = excluded.body_md,
+         tldr_hu       = excluded.tldr_hu,
+         body_html_hu  = excluded.body_html_hu,
+         body_md_hu    = excluded.body_md_hu`,
     )
       .bind(
         id,
@@ -163,6 +187,13 @@ async function handleIngest(request, env, idParam) {
         d.has_attention ? 1 : 0,
         d.body_html,
         d.body_md,
+        // NULL when the app didn't send a translation for this digest —
+        // ON CONFLICT's excluded.* means a re-ingest of a previously
+        // translated digest without hu fields correctly NULLs them back out,
+        // same idempotent-upsert contract as every other column here.
+        d.tldr_hu,
+        d.body_html_hu,
+        d.body_md_hu,
       )
       .run();
   } catch {
@@ -172,29 +203,30 @@ async function handleIngest(request, env, idParam) {
   return json({ ok: true }, 200);
 }
 
-async function handleIndexPage(env, token, url) {
+async function handleIndexPage(env, token, url, lang) {
   if (!(await tokenMatches(env, token))) return notFound();
 
   // LIMIT 1000 = ~4 months of 3-hourly digests. Not pagination, a page-weight
   // backstop: every row carries a ~paragraph tldr, and an unbounded index
   // would grow by ~1MB/quarter forever. Older digests stay reachable through
   // each digest page's prev/next chain; add real pagination if the cap is
-  // ever actually felt.
+  // ever actually felt. tldr_hu is always selected (cheap) even for the EN
+  // page — only the HU renderer reads it.
   const { results } = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention FROM digests ORDER BY id DESC LIMIT 1000",
+    "SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention FROM digests ORDER BY id DESC LIMIT 1000",
   ).all();
 
-  return htmlResponse(renderIndexPage(results ?? [], token, url.hostname));
+  return htmlResponse(renderIndexPage(results ?? [], token, url.hostname, lang));
 }
 
-async function handleDigestPage(env, token, idParam, url) {
+async function handleDigestPage(env, token, idParam, url, lang) {
   if (!(await tokenMatches(env, token))) return notFound();
 
   const id = Number(idParam);
   if (!Number.isInteger(id) || id <= 0) return notFound();
 
   const digest = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html FROM digests WHERE id = ?",
+    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu FROM digests WHERE id = ?",
   )
     .bind(id)
     .first();
@@ -214,7 +246,7 @@ async function handleDigestPage(env, token, idParam, url) {
   ]);
 
   return htmlResponse(
-    renderDigestPage(digest, older, newer, token, url.hostname),
+    renderDigestPage(digest, older, newer, token, url.hostname, lang),
   );
 }
 
@@ -240,6 +272,9 @@ function validateDigestPayload(payload) {
     has_attention,
     body_html,
     body_md,
+    tldr_hu,
+    body_html_hu,
+    body_md_hu,
   } = payload;
 
   if (
@@ -284,6 +319,46 @@ function validateDigestPayload(payload) {
     return { ok: false, error: "body_md must be a non-empty string within size limits" };
   }
 
+  // Hungarian translation fields are entirely optional (older/untranslated
+  // callers omit them), but a half-translation is a caller bug, not a valid
+  // partial state: all three must show up together or not at all. `null` is
+  // treated the same as "absent" so a caller can send explicit nulls.
+  const huFieldsPresent = [tldr_hu, body_html_hu, body_md_hu].filter(
+    (v) => v !== undefined && v !== null,
+  ).length;
+  if (huFieldsPresent !== 0 && huFieldsPresent !== 3) {
+    return {
+      ok: false,
+      error:
+        "tldr_hu, body_html_hu, and body_md_hu must all be present or all absent",
+    };
+  }
+  const huEnabled = huFieldsPresent === 3;
+
+  if (huEnabled) {
+    if (
+      typeof tldr_hu !== "string" ||
+      tldr_hu.length === 0 ||
+      byteLength(tldr_hu) > MAX_TLDR_BYTES
+    ) {
+      return { ok: false, error: "tldr_hu must be a non-empty string within size limits" };
+    }
+    if (
+      typeof body_html_hu !== "string" ||
+      body_html_hu.length === 0 ||
+      byteLength(body_html_hu) > MAX_BODY_FIELD_BYTES
+    ) {
+      return { ok: false, error: "body_html_hu must be a non-empty string within size limits" };
+    }
+    if (
+      typeof body_md_hu !== "string" ||
+      body_md_hu.length === 0 ||
+      byteLength(body_md_hu) > MAX_BODY_FIELD_BYTES
+    ) {
+      return { ok: false, error: "body_md_hu must be a non-empty string within size limits" };
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -294,6 +369,9 @@ function validateDigestPayload(payload) {
       has_attention: has_attention === true || has_attention === 1,
       body_html,
       body_md,
+      tldr_hu: huEnabled ? tldr_hu : null,
+      body_html_hu: huEnabled ? body_html_hu : null,
+      body_md_hu: huEnabled ? body_md_hu : null,
     },
   };
 }
@@ -370,10 +448,15 @@ function esc(value) {
 
 // ── time formatting (Europe/Budapest hardcoded, per project convention:
 // storage/comparisons stay UTC, only rendering converts) ────────────────
+//
+// Both formatters take `locale` explicitly (STRINGS[lang].locale below)
+// rather than deriving it from lang themselves — Intl does all the actual
+// EN/HU formatting work (weekday/month names, date ordering) once given the
+// right locale tag; this file never hand-builds a Hungarian date string.
 
-function formatDayHeader(date) {
-  // "Wednesday, 5 August 2026"
-  return new Intl.DateTimeFormat("en-GB", {
+function formatDayHeader(date, locale) {
+  // en-GB: "Wednesday, 5 August 2026" · hu-HU: "2026. augusztus 6., csütörtök"
+  return new Intl.DateTimeFormat(locale, {
     timeZone: TIMEZONE,
     weekday: "long",
     day: "numeric",
@@ -382,9 +465,10 @@ function formatDayHeader(date) {
   }).format(date);
 }
 
-function formatTime(date) {
-  // "18:00"
-  return new Intl.DateTimeFormat("en-GB", {
+function formatTime(date, locale) {
+  // "18:00" in both locales (hour12: false makes the locale irrelevant here,
+  // but it's threaded through for consistency/future-proofing).
+  return new Intl.DateTimeFormat(locale, {
     timeZone: TIMEZONE,
     hour: "2-digit",
     minute: "2-digit",
@@ -397,6 +481,8 @@ function tzAbbr(date) {
   // GMT offset ("GMT+1"/"GMT+2") rather than "CET"/"CEST", so derive the
   // abbreviation from the offset ourselves instead of trusting that string.
   // Europe/Budapest only ever has these two offsets, so the mapping is exact.
+  // This is a locale-independent numeric parse (not user-facing text), so it
+  // stays on "en-GB" regardless of the page's language.
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: TIMEZONE,
     timeZoneName: "shortOffset",
@@ -408,6 +494,66 @@ function tzAbbr(date) {
   // exists to avoid).
   const m = offset.match(/[+-]0?(\d)/);
   return m && m[1] === "2" ? "CEST" : "CET";
+}
+
+// ── chrome strings (EN|HU) ──────────────────────────────────────────────
+//
+// This is the ENTIRE Hungarian vocabulary this Worker knows — everything
+// else Hungarian-language on a /hu/ page is either digest content the app
+// already translated (body_html_hu/tldr_hu) or a handful of untranslated
+// micro-labels ("TL;DR:", "digest #N") left as-is; see README/PR notes for
+// the reasoning. Owner: please read these for correctness, they're the only
+// hardcoded Hungarian text in the codebase.
+const STRINGS = {
+  en: {
+    locale: "en-GB",
+    cadence: "every 3 hours · private link",
+    attention: "needs attention",
+    itemsWord: "items",
+    sectionsWord: "sections",
+    allDigests: "← All digests",
+    noDigests: "No digests yet.",
+    footerPrivate:
+      "Private link — anyone with this URL can read. Don't share it outside the group.",
+    footerNotIndexed: "Not indexed · generated by the digest service, every 3 hours",
+    enOnlyNote: null,
+  },
+  hu: {
+    locale: "hu-HU",
+    cadence: "3 óránként · privát link",
+    attention: "figyelmet igényel",
+    itemsWord: "elem",
+    sectionsWord: "szakasz",
+    allDigests: "← Minden hírlevél",
+    noDigests: "Még nincs hírlevél.",
+    footerPrivate:
+      "Privát link — bárki olvashatja, akinél megvan ez az URL. Ne oszd meg a csoporton kívül.",
+    footerNotIndexed: "Nem indexelt · a digest szolgáltatás generálja, 3 óránként",
+    enOnlyNote: "Csak angolul elérhető",
+  },
+};
+
+// ── language-space path helpers (keep every internal link inside the
+// current language space: index↔index, digest↔digest, EN pages never link
+// into /hu/ and vice versa except via the explicit switcher) ────────────
+
+function indexHref(token, lang) {
+  return `/t/${encodeURIComponent(token)}/${lang === "hu" ? "hu/" : ""}`;
+}
+
+function digestHref(token, lang, id) {
+  return `/t/${encodeURIComponent(token)}/${lang === "hu" ? "hu/" : ""}d/${esc(id)}`;
+}
+
+function renderLangSwitcher(token, lang, kind, id) {
+  const enHref = kind === "index" ? indexHref(token, "en") : digestHref(token, "en", id);
+  const huHref = kind === "index" ? indexHref(token, "hu") : digestHref(token, "hu", id);
+  // Current language: plain bold text, not a link (nothing to switch to).
+  // Other language: a link to the SAME page (same index row / same digest
+  // id) in the other language space.
+  const en = lang === "en" ? "<strong>EN</strong>" : `<a href="${enHref}">EN</a>`;
+  const hu = lang === "hu" ? "<strong>HU</strong>" : `<a href="${huHref}">HU</a>`;
+  return `<span class="langswitch">${en} | ${hu}</span>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -478,11 +624,18 @@ const CSS = `
 
   header.mast {
     display: flex; align-items: baseline; justify-content: space-between;
-    gap: 1em; padding: 1.4em 0 1em; border-bottom: 1px solid var(--hairline);
-    margin-bottom: 1.6em;
+    flex-wrap: wrap; gap: 0.6em 1em; padding: 1.4em 0 1em;
+    border-bottom: 1px solid var(--hairline); margin-bottom: 1.6em;
   }
   .mast .brand { font-weight: 700; font-size: 1.05em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
   .mast .brand .tld { color: var(--accent); }
+  /* Switcher (EN | HU) sits top-right in the masthead; the cadence line
+     stacks right below it, both right-aligned — same markup at both
+     breakpoints, header.mast's own flex-wrap handles narrow viewports. */
+  .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; }
+  .mast .langswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
+  .mast .langswitch a { text-decoration: none; }
+  .mast .langswitch strong { color: var(--text); }
   .mast .cadence { color: var(--muted); font-size: 0.8em; }
 
   .dayhead {
@@ -505,6 +658,10 @@ const CSS = `
     font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
     background: var(--attention-bg); color: var(--attention-text);
   }
+  /* Neutral/muted variant for the "EN" fallback chip on untranslated HU
+     index entries — deliberately NOT the amber attention colors, this isn't
+     a warning, just a language note. Reuses .flag's shape/sizing. */
+  .entry .flag.flag-muted { background: var(--chip-bg); color: var(--chip-text); }
   .entry .excerpt {
     margin: 0; color: var(--muted); font-size: 0.93em;
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
@@ -518,6 +675,9 @@ const CSS = `
   nav.digestnav a { text-decoration: none; }
   nav.digestnav .spacer { flex: 1; }
   .stamp { color: var(--muted); font-size: 0.85em; margin: 0 0 1.2em; font-variant-numeric: tabular-nums; }
+  /* HU digest page, no body_html_hu on file: shown above the article,
+     falling back to the English body. */
+  .en-only-note { color: var(--muted); font-size: 0.85em; font-style: italic; margin: 0 0 1em; }
 
   .attention {
     background: var(--attention-bg); color: var(--attention-text);
@@ -569,10 +729,11 @@ const CSS = `
   }
 `;
 
-function pageChrome(host, token, bodyHtml) {
+function pageChrome(host, token, lang, switcherHtml, bodyHtml) {
   const { first, rest } = brandParts(host);
+  const strings = STRINGS[lang];
   return `<!doctype html>
-<html lang="en">
+<html lang="${lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -583,13 +744,16 @@ function pageChrome(host, token, bodyHtml) {
 <body>
 <div class="wrap">
   <header class="mast">
-    <a class="brand" href="/t/${encodeURIComponent(token)}/">${esc(first)}<span class="tld">${esc(rest)}</span></a>
-    <span class="cadence">every 3 hours · private link</span>
+    <a class="brand" href="${indexHref(token, lang)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
+    <div class="mastright">
+      ${switcherHtml}
+      <span class="cadence">${esc(strings.cadence)}</span>
+    </div>
   </header>
   ${bodyHtml}
   <footer class="site">
-    <p>Private link — anyone with this URL can read. Don't share it outside the group.</p>
-    <p>Not indexed · generated by the digest service, every 3 hours</p>
+    <p>${esc(strings.footerPrivate)}</p>
+    <p>${esc(strings.footerNotIndexed)}</p>
   </footer>
 </div>
 </body>
@@ -598,12 +762,12 @@ function pageChrome(host, token, bodyHtml) {
 
 // ── page bodies ──────────────────────────────────────────────────────────
 
-function groupByDay(rows) {
+function groupByDay(rows, locale) {
   const groups = [];
   let currentLabel = null;
   let currentItems = null;
   for (const row of rows) {
-    const label = formatDayHeader(new Date(row.created_at));
+    const label = formatDayHeader(new Date(row.created_at), locale);
     if (label !== currentLabel) {
       currentLabel = label;
       currentItems = [];
@@ -614,58 +778,102 @@ function groupByDay(rows) {
   return groups;
 }
 
-function renderIndexEntry(row, token) {
-  const time = formatTime(new Date(row.created_at));
+function renderIndexEntry(row, token, lang) {
+  const strings = STRINGS[lang];
+  const time = formatTime(new Date(row.created_at), strings.locale);
   const flag = row.has_attention
-    ? '<span class="flag">needs attention</span>'
+    ? `<span class="flag">${esc(strings.attention)}</span>`
     : "";
-  return `<a class="entry" href="/t/${encodeURIComponent(token)}/d/${esc(row.id)}">
-    <span class="meta"><span class="time">${esc(time)}</span><span class="count">${esc(row.item_count)} items · ${esc(row.section_count)} sections</span>${flag}</span>
-    <p class="excerpt"><strong>TL;DR:</strong> ${esc(row.tldr)}</p>
+
+  // HU page: prefer the translated tldr; if the app never sent one for this
+  // digest, fall back to the English tldr and mark it with a muted "EN"
+  // chip rather than silently presenting English text as if translated.
+  let excerptHtml = esc(row.tldr);
+  let langChip = "";
+  if (lang === "hu") {
+    if (row.tldr_hu) {
+      excerptHtml = esc(row.tldr_hu);
+    } else {
+      langChip = '<span class="flag flag-muted">EN</span>';
+    }
+  }
+
+  const counts = `${esc(row.item_count)} ${esc(strings.itemsWord)} · ${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
+
+  return `<a class="entry" href="${digestHref(token, lang, row.id)}">
+    <span class="meta"><span class="time">${esc(time)}</span><span class="count">${counts}</span>${flag}${langChip}</span>
+    <p class="excerpt"><strong>TL;DR:</strong> ${excerptHtml}</p>
   </a>`;
 }
 
-function renderIndexPage(rows, token, host) {
-  const groups = groupByDay(rows);
+function renderIndexPage(rows, token, host, lang) {
+  const strings = STRINGS[lang];
+  const groups = groupByDay(rows, strings.locale);
   const body =
     groups.length === 0
-      ? '<p class="stamp">No digests yet.</p>'
+      ? `<p class="stamp">${esc(strings.noDigests)}</p>`
       : groups
           .map(
             (group) => `<div class="dayhead">${esc(group.label)}</div>
-${group.items.map((row) => renderIndexEntry(row, token)).join("\n")}`,
+${group.items.map((row) => renderIndexEntry(row, token, lang)).join("\n")}`,
           )
           .join("\n");
 
-  return pageChrome(host, token, `<section>${body}</section>`);
+  return pageChrome(
+    host,
+    token,
+    lang,
+    renderLangSwitcher(token, lang, "index"),
+    `<section>${body}</section>`,
+  );
 }
 
-function renderDigestPage(digest, older, newer, token, host) {
+function renderDigestPage(digest, older, newer, token, host, lang) {
+  const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
-  const stamp = `${formatDayHeader(date)} · ${formatTime(date)} ${tzAbbr(date)} · digest #${digest.id}`;
+  const stamp = `${formatDayHeader(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · digest #${digest.id}`;
 
   const navLinks = [
-    `<a href="/t/${encodeURIComponent(token)}/">← All digests</a>`,
+    `<a href="${indexHref(token, lang)}">${esc(strings.allDigests)}</a>`,
     '<span class="spacer"></span>',
   ];
   // Hide the link entirely at each end (oldest has no older, newest has no
   // newer) rather than showing a disabled placeholder.
   if (older) {
     navLinks.push(
-      `<a href="/t/${encodeURIComponent(token)}/d/${esc(older.id)}">← ${esc(formatTime(new Date(older.created_at)))}</a>`,
+      `<a href="${digestHref(token, lang, older.id)}">← ${esc(formatTime(new Date(older.created_at), strings.locale))}</a>`,
     );
   }
   if (newer) {
     navLinks.push(
-      `<a href="/t/${encodeURIComponent(token)}/d/${esc(newer.id)}">${esc(formatTime(new Date(newer.created_at)))} →</a>`,
+      `<a href="${digestHref(token, lang, newer.id)}">${esc(formatTime(new Date(newer.created_at), strings.locale))} →</a>`,
     );
+  }
+
+  // HU page: prefer the translated body; if the app never sent one for this
+  // digest, fall back to the English body_html and say so above the article
+  // rather than silently presenting untranslated content on a HU URL.
+  let articleHtml = digest.body_html;
+  let enOnlyNoteHtml = "";
+  if (lang === "hu") {
+    if (digest.body_html_hu) {
+      articleHtml = digest.body_html_hu;
+    } else {
+      enOnlyNoteHtml = `<p class="en-only-note">${esc(strings.enOnlyNote)}</p>`;
+    }
   }
 
   const body = `<nav class="digestnav">${navLinks.join("\n")}</nav>
 <p class="stamp">${esc(stamp)}</p>
-<article class="digest">
-${digest.body_html}
+${enOnlyNoteHtml}<article class="digest">
+${articleHtml}
 </article>`;
 
-  return pageChrome(host, token, body);
+  return pageChrome(
+    host,
+    token,
+    lang,
+    renderLangSwitcher(token, lang, "digest", digest.id),
+    body,
+  );
 }
