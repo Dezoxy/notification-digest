@@ -258,7 +258,7 @@ def test_empty_subreddits_is_a_noop_no_network_at_all(monkeypatch: pytest.Monkey
     assert result.failed is False
 
 
-# --- auth back-off mid-run (401/403 after a successful verify) ---
+# --- auth/rate-limit back-off mid-run (401/403/429 after a successful verify) ---
 
 
 def test_401_mid_run_aborts_remaining_subreddits_and_marks_failed(
@@ -307,19 +307,67 @@ def test_403_mid_run_never_fetches_the_third_subreddit(monkeypatch: pytest.Monke
     assert result.failed is True
 
 
-def test_non_auth_http_error_does_not_abort_remaining_subreddits(
+def test_429_mid_run_aborts_remaining_subreddits_and_marks_failed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    earlier_post = _post(post_id="earlier1")
+    responses = {
+        _ME_URL: _me_response(),
+        _sub_url("first"): _listing([earlier_post]),
+        _sub_url("second"): _http_error(429),
+    }
+    _patch_urlopen(monkeypatch, responses)
+    _no_sleep(monkeypatch)
+
+    with caplog.at_level("WARNING"):
+        result = collect(_SESSION_COOKIE, ["first", "second", "third"], 10)
+
+    assert result.failed is True
+    # Earlier, successfully-fetched items are retained.
+    assert [item.source_id for item in result.items] == ["earlier1"]
+    assert _SESSION_COOKIE not in caplog.text
+
+
+def test_429_mid_run_never_fetches_the_third_subreddit(monkeypatch: pytest.MonkeyPatch) -> None:
+    fetched: list[str] = []
+
+    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+        url = request.full_url  # type: ignore[attr-defined]
+        if url == _ME_URL:
+            return _FakeResponse(_me_response())
+        if url == _sub_url("first"):
+            fetched.append("first")
+            return _FakeResponse(_listing([]))
+        if url == _sub_url("second"):
+            fetched.append("second")
+            raise _http_error(429)
+        fetched.append("third")
+        raise AssertionError("third subreddit must never be fetched after a 429")
+
+    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    _no_sleep(monkeypatch)
+
+    result = collect(_SESSION_COOKIE, ["first", "second", "third"], 10)
+
+    assert fetched == ["first", "second"]
+    assert result.failed is True
+
+
+def test_non_abort_http_error_does_not_abort_remaining_subreddits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 404: a renamed/banned subreddit -- a routine per-subreddit failure,
+    # not an account-risk signal, so it must not abort the run.
     good_post = _post(post_id="good1")
     responses = {
         _ME_URL: _me_response(),
-        _sub_url("ratelimited"): _http_error(429),
+        _sub_url("gonesub"): _http_error(404),
         _sub_url("goodsub"): _listing([good_post]),
     }
     _patch_urlopen(monkeypatch, responses)
     _no_sleep(monkeypatch)
 
-    result = collect(_SESSION_COOKIE, ["ratelimited", "goodsub"], 10)
+    result = collect(_SESSION_COOKIE, ["gonesub", "goodsub"], 10)
 
     assert result.failed is False
     assert [item.source_id for item in result.items] == ["good1"]
