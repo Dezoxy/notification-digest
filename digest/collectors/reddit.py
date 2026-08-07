@@ -65,10 +65,11 @@ not permanently trip the digest's failure banner every run thereafter --
 that is exactly rss.py's per-feed fault-tolerance rationale, reused here
 verbatim: one subreddit's fetch failure is logged and skipped, and
 `failed=True` is set on the overall result when EVERY configured subreddit
-failed (a total outage), OR when the session dies mid-run (see the next
-section) -- whichever comes first.
+failed (a total outage), OR when the run is aborted mid-way because the
+session died or Reddit started rate-limiting it (see the next section) --
+whichever comes first.
 
-Auth back-off mid-run (mirrors x.py's hard rule: back off, never retry-loop)
+Mid-run back-off: auth AND rate limiting (mirrors x.py's hard rule)
 ----------------------------------------------------------------------
 An HTTP 401/403 from a per-subreddit request, after the session verified
 logged-in moments earlier, means the session died DURING this run -- the
@@ -88,6 +89,18 @@ the REMAINING, not-yet-fetched subreddits are skipped. `result.failed` is
 set True in this case even though earlier subreddits may have succeeded: a
 dying session is the whole run's signal (something is wrong with the
 credential itself, not with one subreddit), regardless of partial success.
+
+An HTTP 429 gets the identical treatment, for a related but distinct
+reason: 429 is Reddit explicitly saying "slow down", and continuing to
+fetch the remaining subreddits after being told that is precisely how a
+throttled account becomes a flagged one -- the same escalation path the
+401/403 case guards against, just triggered by the server's own rate-limit
+signal instead of a dead credential. x.py takes the identical stance on its
+own rate-limit exception (`TooManyRequests`): `result.failed = True` and
+return, no retry. The accepted trade-off is plain: one throttled subreddit
+forfeits the whole window's reddit items, and that is the deliberate,
+safer side to err on for an account that can't be easily replaced. As with
+401/403, the next scheduled run (3h later) is the retry -- not this one.
 
 No cursor axis; a lookback window instead (mirrors rss.py exactly)
 ----------------------------------------------------------------------
@@ -370,9 +383,9 @@ def _fetch_subreddit_posts(session_cookie: str, subreddit: str, posts_per_sub: i
     body missing `data.children` as a list) -- deliberately unguarded here,
     matching `_verify_session`: the caller (`collect`) wraps this call in
     the try/except that counts this ONE subreddit as failed, with a special
-    case for `urllib.error.HTTPError` 401/403 (module docstring's "Auth
-    back-off mid-run" section -- a single subreddit's fetch failing on a
-    NON-auth error is routine, not the whole run's signal).
+    case for `urllib.error.HTTPError` 401/403/429 (module docstring's
+    "Mid-run back-off" section -- a single subreddit's fetch failing on a
+    NON-auth, non-rate-limit error is routine, not the whole run's signal).
     """
     url = f"{_BASE_URL}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
     request = urllib.request.Request(url, headers=_session_headers(session_cookie))
@@ -410,16 +423,22 @@ def collect(
     Each subreddit is then fetched (`_fetch_subreddit_posts`) independently,
     wrapped in its own try/except. `urllib.error.HTTPError` with
     `exc.code in (401, 403)` is handled separately from every other
-    exception: it means the session died MID-RUN (module docstring's "Auth
-    back-off mid-run" section) -- a single WARNING is logged, `result.failed`
-    is set True, and the loop `break`s immediately, never touching the
-    remaining subreddits. Any OTHER exception per subreddit (a transient
-    error, the subreddit going private/banned/renamed) is logged as a
-    WARNING (the subreddit name is owner config, not a secret) and skipped;
-    the rest proceed normally. `failed=True` is otherwise set on the result
-    only when subreddits were configured and EVERY single one of them
-    failed -- a total outage -- mirroring rss.py's own per-feed
-    fault-tolerance contract.
+    exception: it means the session died MID-RUN (module docstring's "Mid-run
+    back-off" section) -- a single WARNING is logged, `result.failed` is set
+    True, and the loop `break`s immediately, never touching the remaining
+    subreddits. `exc.code == 429` is handled the same way but logged with its
+    own distinct WARNING message: it means Reddit is actively rate-limiting
+    this session, and continuing to fetch the remaining subreddits into that
+    signal is how a throttled account becomes a flagged one (module
+    docstring's "Mid-run back-off" section) -- same abort-the-run action as
+    401/403, kept as a separate `if` clause (not merged) so the owner
+    debugging a failed run can tell which of the two happened. Any OTHER
+    exception per subreddit (a transient error, the subreddit going
+    private/banned/renamed) is logged as a WARNING (the subreddit name is
+    owner config, not a secret) and skipped; the rest proceed normally.
+    `failed=True` is otherwise set on the result only when subreddits were
+    configured and EVERY single one of them failed -- a total outage --
+    mirroring rss.py's own per-feed fault-tolerance contract.
 
     A small fixed pause (`_INTER_SUB_SLEEP_SECONDS`) is taken BEFORE each
     subreddit request except the first -- pure courtesy pacing (module
@@ -464,6 +483,13 @@ def collect(
                     "reddit session rejected mid-run (HTTP %d) at r/%s; "
                     "aborting remaining subreddits",
                     exc.code,
+                    subreddit,
+                )
+                result.failed = True
+                break
+            if exc.code == 429:
+                logger.warning(
+                    "reddit rate limited (HTTP 429) at r/%s; aborting remaining subreddits",
                     subreddit,
                 )
                 result.failed = True
