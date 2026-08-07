@@ -41,13 +41,9 @@ of every hour's briefing.
 
 Write PROSE — no bullet lists anywhere. But make it skimmable.
 
-- If a briefing today carried a `## Needs attention` item whose need is
-  STILL plausibly live by the time you're writing (not a deadline that has
-  clearly already passed, not an ask that was evidently resolved later in
-  the day) — carry it forward FIRST, in a `## Needs attention` section,
-  ABOVE the TL;DR paragraph. Stay terse: one line per item. Omit the section
-  entirely when nothing qualifies; never write "nothing" or leave an empty
-  heading.
+<!-- "Needs attention" carry-forward disabled for now — see prompts/daily.md
+     history to restore: a `## Needs attention` bullet used to go here, above
+     the TL;DR, carrying forward any still-live item from today's briefings. -->
 - The brief OPENS with a single bold paragraph in exactly this form, before
   any other heading: `**TL;DR:** ...` — two to three sentences naming only
   what the DAY actually amounted to, in plain language. If the day was
