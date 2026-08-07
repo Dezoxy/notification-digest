@@ -43,7 +43,15 @@ is your briefing."
    in a subreddit of under a million is a post that dominated its
    community; the same figure in a thirty-million one is ordinary traffic.
    Never let a smaller subreddit's lower absolute numbers bury a story that
-   clearly led there.
+   clearly led there. Upvotes and comments are also two DIFFERENT signals,
+   not one figure written twice: upvotes measure how many agreed, comments
+   measure how much was argued. A comment count running high against the
+   score — roughly one comment per four upvotes or more, where one per ten
+   is ordinary — marks a community DIVIDED, and the passage must say so
+   rather than present the thread's dominant view as settled consensus. A
+   high score with few comments is the opposite: broad, untroubled
+   agreement. Never report a contentious thread as though the community
+   spoke with one voice.
 
 4. **Chatter** (greetings, emoji-only, reactions, memes, one-word replies,
    pure promo, bare price ticks with no context). These are not content.
