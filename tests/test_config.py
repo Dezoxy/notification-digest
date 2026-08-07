@@ -414,7 +414,7 @@ def test_polymarket_swing_threshold_out_of_range_raises_config_error(monkeypatch
         Config.from_env()
 
 
-# --- REDDIT_ENABLED / REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET /
+# --- REDDIT_ENABLED / REDDIT_SESSION_COOKIE /
 #     REDDIT_SUBREDDITS / REDDIT_POSTS_PER_SUB ---
 
 
@@ -422,8 +422,7 @@ def test_reddit_defaults_when_unset(monkeypatch):
     _set_base_env(monkeypatch)
     for name in (
         "REDDIT_ENABLED",
-        "REDDIT_CLIENT_ID",
-        "REDDIT_CLIENT_SECRET",
+        "REDDIT_SESSION_COOKIE",
         "REDDIT_SUBREDDITS",
         "REDDIT_POSTS_PER_SUB",
     ):
@@ -432,39 +431,25 @@ def test_reddit_defaults_when_unset(monkeypatch):
     config = Config.from_env()
 
     assert config.reddit_enabled is False
-    assert config.reddit_client_id is None
-    assert config.reddit_client_secret is None
+    assert config.reddit_session_cookie is None
     assert config.reddit_subreddits == ()
     assert config.reddit_posts_per_sub == 10
 
 
-def test_reddit_enabled_without_client_id_raises_config_error(monkeypatch):
+def test_reddit_enabled_without_session_cookie_raises_config_error(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.delenv("REDDIT_CLIENT_ID", raising=False)
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret")
+    monkeypatch.delenv("REDDIT_SESSION_COOKIE", raising=False)
     monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
 
-    with pytest.raises(ConfigError, match="REDDIT_CLIENT_ID"):
-        Config.from_env()
-
-
-def test_reddit_enabled_without_client_secret_raises_config_error(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "id123")
-    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
-
-    with pytest.raises(ConfigError, match="REDDIT_CLIENT_SECRET"):
+    with pytest.raises(ConfigError, match="REDDIT_SESSION_COOKIE"):
         Config.from_env()
 
 
 def test_reddit_enabled_without_subreddits_raises_config_error(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "id123")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
 
     with pytest.raises(ConfigError, match="REDDIT_SUBREDDITS"):
@@ -474,15 +459,13 @@ def test_reddit_enabled_without_subreddits_raises_config_error(monkeypatch):
 def test_reddit_enabled_with_valid_config_is_parsed(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "id123")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret456")
+    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", "Futurology, LocalLLaMA,hungary")
 
     config = Config.from_env()
 
     assert config.reddit_enabled is True
-    assert config.reddit_client_id == "id123"
-    assert config.reddit_client_secret == "secret456"
+    assert config.reddit_session_cookie == "cookie-value"
     assert config.reddit_subreddits == ("Futurology", "LocalLLaMA", "hungary")
 
 
@@ -490,8 +473,7 @@ def test_reddit_enabled_with_valid_config_is_parsed(monkeypatch):
 def test_reddit_subreddits_invalid_token_raises_config_error(monkeypatch, value):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "id123")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", f"news,{value}")
 
     with pytest.raises(ConfigError, match="REDDIT_SUBREDDITS"):
@@ -501,8 +483,7 @@ def test_reddit_subreddits_invalid_token_raises_config_error(monkeypatch, value)
 def test_reddit_subreddits_blank_entries_are_dropped_not_errors(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "id123")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", "news,,")
 
     config = Config.from_env()
@@ -510,17 +491,15 @@ def test_reddit_subreddits_blank_entries_are_dropped_not_errors(monkeypatch):
     assert config.reddit_subreddits == ("news",)
 
 
-def test_reddit_client_id_and_secret_excluded_from_repr(monkeypatch):
+def test_reddit_session_cookie_excluded_from_repr(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "id123")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret456")
+    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "super-secret-cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
 
     config = Config.from_env()
 
-    assert "id123" not in repr(config)
-    assert "secret456" not in repr(config)
+    assert "super-secret-cookie-value" not in repr(config)
 
 
 def test_reddit_posts_per_sub_custom_value_is_used(monkeypatch):

@@ -183,16 +183,14 @@ class Config:
     # explicit flag is the only unambiguous way to represent "collector
     # present but off" (same rationale as polymarket_enabled's own comment).
     reddit_enabled: bool = False
-    # SECRET-ish (repr=False): the Reddit "script" app's client id, used only
-    # for the OAuth app-only client_credentials exchange (HTTP Basic auth
-    # against https://www.reddit.com/api/v1/access_token, see
-    # digest/collectors/reddit.py's module docstring) -- never logged.
-    # Required (ConfigError) when reddit_enabled is True.
-    reddit_client_id: str | None = field(default=None, repr=False)
-    # SECRET (repr=False): the app's client secret, the other half of the
-    # same Basic-auth exchange -- never logged. Required when reddit_enabled
-    # is True.
-    reddit_client_secret: str | None = field(default=None, repr=False)
+    # SECRET (repr=False): the owner's own logged-in Reddit `reddit_session`
+    # browser cookie, sent verbatim as a Cookie header by
+    # digest/collectors/reddit.py to old.reddit.com's .json endpoints (see
+    # that module's docstring for why -- Reddit's Data Team formally refused
+    # this owner's OAuth API application, so app-only OAuth is permanently
+    # dead) -- never logged. Required (ConfigError via _require_str) when
+    # reddit_enabled is True.
+    reddit_session_cookie: str | None = field(default=None, repr=False)
     # Comma-separated subreddit names WITHOUT the "r/" prefix (e.g.
     # "Futurology,LocalLLaMA,MachineLearning,news,hungary"). Required,
     # non-empty, when reddit_enabled is True -- there is no sane default
@@ -254,15 +252,13 @@ class Config:
         )
 
         reddit_enabled = _parse_bool(os.environ.get("REDDIT_ENABLED", "false"))
-        reddit_client_id: str | None = None
-        reddit_client_secret: str | None = None
+        reddit_session_cookie: str | None = None
         reddit_subreddits: tuple[str, ...] = ()
         reddit_posts_per_sub = _optional_int_in_range(
             "REDDIT_POSTS_PER_SUB", default=10, minimum=1, maximum=25
         )
         if reddit_enabled:
-            reddit_client_id = _require_str("REDDIT_CLIENT_ID")
-            reddit_client_secret = _require_str("REDDIT_CLIENT_SECRET")
+            reddit_session_cookie = _require_str("REDDIT_SESSION_COOKIE")
             reddit_subreddits = _require_subreddit_tuple("REDDIT_SUBREDDITS")
 
         email_enabled = _parse_bool(os.environ.get("EMAIL_ENABLED", "true"))
@@ -329,8 +325,7 @@ class Config:
             polymarket_top_n=polymarket_top_n,
             polymarket_swing_threshold=polymarket_swing_threshold,
             reddit_enabled=reddit_enabled,
-            reddit_client_id=reddit_client_id,
-            reddit_client_secret=reddit_client_secret,
+            reddit_session_cookie=reddit_session_cookie,
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
             email_enabled=email_enabled,
