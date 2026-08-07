@@ -890,22 +890,21 @@ def _run_reddit_collector(cfg: Config) -> CollectResult:
     in flight for an executor wrapper to protect against blocking).
 
     `reddit_collector.collect` already never raises past its own try/except
-    around the token fetch and each per-subreddit request (module
+    around the session verify and each per-subreddit request (module
     docstring's "Failure semantics"), but this call is wrapped in a
     catch-all here too as a second line of defense, mirroring every other
     collector wrapper in this module: a not-yet-anticipated bug must not
     take down the whole run (and the other collectors' already-collected
     items) before `commit_new_items` gets a chance to persist them. Only the
     exception's type name is logged -- the underlying error could otherwise
-    embed the client_id/secret from a malformed request.
+    embed the session cookie from a malformed request.
     """
     if not cfg.reddit_enabled:
         return CollectResult()
 
     try:
         return reddit_collector.collect(
-            cfg.reddit_client_id,
-            cfg.reddit_client_secret,
+            cfg.reddit_session_cookie,
             cfg.reddit_subreddits,
             cfg.reddit_posts_per_sub,
         )

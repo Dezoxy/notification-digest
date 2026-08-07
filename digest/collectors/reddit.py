@@ -1,55 +1,93 @@
-"""Reddit collector: top-of-day posts from the owner's chosen subreddits, via OAuth app-only auth.
+"""Reddit collector: top-of-day posts from the owner's chosen subreddits, via a cookie session.
 
 See CLAUDE.md and PLAN.md for the full plan. This module is synchronous
 (urllib), matching rss.py/polymarket.py -- the caller (digest/main.py) runs
 collectors sequentially, one at a time, so there is nothing else in flight
 to block on.
 
-Why OAuth app-only, not the public RSS feed (live-verified)
+Why a cookie session, not OAuth, not anonymous endpoints (live-verified)
 ----------------------------------------------------------------------
-Reddit's unauthenticated `.rss`/`.json` endpoints are throttled per-IP hard
-enough to be useless for a scheduled collector: live-verified from the
-production IP, 4 of 5 requests came back 429 even when paced. Reddit's own
-documented alternative for a script with no per-user login flow is the
-OAuth **app-only** grant: a "script"-type app's client_id+secret are
-exchanged via HTTP Basic auth at `https://www.reddit.com/api/v1/access_token`
-(`grant_type=client_credentials`) for a bearer token good for about an hour,
-which then authenticates every `https://oauth.reddit.com/...` request at up
-to 100 requests/minute -- far more headroom than this collector, run once
-every 3 hours across a handful of subreddits, could ever need.
+This collector previously authenticated via Reddit's OAuth app-only
+(`client_credentials`) grant. That path is now permanently dead: Reddit's
+Data Team formally REFUSED the owner's API access application (email dated
+2026-08-06 -- "not in compliance with Reddit's Responsible Builder Policy
+and/or lacks necessary details"), so no script-app client_id/secret this
+owner could obtain would ever be granted a token. The anonymous fallback --
+unauthenticated `.json`/`.rss` endpoints -- is also a dead end, and more
+thoroughly than mere throttling: live-verified from the production IP,
+anonymous `.json` comes back a HARD 403 regardless of request pacing, not a
+429 that gentler pacing could work around. `rss.py`'s per-host-paced RSS
+fallback (PR #33) is a genuinely different, degraded surface -- slower,
+fragile to markup changes, and carrying no score/comment-count signal at
+all -- and stays UNTOUCHED as this collector's safety net; nothing here
+changes that module.
 
-One token fetch per run (not cached across runs): this process is a fresh
-`python -m digest` invocation every time (no long-lived daemon), so there is
-nowhere to cache a ~1h token between runs anyway, and re-fetching costs one
-extra request per run against a limit measured in the hundreds.
+The replacement is the owner's own logged-in Reddit session: the browser's
+long-lived `reddit_session` cookie, sent as a bare `Cookie` header to
+`https://old.reddit.com`'s `.json` endpoints. This mirrors the ToS-risk
+posture digest/collectors/x.py already takes for X/Twitter (cookie session,
+unofficial, owner accepts the risk) -- same posture, same back-off
+semantics on an auth failure (see `collect`'s docstring), applied to a
+different site.
 
-User-Agent is mandatory, not a nicety (live-verified requirement)
+Why `old.reddit.com`, not `www.reddit.com` (live-verified)
 ----------------------------------------------------------------------
-Reddit's API rules require every application to send a unique, descriptive
-User-Agent string; generic ones (a bare library default, or something
-indistinguishable from every other client) get throttled far more
-aggressively than the documented limits, independent of the OAuth grant
-itself. `_USER_AGENT` is a module constant for exactly this reason -- it
-must stay descriptive and stable, never revert to urllib's default
-"Python-urllib/x.y" signature.
+`old.reddit.com` is the surface that still accepts a bare `reddit_session`
+cookie as full authentication for its `.json` endpoints -- the legacy
+session model this cookie was issued under. `www.reddit.com`'s current
+frontend instead expects a short-lived `token_v2` JWT (refreshed
+client-side by the React app on every page load), which a single exported
+`reddit_session` cookie value cannot substitute for. `_BASE_URL` therefore
+points at `old.reddit.com`, deliberately, not the modern domain.
 
-Failure semantics: token vs per-subreddit (mirrors telegram.py/x.py vs rss.py)
+User-Agent (unproven for a cookie session, not a live-verified requirement)
 ----------------------------------------------------------------------
-The token fetch is the single point every subsequent request depends on --
-if it fails, nothing else in this run can possibly succeed, so ANY failure
-of it sets `failed=True` for the whole run and returns immediately (no
-network calls are made at all), the same posture telegram.py/x.py take
-toward their one chat/timeline (see rss.py's own module docstring for the
-contrast this mirrors).
+Reddit's API rules mandate a descriptive User-Agent for the OAuth API;
+whether `old.reddit.com`'s cookie-session surface prefers (or requires) a
+browser-like UA instead of a descriptive one is NOT yet live-verified one
+way or the other. `_USER_AGENT` keeps the same descriptive, stable string
+this module already used for OAuth -- the honest default until a live run
+proves otherwise, at which point this comment (and the constant) should be
+revisited.
 
-Once a token is in hand, though, each subreddit is fetched independently and
-a single subreddit going private, banned, or renamed must not permanently
-trip the digest's failure banner every run thereafter -- that is exactly
-rss.py's per-feed fault-tolerance rationale, reused here verbatim: one
-subreddit's fetch failure is logged and skipped, and `failed=True` is set on
-the overall result only when EVERY configured subreddit failed (a total
-outage, or -- more likely in practice -- a token that authenticates but has
-lost all scope).
+Failure semantics: session verify vs per-subreddit (mirrors telegram.py/x.py vs rss.py)
+----------------------------------------------------------------------
+The session-verify call is the single point every subsequent request
+depends on -- if it fails, nothing else in this run can possibly succeed,
+so ANY failure of it sets `failed=True` for the whole run and returns
+immediately (no further network calls are made at all), the same posture
+telegram.py/x.py take toward their one chat/timeline (see rss.py's own
+module docstring for the contrast this mirrors).
+
+Once a session is confirmed logged in, though, each subreddit is fetched
+independently and a single subreddit going private, banned, or renamed must
+not permanently trip the digest's failure banner every run thereafter --
+that is exactly rss.py's per-feed fault-tolerance rationale, reused here
+verbatim: one subreddit's fetch failure is logged and skipped, and
+`failed=True` is set on the overall result when EVERY configured subreddit
+failed (a total outage), OR when the session dies mid-run (see the next
+section) -- whichever comes first.
+
+Auth back-off mid-run (mirrors x.py's hard rule: back off, never retry-loop)
+----------------------------------------------------------------------
+An HTTP 401/403 from a per-subreddit request, after the session verified
+logged-in moments earlier, means the session died DURING this run -- the
+owner logged out elsewhere, Reddit flagged/locked the account, or the
+cookie simply expired between the verify call and this request. This is
+exactly the scenario x.py's own docstring calls out for X: continuing to
+hammer a dead credential across the remaining subreddits is how an
+unofficial, cookie-based API gets an account flagged or locked harder, not
+just a wasted request. So a 401/403 here aborts the REST of this run
+immediately (`break`, not `continue`) -- no retry, no re-verify attempt;
+the next scheduled run (3h later) is the retry, mirroring x.py's own "next
+scheduled run is the retry" contract. Items already collected from earlier,
+successful subreddits in this same run are still returned and still
+committed (state upsert is idempotent, digest/state.py's
+`UNIQUE(source, source_id)` + `INSERT ... ON CONFLICT DO NOTHING`) -- only
+the REMAINING, not-yet-fetched subreddits are skipped. `result.failed` is
+set True in this case even though earlier subreddits may have succeeded: a
+dying session is the whole run's signal (something is wrong with the
+credential itself, not with one subreddit), regardless of partial success.
 
 No cursor axis; a lookback window instead (mirrors rss.py exactly)
 ----------------------------------------------------------------------
@@ -96,12 +134,11 @@ matter.
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import re
 import time
-import urllib.parse
+import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -114,26 +151,29 @@ from digest.state import Item
 logger = logging.getLogger(__name__)
 
 # Per-request urllib timeout, in seconds. Matches rss.py's/polymarket.py's own
-# constant of the same name/value -- a hung request (token endpoint or a
-# subreddit listing) must not wedge the whole run.
+# constant of the same name/value -- a hung request (the session-verify call
+# or a subreddit listing) must not wedge the whole run.
 _REQUEST_TIMEOUT_SECONDS = 15
 
-# Sent on every request (token exchange AND every oauth.reddit.com call).
-# Live-verified requirement, not a nicety -- see module docstring's "User-
-# Agent is mandatory" section: Reddit's API rules require a unique,
-# descriptive UA, and generic ones get throttled far harder than the
-# documented limits regardless of the OAuth grant itself.
+# Sent on every request (session verify AND every old.reddit.com call). See
+# module docstring's "User-Agent" section: unlike the OAuth API's documented
+# requirement, whether old.reddit.com's cookie-session surface prefers a
+# browser-like UA is unproven -- this descriptive, stable string is the
+# honest default pending a live-verification run.
 _USER_AGENT = "linux:notification-digest:v1 (personal digest)"
 
-_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
-_OAUTH_BASE = "https://oauth.reddit.com"
+# old.reddit.com is the surface that accepts a bare `reddit_session` cookie
+# as full authentication for its `.json` endpoints -- see module docstring's
+# "Why old.reddit.com, not www.reddit.com" section.
+_BASE_URL = "https://old.reddit.com"
 
-# Courtesy pacing between per-subreddit requests. 100 requests/minute (the
-# app-only OAuth grant's own limit) gives enormous headroom for a handful of
-# subreddits once every 3 hours -- this sleep exists purely so this
-# collector doesn't hit Reddit in a tight burst, not because the limit is
-# remotely at risk of being hit.
-_INTER_SUB_SLEEP_SECONDS = 0.5
+# Courtesy pacing between per-subreddit requests. Logged-in old.reddit.com's
+# own rate limits are undocumented/unproven for this cookie-session path
+# (unlike the now-dead OAuth grant's documented 100 req/min) -- 2s across a
+# handful of subreddits once every 3 hours is free insurance, and this
+# collector must err polite given the account-risk posture (module
+# docstring's "Auth back-off mid-run" section).
+_INTER_SUB_SLEEP_SECONDS = 2.0
 
 # Matches Reddit's own `t=day` ranking window -- see module docstring's "No
 # cursor axis" section for why this replaces a cursor entirely rather than
@@ -275,42 +315,51 @@ def _build_item(post: _ParsedPost, subreddit: str, fetched_at: str) -> Item:
     )
 
 
-def _fetch_access_token(client_id: str, client_secret: str) -> str:
-    """Exchange the app's client_id/secret for a bearer token via the client_credentials grant.
+def _session_headers(session_cookie: str) -> dict[str, str]:
+    """Build the Cookie + User-Agent headers every request in this module sends.
 
-    POSTs to `_TOKEN_URL` with HTTP Basic auth built from `client_id:client_secret`
-    (module docstring's "Why OAuth app-only" section) and body
-    `grant_type=client_credentials`. Raises on any failure (network error,
-    non-2xx status, non-JSON body, a JSON body with no usable
-    `access_token` string) -- deliberately unguarded here, matching
-    polymarket.py's `_fetch_markets`: the caller (`collect`) wraps this
-    single call in the try/except that sets `failed=True` for the whole run
-    (module docstring's "Failure semantics" -- a token failure is the whole
-    run's signal, since nothing downstream can work without one).
-
-    Neither `client_id` nor `client_secret` is ever logged by this function,
-    directly or via an exception message -- the caller only logs the
-    exception's TYPE NAME (see `collect`).
+    `session_cookie` is stored and sent EXACTLY as exported from the
+    browser -- it may contain `%`-escapes, and those are sent verbatim,
+    never re-encoded (re-encoding an already-escaped value would double-
+    escape it and break the cookie). Never logged, directly or via any
+    exception message built around it -- callers only log an exception's
+    TYPE NAME (see `_verify_session`/`collect`).
     """
-    credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
-    body = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
-    headers = {
-        "Authorization": f"Basic {credentials}",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": _USER_AGENT,
-    }
-    request = urllib.request.Request(_TOKEN_URL, data=body, headers=headers, method="POST")
+    return {"Cookie": f"reddit_session={session_cookie}", "User-Agent": _USER_AGENT}
+
+
+def _verify_session(session_cookie: str) -> str:
+    """Confirm the session cookie is logged in, returning the owner's own username.
+
+    GETs `{_BASE_URL}/api/me.json` with `_session_headers`. A logged-in
+    session returns a JSON object with `data.name` (the account's username);
+    an anonymous or dead session returns `{}`. Raises `ValueError` when
+    `data.name` is missing or blank -- deliberately unguarded otherwise
+    (network errors, non-2xx status, non-JSON body all propagate) -- this
+    plays EXACTLY the structural role the old OAuth `_fetch_access_token`
+    played: the caller (`collect`) wraps this single call in the try/except
+    that sets `failed=True` for the whole run and returns immediately with
+    zero further network calls (module docstring's "Failure semantics").
+
+    `session_cookie` is never logged by this function, directly or via an
+    exception message. The verified username IS logged, but only at debug
+    level -- it's the owner's own account name, not a secret, but no need
+    for info-level noise on every run.
+    """
+    url = f"{_BASE_URL}/api/me.json"
+    request = urllib.request.Request(url, headers=_session_headers(session_cookie))
     with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
         raw_bytes = response.read()
     data = json.loads(raw_bytes)
-    token = data.get("access_token") if isinstance(data, dict) else None
-    if not isinstance(token, str) or not token:
-        raise ValueError("reddit access_token response missing a usable access_token")
-    return token
+    name = data.get("data", {}).get("name") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name:
+        raise ValueError("reddit session cookie is not logged in")
+    logger.debug("reddit: session verified as u/%s", name)
+    return name
 
 
-def _fetch_subreddit_posts(access_token: str, subreddit: str, posts_per_sub: int) -> list[Any]:
-    """One GET to `{OAUTH_BASE}/r/{subreddit}/top`, returning the raw `Listing` children.
+def _fetch_subreddit_posts(session_cookie: str, subreddit: str, posts_per_sub: int) -> list[Any]:
+    """One GET to `{_BASE_URL}/r/{subreddit}/top`, returning the raw `Listing` children.
 
     `t=day` + `limit={posts_per_sub}` + `raw_json=1` -- see module
     docstring's "No cursor axis" section for why `t=day` (not a cursor) is
@@ -319,14 +368,14 @@ def _fetch_subreddit_posts(access_token: str, subreddit: str, posts_per_sub: int
 
     Raises on any failure (network error, non-2xx status, non-JSON body, a
     body missing `data.children` as a list) -- deliberately unguarded here,
-    matching `_fetch_access_token`: the caller (`collect`) wraps this call in
-    the try/except that counts this ONE subreddit as failed (module
-    docstring's "Failure semantics" -- a single subreddit's fetch failing is
-    routine, not the whole run's signal).
+    matching `_verify_session`: the caller (`collect`) wraps this call in
+    the try/except that counts this ONE subreddit as failed, with a special
+    case for `urllib.error.HTTPError` 401/403 (module docstring's "Auth
+    back-off mid-run" section -- a single subreddit's fetch failing on a
+    NON-auth error is routine, not the whole run's signal).
     """
-    url = f"{_OAUTH_BASE}/r/{subreddit}/top?t=day&limit={posts_per_sub}&raw_json=1"
-    headers = {"Authorization": f"Bearer {access_token}", "User-Agent": _USER_AGENT}
-    request = urllib.request.Request(url, headers=headers)
+    url = f"{_BASE_URL}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
+    request = urllib.request.Request(url, headers=_session_headers(session_cookie))
     with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
         raw_bytes = response.read()
     data = json.loads(raw_bytes)
@@ -337,33 +386,40 @@ def _fetch_subreddit_posts(access_token: str, subreddit: str, posts_per_sub: int
 
 
 def collect(
-    client_id: str,
-    client_secret: str,
+    session_cookie: str,
     subreddits: Sequence[str],
     posts_per_sub: int,
 ) -> CollectResult:
     """Fetch today's top posts from every configured subreddit.
 
     Empty `subreddits` -> a fresh, unfailed `CollectResult()` with no network
-    calls at all (not even the token exchange) -- mirrors rss.py's own
+    calls at all (not even the session verify) -- mirrors rss.py's own
     `collect(feed_urls=())` no-op, and covers the same "collector wired up
     but nothing configured yet" shape digest/config.py's validation should
     already prevent once `REDDIT_ENABLED=true`, kept here anyway so this
     function's own contract stays total.
 
-    One token fetch (`_fetch_access_token`) up front. ANY failure of it sets
+    One session verify (`_verify_session`) up front. ANY failure of it sets
     `failed=True` and returns immediately with no items -- see module
-    docstring's "Failure semantics": every subsequent request depends on
-    this token, so its failure is the whole run's signal, exactly like
-    telegram.py's single session or x.py's single timeline.
+    docstring's "Failure semantics": every subsequent request depends on a
+    confirmed logged-in session, so its failure is the whole run's signal,
+    exactly like telegram.py's single session or x.py's single timeline.
+    Only the exception's TYPE NAME is logged, never the cookie or any
+    exception message that might embed it.
 
     Each subreddit is then fetched (`_fetch_subreddit_posts`) independently,
-    wrapped in its own try/except -- one subreddit failing (private, banned,
-    renamed, a transient error) is logged as a WARNING (the subreddit name
-    is owner config, not a secret) and skipped; the rest proceed normally.
-    `failed=True` is set on the result ONLY when subreddits were configured
-    and EVERY single one of them failed -- a total outage -- mirroring
-    rss.py's own per-feed fault-tolerance contract exactly.
+    wrapped in its own try/except. `urllib.error.HTTPError` with
+    `exc.code in (401, 403)` is handled separately from every other
+    exception: it means the session died MID-RUN (module docstring's "Auth
+    back-off mid-run" section) -- a single WARNING is logged, `result.failed`
+    is set True, and the loop `break`s immediately, never touching the
+    remaining subreddits. Any OTHER exception per subreddit (a transient
+    error, the subreddit going private/banned/renamed) is logged as a
+    WARNING (the subreddit name is owner config, not a secret) and skipped;
+    the rest proceed normally. `failed=True` is otherwise set on the result
+    only when subreddits were configured and EVERY single one of them
+    failed -- a total outage -- mirroring rss.py's own per-feed
+    fault-tolerance contract.
 
     A small fixed pause (`_INTER_SUB_SLEEP_SECONDS`) is taken BEFORE each
     subreddit request except the first -- pure courtesy pacing (module
@@ -386,9 +442,9 @@ def collect(
         return result
 
     try:
-        access_token = _fetch_access_token(client_id, client_secret)
+        _verify_session(session_cookie)
     except Exception as exc:
-        logger.warning("reddit token fetch failed: %s", type(exc).__name__)
+        logger.warning("reddit session verify failed: %s", type(exc).__name__)
         return CollectResult(failed=True)
 
     fetched_at = datetime.now(UTC).isoformat()
@@ -401,7 +457,21 @@ def collect(
             time.sleep(_INTER_SUB_SLEEP_SECONDS)
 
         try:
-            children = _fetch_subreddit_posts(access_token, subreddit, posts_per_sub)
+            children = _fetch_subreddit_posts(session_cookie, subreddit, posts_per_sub)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                logger.warning(
+                    "reddit session rejected mid-run (HTTP %d) at r/%s; "
+                    "aborting remaining subreddits",
+                    exc.code,
+                    subreddit,
+                )
+                result.failed = True
+                break
+            logger.warning(
+                "reddit subreddit fetch failed: r/%s (%s)", subreddit, type(exc).__name__
+            )
+            continue
         except Exception as exc:
             logger.warning(
                 "reddit subreddit fetch failed: r/%s (%s)", subreddit, type(exc).__name__
