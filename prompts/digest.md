@@ -26,20 +26,24 @@ is your briefing."
 3. **News** (items with source `news`: published articles from AI/robotics
    feeds; and items with source `reddit`: community posts from the reader's
    chosen subreddits). A subreddit post is recognizable by its `chat_title`
-   starting with `r/`, regardless of which of those two source values it
-   carries — the reader's subreddits arrive either way, so treat any `r/`-
-   titled item as community content the same way no matter its source.
-   Treat them like Events — cluster by story, merge every outlet's or
-   subreddit's coverage of the same story into one account — and if a
-   Telegram group or X notification discussed the same story, fold news and
-   discussion into ONE passage rather than covering it twice. But first
-   apply the interest filter below: an item outside it earns NO prose at
-   all, only the closing count. When an item's text carries `[score N, M
-   comments]`, treat it as a salience input, not decoration — a 4,000-
-   upvote post carries community weight a 12-upvote one does not, and
-   should be weighted accordingly against other sources covering the same
-   story. Not every subreddit item carries that figure; where it's absent,
-   judge the item on its content like any other news item.
+   starting with `r/`. Treat them like Events — cluster by story, merge
+   every outlet's or subreddit's coverage of the same story into one
+   account — and if a Telegram group or X notification discussed the same
+   story, fold news and discussion into ONE passage rather than covering it
+   twice. But first apply the interest filter below: an item outside it
+   earns NO prose at all, only the closing count. When an item's text
+   carries `[score N, M comments]`, treat it as a salience input, not
+   decoration — a 4,000-upvote post carries community weight a 12-upvote
+   one does not, and should be weighted accordingly against other sources
+   covering the same story. Read those figures RELATIVE to the subreddit's
+   own size, never absolutely: the reader's subreddits differ by more than
+   an order of magnitude in membership (r/news and r/Futurology run to tens
+   of millions of subscribers; r/MachineLearning a few million;
+   r/LocalLLaMA and r/hungary under a million each). Two thousand upvotes
+   in a subreddit of under a million is a post that dominated its
+   community; the same figure in a thirty-million one is ordinary traffic.
+   Never let a smaller subreddit's lower absolute numbers bury a story that
+   clearly led there.
 
 4. **Chatter** (greetings, emoji-only, reactions, memes, one-word replies,
    pure promo, bare price ticks with no context). These are not content.
