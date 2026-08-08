@@ -158,6 +158,24 @@ def test_x_enabled_true_with_only_inline_cookies_is_ok(monkeypatch):
     assert config.x_cookies == '{"ct0": "abc", "auth_token": "def"}'
 
 
+def test_legacy_secrets_excluded_from_repr(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TG_SESSION", "super-secret-tg-session")
+    monkeypatch.setenv("TG_API_HASH", "super-secret-tg-api-hash")
+    monkeypatch.setenv("SMTP_PASSWORD", "super-secret-smtp-password")
+    monkeypatch.setenv("X_ENABLED", "true")
+    monkeypatch.delenv("X_COOKIES_PATH", raising=False)
+    monkeypatch.setenv("X_COOKIES", "super-secret-x-cookies")
+
+    config = Config.from_env()
+
+    text = repr(config)
+    assert "super-secret-tg-session" not in text
+    assert "super-secret-tg-api-hash" not in text
+    assert "super-secret-smtp-password" not in text
+    assert "super-secret-x-cookies" not in text
+
+
 # --- CLAUDE_EFFORT ---
 
 

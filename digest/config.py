@@ -48,20 +48,20 @@ _SUBREDDIT_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 @dataclass(frozen=True)
 class Config:
     tg_api_id: int
-    tg_api_hash: str
-    tg_session: str
+    tg_api_hash: str = field(repr=False)
+    tg_session: str = field(repr=False)
     tg_chat_allowlist: tuple[int, ...]
     smtp_host: str
     smtp_port: int
     smtp_user: str
-    smtp_password: str
+    smtp_password: str = field(repr=False)
     digest_from: str
     digest_to: str
     digest_from_name: str = "Digest"
     state_db_path: str = "./state.db"
     x_enabled: bool = False
     x_cookies_path: str | None = None
-    x_cookies: str | None = None
+    x_cookies: str | None = field(default=None, repr=False)
     anthropic_model: str = "claude-opus-5"
     archive_dir: str = "./archive"
     claude_timeout_seconds: int = 300
