@@ -1,6 +1,6 @@
 """Two secondary delivery channels: site publish (Cloudflare Worker PUT) and Telegram TL;DR.
 
-See CLAUDE.md and digest/main.py's `_deliver_channels` for how these fit into
+See CLAUDE.md and digest/deliver.py's `deliver_channels` for how these fit into
 the multi-channel delivery refactor. Kept as one small module (rather than
 two) because both channels are thin, stdlib-urllib HTTP calls sharing the
 same markdown-derived summary helpers (`extract_tldr`, `count_sections`,
@@ -10,7 +10,7 @@ import between two otherwise-parallel modules, for no real benefit at this
 size.
 
 Both channels raise on failure and never retry internally -- digest/main.py's
-`_deliver_channels` is the retry boundary (each channel's own per-digest
+`deliver_channels` is the retry boundary (each channel's own per-digest
 sent flag drives the next run's retry, see digest/state.py's
 get_pending_digests), matching the "gentleness" posture the rest of this
 codebase's collectors already use for hitting external services (one
@@ -282,7 +282,7 @@ def publish_to_site(
 
     `body_html` is the caller's already-rendered, already-sanitized digest
     HTML (digest/emailer.py's `render_body_html`, rendered once by
-    digest/main.py's `_deliver_channels` and handed to both the email and
+    digest/deliver.py's `deliver_channels` and handed to both the email and
     site channels) -- this function does no markdown rendering or
     sanitization of its own, it only ships what it's given. `item_count`
     comes from the caller (the `digests` row already carries it; there is
@@ -316,14 +316,14 @@ def publish_to_site(
     daily brief distinctly on the site (a separate Worker change handles the
     actual display; this function only ever needs to forward the field).
     Threaded from the digest row by the caller on both the fresh-digest and
-    pending-retry delivery paths (digest/main.py's `_deliver_site`), so a
+    pending-retry delivery paths (digest/deliver.py's `_deliver_site`), so a
     daily brief is labeled correctly however many runs it takes to actually
     publish.
 
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
-    precedent: the caller (`_deliver_channels`) is the layer that catches,
+    precedent: the caller (`deliver_channels`) is the layer that catches,
     logs (type name only), and marks this channel's own retry state, not
     this function.
 

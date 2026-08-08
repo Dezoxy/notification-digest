@@ -486,7 +486,7 @@ def localize_tldr_label_hu(sanitized_html: str) -> str:
     Callers must call this ONLY for the Hungarian body_html_hu, never for
     the English body_html -- the English site page, the email, and the
     Telegram TL;DR message all keep the literal English "TL;DR" label/marker
-    untouched (see digest/main.py's `_deliver_site` for the one call site,
+    untouched (see digest/deliver.py's `_deliver_site` for the one call site,
     and digest/publish.py's `send_telegram_tldr`, which reads `extract_tldr`
     off the ENGLISH `body_md` regardless of whether a Hungarian translation
     exists for this digest at all).
@@ -620,7 +620,7 @@ def render_body_html(body_md: str, allowed_urls: Collection[str]) -> str:
     This is the shared security-and-styling pipeline both of this
     function's callers need: `render_html` below wraps this output in
     `_HTML_TEMPLATE` (the masthead + `<html>`/`<style>` shell) for the email
-    channel, and digest/main.py's `_deliver_channels` calls this directly to
+    channel, and digest/deliver.py's `deliver_channels` calls this directly to
     get the identical sanitized HTML for the site channel's `body_html`
     field (digest/publish.py's `publish_to_site`) -- factored out
     specifically so the escape/markdown/nh3/anchor-provenance/cosmetic
@@ -721,7 +721,7 @@ def render_html(body_md: str, allowed_urls: Collection[str], generated_at_label:
     string for the masthead timestamp (e.g. "Thu, Jul 31 · 18:07"). This
     function does no timezone conversion of its own -- per CLAUDE.md,
     storage stays UTC and only render/email time converts, and the actual
-    conversion happens in the caller (digest/main.py's `_deliver_email`),
+    conversion happens in the caller (digest/deliver.py's `_deliver_email`),
     which is what has access to the run's local clock in the first place.
     """
     sanitized = render_body_html(body_md, allowed_urls)

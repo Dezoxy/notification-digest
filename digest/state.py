@@ -1084,7 +1084,7 @@ def get_pending_digests(
 
     Replaces the old single-channel `get_pending_digest` (kept below as a
     thin backward-compatible wrapper) now that delivery has three
-    independent channels (digest/main.py's `_deliver_channels`): email
+    independent channels (digest/deliver.py's `deliver_channels`): email
     (`email_sent`), site (`site_published`), and Telegram (`telegram_sent`).
     A digest is "pending" here iff at least one of its ENABLED channels'
     flags is still 0 -- a DISABLED channel's flag is ignored entirely, both
@@ -1099,14 +1099,14 @@ def get_pending_digests(
     Each returned tuple is `(digest_id, body_md, done, kind)`, where `done`
     is a `{"email": bool, "site": bool, "telegram": bool}` map of the
     digest's ACTUAL stored flags (not filtered by which channels are
-    enabled) -- `_deliver_channels` needs the raw per-channel completion
+    enabled) -- `deliver_channels` needs the raw per-channel completion
     state to know which of the enabled-and-incomplete channels to attempt,
     and passing the unfiltered map (rather than pre-masking it here) keeps
     this function a pure read of stored state, with the enabled/disabled
     policy decision left entirely to the caller. `kind` ("window" or
     "daily") is the digest's own stored kind -- the retry path needs it to
     pick the right Telegram thread for a pending "daily" row (see
-    digest/main.py's `_deliver_telegram`), the same way the fresh-digest
+    digest/deliver.py's `_deliver_telegram`), the same way the fresh-digest
     path already knows its own kind at creation time.
 
     Ordered oldest first (`ORDER BY id ASC`) -- unlike the old
