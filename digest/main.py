@@ -7,6 +7,7 @@ Phase 2: Telegram collection + state persistence, then summarization
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 import sys
@@ -494,7 +495,37 @@ async def _run(cfg: Config) -> bool:
         ]
 
         delivered = _deliver(conn, cfg, failed_sources)
-        return delivered and not failed_sources
+        ok = delivered and not failed_sources
+
+        # Exit code stays the sole alert trigger (see main()'s sys.exit(0 if
+        # ok else 1)); this line exists purely so a Loki query can see WHICH
+        # leg of a window run failed -- a specific collector, delivery, or
+        # both -- without a log dive across each collector's own lines above.
+        collectors = {"telegram": "failed" if tg_result.failed else "ok"}
+        if cfg.x_enabled:
+            collectors["x"] = "failed" if x_result.failed else "ok"
+        if cfg.news_feeds:
+            collectors["news"] = "failed" if news_result.failed else "ok"
+        if cfg.polymarket_enabled:
+            collectors["polymarket"] = "failed" if polymarket_result.failed else "ok"
+        if cfg.reddit_enabled:
+            collectors["reddit"] = "failed" if reddit_result.failed else "ok"
+        logger.info(
+            "run_summary %s",
+            json.dumps(
+                {
+                    "mode": "window",
+                    "collectors": collectors,
+                    "items_collected": len(items),
+                    "items_inserted": inserted,
+                    "delivered": delivered,
+                    "ok": ok,
+                },
+                sort_keys=True,
+            ),
+        )
+
+        return ok
     finally:
         conn.close()
 
@@ -579,6 +610,23 @@ def run_daily(cfg: Config) -> bool:
         rows = get_window_digests_since(conn, since.isoformat())
         if not rows:
             logger.info("no window digests in the last 24 hours, nothing to brief today")
+            # Exit code stays the sole alert trigger; this line lets a Loki
+            # query see this was an empty-day no-op (source_digests: 0)
+            # rather than a failed daily brief. Nothing was freshly
+            # delivered this run -- both fields fall back to the pending
+            # pass's own result, matching `delivered`/`ok`'s meaning below.
+            logger.info(
+                "run_summary %s",
+                json.dumps(
+                    {
+                        "mode": "daily",
+                        "source_digests": 0,
+                        "delivered": all_ok,
+                        "ok": all_ok,
+                    },
+                    sort_keys=True,
+                ),
+            )
             return all_ok
 
         allowed_urls: set[str] = set()
@@ -622,7 +670,25 @@ def run_daily(cfg: Config) -> bool:
             conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
             kind=kind,
         )
-        return all_ok and ok
+        result = all_ok and ok
+
+        # Exit code stays the sole alert trigger; this line is for Loki
+        # queries to see WHICH leg failed -- the pending-retry pass vs this
+        # run's own fresh brief -- without a log dive.
+        logger.info(
+            "run_summary %s",
+            json.dumps(
+                {
+                    "mode": "daily",
+                    "source_digests": len(rows),
+                    "delivered": ok,
+                    "ok": result,
+                },
+                sort_keys=True,
+            ),
+        )
+
+        return result
     finally:
         conn.close()
 

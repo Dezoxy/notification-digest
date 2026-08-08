@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -297,6 +298,35 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert sent["generated_at_label"] != ""
     assert get_pending_digest(conn) is None
     assert archived["id"] == 1
+
+
+def test_deliver_logs_digest_delivery_line_matching_success_path(conn, monkeypatch, caplog):
+    # All three channels enabled and succeeding for a freshly summarized
+    # digest: the digest_delivery Loki line (digest/deliver.py's
+    # deliver_channels) must report every channel as "sent" -- mirrors
+    # test_deliver_success_path_creates_digest_sends_marks_sent_and_archives's
+    # own setup, plus the site/telegram channels turned on via
+    # _multichannel_cfg so all three statuses are exercised at once.
+    commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
+
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _multichannel_cfg()
+    with caplog.at_level("INFO", logger=deliver_mod.logger.name):
+        ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+
+    line = next(r.message for r in caplog.records if r.message.startswith("digest_delivery "))
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["kind"] == "window"
+    assert payload["email"] == "sent"
+    assert payload["site"] == "sent"
+    assert payload["telegram"] == "sent"
 
 
 def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypatch):
@@ -951,7 +981,7 @@ def test_deliver_channels_email_failure_does_not_block_site_or_telegram(conn, mo
     assert row == (0, 1, 1)
 
 
-def test_deliver_channels_site_failure_skips_telegram_this_run(conn, monkeypatch):
+def test_deliver_channels_site_failure_skips_telegram_this_run(conn, monkeypatch, caplog):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
 
@@ -964,16 +994,17 @@ def test_deliver_channels_site_failure_skips_telegram_this_run(conn, monkeypatch
         deliver_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
     )
 
-    ok = deliver_channels(
-        conn,
-        _multichannel_cfg(),
-        digest_id,
-        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
-        1,
-        "2026-07-29T10:00:00+00:00",
-        _NO_CHANNELS_DONE,
-        _fresh_telegram_state(),
-    )
+    with caplog.at_level("INFO", logger=deliver_mod.logger.name):
+        ok = deliver_channels(
+            conn,
+            _multichannel_cfg(),
+            digest_id,
+            "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+            1,
+            "2026-07-29T10:00:00+00:00",
+            _NO_CHANNELS_DONE,
+            _fresh_telegram_state(),
+        )
 
     assert ok is False
     assert telegram_calls == []  # never attempted -- site publish isn't done yet
@@ -982,6 +1013,15 @@ def test_deliver_channels_site_failure_skips_telegram_this_run(conn, monkeypatch
         (digest_id,),
     ).fetchone()
     assert row == (1, 0, 0)
+
+    # digest_delivery Loki line: telegram must read "skipped" (attempted
+    # nothing, distinct from "failed") since it's the site publish that
+    # actually failed here.
+    line = next(r.message for r in caplog.records if r.message.startswith("digest_delivery "))
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["email"] == "sent"
+    assert payload["site"] == "failed"
+    assert payload["telegram"] == "skipped"
 
 
 def test_deliver_channels_second_run_only_retries_the_failed_channel(conn, monkeypatch):
@@ -1377,6 +1417,60 @@ def test_run_x_disabled_never_calls_x_collector(monkeypatch, tmp_path):
     ok = asyncio.run(main_mod._run(cfg))
 
     assert ok is True
+
+
+def test_run_logs_run_summary_line_with_exactly_the_enabled_collectors(
+    monkeypatch, tmp_path, caplog
+):
+    # Telegram is always enabled; X is turned on here via x_enabled=True.
+    # news/polymarket/reddit stay off (plain _cfg() defaults), so the
+    # run_summary line's "collectors" dict must contain exactly telegram+x,
+    # not every collector this module knows how to run. Reuses this test
+    # file's own end-to-end _run() wiring pattern (see the test right below,
+    # which this one is placed ahead of).
+    cfg = replace(
+        _cfg(),
+        state_db_path=str(tmp_path / "state.db"),
+        x_enabled=True,
+        x_cookies_path="/tmp/x-cookies.json",
+    )
+
+    tg_item = _item("1")
+    x_item = Item(
+        source="x",
+        source_id="999",
+        chat_id=None,
+        author="bob",
+        text="hey",
+        url="https://x.com/bob/status/999",
+        fetched_at="2026-07-29T10:00:00+00:00",
+    )
+
+    _patch_telegram_client(
+        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
+    )
+    _patch_x_client(
+        monkeypatch, CollectResult(items=[x_item], cursor_updates={("x", "notifications"): "999"})
+    )
+
+    monkeypatch.setattr(
+        main_mod, "commit_new_items", lambda conn, items, cursor_updates: len(items)
+    )
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    with caplog.at_level("INFO", logger=main_mod.logger.name):
+        ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+
+    line = next(r.message for r in caplog.records if r.message.startswith("run_summary "))
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["mode"] == "window"
+    assert payload["collectors"] == {"telegram": "ok", "x": "ok"}
+    assert payload["items_collected"] == 2
+    assert payload["items_inserted"] == 2
+    assert payload["delivered"] is True
+    assert payload["ok"] is True
 
 
 def test_run_merges_telegram_and_x_items_into_one_commit(monkeypatch, tmp_path):
@@ -2079,7 +2173,7 @@ def _window_digest(conn, body_md: str, item_count: int, created_at: str) -> int:
     return digest_id
 
 
-def test_run_daily_empty_window_is_a_no_op_returns_true(monkeypatch, tmp_path):
+def test_run_daily_empty_window_is_a_no_op_returns_true(monkeypatch, tmp_path, caplog):
     def boom(*args, **kwargs):
         raise AssertionError("must not be called when there are no window digests to brief")
 
@@ -2093,9 +2187,20 @@ def test_run_daily_empty_window_is_a_no_op_returns_true(monkeypatch, tmp_path):
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", boom)
     monkeypatch.setattr(main_mod, "archive", boom)
 
-    ok = run_daily(cfg)
+    with caplog.at_level("INFO", logger=main_mod.logger.name):
+        ok = run_daily(cfg)
 
     assert ok is True
+
+    # run_summary must still fire on this early-return, empty-day path, with
+    # source_digests: 0 -- Loki's only way to tell "empty day" apart from a
+    # daily run that actually failed further along.
+    line = next(r.message for r in caplog.records if r.message.startswith("run_summary "))
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["mode"] == "daily"
+    assert payload["source_digests"] == 0
+    assert payload["delivered"] is True
+    assert payload["ok"] is True
 
 
 def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatch, tmp_path):
