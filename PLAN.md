@@ -1,5 +1,7 @@
 # digest — Implementation Plan
 
+*This document was refreshed 2026-08-08 to match the system as built (see §10); §§5–9 keep their original narrative where still accurate.*
+
 ## 1. Goal & constraints
 
 - Personal notification-digest service: scrape own Telegram group notifications and own X/Twitter notifications, summarize new items every 3 hours with Claude, email an HTML digest.
@@ -12,50 +14,71 @@
 ## 2. Architecture
 
 ```
-                        systemd timer (OnCalendar=*/3h, RandomizedDelaySec=600)
-                                          │
+     systemd timer (OnCalendar=*/3h)          systemd timer (OnCalendar=daily)
+     `docker compose run --rm digest`         `docker compose run --rm digest daily`
+     window mode                              daily mode
+                    │                                       │
+                    └────────────────────┬──────────────────┘
                                           ▼
-                         docker compose run --rm digest
-                                          │
-                    ┌─────────────────────┴─────────────────────┐
-                    │                 main.py                    │
-                    │  (orchestrates one run, exit code = health) │
-                    └─────────┬───────────────────────┬──────────┘
-                               │                       │
-                 ┌─────────────▼───────────┐ ┌──────────▼─────────────┐
-                 │ collectors/telegram.py  │ │   collectors/x.py       │
-                 │ Telethon, StringSession │ │ twikit, cookie session  │
-                 │ pulls since last cursor │ │ pulls since last cursor │
-                 └─────────────┬───────────┘ └──────────┬─────────────┘
-                               │                       │
-                               ▼                       ▼
-                         ┌─────────────────────────────────┐
-                         │   SQLite: /srv/appdata/digest/   │
-                         │           state.db               │
-                         │   items, digests, cursors tables  │
-                         └─────────────────┬─────────────────┘
-                                            │ new items since last digest
-                                            ▼
-                                  ┌───────────────────┐
-                                  │  summarize.py      │
-                                  │  claude -p (Opus)  │
-                                  │  prompts/digest.md │
-                                  └─────────┬───────────┘
-                                            │ markdown (3 sections)
-                                            ▼
-                                  ┌───────────────────┐
-                                  │  emailer.py         │
-                                  │  markdown → HTML    │
-                                  │  smtplib send        │
-                                  │  archive to disk      │
-                                  └─────────┬───────────┘
-                                            │
-                              ┌─────────────┴─────────────┐
-                              ▼                            ▼
-                        recipient inbox         /srv/appdata/digest/archive/
+                           ┌───────────────────────────┐
+                           │        digest/main.py       │
+                           │ orchestrates one run,        │
+                           │ exit code = health signal    │
+                           └───────────────┬───────────────┘
+                                           │
+                     window mode only:     │
+                                           ▼
+                       ┌─────────────────────────────────┐
+                       │ 5 collectors, run sequentially,   │
+                       │ each isolated + failure-flagged:  │
+                       │  collectors/telegram.py (Telethon)│
+                       │  collectors/x.py (twifork, X_ENABLED)
+                       │  collectors/rss.py ("news" feeds) │
+                       │  collectors/polymarket.py (swings)│
+                       │  collectors/reddit.py (top-of-day)│
+                       └────────────────┬───────────────────┘
+                                        ▼
+                       ┌─────────────────────────────────┐
+                       │   SQLite: /srv/appdata/digest/    │
+                       │           state.db                │
+                       │  items, digests, cursors,         │
+                       │  polymarket_probs (PRAGMA          │
+                       │  user_version schema versioning)  │
+                       └────────────────┬───────────────────┘
+                        window mode: unsummarized items
+                        daily mode: today's window digests
+                        (get_window_digests_since — no
+                        collectors touched)
+                                        ▼
+                       ┌─────────────────────────────────┐
+                       │ summarize.py (window) /            │
+                       │ daily.py (daily)                   │
+                       │ claude -p, RECENT_COVERAGE          │
+                       │ continuity, link allowlist          │
+                       └────────────────┬───────────────────┘
+                                        │ markdown
+                                        ▼
+                       ┌─────────────────────────────────┐
+                       │ translate.py (optional,             │
+                       │ TRANSLATE_HU_ENABLED)                │
+                       │ Hungarian, soft-failing,             │
+                       │ stored on the digest row             │
+                       └────────────────┬───────────────────┘
+                                        ▼
+                       ┌───────────────────────────────────────┐
+                       │ main.py: create_digest + archive, then  │
+                       │ deliver.py fans out to 3 channels:      │
+                       │  email    -- emailer.py / SMTP          │
+                       │  site     -- publish.py -> ingest       │
+                       │  telegram -- publish.py bot sendMessage │
+                       │   (site-before-telegram ordering; 12h   │
+                       │   freshness guard + per-run 429 breaker,│
+                       │   docs/incidents/2026-08-06-telegram-   │
+                       │   flood.md)                             │
+                       └───────────────────────────────────────┘
 ```
 
-One run = one process, one exit code. `main.py` runs both collectors (failures isolated per-collector), persists new items and cursors to SQLite, pulls the unsummarized set, calls `claude -p` once with the fixed prompt template, converts the markdown result to HTML, sends it via SMTP, and archives the markdown. The container has no long-running process and no exposed ports — all scheduling, retry visibility, and alerting live in systemd/journal/Loki on the host, not in the app.
+One run = one process, one exit code, in either mode. In **window mode**, `main.py` runs all five collectors sequentially (failures isolated per-collector — one bad collector never suppresses another's items or the digest itself), commits new items and advances cursors (plus Polymarket's anchor table) in one SQLite transaction, retries any digest still pending on a channel from a previous run, then — if there are unsummarized items — calls `claude -p` once via `summarize.py`, optionally translates via `translate.py`, durably records and disk-archives the digest, and hands it to `deliver.py` for channel fan-out. In **daily mode** (`python -m digest daily`, a separate systemd timer), `main.py` skips collection entirely, retries pending digests, reads back the last 24h of window digests, and calls `daily.py` instead of `summarize.py` to synthesize one `kind='daily'` digest through the identical delivery path. Both modes end by logging one structured JSON `run_summary` line (mode, per-collector or per-source-digest status, item counts, `delivered`/`ok`), and `deliver.py` logs one `digest_delivery` line per digest handled (per-channel outcome) — both are for Loki queries, not the alert signal itself: the process exit code (0/1) remains the only thing systemd/the Grafana alert acts on. The container has no long-running process and no exposed ports — all scheduling, retry visibility, and alerting live in systemd/journal/Loki on the host, not in the app.
 
 ## 3. Repo layout
 
@@ -63,30 +86,62 @@ One run = one process, one exit code. `main.py` runs both collectors (failures i
 x_and_telegram-scrape/
 ├── .github/
 │   └── workflows/
-│       └── release.yml         # build + push digest image to GHCR on git tag
+│       ├── release.yml           # build + push digest image to GHCR on git tag
+│       └── pr-summary.yml        # post-merge PR summary -> docs/pr-summaries/pr-<n>.md
+├── .githooks/
+│   └── pre-push                  # blocks direct pushes to main (ALLOW_MAIN_PUSH=1 for bootstrap)
 ├── digest/
 │   ├── __init__.py
-│   ├── main.py              # entrypoint: orchestrates one run, sets process exit code
-│   ├── config.py             # loads/validates env vars into a typed Config object
-│   ├── state.py               # SQLite access: schema init, item upsert, cursor read/write, digest bookkeeping
-│   ├── collectors/
-│   │   ├── __init__.py
-│   │   ├── telegram.py        # Telethon collector: fetch new messages per allowlisted chat
-│   │   └── x.py                # twikit collector: fetch new notifications, feature-flagged
-│   ├── summarize.py           # builds JSON payload from items, invokes `claude -p`, returns markdown
-│   └── emailer.py             # markdown→HTML render, smtplib send, archive-to-disk
+│   ├── __main__.py               # `python -m digest [daily]` entrypoint, calls main.main()
+│   ├── main.py                   # orchestrates one run (window or daily mode), sets exit code
+│   ├── config.py                 # loads/validates every env var into a typed Config object
+│   ├── state.py                  # SQLite: schema + migrations, item/cursor/digest persistence, prunes
+│   ├── deliver.py                # per-channel senders, pending-digest retry, Telegram 429 breaker
+│   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation
+│   ├── daily.py                  # daily-brief prompt build + `claude -p`, synthesizes window digests
+│   ├── translate.py              # optional Hungarian translation of a digest, soft-failing
+│   ├── emailer.py                # markdown→HTML render, smtplib send, archive-to-disk
+│   ├── publish.py                # site ingest PUT + Telegram Bot API sendMessage
+│   └── collectors/
+│       ├── __init__.py
+│       ├── base.py               # shared CollectResult type every collector returns
+│       ├── telegram.py           # Telethon collector: fetch new messages per allowlisted chat
+│       ├── x.py                  # twifork (twikit fork) collector: notifications, X_ENABLED-gated
+│       ├── rss.py                # RSS/Atom "news" feed collector, no cursor axis
+│       ├── polymarket.py         # Polymarket swing-detection collector, own polymarket_probs state
+│       └── reddit.py             # Reddit top-of-day collector, cookie session
 ├── prompts/
-│   └── digest.md              # fixed prompt template (prose BRIEFING output contract, §5)
+│   ├── digest.md                 # window-digest prompt template (BRIEFING output contract, §5)
+│   ├── daily.md                  # daily-brief synthesis prompt template
+│   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
-│   └── telegram_login.py      # one-time interactive Telethon login → prints StringSession for Key Vault
+│   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
+│   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
+│   ├── backfill_translate_hu.py  # one-shot: translate historical digests to Hungarian
+│   ├── pr_summary.py             # post-merge PR summary generator (also run by CI)
+│   └── fetch-pr-review-threads.py # unresolved Codex PR review-thread watcher
 ├── tests/
-│   ├── test_state.py           # SQLite idempotency, cursor advance, digest bookkeeping
-│   ├── test_collectors.py      # collector output shape, allowlist filtering (mocked clients)
-│   └── test_summarize.py       # prompt payload construction, markdown passthrough (mocked claude CLI)
-├── Dockerfile                  # slim Python 3.12 image, runs `python -m digest.main`
-├── compose.yml                 # local dev: one-shot `digest` service + env file, no host deps
-├── pyproject.toml              # uv-managed, Python 3.12, deps: telethon, twikit, markdown, python-dotenv
-└── .env.example                 # documents every env var from §4, no real values
+│   ├── test_collectors.py         # Telegram collector: output shape, allowlist filtering (mocked client)
+│   ├── test_config.py             # Config.from_env: every var, every error path
+│   ├── test_daily.py              # daily.py: prompt build + summarize_daily (mocked claude CLI)
+│   ├── test_emailer.py            # HTML render, SMTP send, archive-to-disk (mocked)
+│   ├── test_main.py               # main.py orchestration, both run modes (mocked collectors/channels)
+│   ├── test_polymarket_collector.py # swing detection, the anchor rule (mocked urllib)
+│   ├── test_publish.py            # site/Telegram channel HTTP calls (mocked urllib)
+│   ├── test_reddit_collector.py   # session verify, per-subreddit fetch, back-off (mocked urllib)
+│   ├── test_rss_collector.py      # lookback window, per-feed fault tolerance (mocked urllib)
+│   ├── test_state.py              # SQLite idempotency, schema migrations, prunes
+│   ├── test_summarize.py          # prompt build, validate_output, link allowlist (mocked claude CLI)
+│   ├── test_translate.py          # soft-failing translation, fallback model (mocked claude CLI)
+│   └── test_x_collector.py        # notifications parsing, per-account post cursors (mocked twikit client)
+├── docs/
+│   ├── incidents/
+│   │   └── 2026-08-06-telegram-flood.md  # the Telegram 429/freshness-guard incident write-up
+│   └── pr-summaries/              # pr-<n>.md narrative per merged PR, generated by pr-summary.yml
+├── Dockerfile                     # slim Python 3.12 image, runs `python -m digest`
+├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
+├── pyproject.toml                 # uv-managed, Python 3.12 deps: telethon, twifork, markdown, nh3, feedparser, python-dotenv
+└── .env.example                   # documents every env var from §4.7, no real values
 ```
 
 ## 4. Component specs
@@ -96,42 +151,67 @@ x_and_telegram-scrape/
 ```sql
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
-    source_id   TEXT NOT NULL,              -- telegram: "{chat_id}:{msg_id}" (msg ids repeat across chats); x: tweet id
-    chat_id     TEXT,                       -- telegram chat/thread id; NULL for X
+    -- Source validity is enforced in code (commit_new_items's _KNOWN_SOURCES
+    -- check, below), not by a CHECK here -- SQLite has no ALTER CONSTRAINT,
+    -- so a CHECK made every new source a full-table rebuild migration.
+    source      TEXT NOT NULL,
+    source_id   TEXT NOT NULL,              -- telegram: "{chat_id}:{msg_id}"; x/news/polymarket/reddit: source-native id
+    chat_id     TEXT,                       -- telegram chat/thread id; NULL for every other source
+    chat_title  TEXT,                       -- telegram entity title, when known; NULL otherwise
     author      TEXT,
     text        TEXT,
-    url         TEXT NOT NULL,              -- t.me/c/<chat_id>/<msg_id> or x.com status URL
+    url         TEXT NOT NULL,
     fetched_at  TEXT NOT NULL,              -- ISO8601 UTC
-    digest_id   INTEGER REFERENCES digests(id),  -- NULL until included in a sent/attempted digest
+    digest_id   INTEGER REFERENCES digests(id),  -- NULL until stamped by create_digest
     UNIQUE (source, source_id)
 );
 
 CREATE TABLE IF NOT EXISTS digests (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at  TEXT NOT NULL,
-    item_count  INTEGER NOT NULL,
-    email_sent  INTEGER NOT NULL DEFAULT 0, -- 0/1
-    body_md     TEXT NOT NULL               -- summarizer output; enables send-retry without re-summarizing
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      TEXT NOT NULL,
+    item_count      INTEGER NOT NULL,
+    email_sent      INTEGER NOT NULL DEFAULT 0,   -- one of three independent per-channel flags
+    site_published  INTEGER NOT NULL DEFAULT 0,
+    telegram_sent   INTEGER NOT NULL DEFAULT 0,
+    body_md         TEXT NOT NULL,                -- summarizer output; enables per-channel retry without re-summarizing
+    body_md_hu      TEXT,                          -- optional Hungarian translation; NULL if disabled/failed
+    kind            TEXT NOT NULL DEFAULT 'window' -- 'window' (every-3h) or 'daily' (once-a-day synthesis)
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
-    source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+    source        TEXT NOT NULL,
     scope         TEXT NOT NULL,              -- telegram: chat id; x: 'notifications' or 'posts:{user_id}'
     last_seen_id  TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     PRIMARY KEY (source, scope)
 );
 
+-- Polymarket's own state axis, not a cursor: a market has no "since"
+-- pagination the way a chat or the X notifications timeline does.
+-- `probability` is the last REPORTED value (the swing anchor); `updated_at`
+-- is the last OBSERVED time, which the 30-day prune below compares against.
+CREATE TABLE IF NOT EXISTS polymarket_probs (
+    market_id   TEXT PRIMARY KEY,
+    probability REAL NOT NULL,
+    question    TEXT,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 ```
 
+**Schema versioning.** `init_db` tracks the schema via SQLite's built-in `PRAGMA user_version`, not a migrations table. A brand-new database is created directly at `_LATEST_SCHEMA_VERSION`'s shape (the block above) and stamped — no migration steps run. A database at version 0 that already has an `items` table (i.e. predates this versioning scheme) instead runs the full legacy-bootstrap chain once, in order: backfill the `body_md` and `chat_title` columns, then three widen-the-CHECK rebuilds (news, then polymarket, then reddit — news widens both `items` and `cursors`; polymarket/reddit widen `items` only, since neither source ever gets a cursor row), then backfill `site_published`/`telegram_sent`/`body_md_hu`/`kind`, then a final rebuild of both `items` and `cursors` that drops the `source` CHECK entirely — landing on the exact same checkless shape a fresh database gets. Once a database is at `_LATEST_SCHEMA_VERSION`, every later `init_db` call is an O(1) no-op. A future schema change bumps `_LATEST_SCHEMA_VERSION` and adds one more `if version < N` step; `init_db` refuses to run (`RuntimeError`) against a database whose stored version is newer than this code's own.
+
+**Source validity.** With the CHECK constraints gone, `commit_new_items` validates every item's and cursor update's `source` against `_KNOWN_SOURCES` (`telegram`, `x`, `news`, `polymarket`, `reddit`) before opening its transaction — the same "malformed data must fail loudly, the cursor must not advance" guarantee the CHECK used to provide, just enforced in code, so adding a source is now a one-line edit instead of a table rebuild.
+
+**Pruning.** `commit_new_items` prunes `polymarket_probs` rows whose `updated_at` is older than 30 days (`_POLYMARKET_PROB_PRUNE_DAYS`), inside the same transaction as every item/cursor/anchor write — a market that drops out of the top-N (resolved, delisted) ages out instead of accumulating forever. Separately, `prune_delivered_items` (called from `main.py`'s window run, after delivery, in its own transaction) deletes `items` rows older than 90 days (`_ITEMS_PRUNE_DAYS`) whose digest has fully delivered on every ENABLED channel — never a still-unsummarized item, and never a row behind a digest still pending on some channel (the exact same per-channel pendingness rule `get_pending_digests` uses, duplicated deliberately so the two can never silently disagree).
+
 Idempotency contract:
-- Each collector reads its `cursors.last_seen_id` per `(source, scope)` before fetching, and only requests items newer than that — Telegram message IDs are only monotonic within a chat, so each allowlisted chat gets its own cursor row; X uses a single `notifications` scope.
-- First run for a chat (no cursor row): seed the cursor from the latest message without emitting items — the first digest starts from "now", never a full-history backfill.
-- Inserts use `INSERT OR IGNORE` on the `(source, source_id)` unique constraint — re-fetching an overlapping window is a no-op.
-- The cursor only advances after items are durably committed in the same transaction as the insert.
-- A digest row is created before the email send attempt (`email_sent=0`) and flipped to `1` only after SMTP confirms; items are stamped with `digest_id` at creation. If the process crashes after commit but before send, the next run detects an existing digest with `email_sent=0` and retries the send instead of re-summarizing (avoids double-billing Opus calls). If it crashes before the digest row commits, next run's "new since last digest" query naturally includes the same items — no loss, no duplicate items (duplicate *summarization* of a stuck row is bounded to one retry pass).
+- Each collector reads its `cursors.last_seen_id` per `(source, scope)` before fetching and only requests items newer than that — telegram gets one cursor row per allowlisted chat, x gets `notifications` plus one `posts:{user_id}` per notification-enabled account; news/polymarket/reddit have no cursor axis at all (see their own §4 subsections).
+- First sighting of a chat/account/market (no cursor or anchor row): seed from the latest item without emitting one — a digest never backfills full history.
+- Inserts use `INSERT ... ON CONFLICT (source, source_id) DO NOTHING` on the `(source, source_id)` unique constraint — re-fetching an overlapping window is a no-op. (Deliberately not `INSERT OR IGNORE`, which would also silently swallow NOT NULL violations that have nothing to do with dedup — see `commit_new_items`'s docstring.)
+- Cursors, items, and Polymarket anchors all advance together, in one transaction (`commit_new_items`) — a crash before commit leaves everything at the previous run's state; nothing is lost or duplicated.
+- A digest row is created (`create_digest`) before any channel is attempted, with all three delivery flags (`email_sent`, `site_published`, `telegram_sent`) at 0, and items are stamped with `digest_id` in the same transaction. The three channels are independent: each flips its own flag to 1 only after its own send/publish confirms, so email failing can never roll back a site publish that already succeeded, and vice versa. `get_pending_digests` finds every digest with at least one ENABLED channel still at 0, and `deliver_pending` retries exactly those channels, oldest digest first — never re-summarizing (`body_md` is stored on the row precisely so a resend never re-invokes Claude).
 
 ### 4.2 `collectors/telegram.py`
 
@@ -170,40 +250,100 @@ Idempotency contract:
 - **Auth:** the CLI authenticates via the owner's Claude Max subscription (one-time interactive `claude` login performed by the owner on the VM), not an API key. Its config/credentials dir is persisted in a volume (`/srv/appdata/digest/claude-home`), mounted into the container as the CLI's home/config dir — mirrors the existing T3MP3ST pattern on the same VM that persists an agent home at `/srv/appdata/agent`. No `ANTHROPIC_API_KEY` is set.
 - **Input:** `ANTHROPIC_MODEL` (default `claude-opus-5`), `CLAUDE_EFFORT` (default `high`), items JSON, collector failure flags (to inject the "⚠ X collection failed" banner context).
 - **Reasoning effort:** `claude -p` is invoked with an explicit `--effort` flag rather than the CLI's own default. An A/B on 50 real production items showed `high` produces materially better editorial judgment (tighter story clustering, output closer to the target length) than the CLI default, while `max` was near-identical output for 65% more wall-clock — so `high` is the chosen default, not `max`. Configurable via `CLAUDE_EFFORT` rather than hardcoded because the owner authenticates via a Max subscription (no per-token billing), so a higher effort's real cost is shared subscription usage limits, spent on 8 unattended runs/day forever — a knob the owner should control, not a fixed maximum.
+- **Bounds & continuity:** `main.py` caps a single run to `_MAX_ITEMS_PER_DIGEST` (200) unsummarized items, oldest first, before ever calling `summarize()` — the 3-hourly timer drains any remainder over later runs. `select_items_for_prompt` (in this module) then shrinks that list further, if needed, so the built prompt's UTF-8 byte length stays under `_MAX_PROMPT_BYTES` (300,000) — bytes, not characters, since CJK/emoji-heavy text can serialize to far more bytes than its character count suggests (see that function's own docstring for the binary-search mechanics). `format_recent_coverage` renders the last 24h of prior digests' own `## ` headings into the prompt's `{{RECENT_COVERAGE}}` block — a "running story memory" so the model writes delta-only updates for a still-developing story instead of re-explaining it every 3 hours (`main.py`'s `_RECENT_COVERAGE_WINDOW`).
 - **Output:** markdown string matching the BRIEFING contract (§5).
 - **Error handling:** non-zero exit / empty stdout from `claude -p` → treat as summarizer failure, do not send a garbage email; log and exit non-zero so systemd/journal record the failure (surfaces via Loki). No automatic retry within the run — next scheduled run picks up the same unsummarized items since `digest_id` was never assigned. A subscription session expiry/revocation fails the same way (non-zero exit → existing Loki alert); recovery is a manual re-login on the VM, not automated (§8).
 
 ### 4.5 `emailer.py`
 
-- **Responsibility:** render the summarizer's markdown to HTML, send via SMTP, archive the markdown to disk, mark the digest row `email_sent=1` on success.
-- **Library:** `smtplib` (stdlib) + a small markdown→HTML converter (e.g. `markdown` package) — no templating framework needed for 8 emails/day.
-- **Provider:** iCloud Custom Email Domain SMTP — `smtp.mail.me.com:587` (STARTTLS), auth = the owner's iCloud account username + an app-specific password (generated at account.apple.com, stored in Key Vault). `DIGEST_FROM` is an alias on the custom domain (e.g. `digest@toomhorvath.com`) that the owner must create in iCloud settings first — a Phase 2 prerequisite. `DIGEST_TO` stays `me@toomhorvath.com`. iCloud signs outgoing mail with `d=toomhorvath.com` DKIM, which passes the domain's existing strict DMARC (`p=reject`, `adkim=s`/`aspf=s`) — no DNS changes needed.
-- **Input:** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `DIGEST_FROM`, `DIGEST_TO`, `ARCHIVE_DIR`, the markdown body.
+- **Responsibility:** the email channel only — render a digest's markdown to sanitized HTML (`render_body_html`, reused unchanged by `deliver.py`'s site channel — both channels must show identical content), send it via SMTP, and mark `email_sent=1` on success. Also owns `archive()`, but archiving is no longer send-gated: `main.py` calls it unconditionally right after `create_digest` durably records a digest, regardless of any channel's outcome — the old single-channel behavior (archive only after a successful send) would otherwise mean a digest with `EMAIL_ENABLED=false` could never be archived at all, even though site/Telegram delivered it fine. Channel orchestration itself — which channels are enabled, ordering between channels, retrying a failed one — lives in `deliver.py` (§4.13), not here; this module's `send_digest` only ever sends, it never decides whether to.
+- **Library:** `smtplib` (stdlib) + `markdown` (markdown→HTML) + `nh3` (HTML sanitization — `_enforce_anchor_provenance`'s renderer-grammar-proof second layer over `enforce_link_allowlist`'s markdown-source pass, see §5).
+- **Provider:** iCloud Custom Email Domain SMTP — `smtp.mail.me.com:587` (STARTTLS), auth = the owner's iCloud account username + an app-specific password (Key Vault). `DIGEST_FROM` is an alias on the custom domain (e.g. `digest@toomhorvath.com`); `DIGEST_TO` stays `me@toomhorvath.com`. iCloud signs outgoing mail with `d=toomhorvath.com` DKIM, which passes the domain's existing strict DMARC (`p=reject`, `adkim=s`/`aspf=s`) — no DNS changes needed.
+- **Input:** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `DIGEST_FROM`, `DIGEST_FROM_NAME`, `DIGEST_TO`, `ARCHIVE_DIR`, the markdown body, and the digest's item-URL allowlist (for `_enforce_anchor_provenance`).
 - **Output:** sent email + a `.md` file written to `ARCHIVE_DIR` (filename: digest id + timestamp).
-- **Error handling:** SMTP failure → do not mark `email_sent=1`, log and exit non-zero (next run retries send, per §4.1 contract); archive write is best-effort but its failure must not block the send (log a warning, continue).
+- **Error handling:** SMTP failure → the digest row's `email_sent` flag simply stays 0; `deliver.py`'s `get_pending_digests`/`deliver_pending` retry exactly this channel on a later run — site and Telegram, if enabled, are unaffected either way (§4.1's per-channel contract). Archive write is best-effort and its failure must not block the send (log a warning, continue).
 
 ### 4.6 `main.py` / `config.py`
 
-- **`config.py`:** loads all env vars into one validated `Config` dataclass at startup; fails fast (non-zero exit before any collector runs) if a required var is missing or malformed — cheaper to fail loud in journal than to run half-configured.
-- **`main.py`:** run order — init/open SQLite → run Telegram collector → run X collector (if enabled) → commit new items + advance cursors → query unsummarized items → if none, exit 0 (no email) → summarize → email → exit 0/non-zero based on outcome. Exit code is the only health signal systemd needs.
+- **`config.py`:** loads all env vars into one validated `Config` dataclass at startup (§4.7 is the full list); fails fast (non-zero exit, before any collector runs) if a required var is missing or malformed, or if every delivery channel ends up disabled — cheaper to fail loud in journal than to run half-configured.
+- **`main.py`:** dispatches on argv (`python -m digest` vs `python -m digest daily`) to one of two run functions, both returning a bool the caller turns into the process exit code:
+  - **Window mode (`_run`)** — init/open SQLite → run the five collectors sequentially (Telegram, X if enabled, news, Polymarket if enabled, Reddit if enabled) → `commit_new_items` (new items + advanced cursors + Polymarket anchors, one transaction) → `_deliver`: retry any digest still pending on a channel (`deliver_pending`), then, if there are unsummarized items, `select_items_for_prompt` → `summarize()` → optional `translate_digest()` → `create_digest` + `archive()` → `deliver_channels` → `prune_delivered_items`.
+  - **Daily mode (`run_daily`)** — no collectors at all: retry pending digests, read back the last 24h of `kind='window'` digests (`get_window_digests_since`), `summarize_daily()` (§4.11) over the union of their allowed URLs, then the identical translate/create/archive/deliver sequence, stamped `kind="daily"`.
+  - Both modes end by logging one structured JSON `run_summary` INFO line (mode, per-collector or per-source-digest-count status, item counts, `delivered`/`ok`) — for a Loki query to tell which leg of a run failed without a log dive; the process exit code (0/1) remains the only signal the Grafana alert itself acts on.
 
 ### 4.7 Full env var reference
 
+Every var below is read in `config.py`'s `Config.from_env`, except `CLAUDE_CONFIG_DIR` (read by `claude_subprocess_env`, forwarded straight to the `claude` CLI subprocess — see its own row). "Secret" vars are `field(repr=False)` in `Config` so `repr(cfg)` can never leak them, and are Key-Vault-sourced at deploy time (§6), never committed.
+
 | Var | Used by | Purpose |
 |---|---|---|
-| `TG_API_ID` | telegram.py | my.telegram.org app id |
-| `TG_API_HASH` | telegram.py | my.telegram.org app hash |
-| `TG_SESSION` | telegram.py | Telethon StringSession (from one-time interactive login) |
-| `TG_CHAT_ALLOWLIST` | telegram.py | comma-separated chat IDs to scrape |
-| `X_ENABLED` | main.py, x.py | `true`/`false` feature flag |
-| `X_COOKIES_PATH` or `X_COOKIES` | x.py | path to cookie file, or inline cookie JSON |
-| `ANTHROPIC_MODEL` | summarize.py | Claude model, default `claude-opus-5` |
-| `CLAUDE_CONFIG_DIR` | summarize.py | Points the Claude CLI at the persisted config/credentials dir (`/srv/appdata/digest/claude-home`, volume-mounted) so the Max-subscription login survives across runs; no API key involved |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | emailer.py | iCloud SMTP (`smtp.mail.me.com:587`); user = iCloud account username, password = app-specific password |
+| `TG_API_ID` | collectors/telegram.py | my.telegram.org app id |
+| `TG_API_HASH` | collectors/telegram.py | my.telegram.org app hash (secret) |
+| `TG_SESSION` | collectors/telegram.py | Telethon StringSession from one-time interactive login (secret) |
+| `TG_CHAT_ALLOWLIST` | collectors/telegram.py | comma-separated chat ids to collect from |
+| `SMTP_HOST` / `SMTP_PORT` | emailer.py | iCloud SMTP (`smtp.mail.me.com:587`, STARTTLS) |
+| `SMTP_USER` | emailer.py | iCloud account username (Key-Vault-sourced) |
+| `SMTP_PASSWORD` | emailer.py | iCloud app-specific password (secret) |
 | `DIGEST_FROM` | emailer.py | From address |
+| `DIGEST_FROM_NAME` | emailer.py | display name alongside `DIGEST_FROM` in the mail client (default `Digest`) |
 | `DIGEST_TO` | emailer.py | recipient address (self) |
-| `STATE_DB_PATH` | state.py | SQLite file path, default `/srv/appdata/digest/state.db` |
-| `ARCHIVE_DIR` | emailer.py | markdown archive dir, default `/srv/appdata/digest/archive/` |
+| `STATE_DB_PATH` | state.py | SQLite file path (default `./state.db`) |
+| `X_ENABLED` | main.py, collectors/x.py | master switch for the X collector (default `false`) |
+| `X_COOKIES_PATH` or `X_COOKIES` | collectors/x.py | exactly one required when `X_ENABLED=true`: cookie file path, or inline cookie JSON (secret) |
+| `ANTHROPIC_MODEL` | summarize.py, daily.py | Claude model for window/daily summarization (default `claude-opus-5`) |
+| `ARCHIVE_DIR` | emailer.py (`archive()`) | markdown archive dir (default `./archive`) |
+| `CLAUDE_TIMEOUT_SECONDS` | summarize.py, daily.py, translate.py | `claude -p` subprocess timeout, seconds (default `300`) |
+| `CLAUDE_EFFORT` | summarize.py, daily.py | `claude -p --effort`, one of low/medium/high/xhigh/max (default `high`) |
+| `NEWS_FEEDS` | collectors/rss.py | comma-separated RSS/Atom feed URLs; empty = news collector disabled (no separate flag) |
+| `TRANSLATE_HU_ENABLED` | main.py, translate.py | master switch for the Hungarian translation step (default `false`) |
+| `TRANSLATE_MODEL` | translate.py | Claude model for translation (default `sonnet` alias) |
+| `TRANSLATE_MODEL_FALLBACK` | translate.py | fallback model used when `TRANSLATE_MODEL` is refused by the safety classifier (default `claude-sonnet-4-6`; empty string disables the fallback) |
+| `POLYMARKET_ENABLED` | main.py, collectors/polymarket.py | master switch for the Polymarket collector (default `false`) |
+| `POLYMARKET_API_BASE` | collectors/polymarket.py | Polymarket API base URL (default `https://gamma-api.polymarket.com`; owner's Cloudflare Worker proxy in production) |
+| `POLYMARKET_PROXY_KEY` | collectors/polymarket.py | optional `x-proxy-key` header for the owner's proxy Worker (secret) |
+| `POLYMARKET_TOP_N` | collectors/polymarket.py | markets reported after filtering, 1–100 (default `30`) |
+| `POLYMARKET_SWING_THRESHOLD` | collectors/polymarket.py | absolute probability-point swing that triggers a report, exclusive (0,1) (default `0.15`) |
+| `REDDIT_ENABLED` | main.py, collectors/reddit.py | master switch for the Reddit collector (default `false`) |
+| `REDDIT_SESSION_COOKIE` | collectors/reddit.py | owner's logged-in `reddit_session` cookie value, required when enabled (secret) |
+| `REDDIT_SUBREDDITS` | collectors/reddit.py | comma-separated subreddit names, no `r/` prefix, required when enabled |
+| `REDDIT_POSTS_PER_SUB` | collectors/reddit.py | top-of-day posts requested per subreddit, 1–25 (default `10`) |
+| `EMAIL_ENABLED` | deliver.py | master switch for the email channel (default `true`) |
+| `SITE_PUBLISH_URL` | deliver.py, publish.py | site ingest Worker base URL; unset = site channel disabled |
+| `SITE_INGEST_KEY` | publish.py | `x-ingest-key` header, required when `SITE_PUBLISH_URL` is set (secret) |
+| `SITE_PUBLIC_BASE` | publish.py | reader-facing site base URL (embeds a capability token), used to build the Telegram deep link; required when the Telegram channel is enabled (secret) |
+| `TELEGRAM_NOTIFY_BOT_TOKEN` | publish.py | Telegram Bot API token; unset = Telegram channel disabled (secret) |
+| `TELEGRAM_NOTIFY_CHAT_ID` | publish.py | target group/channel id, required when the bot token is set |
+| `TELEGRAM_NOTIFY_THREAD_ID` | publish.py, deliver.py | forum-topic thread id for window digests; `0` = group root (default `0`) |
+| `TELEGRAM_DAILY_THREAD_ID` | deliver.py | separate forum-topic thread id for daily briefs; unset falls back to `TELEGRAM_NOTIFY_THREAD_ID` with an INFO log |
+| `CLAUDE_CONFIG_DIR` | summarize.py (via `claude_subprocess_env`) | points the `claude` CLI at its persisted config/credentials dir so the Max-subscription login survives across runs; read directly from the process environment, not part of `Config` |
+
+### 4.8 `collectors/rss.py` ("news")
+
+Synchronous urllib collector over owner-curated RSS/Atom feeds (`NEWS_FEEDS`, comma-separated URLs — there is no separate `NEWS_ENABLED` flag; an empty list means disabled). No cursor axis: idempotency comes entirely from `items`'s `UNIQUE(source, source_id)` constraint, over a rolling 12h lookback window per feed, re-checked every run. No interest filtering happens here — every entry in the window from every configured feed becomes an item; filtering by topic is the summarizer prompt's job (`prompts/digest.md`'s "News interest filter"). Failure semantics deliberately diverge from Telegram/X: `failed=True` only when EVERY configured feed fails in one run — a lone flaky publisher (dead DNS, a 500) is routine and must not trip the ⚠ banner or the Loki alert. Per-host pacing (`_MIN_SECONDS_BETWEEN_SAME_HOST`, live-verified against Reddit's own `.rss` feeds) keeps repeat requests to the same host from tripping throttling. Full rationale in the module's own docstring.
+
+### 4.9 `collectors/polymarket.py`
+
+Synchronous urllib collector, enabled via `POLYMARKET_ENABLED` (an explicit flag, not an empty-means-disabled sentinel — there's no natural "unconfigured" shape for a single base URL). Reports MOVEMENT, not absolute odds: each run compares the top-N (`POLYMARKET_TOP_N`, ranked by 24h volume) binary markets' current probability against the last probability this module itself REPORTED (its stored anchor in `polymarket_probs`, §4.1) — a swing ≥ `POLYMARKET_SWING_THRESHOLD` emits an item and moves the anchor; below threshold, the anchor deliberately stays put, so a slow drift eventually crosses the threshold and gets reported once, in full. No cursor axis (its state lives entirely in `polymarket_probs`, not `cursors`). Talks to `POLYMARKET_API_BASE` (an owner-run Cloudflare Worker proxy in production — polymarket.com is ISP-blocked in Hungary), optionally authenticated via `POLYMARKET_PROXY_KEY`. Sports/esports markets and non-binary markets are excluded (live-verified discriminators). Failure semantics match Telegram/X (any failed request fails the whole collector for the run). Full rationale, including the Gamma API's JSON-encoded-string response quirks, is in the module's own docstring.
+
+### 4.10 `collectors/reddit.py`
+
+Synchronous urllib collector, enabled via `REDDIT_ENABLED`. Authenticates with the owner's own logged-in `reddit_session` browser cookie (`REDDIT_SESSION_COOKIE`) against `old.reddit.com`'s `.json` endpoints — Reddit's Data Team formally refused this owner's OAuth API application, and anonymous `.json` access comes back a hard 403 regardless of pacing, so a cookie session (the same ToS-risk posture `collectors/x.py` already takes) is what remains. Fetches `REDDIT_POSTS_PER_SUB` top-of-day posts from each of `REDDIT_SUBREDDITS`. No cursor axis — idempotency is `UNIQUE(source, source_id)` alone, exactly like `rss.py`'s news source. The session-verify call gates the whole run (any failure sets `failed=True` and stops before any subreddit is fetched); once verified, each subreddit is fetched independently and a single subreddit failing is logged and skipped, but a 401/403/429 partway through aborts the rest of the run immediately (no retry, no re-verify — the next scheduled run is the retry), mirroring `x.py`'s own back-off posture for an unofficial, cookie-based API. Full rationale in the module's own docstring.
+
+### 4.11 `digest/daily.py`
+
+Builds the daily-brief prompt (`prompts/daily.md`) and invokes `claude -p`, reusing `summarize.py`'s `run_claude`/`validate_output`/`enforce_link_allowlist` rather than reimplementing them. Input is a day's worth of already-summarized `kind='window'` digests (`get_window_digests_since`, oldest first so a story's arc reads chronologically), never raw items — a daily brief is a synthesis of a synthesis, not a second pass over the raw Telegram/X/news text. Runs at the same `CLAUDE_EFFORT` tier as window summarization — this is equally editorial work: clustering the day's arcs, weighting significance, deciding what to drop. Unlike `translate_digest`, `summarize_daily` does NOT soft-fail — a daily brief is a deliverable in its own right, so a failure propagates and fails the run/alert exactly like a window digest's own summarization failure does. Invoked once a day by `main.py`'s `run_daily` (§4.6).
+
+### 4.12 `digest/translate.py`
+
+Optional Hungarian translation of an already-validated English digest (`TRANSLATE_HU_ENABLED`), run after `summarize()`/`summarize_daily()` succeeds and before `create_digest`. Reuses `summarize.py`'s `run_claude`/`validate_output`/`enforce_link_allowlist` — a translation must pass the identical structural-heading and link-provenance checks the English body does. Runs at a fixed, cheaper `medium` effort (`TRANSLATE_MODEL`, default the `sonnet` alias) — translation is a faithful rewrite, not an editorial judgment call. `translate_digest` never raises: any failure (including a safety-classifier refusal, retried once against `TRANSLATE_MODEL_FALLBACK` when configured — see the live incident documented in its docstring) is logged and returns `None`, meaning the digest simply stays English-only forever; it is a soft-failing production step, never a delivery channel of its own. The result (or `None`) is stored on the digest row's `body_md_hu` column and carried through to the one channel with a Hungarian field — the site (§4.14); email and Telegram stay English-only.
+
+### 4.13 `digest/deliver.py`
+
+Owns getting an already-recorded digest out across its three independent channels — email, site, Telegram — plus the pending-digest retry pass; it never summarizes or persists a digest itself (that's `main.py`'s job). `deliver_channels` attempts every ENABLED, not-yet-done channel for one digest, each with its own try/except and its own `mark_digest_*` commit, so one channel's failure never rolls back or blocks another. Site is attempted before Telegram — a real dependency: the Telegram message links to the site's own page for that digest, so Telegram is skipped for a digest this run if its site publish isn't done yet. Telegram carries two extra guards, added after the incident in `docs/incidents/2026-08-06-telegram-flood.md`: a digest older than 12h is marked sent without ever notifying (a stale "just caught up" ping is pure noise for a real-time channel), and a per-run `TelegramRunState` circuit breaker skips every remaining Telegram send for the rest of the run once any send in it hits HTTP 429. `deliver_pending` retries every digest (window or daily) still pending on at least one enabled channel, oldest first, sharing one `TelegramRunState` with whatever fresh digest the caller summarizes in the same run. Logs one structured JSON `digest_delivery` line per digest handled (per-channel outcome).
+
+### 4.14 `digest/publish.py`
+
+The site and Telegram channels, both thin stdlib-urllib HTTP calls, kept in one module since they share the same markdown-derived summary helpers (`extract_tldr`, `count_sections`, `has_needs_attention`). `publish_to_site` PUTs a digest (markdown, pre-rendered sanitized HTML, TL;DR, section count, `has_attention`, `kind`, plus the Hungarian fields when a translation exists) to `SITE_PUBLISH_URL`'s ingest endpoint, authenticated via `SITE_INGEST_KEY`. `send_telegram_tldr` posts a short plain-text TL;DR (never Telegram's Markdown parse mode — a single unescaped character there would 400 the whole message) plus an inline "Open the digest" button linking to `{SITE_PUBLIC_BASE}/d/{digest_id}`, to `TELEGRAM_NOTIFY_CHAT_ID` — thread-routed by digest `kind` (`TELEGRAM_NOTIFY_THREAD_ID` for window digests, `TELEGRAM_DAILY_THREAD_ID` for daily briefs, falling back to the window thread when unset). Both raise on failure and never retry internally — `deliver.py` is the retry boundary. Neither ever logs a bot token, ingest key, or response body — only a status code or exception type name.
 
 ## 5. Summarization prompt design
 
@@ -284,33 +424,35 @@ WantedBy=timers.target
 
 ## 7. Phases with acceptance criteria
 
+Phases 1–4 below shipped long ago; everything past them (the site/Telegram delivery channels, the daily brief, Hungarian translation, and the rss/polymarket/reddit collectors) was delivered incrementally via PRs #1–#48, not as a fifth phase in this section — see §10 for that later work's own checklist.
+
 ### Phase 1 — Telegram collector + state (local, macOS)
-- [ ] Telethon StringSession obtained via one-time interactive login script, works from a local `.env`.
-- [ ] `collectors/telegram.py` fetches new messages from allowlisted chats and normalizes them to the item shape.
-- [ ] SQLite schema created on first run; re-running with no new messages is a true no-op (no duplicate rows).
-- [ ] Cursor advances only after a successful commit; simulated crash mid-run (kill before commit) does not lose or duplicate items on next run.
-- [ ] `tests/test_state.py` and `tests/test_collectors.py` (mocked Telethon client) pass.
+- [x] Telethon StringSession obtained via one-time interactive login script, works from a local `.env`.
+- [x] `collectors/telegram.py` fetches new messages from allowlisted chats and normalizes them to the item shape.
+- [x] SQLite schema created on first run; re-running with no new messages is a true no-op (no duplicate rows).
+- [x] Cursor advances only after a successful commit; simulated crash mid-run (kill before commit) does not lose or duplicate items on next run.
+- [x] `tests/test_state.py` and `tests/test_collectors.py` (mocked Telethon client) pass.
 
 ### Phase 2 — Summarizer + email, end to end (Telegram-only digest delivered)
-- [ ] `summarize.py` builds the JSON payload and gets a valid 3-section markdown response from `claude -p` locally.
-- [ ] Empty item window produces zero Claude calls and zero emails.
-- [ ] `emailer.py` sends a real HTML email to `DIGEST_TO` via configured SMTP and archives the markdown to `ARCHIVE_DIR`.
-- [ ] Full `main.py` run against real Telegram data produces one correctly formatted digest email with working deep links.
-- [ ] Simulated SMTP failure leaves `email_sent=0`; next run retries the send without re-summarizing.
+- [x] `summarize.py` builds the JSON payload and gets a valid 3-section markdown response from `claude -p` locally.
+- [x] Empty item window produces zero Claude calls and zero emails.
+- [x] `emailer.py` sends a real HTML email to `DIGEST_TO` via configured SMTP and archives the markdown to `ARCHIVE_DIR`.
+- [x] Full `main.py` run against real Telegram data produces one correctly formatted digest email with working deep links.
+- [x] Simulated SMTP failure leaves `email_sent=0`; next run retries the send without re-summarizing.
 
 ### Phase 3 — X collector behind `X_ENABLED`
-- [ ] `collectors/x.py` authenticates via persisted cookies (no fresh login) and fetches new notifications.
-- [ ] `X_ENABLED=false` fully skips the collector with no twikit import side effects.
-- [ ] Simulated X auth failure flags the collector as failed without crashing the run; Telegram-only digest still sends with the "⚠ X collection failed" banner.
-- [ ] Combined Telegram+X digest groups items correctly by source in the "Worth knowing" section.
+- [x] `collectors/x.py` authenticates via persisted cookies (no fresh login) and fetches new notifications.
+- [x] `X_ENABLED=false` fully skips the collector with no twikit import side effects.
+- [x] Simulated X auth failure flags the collector as failed without crashing the run; Telegram-only digest still sends with the "⚠ X collection failed" banner.
+- [x] Combined Telegram+X digest groups items correctly by source in the "Worth knowing" section.
 
 ### Phase 4 — Ansible deployment + timer + alerting
-- [ ] Tagged release (e.g. `v0.1.0`) published to GHCR via `.github/workflows/release.yml` (build + push on git tag).
-- [ ] `digest` compose service defined in the `myapps` role, deployed to `01-myapps-vm`, pulling the pinned GHCR image tag (never built on the VM), env vars sourced from Key Vault at deploy time (no secrets in the repo or in plaintext on disk outside the running container's env).
-- [ ] systemd timer fires on schedule with jitter; `systemctl status digest.timer` shows correct next-run time.
-- [ ] A real scheduled run on the VM produces a digest email and an archived markdown file under `/srv/appdata/digest/archive/`.
-- [ ] `/srv/appdata` restic backup includes `digest/state.db` and `digest/archive/` (verify via existing backup job, no new backup config needed).
-- [ ] Grafana alert fires within one scheduling cycle of a forced `digest.service` failure.
+- [x] Tagged release (e.g. `v0.1.0`) published to GHCR via `.github/workflows/release.yml` (build + push on git tag).
+- [x] `digest` compose service defined in the `myapps` role, deployed to `01-myapps-vm`, pulling the pinned GHCR image tag (never built on the VM), env vars sourced from Key Vault at deploy time (no secrets in the repo or in plaintext on disk outside the running container's env).
+- [x] systemd timer fires on schedule with jitter; `systemctl status digest.timer` shows correct next-run time.
+- [x] A real scheduled run on the VM produces a digest email and an archived markdown file under `/srv/appdata/digest/archive/`.
+- [x] `/srv/appdata` restic backup includes `digest/state.db` and `digest/archive/` (verify via existing backup job, no new backup config needed).
+- [x] Grafana alert fires within one scheduling cycle of a forced `digest.service` failure.
 
 ## 8. Risks & mitigations
 
@@ -336,15 +478,15 @@ WantedBy=timers.target
 
 A design-improvement pass agreed 2026-08-08, executed one PR per step below, in order — each step merges to `main` before the next starts. After the last step merges, a release tag ships the whole set as one version.
 
-- [ ] **Roadmap (this section)** — record the improvement plan in PLAN.md itself so progress is trackable in-repo. (This very PR.)
-- [ ] **Config secret hygiene** — add `repr=False` to the legacy secret fields in `digest/config.py` (`tg_session`, `tg_api_hash`, `smtp_password`, `x_cookies`) so `repr(cfg)` can never leak them; newer secrets (`site_ingest_key`, `telegram_notify_bot_token`, `reddit_session_cookie`, `polymarket_proxy_key`, `site_public_base`) already have it.
-- [ ] **Schema: drop the `source` CHECK constraints + versioned migrations** — one final rebuild of `items` and `cursors` removes the `source IN (...)` CHECK (source validation moves to code); adding a future source becomes a zero-migration change. Same PR switches `init_db` to `PRAGMA user_version` sequential migrations: the existing probe-style migrations become the version 0→1 bootstrap, the CHECK-removal rebuild is 1→2, and a fresh DB is created at the latest schema directly.
-- [ ] **Extract `digest/deliver.py`** — move the `_deliver*` family plus `_TelegramRunState` (~450 lines of channel coordination) out of `main.py`. Pure move, no behavior change; `main.py` returns to orchestration + run-mode dispatch.
-- [ ] **`collectors/base.py`** — move `CollectResult` out of `collectors/telegram.py` into a new `collectors/base.py`; X/RSS/Reddit importing the Telegram collector's type is a misleading dependency edge (telegram is just the collector written first, not the base).
-- [ ] **Structured run-summary log line** — one JSON INFO line at the end of each run (window and daily) with run mode, per-collector status, item counts, and per-channel delivery outcomes, so Loki can tell "reddit cookie expired" from "SMTP down" without a log dive. Exit code stays the sole alert trigger.
-- [ ] **Delete dead `get_pending_digest`** — the single-channel predecessor of `get_pending_digests`; only tests still call it.
-- [ ] **Incident narrative dedup** — the 2026-08-06 Telegram flood story is retold in several docstrings; move the full write-up to `docs/incidents/2026-08-06-telegram-flood.md` and shrink the retellings to one-line references. Behavioral contracts stay in the docstrings.
-- [ ] **Prune old `items` rows** — items text accumulates forever; delete rows older than ~90 days whose digest is fully delivered (per enabled channels), so `state.db` and its restic backups stay bounded. Must never delete rows a still-pending digest needs for its URL allowlist.
-- [ ] **Architecture doc refresh** — update this PLAN.md (sections 2–4) to describe the system as it exists (5 collectors, 3 delivery channels, daily brief mode, Hungarian translation, current schema), and tick off this checklist.
+- [x] **Roadmap (this section)** — record the improvement plan in PLAN.md itself so progress is trackable in-repo. (This very PR.)
+- [x] **Config secret hygiene** — add `repr=False` to the legacy secret fields in `digest/config.py` (`tg_session`, `tg_api_hash`, `smtp_password`, `x_cookies`) so `repr(cfg)` can never leak them; newer secrets (`site_ingest_key`, `telegram_notify_bot_token`, `reddit_session_cookie`, `polymarket_proxy_key`, `site_public_base`) already have it.
+- [x] **Schema: drop the `source` CHECK constraints + versioned migrations** — one final rebuild of `items` and `cursors` removes the `source IN (...)` CHECK (source validation moves to code); adding a future source becomes a zero-migration change. Same PR switches `init_db` to `PRAGMA user_version` sequential migrations: the existing probe-style migrations become the version 0→1 bootstrap, the CHECK-removal rebuild is 1→2, and a fresh DB is created at the latest schema directly.
+- [x] **Extract `digest/deliver.py`** — move the `_deliver*` family plus `_TelegramRunState` (~450 lines of channel coordination) out of `main.py`. Pure move, no behavior change; `main.py` returns to orchestration + run-mode dispatch.
+- [x] **`collectors/base.py`** — move `CollectResult` out of `collectors/telegram.py` into a new `collectors/base.py`; X/RSS/Reddit importing the Telegram collector's type is a misleading dependency edge (telegram is just the collector written first, not the base).
+- [x] **Structured run-summary log line** — one JSON INFO line at the end of each run (window and daily) with run mode, per-collector status, item counts, and per-channel delivery outcomes, so Loki can tell "reddit cookie expired" from "SMTP down" without a log dive. Exit code stays the sole alert trigger.
+- [x] **Delete dead `get_pending_digest`** — the single-channel predecessor of `get_pending_digests`; only tests still call it.
+- [x] **Incident narrative dedup** — the 2026-08-06 Telegram flood story is retold in several docstrings; move the full write-up to `docs/incidents/2026-08-06-telegram-flood.md` and shrink the retellings to one-line references. Behavioral contracts stay in the docstrings.
+- [x] **Prune old `items` rows** — items text accumulates forever; delete rows older than ~90 days whose digest is fully delivered (per enabled channels), so `state.db` and its restic backups stay bounded. Must never delete rows a still-pending digest needs for its URL allowlist.
+- [x] **Architecture doc refresh** — update this PLAN.md (sections 2–4) to describe the system as it exists (5 collectors, 3 delivery channels, daily brief mode, Hungarian translation, current schema), and tick off this checklist. (This PR.)
 
-After step 10 merges, tag `v0.8.0` on `main`; `.github/workflows/release.yml` publishes `ghcr.io/dezoxy/notification-digest:v0.8.0`, and the homelab repo's Renovate picks up the bump.
+All ten steps above are merged; `v0.8.0` is being cut on `main` now. `.github/workflows/release.yml` will publish `ghcr.io/dezoxy/notification-digest:v0.8.0`, and the homelab repo's Renovate picks up the bump from there.
