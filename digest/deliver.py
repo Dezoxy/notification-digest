@@ -33,26 +33,13 @@ from digest.state import (
 )
 
 # A Telegram TL;DR notification is a REAL-TIME ping, not an archive record --
-# announcing a stale digest is pure noise. This is not hypothetical: on
-# 2026-08-06 the first run after the multi-channel delivery cutover found
-# ~50 pre-cutover digests with telegram_sent=0 (the ALTER TABLE migration in
-# state.py's `_migrate_add_telegram_sent_column` defaults the new column to
-# 0 for every pre-existing row -- correct for site publish, which SHOULD
-# backfill, but wrong for a live notification channel), attempted a Telegram
-# sendMessage for every one of them oldest-first, and got rate-limited by
-# Telegram (HTTP 429) after about 20 messages -- flooding the group topic
-# with hours-old TL;DRs across two consecutive runs, both of which then
-# exited non-zero on top of it. Any backlog scenario can reproduce this
-# shape: a column-add migration defaulting old rows to unsent (exactly what
-# happened here), a restored DB backup, the Telegram channel re-enabled
-# after a pause, or a long site outage queueing up retries -- none of them
-# should ever flood the topic with old news. 12h = 4 digest windows at the
+# announcing a stale digest is pure noise. 12h = 4 digest windows at the
 # 3-hourly cadence: generous for ordinary retry-after-a-failed-run catch-up,
 # far below "archive dump" territory. Site and email are deliberately NOT
 # windowed -- the site is an archive and SHOULD backfill every pending
-# digest regardless of age (that was correct and desirable in this very same
-# incident: only Telegram flooded, because only Telegram is a live-ping
-# channel, not an archive).
+# digest regardless of age; only a live-ping channel needs this guard.
+# Full incident story (why this exists at all):
+# docs/incidents/2026-08-06-telegram-flood.md
 _TELEGRAM_MAX_AGE = timedelta(hours=12)
 
 logger = logging.getLogger(__name__)
@@ -237,13 +224,14 @@ def _deliver_site(
 class TelegramRunState:
     """Run-scoped Telegram circuit-breaker flag, shared by every digest one `_deliver` call handles.
 
-    GUARD 2 of the 2026-08-06 incident (see `_TELEGRAM_MAX_AGE`'s neighboring
-    comment): once ANY Telegram send in a run hits HTTP 429, every remaining
-    Telegram send for the REST OF THAT RUN must be skipped -- across both the
-    pending-digests retry loop and the freshly-summarized digest in the same
-    `_deliver` call, not just the rest of whichever loop iteration tripped
-    it. That requires state that outlives a single `_deliver_telegram` call
-    and is visible to every later one in the same run, without resorting to
+    GUARD 2 of the 2026-08-06 incident (full story:
+    docs/incidents/2026-08-06-telegram-flood.md): once ANY Telegram send in
+    a run hits HTTP 429, every remaining Telegram send for the REST OF THAT
+    RUN must be skipped -- across both the pending-digests retry loop and
+    the freshly-summarized digest in the same `_deliver` call, not just the
+    rest of whichever loop iteration tripped it. That requires state that
+    outlives a single `_deliver_telegram` call and is visible to every
+    later one in the same run, without resorting to
     a module-level global (which would leak across runs/tests and isn't
     thread/asyncio-reentrancy-safe). A single instance, created fresh at the
     top of a run mode in main.py (`_deliver` or `run_daily`) and threaded
@@ -296,8 +284,8 @@ def _deliver_telegram(
     """Send the Telegram TL;DR channel for one digest. Returns True on success.
 
     Two guards run BEFORE any network call is attempted, both added after
-    the 2026-08-06 flood incident (see `_TELEGRAM_MAX_AGE`'s comment for the
-    full story):
+    the 2026-08-06 flood incident (full story:
+    docs/incidents/2026-08-06-telegram-flood.md):
 
     GUARD 1 -- freshness window: if `created_at` is older than
     `_TELEGRAM_MAX_AGE`, this digest is never sent to Telegram at all. It is

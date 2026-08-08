@@ -1175,8 +1175,8 @@ def test_deliver_run_failure_propagates_from_a_single_failed_channel(conn, monke
 
 
 # --- GUARD 1 (freshness window) + GUARD 2 (per-run 429 circuit breaker) --
-# See _TELEGRAM_MAX_AGE's module-level comment in digest/main.py for the
-# 2026-08-06 incident these two guards exist to make unrepeatable.
+# See docs/incidents/2026-08-06-telegram-flood.md for the incident these
+# two guards exist to make unrepeatable.
 
 
 def _telegram_only_cfg(**overrides) -> Config:
@@ -1259,7 +1259,8 @@ def test_deliver_incident_replay_stale_backlog_all_skip_telegram_only_fresh_one_
     # for the ALTER TABLE migration's DEFAULT 0 on every pre-existing row)
     # plus one genuinely fresh digest. GUARD 1 must mark every stale one
     # sent WITHOUT ever calling send_telegram_tldr, and still deliver the
-    # fresh one normally -- and the whole run must come back green.
+    # fresh one normally -- and the whole run must come back green. Full
+    # incident writeup: docs/incidents/2026-08-06-telegram-flood.md
     stale_ids = []
     for i in range(10):
         digest_id = create_digest(conn, f"**TL;DR:** old {i}\n\n## Worth knowing\n\nstuff", [])
