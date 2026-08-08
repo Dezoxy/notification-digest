@@ -14,6 +14,7 @@ class's docstring for why one shared instance per run matters).
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Collection
@@ -458,26 +459,58 @@ def deliver_channels(
     site_done = done["site"] or not site_enabled
     telegram_done = done["telegram"] or not telegram_enabled
 
+    # Per-channel status for the digest_delivery log line at the bottom of
+    # this function -- seeded from the same enabled/entry-done facts as the
+    # *_done variables above, then overwritten below only inside the branch
+    # that actually attempts (or explicitly skips) that channel this call.
+    email_status = "disabled" if not email_enabled else "done" if email_done else None
+    site_status = "disabled" if not site_enabled else "done" if site_done else None
+    telegram_status = "disabled" if not telegram_enabled else "done" if telegram_done else None
+
     allowed_urls = get_digest_item_urls(conn, digest_id)
 
     if email_enabled and not email_done:
         email_done = _deliver_email(conn, cfg, digest_id, body_md, item_count, allowed_urls)
+        email_status = "sent" if email_done else "failed"
 
     if site_enabled and not site_done:
         site_done = _deliver_site(
             conn, cfg, digest_id, body_md, item_count, created_at, allowed_urls, body_md_hu,
             kind=kind,
         )
+        site_status = "sent" if site_done else "failed"
 
     if telegram_enabled and not telegram_done:
         if site_enabled and not site_done:
             logger.info(
                 "digest %d: skipping telegram this run, site publish not done", digest_id
             )
+            telegram_status = "skipped"
         else:
             telegram_done = _deliver_telegram(
                 conn, cfg, digest_id, body_md, created_at, telegram_state, kind=kind
             )
+            telegram_status = "sent" if telegram_done else "failed"
+
+    # Loki-queryable per-channel outcome for this one digest -- the
+    # human-readable per-failure logs above (_deliver_email/_deliver_site/
+    # _deliver_telegram) stay as they are; this line is what lets a Loki
+    # query answer "what happened to each channel of digest N" (or "which
+    # channel kind keeps failing") without a log dive across those separate
+    # lines.
+    logger.info(
+        "digest_delivery %s",
+        json.dumps(
+            {
+                "digest_id": digest_id,
+                "kind": kind,
+                "email": email_status,
+                "site": site_status,
+                "telegram": telegram_status,
+            },
+            sort_keys=True,
+        ),
+    )
 
     return email_done and site_done and telegram_done
 
