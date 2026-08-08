@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 import feedparser
 
-from digest.collectors.telegram import CollectResult
+from digest.collectors.base import CollectResult
 from digest.state import Item
 
 logger = logging.getLogger(__name__)

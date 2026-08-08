@@ -21,8 +21,8 @@ from digest.collectors import reddit as reddit_collector
 from digest.collectors import rss as rss_collector
 from digest.collectors import telegram as telegram_collector
 from digest.collectors import x as x_collector
+from digest.collectors.base import CollectResult
 from digest.collectors.polymarket import PolymarketCollectResult
-from digest.collectors.telegram import CollectResult
 from digest.config import Config, ConfigError
 from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
@@ -419,7 +419,7 @@ async def _run(cfg: Config) -> bool:
         try:
             if not await _client_ready(client):
                 logger.warning("telegram session not authorized / connect failed")
-                tg_result = telegram_collector.CollectResult(failed=True)
+                tg_result = CollectResult(failed=True)
             else:
                 tg_result = await telegram_collector.collect(
                     client, cfg.tg_chat_allowlist, tg_cursors
