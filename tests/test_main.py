@@ -1421,6 +1421,31 @@ def test_run_x_disabled_never_calls_x_collector(monkeypatch, tmp_path):
     assert ok is True
 
 
+def test_run_calls_prune_delivered_items_with_the_configured_channel_flags(monkeypatch, tmp_path):
+    # Window-mode _run must prune old, fully-delivered items after delivery,
+    # every run -- not just when there happens to be something to prune.
+    # `_cfg()`'s defaults (no `replace` overrides here) are email_enabled=True
+    # (Config's own default) with site_publish_url/telegram_notify_bot_token
+    # both unset, so `_run` must derive site_enabled/telegram_enabled as
+    # False exactly the way digest/deliver.py's own _deliver_channels does.
+    cfg = replace(_cfg(), state_db_path=str(tmp_path / "state.db"))
+
+    _patch_telegram_client(monkeypatch, CollectResult())
+
+    prune_calls = []
+
+    def fake_prune(conn, *, email_enabled, site_enabled, telegram_enabled):
+        prune_calls.append((email_enabled, site_enabled, telegram_enabled))
+        return 0
+
+    monkeypatch.setattr(main_mod, "prune_delivered_items", fake_prune)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+    assert prune_calls == [(True, False, False)]
+
+
 def test_run_logs_run_summary_line_with_exactly_the_enabled_collectors(
     monkeypatch, tmp_path, caplog
 ):

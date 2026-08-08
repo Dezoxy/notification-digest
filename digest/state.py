@@ -90,6 +90,21 @@ CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 # handful of runs.
 _POLYMARKET_PROB_PRUNE_DAYS = 30
 
+# How long an `items` row survives after its digest has fully delivered
+# before `prune_delivered_items` (below) removes it, so state.db (and its
+# restic backups, see the homelab repo's deploy note) stays bounded instead
+# of growing forever. 90 days comfortably outlives every read path that
+# still goes back to `items` for its TEXT, not just its existence:
+# get_digest_item_urls only reconstructs URLs for a digest that is still
+# PENDING on some channel (a resend needs ITS OWN items, never an
+# arbitrarily old digest's -- see that function's docstring), and the daily
+# brief (digest/main.py's run_daily, via get_window_digests_since) only ever
+# looks at a same-day 24h window. 90 days is a wide safety margin over both
+# -- wide enough that a digest stuck pending for weeks (a channel outage, a
+# stuck retry) still has its items around by the time delivery finally
+# succeeds.
+_ITEMS_PRUNE_DAYS = 90
+
 # The complete set of valid `Item.source` / cursor-source values. This is
 # where source validity is enforced now that _SCHEMA's `source` columns have
 # no CHECK constraint (see _SCHEMA's comment on items.source and
@@ -1150,6 +1165,114 @@ def get_pending_digests(
         )
         for digest_id, body_md, email_sent, site_published, telegram_sent, kind in rows
     ]
+
+
+def prune_delivered_items(
+    conn: sqlite3.Connection,
+    *,
+    email_enabled: bool,
+    site_enabled: bool,
+    telegram_enabled: bool,
+) -> int:
+    """Delete `items` rows whose digest has fully delivered, past `_ITEMS_PRUNE_DAYS`.
+
+    A row is eligible for deletion only when ALL of:
+      - `fetched_at` is older than `_ITEMS_PRUNE_DAYS` (90) days -- see that
+        constant's own docstring for why 90 is safely wider than every read
+        path that still needs an old row's TEXT.
+      - `digest_id IS NOT NULL` -- an item never attached to a digest is
+        unsummarized BACKLOG, not delivered content, no matter how old. It
+        must survive until get_unsummarized_items/create_digest eventually
+        claims it, however long that takes (a stuck summarizer, a
+        long-disabled collector's backlog draining slowly, etc.); pruning it
+        here would silently discard content the reader was never actually
+        shown.
+      - its digest is NOT pending on any ENABLED channel.
+
+    The "not pending" half is `digest_id NOT IN (SELECT id FROM digests
+    WHERE <pending condition>)`, and `<pending condition>` is built with the
+    EXACT same per-channel logic as get_pending_digests -- the same three
+    `email_sent = 0` / `site_published = 0` / `telegram_sent = 0` fragments,
+    each included only when its channel is enabled, joined with OR. This
+    duplication is deliberate: pruning and pending-retry read the same three
+    flag columns to answer the same question ("does this digest still need
+    something?") from opposite directions, and if the two conditions were
+    ever allowed to drift apart the failure mode is silent and severe --
+    either this prune deletes the items behind a digest get_pending_digests
+    still considers pending (e.g. a pending SITE backfill of an arbitrarily
+    old digest reads its item URLs via get_digest_item_urls; pruning out from
+    under it would corrupt or empty that resend), or rows survive that both
+    functions already agree are done, quietly defeating the point of this
+    prune. Any future change to get_pending_digests' pendingness rule must be
+    mirrored here in the same commit.
+
+    Known, accepted trade-off: pendingness is evaluated with the channels
+    enabled NOW. A channel re-enabled after a months-long pause makes old
+    digests pending again -- but their items may already be pruned, so such
+    a late backfill renders with an empty URL allowlist (citations defang
+    to plain text; see digest/summarize.py's enforce_link_allowlist). The
+    digest BODY is intact -- body_md lives on the digests row, which is
+    never pruned -- so this degrades links only, on content months stale,
+    and only after a deliberate config flip. Not worth keeping every item
+    forever to prevent.
+
+    When none of the three channels are enabled, get_pending_digests treats
+    NO digest as pending at all (its own `if not conditions: return []`
+    short-circuit) -- mirrored here by dropping the `NOT IN (...)` exclusion
+    entirely rather than querying it with an empty condition list, so every
+    digest_id-carrying row past the cutoff is eligible. This should never
+    actually happen in production (`Config.from_env` raises a ConfigError
+    when every channel is disabled), but it keeps this function's own
+    contract total rather than leaning on that caller-side guarantee -- the
+    same reasoning get_pending_digests applies to itself for the identical
+    edge case.
+
+    `fetched_at` is compared lexicographically against the cutoff, safe for
+    the same reason get_recent_digests relies on: both are ISO8601 UTC
+    strings from `datetime.isoformat()`, whose fixed-width,
+    most-significant-field-first layout makes lexicographic and
+    chronological order coincide.
+
+    Deliberately NOT folded into commit_new_items alongside the
+    polymarket_probs prune it already runs (`_POLYMARKET_PROB_PRUNE_DAYS`):
+    that prune needs no input beyond the current time, so it can run
+    unconditionally inside commit_new_items' own already-open transaction on
+    every call. This prune needs the three channel-enabled flags, which live
+    on Config (digest/config.py) -- commit_new_items has no config coupling
+    today (it's called from collector wiring alone) and should not grow one
+    just to host an unrelated prune. Keeping this as its own top-level
+    function, called explicitly from digest/main.py's `_run` after delivery,
+    keeps that separation intact.
+
+    Runs in its own transaction (BEGIN/commit, rollback on any failure) --
+    a standalone one, unlike the polymarket prune above which piggybacks on
+    commit_new_items' already-open transaction. Returns the number of rows
+    deleted.
+    """
+    conditions = []
+    if email_enabled:
+        conditions.append("email_sent = 0")
+    if site_enabled:
+        conditions.append("site_published = 0")
+    if telegram_enabled:
+        conditions.append("telegram_sent = 0")
+
+    cutoff = (datetime.now(UTC) - timedelta(days=_ITEMS_PRUNE_DAYS)).isoformat()
+    query = "DELETE FROM items WHERE fetched_at < ? AND digest_id IS NOT NULL"
+    if conditions:
+        where_sql = " OR ".join(conditions)
+        query += f" AND digest_id NOT IN (SELECT id FROM digests WHERE {where_sql})"
+
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(query, (cutoff,))
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:

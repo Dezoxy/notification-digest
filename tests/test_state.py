@@ -20,6 +20,7 @@ from digest.state import (
     mark_digest_sent,
     mark_digest_site_published,
     mark_digest_telegram_sent,
+    prune_delivered_items,
 )
 
 
@@ -1647,3 +1648,98 @@ def test_get_window_digests_since_empty_when_nothing_in_window(conn):
     result = get_window_digests_since(conn, "2026-07-29T00:00:00+00:00")
 
     assert result == []
+
+
+# --- prune_delivered_items (bounded state.db) ---
+
+
+def _insert_item_row(
+    conn: sqlite3.Connection,
+    source_id: str,
+    *,
+    fetched_at: str,
+    digest_id: int | None = None,
+) -> None:
+    """Insert an `items` row directly with an explicit `fetched_at`/`digest_id` --
+    these tests only care about prune_delivered_items' own age/pendingness
+    filtering, not real item collection (mirrors _insert_digest's role for
+    get_recent_digests above)."""
+    conn.execute(
+        "INSERT INTO items (source, source_id, chat_id, author, text, url, fetched_at, digest_id) "
+        "VALUES ('telegram', ?, '123', 'alice', 'hello', ?, ?, ?)",
+        (source_id, f"https://t.me/c/123/{source_id}", fetched_at, digest_id),
+    )
+    conn.commit()
+
+
+def test_prune_delivered_items_deletes_old_fully_delivered_row(conn):
+    old = (datetime.now(UTC) - timedelta(days=91)).isoformat()
+    digest_id = _digest_row(conn, "done", email_sent=1, site_published=1, telegram_sent=1)
+    _insert_item_row(conn, "1", fetched_at=old, digest_id=digest_id)
+
+    deleted = prune_delivered_items(
+        conn, email_enabled=True, site_enabled=True, telegram_enabled=True
+    )
+
+    assert deleted == 1
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+
+def test_prune_delivered_items_keeps_unsummarized_backlog_regardless_of_age(conn):
+    # digest_id IS NULL -- never attached to a digest, so it must never be
+    # pruned no matter how old: it hasn't shipped yet.
+    ancient = (datetime.now(UTC) - timedelta(days=900)).isoformat()
+    _insert_item_row(conn, "1", fetched_at=ancient, digest_id=None)
+
+    deleted = prune_delivered_items(
+        conn, email_enabled=True, site_enabled=True, telegram_enabled=True
+    )
+
+    assert deleted == 0
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+def test_prune_delivered_items_keeps_row_whose_digest_is_pending_on_an_enabled_channel(conn):
+    old = (datetime.now(UTC) - timedelta(days=91)).isoformat()
+    digest_id = _digest_row(
+        conn, "site pending", email_sent=1, site_published=0, telegram_sent=1
+    )
+    _insert_item_row(conn, "1", fetched_at=old, digest_id=digest_id)
+
+    deleted = prune_delivered_items(
+        conn, email_enabled=True, site_enabled=True, telegram_enabled=True
+    )
+
+    assert deleted == 0
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+def test_prune_delivered_items_deletes_when_the_only_pending_channel_is_disabled(conn):
+    # Same row/flags as the test above, but the site channel is now
+    # DISABLED -- mirroring get_pending_digests, a disabled channel's unset
+    # flag must never block a prune, so this row is now eligible.
+    old = (datetime.now(UTC) - timedelta(days=91)).isoformat()
+    digest_id = _digest_row(
+        conn, "site pending but disabled", email_sent=1, site_published=0, telegram_sent=1
+    )
+    _insert_item_row(conn, "1", fetched_at=old, digest_id=digest_id)
+
+    deleted = prune_delivered_items(
+        conn, email_enabled=True, site_enabled=False, telegram_enabled=True
+    )
+
+    assert deleted == 1
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+
+def test_prune_delivered_items_keeps_fresh_rows_even_if_fully_delivered(conn):
+    fresh = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    digest_id = _digest_row(conn, "done", email_sent=1, site_published=1, telegram_sent=1)
+    _insert_item_row(conn, "1", fetched_at=fresh, digest_id=digest_id)
+
+    deleted = prune_delivered_items(
+        conn, email_enabled=True, site_enabled=True, telegram_enabled=True
+    )
+
+    assert deleted == 0
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1

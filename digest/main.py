@@ -29,6 +29,7 @@ from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
 from digest.emailer import archive
 from digest.state import (
+    _ITEMS_PRUNE_DAYS,
     commit_new_items,
     connect,
     count_unsummarized_items,
@@ -40,6 +41,7 @@ from digest.state import (
     get_unsummarized_items,
     get_window_digests_since,
     init_db,
+    prune_delivered_items,
 )
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
@@ -495,6 +497,16 @@ async def _run(cfg: Config) -> bool:
         ]
 
         delivered = _deliver(conn, cfg, failed_sources)
+
+        pruned = prune_delivered_items(
+            conn,
+            email_enabled=cfg.email_enabled,
+            site_enabled=cfg.site_publish_url is not None,
+            telegram_enabled=cfg.telegram_notify_bot_token is not None,
+        )
+        if pruned:
+            logger.info("pruned %d delivered items older than %d days", pruned, _ITEMS_PRUNE_DAYS)
+
         ok = delivered and not failed_sources
 
         # Exit code stays the sole alert trigger (see main()'s sys.exit(0 if
