@@ -158,7 +158,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from digest.collectors.telegram import CollectResult
+from digest.collectors.base import CollectResult
 from digest.state import Item
 
 logger = logging.getLogger(__name__)

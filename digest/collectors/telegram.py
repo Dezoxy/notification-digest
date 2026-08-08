@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -25,6 +24,7 @@ from telethon.errors import (
 from telethon.tl.types import PeerChat
 from telethon.utils import resolve_id
 
+from digest.collectors.base import CollectResult
 from digest.state import Item
 
 logger = logging.getLogger(__name__)
@@ -62,13 +62,6 @@ class TelegramClientLike(Protocol):
     def iter_messages(
         self, entity: Any, *, limit: int | None = None, min_id: int = 0, reverse: bool = False
     ) -> Any: ...
-
-
-@dataclass
-class CollectResult:
-    items: list[Item] = field(default_factory=list)
-    cursor_updates: dict[tuple[str, str], str] = field(default_factory=dict)
-    failed: bool = False
 
 
 def is_basic_group(chat_id: int) -> bool:

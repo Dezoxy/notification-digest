@@ -5,7 +5,8 @@ import pytest
 from telethon.errors import AuthKeyUnregisteredError, FloodWaitError
 
 import digest.collectors.telegram as telegram_collector
-from digest.collectors.telegram import CollectResult, build_message_url, collect, is_basic_group
+from digest.collectors.base import CollectResult
+from digest.collectors.telegram import build_message_url, collect, is_basic_group
 
 
 class FakeMessage:

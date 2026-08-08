@@ -154,7 +154,7 @@ _OVERFETCH_LIMIT = 100
 
 @dataclass
 class PolymarketCollectResult:
-    """Sibling of digest.collectors.telegram.CollectResult, but for Polymarket.
+    """Sibling of digest.collectors.base.CollectResult, but for Polymarket.
 
     Deliberately its own type rather than reusing CollectResult: this
     collector has no cursor axis at all (see module docstring -- its state

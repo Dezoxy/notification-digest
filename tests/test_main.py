@@ -7,8 +7,8 @@ import pytest
 
 import digest.deliver as deliver_mod
 import digest.main as main_mod
+from digest.collectors.base import CollectResult
 from digest.collectors.polymarket import PolymarketCollectResult
-from digest.collectors.telegram import CollectResult
 from digest.config import Config
 from digest.deliver import (
     TelegramRunState,
