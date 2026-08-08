@@ -116,7 +116,7 @@ class Config:
     polymarket_proxy_key: str | None = field(default=None, repr=False)
     polymarket_top_n: int = 30
     polymarket_swing_threshold: float = 0.15
-    # Delivery channels (see digest/main.py's _deliver_channels and
+    # Delivery channels (see digest/deliver.py's deliver_channels and
     # digest/publish.py). Each channel has its own enabled-ness and its own
     # per-digest sent flag (digest/state.py's digests.email_sent/
     # site_published/telegram_sent) so one channel failing never blocks or
