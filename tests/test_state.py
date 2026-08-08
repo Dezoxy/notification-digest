@@ -94,9 +94,9 @@ def test_cursor_upsert_overwrites(conn):
 
 def test_atomicity_rolls_back_items_and_cursors_on_failure(conn):
     good_item = _item("1")
-    bad_item = _item("2", source="not-a-real-source")  # violates CHECK(source IN (...))
+    bad_item = _item("2", source="not-a-real-source")  # not in _KNOWN_SOURCES
 
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(ValueError, match="not-a-real-source"):
         commit_new_items(conn, [good_item, bad_item], {("telegram", "123"): "2"})
 
     item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
@@ -437,11 +437,23 @@ def test_fresh_db_accepts_news_source_item(conn):
     assert items[0].chat_title == "AI Weekly"
 
 
-def test_fresh_db_check_still_rejects_unknown_source(conn):
-    bad_item = _item("1", source="rss")  # not one of telegram/x/news
+def test_commit_new_items_rejects_unknown_item_source(conn):
+    # Source validity is no longer a DB-level CHECK (see _SCHEMA) -- it's
+    # enforced by _KNOWN_SOURCES at the top of commit_new_items instead, and
+    # nothing is written when it rejects.
+    bad_item = _item("1", source="rss")  # not in _KNOWN_SOURCES
 
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(ValueError, match="rss"):
         commit_new_items(conn, [bad_item], {})
+
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+
+def test_commit_new_items_rejects_unknown_cursor_source(conn):
+    with pytest.raises(ValueError, match="rss"):
+        commit_new_items(conn, [], {("rss", "scope"): "1"})
+
+    assert get_cursors(conn, "rss") == {}
 
 
 def test_init_db_migrates_pre_news_source_check_with_preexisting_rows(tmp_path: Path):
@@ -761,8 +773,21 @@ def test_commit_new_items_polymarket_prob_updates_defaults_to_none_unaffected(co
 
 
 def test_commit_new_items_rolls_back_polymarket_prob_updates_on_item_insert_failure(conn):
+    # The failure must happen MID-TRANSACTION (a NOT NULL violation raised by
+    # SQLite itself), not at the _KNOWN_SOURCES pre-check before BEGIN --
+    # this test exists to prove the polymarket upserts participate in the
+    # same rollback as items/cursors, so the transaction has to actually
+    # open first.
     good_item = _item("1")
-    bad_item = _item("2", source="not-a-real-source")  # violates CHECK(source IN (...))
+    bad_item = Item(
+        source="telegram",
+        source_id="2",
+        chat_id="123",
+        author="alice",
+        text="hello",
+        url="https://t.me/c/123/2",
+        fetched_at=None,  # violates NOT NULL on fetched_at
+    )
 
     with pytest.raises(sqlite3.IntegrityError):
         commit_new_items(
@@ -1025,6 +1050,121 @@ def test_init_db_migrates_pre_reddit_source_check_with_preexisting_rows(tmp_path
     assert reddit_sources == ["reddit"]
 
     old_conn.close()
+
+
+# --- source CHECK dropped entirely; PRAGMA user_version schema versioning ---
+
+
+def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
+    items_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'items'"
+    ).fetchone()[0]
+    cursors_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cursors'"
+    ).fetchone()[0]
+    # Not a bare "CHECK" substring check: sqlite_master.sql stores the DDL
+    # verbatim, comments included, and _SCHEMA's own comment on
+    # items.source mentions the word "CHECK" in prose explaining this exact
+    # history -- the actual constraint syntax is "CHECK (source ...)".
+    assert "CHECK (source" not in items_ddl
+    assert "CHECK (source" not in cursors_ddl
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+    # Fast path: a second call is a no-op and leaves the version unchanged.
+    init_db(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
+    # Proves the CHECK is really gone: a raw INSERT with a source not in
+    # _KNOWN_SOURCES succeeds at the SQL level now -- only commit_new_items's
+    # code-level guard rejects it, not the schema.
+    conn.execute(
+        "INSERT INTO items (source, source_id, url, fetched_at) "
+        "VALUES ('mastodon', '1', 'https://example.com/1', '2026-07-29T10:00:00+00:00')"
+    )
+    conn.commit()
+
+    row = conn.execute("SELECT source FROM items WHERE source_id = '1'").fetchone()
+    assert row == ("mastodon",)
+
+
+def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(tmp_path: Path):
+    # A v0 database (SQLite defaults PRAGMA user_version to 0 when it's
+    # never been set) with the ORIGINAL two-value CHECK, predating every
+    # migration in the probe chain -- mirrors the news-migration fixture
+    # above. init_db must run the whole legacy bootstrap chain, including
+    # the final CHECK-drop, in one call.
+    old_conn = connect(str(tmp_path / "legacy_v0.db"))
+    old_conn.executescript(
+        """
+        CREATE TABLE items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            source_id   TEXT NOT NULL,
+            chat_id     TEXT,
+            author      TEXT,
+            text        TEXT,
+            url         TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            digest_id   INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        );
+
+        CREATE TABLE digests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL,
+            email_sent  INTEGER NOT NULL DEFAULT 0,
+            body_md     TEXT NOT NULL
+        );
+
+        CREATE TABLE cursors (
+            source        TEXT NOT NULL CHECK (source IN ('telegram', 'x')),
+            scope         TEXT NOT NULL,
+            last_seen_id  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            PRIMARY KEY (source, scope)
+        );
+        """
+    )
+    old_conn.execute(
+        "INSERT INTO items (source, source_id, chat_id, author, text, url, fetched_at) "
+        "VALUES ('telegram', '111:1', '111', 'alice', 'hi', 'https://t.me/c/111/1', "
+        "'2026-07-29T09:00:00+00:00')"
+    )
+    old_conn.commit()
+    row_id = old_conn.execute("SELECT id FROM items").fetchone()[0]
+
+    init_db(old_conn)
+
+    items_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'items'"
+    ).fetchone()[0]
+    cursors_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cursors'"
+    ).fetchone()[0]
+    assert "CHECK (source" not in items_ddl
+    assert "CHECK (source" not in cursors_ddl
+
+    preserved = old_conn.execute(
+        "SELECT id, source FROM items WHERE id = ?", (row_id,)
+    ).fetchone()
+    assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
+
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+    old_conn.close()
+
+
+def test_init_db_raises_runtime_error_when_db_version_is_newer_than_latest(conn):
+    # A database stamped by a NEWER release than this code knows about --
+    # running old code against it is undefined, so init_db must refuse
+    # rather than silently query/write columns it doesn't know about.
+    conn.execute("PRAGMA user_version = 999")
+
+    with pytest.raises(RuntimeError):
+        init_db(conn)
 
 
 # --- site_published / telegram_sent columns (delivery-channels feature) ---

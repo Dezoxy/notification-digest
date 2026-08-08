@@ -15,7 +15,12 @@ from pathlib import Path
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source      TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news', 'polymarket', 'reddit')),
+    -- Source validity is enforced in code (commit_new_items's _KNOWN_SOURCES
+    -- check below), not by a CHECK here -- SQLite has no ALTER CONSTRAINT,
+    -- so the old CHECK made every new source a full-table rebuild migration
+    -- (three of which exist below as history/legacy-DB bootstrap:
+    -- _migrate_expand_source_check_for_{news,polymarket,reddit}).
+    source      TEXT NOT NULL,
     source_id   TEXT NOT NULL,
     chat_id     TEXT,
     chat_title  TEXT,
@@ -46,7 +51,7 @@ CREATE TABLE IF NOT EXISTS digests (
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
-    source        TEXT NOT NULL CHECK (source IN ('telegram', 'x', 'news')),
+    source        TEXT NOT NULL,
     scope         TEXT NOT NULL,
     last_seen_id  TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
@@ -85,10 +90,17 @@ CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 # handful of runs.
 _POLYMARKET_PROB_PRUNE_DAYS = 30
 
+# The complete set of valid `Item.source` / cursor-source values. This is
+# where source validity is enforced now that _SCHEMA's `source` columns have
+# no CHECK constraint (see _SCHEMA's comment on items.source and
+# commit_new_items's docstring) -- adding a new source is a one-line edit
+# here instead of a full-table rebuild migration.
+_KNOWN_SOURCES = frozenset({"telegram", "x", "news", "polymarket", "reddit"})
+
 
 @dataclass(frozen=True)
 class Item:
-    source: str  # "telegram" | "x" | "news"
+    source: str  # one of _KNOWN_SOURCES
     # telegram: "{chat_id}:{msg_id}" (chat-scoped composite — msg ids repeat across chats);
     # x: bare tweet id (globally unique)
     # news: the feed entry's own GUID (entry.id), falling back to the entry's URL
@@ -116,19 +128,81 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+# The schema version this code knows how to run against, tracked via
+# SQLite's built-in `PRAGMA user_version` (a plain integer stored in the
+# database file itself -- no extra table needed). Bump this and add an
+# `if version < N: ...` migration step in init_db when the schema next
+# changes; see init_db's own docstring for the full versioning scheme.
+_LATEST_SCHEMA_VERSION = 1
+
+
 def init_db(conn: sqlite3.Connection) -> None:
-    """Create the schema if it doesn't already exist. Safe to call repeatedly."""
+    """Create/upgrade the schema to `_LATEST_SCHEMA_VERSION`. Safe to call repeatedly.
+
+    Version 0 (SQLite's own default for a database that has never had
+    `PRAGMA user_version` set) covers two very different cases at once: a
+    brand-new database with no `items` table at all, and every legacy
+    database created before this versioning scheme existed. `fresh`
+    distinguishes them by checking `items`' presence before _SCHEMA runs --
+    a fresh DB is created directly at the latest shape by _SCHEMA and needs
+    no migrations; a legacy DB gets the full probe-style bootstrap chain
+    that used to run unconditionally on every init_db call (each step still
+    idempotent, still individually guarded), ending with the CHECK-removal
+    rebuild (`_migrate_drop_source_checks`) so an old two- or five-value-CHECK
+    database ends up at the exact same checkless shape as a fresh one.
+
+    Once at `_LATEST_SCHEMA_VERSION`, every later init_db call takes the
+    fast path at the top and returns immediately -- O(1) instead of the nine
+    schema probes (`PRAGMA table_info` / `sqlite_master` lookups) the old
+    unconditional-chain version paid on every single call, fresh or not.
+
+    A FUTURE schema change bumps `_LATEST_SCHEMA_VERSION` and adds one more
+    `if version < N: ...` step below the legacy-bootstrap block -- no more
+    probe-style "does this column/CHECK already exist" detection needed,
+    since from here on every database's version is known exactly.
+
+    The version is stamped via `PRAGMA user_version` only AFTER the
+    migrations above it have committed -- so a crash mid-migration leaves
+    the on-disk version unchanged, and the next start simply re-runs the
+    (idempotent) chain from scratch rather than silently skipping it.
+
+    Raises `RuntimeError` if the database's stored version is NEWER than
+    this code's `_LATEST_SCHEMA_VERSION` -- that means a newer release of
+    this codebase already upgraded the schema, and running this (older)
+    code against it is undefined: better to fail loudly at startup than
+    silently query/write columns this code doesn't know about.
+    """
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version == _LATEST_SCHEMA_VERSION:
+        return
+    if version > _LATEST_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"database schema version {version} is newer than this code's "
+            f"latest known version {_LATEST_SCHEMA_VERSION} -- refusing to "
+            "run older code against a database a newer release already "
+            "migrated; upgrade before pointing this code at it"
+        )
+
+    fresh = _table_ddl(conn, "items") is None
     conn.executescript(_SCHEMA)
     conn.commit()
-    _migrate_add_body_md_column(conn)
-    _migrate_add_chat_title_column(conn)
-    _migrate_expand_source_check_for_news(conn)
-    _migrate_expand_source_check_for_polymarket(conn)
-    _migrate_expand_source_check_for_reddit(conn)
-    _migrate_add_site_published_column(conn)
-    _migrate_add_telegram_sent_column(conn)
-    _migrate_add_body_md_hu_column(conn)
-    _migrate_add_kind_column(conn)
+    if not fresh:
+        # Pre-versioning database (version 0, `items` already existed): run
+        # the old probe-style bootstrap chain in its historical order, all
+        # of it still idempotent, ending with the CHECK removal.
+        _migrate_add_body_md_column(conn)
+        _migrate_add_chat_title_column(conn)
+        _migrate_expand_source_check_for_news(conn)
+        _migrate_expand_source_check_for_polymarket(conn)
+        _migrate_expand_source_check_for_reddit(conn)
+        _migrate_add_site_published_column(conn)
+        _migrate_add_telegram_sent_column(conn)
+        _migrate_add_body_md_hu_column(conn)
+        _migrate_add_kind_column(conn)
+        _migrate_drop_source_checks(conn)
+
+    conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
+    conn.commit()
 
 
 def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
@@ -525,6 +599,138 @@ def _migrate_expand_source_check_for_reddit(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_drop_source_checks(conn: sqlite3.Connection) -> None:
+    """Rebuild `items`/`cursors` to drop their `source` CHECK constraint entirely.
+
+    Same rebuild-in-place pattern as `_migrate_expand_source_check_for_news`
+    and its siblings above (see those docstrings for the full rationale --
+    SQLite has no `ALTER TABLE ... ALTER CONSTRAINT`, so a CHECK can only be
+    removed by rebuilding the table: create a new one without the CHECK,
+    copy every row across by explicit column name (never `SELECT *` -- see
+    the news migration's docstring for why), drop the old table, rename the
+    new one into place.
+
+    Unlike the three `_migrate_expand_source_check_for_*` migrations, which
+    each WIDENED the CHECK to admit one more source, this one REMOVES it --
+    source validity moved to code (`commit_new_items`'s `_KNOWN_SOURCES`
+    check) precisely because the CHECK made every new source a full-table
+    rebuild migration. This is the FINAL source-related rebuild: with the
+    CHECK gone, adding a source becomes a one-line `_KNOWN_SOURCES` edit, and
+    the three expand-CHECK migrations above stay only as the version-0
+    bootstrap chain for databases that predate this one.
+
+    Both `items` AND `cursors` are rebuilt here (unlike the polymarket/reddit
+    migrations, which only widened `items` -- `cursors` was deliberately left
+    on its three-value CHECK, since neither of those sources ever gets a
+    cursor row). `cursors` still carries its original `('telegram', 'x',
+    'news')` CHECK at this point in the chain, so it needs the same
+    CHECK-removal treatment as `items`.
+
+    Idempotent per table via the same `_table_ddl` + substring check as the
+    migrations above, generalized from "does the DDL mention my new source"
+    to "does the DDL mention the CHECK constraint syntax at all" -- does
+    nothing for a table whose stored DDL no longer contains `CHECK (source`
+    (covers both "already migrated" and "freshly created by _SCHEMA above",
+    which no longer declares one). The check looks for `CHECK (source`, not
+    a bare `CHECK`, deliberately: `sqlite_master.sql` stores a table's DDL
+    verbatim, comments included, and _SCHEMA's own comment on `items.source`
+    (explaining this exact history) mentions the word "CHECK" in prose -- a
+    bare substring match would misfire on that comment for a table that
+    never had the constraint to begin with.
+
+    MUST run LAST in init_db's legacy-bootstrap chain (see its call order):
+    it inherits the same column-order requirement as the three migrations
+    above (rebuilding `items` needs `chat_title` etc. to already exist in
+    SOME position -- see `_migrate_expand_source_check_for_news`'s docstring
+    for why `SELECT *` would be unsafe here), and it must run after the
+    news/polymarket/reddit CHECK-widening migrations so this rebuild's fixed
+    checkless column list is copying from a table that already has every
+    column _SCHEMA expects.
+    """
+    _rebuild_items_table_dropping_source_check(conn)
+    _rebuild_cursors_table_dropping_source_check(conn)
+
+
+def _rebuild_items_table_dropping_source_check(conn: sqlite3.Connection) -> None:
+    """The `items` half of `_migrate_drop_source_checks` -- see its docstring."""
+    ddl = _table_ddl(conn, "items")
+    if ddl is None or "CHECK (source" not in ddl:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            CREATE TABLE items_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                source      TEXT NOT NULL,
+                source_id   TEXT NOT NULL,
+                chat_id     TEXT,
+                chat_title  TEXT,
+                author      TEXT,
+                text        TEXT,
+                url         TEXT NOT NULL,
+                fetched_at  TEXT NOT NULL,
+                digest_id   INTEGER REFERENCES digests(id),
+                UNIQUE (source, source_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO items_new
+                (id, source, source_id, chat_id, chat_title, author, text,
+                 url, fetched_at, digest_id)
+            SELECT id, source, source_id, chat_id, chat_title, author, text,
+                   url, fetched_at, digest_id
+            FROM items
+            """
+        )
+        cur.execute("DROP TABLE items")
+        cur.execute("ALTER TABLE items_new RENAME TO items")
+        # The index died with the old table -- CREATE TABLE doesn't resurrect
+        # indexes on the table it replaces, so it must be re-created here.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _rebuild_cursors_table_dropping_source_check(conn: sqlite3.Connection) -> None:
+    """The `cursors` half of `_migrate_drop_source_checks` -- see its docstring."""
+    ddl = _table_ddl(conn, "cursors")
+    if ddl is None or "CHECK (source" not in ddl:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute(
+            """
+            CREATE TABLE cursors_new (
+                source        TEXT NOT NULL,
+                scope         TEXT NOT NULL,
+                last_seen_id  TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                PRIMARY KEY (source, scope)
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO cursors_new (source, scope, last_seen_id, updated_at)
+            SELECT source, scope, last_seen_id, updated_at
+            FROM cursors
+            """
+        )
+        cur.execute("DROP TABLE cursors")
+        cur.execute("ALTER TABLE cursors_new RENAME TO cursors")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def get_cursors(conn: sqlite3.Connection, source: str) -> dict[str, str]:
     """Return {scope: last_seen_id} for the given source."""
     rows = conn.execute(
@@ -564,6 +770,17 @@ def commit_new_items(
 ) -> int:
     """Insert new items, advance cursors, and upsert Polymarket anchors — one transaction.
 
+    Every `item.source` in `items` and every source half of a `cursor_updates`
+    key is checked against `_KNOWN_SOURCES` BEFORE the transaction even
+    opens; an unrecognized value raises `ValueError` naming the offending
+    source and writes nothing at all. This is the exact protection the
+    dropped `source` CHECK constraint used to provide (see _SCHEMA) --
+    commit_new_items is the single choke point every item/cursor row passes
+    through on its way into the DB, so validating here in code preserves the
+    same "malformed data must fail loudly, the cursor must not advance"
+    contract described below for NOT NULL violations, just enforced before
+    BEGIN instead of by SQLite mid-transaction.
+
     Items are inserted with INSERT ... ON CONFLICT (source, source_id) DO
     NOTHING, deduping on that UNIQUE constraint. Every (source, scope) ->
     last_seen_id in cursor_updates is upserted with updated_at set to now
@@ -575,14 +792,16 @@ def commit_new_items(
 
     Note: we deliberately use `INSERT ... ON CONFLICT (source, source_id) DO
     NOTHING` instead of `INSERT OR IGNORE`. INSERT OR IGNORE swallows *any*
-    constraint violation on the row — including NOT NULL and CHECK failures
-    that have nothing to do with dedup — so a malformed item (e.g. a missing
+    constraint violation on the row — including NOT NULL failures that have
+    nothing to do with dedup — so a malformed item (e.g. a missing
     source_id or fetched_at) would silently vanish instead of raising, while
     the cursor update still commits: permanent, undetected data loss.
     Scoping the "ignore" to the specific (source, source_id) conflict target
-    means only the intended dedup case is swallowed; NOT NULL/CHECK
-    violations still raise sqlite3.IntegrityError, which is caught below and
-    triggers the rollback like any other failure.
+    means only the intended dedup case is swallowed; NOT NULL violations
+    still raise sqlite3.IntegrityError, which is caught below and triggers
+    the rollback like any other failure. (Source validity is no longer a
+    CHECK/IntegrityError case at all -- see the _KNOWN_SOURCES paragraph
+    above.)
 
     `polymarket_prob_updates` (keyword-only, default None) is an optional
     market_id -> (probability, question) mapping from
@@ -621,6 +840,13 @@ def commit_new_items(
     means stale rows still age out even on a run where the collector is
     disabled or happened to find nothing to update.
     """
+    for item in items:
+        if item.source not in _KNOWN_SOURCES:
+            raise ValueError(f"unknown item source: {item.source!r}")
+    for source, _scope in cursor_updates:
+        if source not in _KNOWN_SOURCES:
+            raise ValueError(f"unknown cursor source: {source!r}")
+
     now = datetime.now(UTC).isoformat()
     try:
         cur = conn.cursor()
