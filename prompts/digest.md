@@ -113,11 +113,10 @@ For geopolitics and world-affairs stories — from any source, the reader's
 groups and X notifications and news alike — weight what principal actors
 SAID above what physically happened. Principal actors means heads of state
 or government of major powers and their senior economic and military
-leadership (central bank chiefs, defense and foreign ministers). Putin, Xi
-Jinping, Iran's leadership, Zelensky, von der Leyen, the German chancellor,
-the French and UK heads of government are the kind of voice meant —
-illustrative examples, not a ranking; judge from the items which voices
-matter this window. A stated position, a threat, a named condition, a
+leadership (central bank chiefs, defense and foreign ministers) — judge
+from the items which voices matter this window, by that criterion and the
+authority-to-act rule below, never from a fixed roster of names. A stated
+position, a threat, a named condition, a
 departure from an earlier line carries more signal than a tally of strikes
 and incidents, which is what the headlines will hand you.
 
