@@ -331,3 +331,20 @@ WantedBy=timers.target
 2. **RESOLVED — SMTP provider:** iCloud Custom Email Domain SMTP (`smtp.mail.me.com:587`), not a third-party relay. `toomhorvath.com` mail is already an iCloud Custom Email Domain (MX, SPF, iCloud DKIM, strict DMARC all managed in the owner's cloudflare-terraform repo); sending from an alias on that domain (e.g. `digest@toomhorvath.com`, to be created in iCloud settings) means iCloud's own DKIM already satisfies the domain's strict DMARC — no DNS changes needed. A third-party relay (Resend etc.) was rejected — it would require new DKIM records in the Terraform zone.
 3. **OPEN — Telegram group allowlist:** which chat IDs go into `TG_CHAT_ALLOWLIST` — owner will supply before Phase 1 testing.
 4. **RESOLVED — X scope:** notifications timeline only, no home timeline. Affects `collectors/x.py` fetch surface and volume/cost assumptions in §8.
+
+## 10. Improvement plan (2026-08)
+
+A design-improvement pass agreed 2026-08-08, executed one PR per step below, in order — each step merges to `main` before the next starts. After the last step merges, a release tag ships the whole set as one version.
+
+- [ ] **Roadmap (this section)** — record the improvement plan in PLAN.md itself so progress is trackable in-repo. (This very PR.)
+- [ ] **Config secret hygiene** — add `repr=False` to the legacy secret fields in `digest/config.py` (`tg_session`, `tg_api_hash`, `smtp_password`, `x_cookies`) so `repr(cfg)` can never leak them; newer secrets (`site_ingest_key`, `telegram_notify_bot_token`, `reddit_session_cookie`, `polymarket_proxy_key`, `site_public_base`) already have it.
+- [ ] **Schema: drop the `source` CHECK constraints + versioned migrations** — one final rebuild of `items` and `cursors` removes the `source IN (...)` CHECK (source validation moves to code); adding a future source becomes a zero-migration change. Same PR switches `init_db` to `PRAGMA user_version` sequential migrations: the existing probe-style migrations become the version 0→1 bootstrap, the CHECK-removal rebuild is 1→2, and a fresh DB is created at the latest schema directly.
+- [ ] **Extract `digest/deliver.py`** — move the `_deliver*` family plus `_TelegramRunState` (~450 lines of channel coordination) out of `main.py`. Pure move, no behavior change; `main.py` returns to orchestration + run-mode dispatch.
+- [ ] **`collectors/base.py`** — move `CollectResult` out of `collectors/telegram.py` into a new `collectors/base.py`; X/RSS/Reddit importing the Telegram collector's type is a misleading dependency edge (telegram is just the collector written first, not the base).
+- [ ] **Structured run-summary log line** — one JSON INFO line at the end of each run (window and daily) with run mode, per-collector status, item counts, and per-channel delivery outcomes, so Loki can tell "reddit cookie expired" from "SMTP down" without a log dive. Exit code stays the sole alert trigger.
+- [ ] **Delete dead `get_pending_digest`** — the single-channel predecessor of `get_pending_digests`; only tests still call it.
+- [ ] **Incident narrative dedup** — the 2026-08-06 Telegram flood story is retold in several docstrings; move the full write-up to `docs/incidents/2026-08-06-telegram-flood.md` and shrink the retellings to one-line references. Behavioral contracts stay in the docstrings.
+- [ ] **Prune old `items` rows** — items text accumulates forever; delete rows older than ~90 days whose digest is fully delivered (per enabled channels), so `state.db` and its restic backups stay bounded. Must never delete rows a still-pending digest needs for its URL allowlist.
+- [ ] **Architecture doc refresh** — update this PLAN.md (sections 2–4) to describe the system as it exists (5 collectors, 3 delivery channels, daily brief mode, Hungarian translation, current schema), and tick off this checklist.
+
+After step 10 merges, tag `v0.8.0` on `main`; `.github/workflows/release.yml` publishes `ghcr.io/dezoxy/notification-digest:v0.8.0`, and the homelab repo's Renovate picks up the bump.
