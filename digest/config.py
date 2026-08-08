@@ -500,7 +500,7 @@ def _optional_str(name: str, *, default: str) -> str:
     Generator refuses to serialize, raising HeaderParseError deep inside
     send_digest -- AFTER create_digest has already durably recorded the
     digest row (PLAN.md §4.1), so every subsequent run's
-    get_pending_digest retry branch hits the identical failure and the
+    get_pending_digests retry branch hits the identical failure and the
     digest is stuck retrying forever, never sending. Validating here at
     startup instead means a value with control characters fails fast,
     before any collector runs, with a clear error -- rather than bricking

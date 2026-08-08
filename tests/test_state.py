@@ -11,7 +11,6 @@ from digest.state import (
     count_unsummarized_items,
     create_digest,
     get_cursors,
-    get_pending_digest,
     get_pending_digests,
     get_polymarket_probs,
     get_recent_digests,
@@ -240,25 +239,6 @@ def test_create_digest_stamps_all_unsummarized_items_and_stores_body_md(conn):
     assert get_unsummarized_items(conn) == []
 
 
-def test_get_pending_digest_returns_newest_unsent_then_none_after_marked_sent(conn):
-    assert get_pending_digest(conn) is None
-
-    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    first_id = create_digest(conn, "first digest", get_unsummarized_items(conn))
-
-    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
-    second_id = create_digest(conn, "second digest", get_unsummarized_items(conn))
-
-    # newest unsent digest wins
-    assert get_pending_digest(conn) == (second_id, "second digest")
-
-    mark_digest_sent(conn, second_id)
-    assert get_pending_digest(conn) == (first_id, "first digest")
-
-    mark_digest_sent(conn, first_id)
-    assert get_pending_digest(conn) is None
-
-
 def test_init_db_migrates_pre_phase2_digests_table_missing_body_md(tmp_path: Path):
     # Simulate a database created by Phase 1 (merged to main), whose digests
     # table predates the body_md column added in Phase 2.
@@ -299,15 +279,23 @@ def test_init_db_migrates_pre_phase2_digests_table_missing_body_md(tmp_path: Pat
     # Must not raise sqlite3.OperationalError: no such column: body_md
     init_db(old_conn)
 
-    # get_pending_digest works against the migrated (empty) table
-    assert get_pending_digest(old_conn) is None
+    # get_pending_digests works against the migrated (empty) table
+    assert (
+        get_pending_digests(
+            old_conn, email_enabled=True, site_enabled=False, telegram_enabled=False
+        )
+        == []
+    )
 
     # create_digest + reading back a pending digest round-trips post-migration
     commit_new_items(old_conn, [_item("1")], {("telegram", "123"): "1"})
     items = get_unsummarized_items(old_conn)
     digest_id = create_digest(old_conn, "migrated digest body", items)
 
-    assert get_pending_digest(old_conn) == (digest_id, "migrated digest body")
+    pending = get_pending_digests(
+        old_conn, email_enabled=True, site_enabled=False, telegram_enabled=False
+    )
+    assert [(row[0], row[1]) for row in pending] == [(digest_id, "migrated digest body")]
 
     old_conn.close()
 
@@ -1180,6 +1168,19 @@ def test_fresh_db_has_site_published_and_telegram_sent_defaulting_to_zero(conn):
     assert row == (0, 0)
 
 
+def test_mark_digest_sent_flips_only_that_flag(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    mark_digest_sent(conn, digest_id)
+
+    row = conn.execute(
+        "SELECT email_sent, site_published, telegram_sent FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    assert row == (1, 0, 0)
+
+
 def test_mark_digest_site_published_flips_only_that_flag(conn):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
@@ -1363,26 +1364,6 @@ def test_get_pending_digests_no_channels_enabled_returns_empty_without_querying(
     _digest_row(conn, "irrelevant", email_sent=0, site_published=0, telegram_sent=0)
 
     assert get_pending_digests(conn, False, False, False) == []
-
-
-def test_get_pending_digest_wrapper_ignores_site_and_telegram_flags(conn):
-    # Backward-compatible wrapper: a digest whose email already went out but
-    # whose site/telegram channels are still pending must NOT show up via
-    # the old single-channel get_pending_digest -- it only ever asked about
-    # email_sent.
-    _digest_row(conn, "email done, others pending", email_sent=1, site_published=0, telegram_sent=0)
-
-    assert get_pending_digest(conn) is None
-
-
-def test_get_pending_digest_wrapper_still_finds_newest_email_unsent(conn):
-    first_id = _digest_row(conn, "first", email_sent=0)
-    second_id = _digest_row(conn, "second", email_sent=0)
-
-    assert get_pending_digest(conn) == (second_id, "second")
-
-    mark_digest_sent(conn, second_id)
-    assert get_pending_digest(conn) == (first_id, "first")
 
 
 # --- body_md_hu column (Hungarian translation feature) ---
@@ -1598,7 +1579,7 @@ def test_init_db_migrates_pre_daily_brief_digests_table_missing_kind_column(tmp_
     old_conn.close()
 
 
-# --- get_pending_digests / get_pending_digest expose kind (daily-brief feature) ---
+# --- get_pending_digests exposes kind (daily-brief feature) ---
 
 
 def test_get_pending_digests_exposes_stored_kind(conn):
