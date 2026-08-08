@@ -37,7 +37,7 @@ from digest.state import (
     count_unsummarized_items,
     create_digest,
     get_digest_item_urls,
-    get_pending_digest,
+    get_pending_digests,
     get_unsummarized_items,
     init_db,
 )
@@ -200,7 +200,7 @@ def test_deliver_retries_pending_digest_and_never_calls_summarize(conn, monkeypa
     assert ok is True
     assert sent["body_md"] == "## Needs attention\n..."
     assert sent["allowed_urls"] == {"https://t.me/c/123/1"}
-    assert get_pending_digest(conn) is None  # marked sent
+    assert get_pending_digests(conn, True, False, False) == []  # marked sent
 
 
 def test_deliver_zero_unsummarized_items_sends_nothing(conn, monkeypatch):
@@ -214,7 +214,7 @@ def test_deliver_zero_unsummarized_items_sends_nothing(conn, monkeypatch):
     ok = _deliver(conn, _cfg(), [])
 
     assert ok is True
-    assert get_pending_digest(conn) is None
+    assert get_pending_digests(conn, True, False, False) == []
 
 
 def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
@@ -232,9 +232,9 @@ def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
     ok = _deliver(conn, _cfg(), [])
 
     assert ok is False
-    pending = get_pending_digest(conn)
-    assert pending is not None
-    digest_id, body_md = pending
+    pending = get_pending_digests(conn, True, False, False)
+    assert len(pending) == 1
+    digest_id, body_md, _done, _kind = pending[0]
     assert body_md == "## Needs attention\n..."
     # P1 spec change: archive() now runs once, unconditionally, right after
     # create_digest -- it is no longer gated on any channel's delivery
@@ -296,7 +296,7 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     # real label through, not the empty-string default of an unwired param.
     assert isinstance(sent["generated_at_label"], str)
     assert sent["generated_at_label"] != ""
-    assert get_pending_digest(conn) is None
+    assert get_pending_digests(conn, True, False, False) == []
     assert archived["id"] == 1
 
 
@@ -534,7 +534,7 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
     assert sends[0] == "## Needs attention\n...pending..."
     assert sends[1] == "## Needs attention\n...new..."
     assert len(summarize_calls) == 1  # only for the new items, never the pending digest
-    assert get_pending_digest(conn) is None
+    assert get_pending_digests(conn, True, False, False) == []
     # The pending digest was archived when IT was created, in a (simulated)
     # previous run -- only the freshly created digest is archived here.
     assert pending_digest_id not in archived
@@ -605,13 +605,14 @@ def test_deliver_pending_digest_send_fails_new_items_still_summarized_and_delive
 
     assert ok is False
     assert len(summarize_calls) == 1  # the new item WAS summarized despite the pending failure
-    pending = get_pending_digest(conn)
-    assert pending is not None  # still unsent, left for the next run's retry
+    pending = get_pending_digests(conn, True, False, False)
+    assert pending  # still unsent, left for the next run's retry
     # Both the original pending digest and the newly created one remain
     # pending -- neither one's email attempt succeeded.
     row_count = conn.execute("SELECT COUNT(*) FROM digests WHERE email_sent = 0").fetchone()[0]
     assert row_count == 2
-    assert pending_digest_id != pending[0]  # the newest-pending id is the freshly created one
+    # get_pending_digests orders oldest first, so the last entry is newest.
+    assert pending_digest_id != pending[-1][0]  # the newest-pending id is the freshly created one
 
 
 def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummarized(

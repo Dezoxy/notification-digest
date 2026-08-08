@@ -211,7 +211,7 @@ def _migrate_add_body_md_column(conn: sqlite3.Connection) -> None:
     Phase 1 (pre-summarizer) created `digests` without `body_md`.
     `CREATE TABLE IF NOT EXISTS` in _SCHEMA never alters an existing table,
     so an upgraded Phase-1 database would otherwise be missing this column
-    and every run would crash in get_pending_digest() with
+    and every run would crash in get_pending_digests() with
     "sqlite3.OperationalError: no such column: body_md". This migration is
     idempotent: it only runs the ALTER TABLE when the column isn't present.
     """
@@ -1082,19 +1082,18 @@ def get_pending_digests(
 ) -> list[tuple[int, str, dict[str, bool], str]]:
     """Return every digest with at least one ENABLED channel still undelivered, oldest first.
 
-    Replaces the old single-channel `get_pending_digest` (kept below as a
-    thin backward-compatible wrapper) now that delivery has three
-    independent channels (digest/deliver.py's `deliver_channels`): email
-    (`email_sent`), site (`site_published`), and Telegram (`telegram_sent`).
-    A digest is "pending" here iff at least one of its ENABLED channels'
-    flags is still 0 -- a DISABLED channel's flag is ignored entirely, both
-    for deciding pendingness and (by the caller, which only retries flags it
-    reads out of the returned `done` map) for retries. This is what keeps
-    turning a channel off from making its old unset-flag rows eternally
-    pending: e.g. a digest sent by email before EMAIL_ENABLED was ever
-    turned off has `email_sent = 0` forever, but with `email_enabled=False`
-    that flag is never consulted, so the row is not pending unless some
-    OTHER enabled channel is also incomplete.
+    Replaces the old single-channel `get_pending_digest` (removed) now that
+    delivery has three independent channels (digest/deliver.py's
+    `deliver_channels`): email (`email_sent`), site (`site_published`), and
+    Telegram (`telegram_sent`). A digest is "pending" here iff at least one
+    of its ENABLED channels' flags is still 0 -- a DISABLED channel's flag
+    is ignored entirely, both for deciding pendingness and (by the caller,
+    which only retries flags it reads out of the returned `done` map) for
+    retries. This is what keeps turning a channel off from making its old
+    unset-flag rows eternally pending: e.g. a digest sent by email before
+    EMAIL_ENABLED was ever turned off has `email_sent = 0` forever, but
+    with `email_enabled=False` that flag is never consulted, so the row is
+    not pending unless some OTHER enabled channel is also incomplete.
 
     Each returned tuple is `(digest_id, body_md, done, kind)`, where `done`
     is a `{"email": bool, "site": bool, "telegram": bool}` map of the
@@ -1151,29 +1150,6 @@ def get_pending_digests(
         )
         for digest_id, body_md, email_sent, site_published, telegram_sent, kind in rows
     ]
-
-
-def get_pending_digest(conn: sqlite3.Connection) -> tuple[int, str] | None:
-    """Return (id, body_md) of the newest unsent digest, or None if none is pending.
-
-    Thin backward-compatible wrapper around `get_pending_digests`, kept for
-    any single-channel-only caller (and the pre-multi-channel test suite)
-    that only ever cared about email. Defined with `site_enabled=False,
-    telegram_enabled=False` so "pending" here means EXACTLY `email_sent =
-    0`, byte-for-byte the same condition this function checked before the
-    multi-channel refactor -- site_published/telegram_sent never factor in.
-    `get_pending_digests` returns oldest-first; this takes the LAST entry
-    (highest id) to preserve this function's own historical "newest unsent
-    wins" contract. digest/main.py's `_deliver` no longer calls this
-    directly -- it calls `get_pending_digests` for all three channels.
-    """
-    pending = get_pending_digests(
-        conn, email_enabled=True, site_enabled=False, telegram_enabled=False
-    )
-    if not pending:
-        return None
-    digest_id, body_md, _done, _kind = pending[-1]
-    return (digest_id, body_md)
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
