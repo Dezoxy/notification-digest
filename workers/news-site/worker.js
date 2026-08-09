@@ -1191,6 +1191,23 @@ const CSS = `
   }
 
   * { box-sizing: border-box; }
+  /* The hidden attribute must actually hide, whatever else is styled.
+     Author rules beat the UA stylesheet's own hidden-means-display-none
+     rule regardless of specificity, so ANY element this file gives an
+     explicit display to stayed VISIBLE when the scripts below set
+     el.hidden = true. That silently broke two features: the unread fence
+     (patched at the time with a one-off selector) and then the index
+     filter, where .entry's own display: block meant a filtered-out entry
+     was marked hidden in the DOM and still painted on screen — typing in
+     the filter appeared to do nothing at all (owner-reported). One global
+     override kills the whole class of bug instead of one selector at a
+     time, and !important is what makes it beat the author display rules it
+     exists to correct (normalize.css ships the same rule for the same
+     reason). Everything toggled by the hidden attribute — the filter
+     input, the theme toggle, the countdown, entries, day headers, the
+     fence — is covered by this one line. NOTE: no backticks in this
+     comment; the whole CSS block is a JS template literal. */
+  [hidden] { display: none !important; }
   /* Reserve the scrollbar's gutter even when the page is too short to
      scroll: the All view scrolls, a near-empty Daily view doesn't, and
      without this the viewport width changes on switch — sliding the
@@ -1586,11 +1603,9 @@ const CSS = `
     flex: 0 0 auto; font-family: var(--font-data); font-size: 0.7em;
     text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
   }
-  /* The filter IIFE hides the fence via the hidden attribute while a query
-     is active (it can get orphaned mid-filter otherwise) — this class sets
-     display unconditionally above, so it needs its own [hidden] override to
-     actually disappear rather than fight the browser's UA stylesheet. */
-  .unreadfence[hidden] { display: none; }
+  /* (The filter IIFE hides this via the hidden attribute while a query is
+     active — the global [hidden] rule near the top of this stylesheet is
+     what makes that actually take effect over the display: flex above.) */
 
   footer.site {
     margin-top: 3.5em; padding-top: 1.2em; border-top: 1px solid var(--hairline);
