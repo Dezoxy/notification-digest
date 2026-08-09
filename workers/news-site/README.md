@@ -422,7 +422,7 @@ so this pass contains no motion/lang work.
   index — one canonical URL). Pure HTML/CSS, no JS, no new data — one
   bounded query over the trailing window, bucketed with the existing
   Budapest date helpers.
-- [ ] **Archive week sparkline** — archive `w/` pages lost the pulse strip
+- [x] **Archive week sparkline** — archive `w/` pages lost the pulse strip
   by design (roadmap 3 gated it to the current week); the week rail's
   center gains seven per-day micro-bars for the rendered week, from rows
   the week query already returns — the pulse visual language, sized for

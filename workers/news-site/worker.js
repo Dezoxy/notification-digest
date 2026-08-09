@@ -1652,6 +1652,16 @@ const CSS = `
   .weekrail .rail-center { flex: 0 1 auto; color: var(--muted); }
   .weekrail a { color: var(--accent); text-decoration: none; }
 
+  /* Archive sparkline (roadmap 4 step 6, renderWeekRail): the pulse strip's
+     visual language, sized down to live inside the rail's center span —
+     archive weeks only, see renderWeekRail. Zero-count days (.sd0) get their
+     height from THIS rule rather than an inline style like the nonzero bars
+     get, so the two never end up in a specificity fight over the same
+     property. */
+  .railspark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; margin-left: 0.7em; vertical-align: -2px; }
+  .railspark i { display: block; width: 4px; background: var(--chip-bg); border-radius: 1px 1px 0 0; }
+  .railspark i.sd0 { background: var(--hairline); height: 15%; }
+
   /* Index filter (roadmap step 6): tucks under the view tabs — negative
      top margin pulls it snug against .viewtabs' own bottom margin instead
      of stacking two gaps. hidden by default (see renderIndexPage), so
@@ -2614,7 +2624,13 @@ function renderHeatmap(heatmapRows, token, lang, currentWeek) {
 // that function). Absent older/newer render as empty (but still flex:1)
 // spacer spans, via the shared .rail-older/.rail-newer classes, so the
 // center label stays visually centered either way (see the .weekrail CSS).
-function renderWeekRail(token, lang, weekInfo, strings) {
+//
+// Archive sparkline (roadmap 4 step 6): `rows` is null on every page except
+// an archive week (see the call site in renderIndexPage, which passes null
+// on the current week so its rail stays byte-identical to before this
+// step) — the current week already has the pulse strip for this job, and
+// showing both would say the same thing twice.
+function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
   const olderLink = weekInfo.older
     ? `<a href="${weekHref(token, lang, "all", weekInfo.older.year, weekInfo.older.week)}">← W${esc(String(weekInfo.older.week).padStart(2, "0"))}</a>`
     : "";
@@ -2640,7 +2656,66 @@ function renderWeekRail(token, lang, weekInfo, strings) {
     .replace("{w}", String(weekInfo.week))
     .replace("{range}", formatWeekRangeLabel(weekInfo.year, weekInfo.week, strings.locale));
 
-  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}</span><span class="rail-newer">${newerLink}</span></nav>`;
+  // Archive sparkline (roadmap 4 step 6): seven per-day micro-bars for THIS
+  // week only, built when (and only when) the caller handed us rows — see
+  // the function comment above. Same Budapest day-bucketing as
+  // renderHeatmap: window digests only (kind === "window" — a daily brief
+  // re-synthesizes the same day's items, so counting it too would double the
+  // day), summed by budapestDateParts key, then read back per day of the
+  // week's own Mon..Sun span off a FRESH per-day proxy copy each iteration
+  // (mondayOfIsoWeek's proxy must never be mutated in place across
+  // iterations, or every day would collapse onto the same Monday — see
+  // renderHeatmap's comment on the same hazard).
+  let sparkHtml = "";
+  if (Array.isArray(rows)) {
+    const daySums = new Map();
+    for (const row of rows) {
+      if (row.kind !== "window") continue;
+      const { y, m, d } = budapestDateParts(new Date(row.created_at));
+      const key = `${y}-${m}-${d}`;
+      daySums.set(key, (daySums.get(key) ?? 0) + row.item_count);
+    }
+
+    const monday = mondayOfIsoWeek(weekInfo.year, weekInfo.week);
+    const days = [];
+    for (let offset = 0; offset < 7; offset += 1) {
+      const day = new Date(monday);
+      day.setUTCDate(day.getUTCDate() + offset);
+      days.push(day);
+    }
+    const counts = days.map((day) => {
+      const { y, m, d } = budapestDateParts(day);
+      return daySums.get(`${y}-${m}-${d}`) ?? 0;
+    });
+
+    // Normalized against the WEEK'S OWN max day-sum (unlike the heatmap,
+    // which normalizes grid-wide) — this bar cluster only ever shows one
+    // week at a time, so there's no wider window to be comparable against.
+    // An empty week (every day zero) renders no sparkline at all rather than
+    // seven identical hairline bars — noise, not signal, same call the
+    // heatmap makes for a uniformly empty grid.
+    const max = Math.max(0, ...counts);
+    if (max > 0) {
+      const bars = days
+        .map((day, i) => {
+          const count = counts[i];
+          const title = `${formatShortDate(day, strings.locale)} · ${count} ${strings.itemsWord}`;
+          // Zero-count days still render a bar (class "sd0", no inline
+          // height — .railspark's CSS gives sd0 a fixed 15% so there's no
+          // specificity fight with the inline height below) so the week
+          // always reads as seven days, not a gappy row.
+          if (count === 0) {
+            return `<i class="sd0" title="${esc(title)}"></i>`;
+          }
+          const pct = Math.max(15, Math.round((count / max) * 100));
+          return `<i style="height:${pct}%" title="${esc(title)}"></i>`;
+        })
+        .join("\n");
+      sparkHtml = `<span class="railspark" aria-hidden="true">${bars}</span>`;
+    }
+  }
+
+  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span></nav>`;
 }
 
 function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null, heatmapRows = null) {
@@ -2706,7 +2781,14 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // wrapper assembled below. Renders on the current week too (unlike the
   // lead/pulse/prefetch below) — the rail IS the archive navigation, so it
   // stays regardless of isCurrent.
-  const railHtml = view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings) : "";
+  //
+  // Archive sparkline (roadmap 4 step 6): `rows` is only handed to the rail
+  // on an archive week (isCurrent false) — the current week keeps the pulse
+  // strip below for this job, so passing rows there too would render the
+  // same volume shape twice. null keeps the current-week rail byte-identical
+  // to before this step.
+  const railHtml =
+    view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows) : "";
 
   // Day-pulse strip (roadmap 2 step 3): between the filter row and the
   // <section> below, i.e. right above the lead card — CURRENT-WEEK-ONLY as
