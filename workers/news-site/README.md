@@ -359,11 +359,11 @@ THE one called-out hazard: the unread fence's script advances
 archive page that would REGRESS the stamp and spawn a bogus fence next
 visit. The update becomes forward-only (store only if newer than stored).
 
-- [ ] **Roadmap (this section)** — (this very PR).
-- [ ] **Core week machinery** — Budapest ISO-week helpers; the `w/` route
+- [x] **Roadmap (this section)** — (this very PR).
+- [x] **Core week machinery** — Budapest ISO-week helpers; the `w/` route
   segment; week-bounded index query + oldest-week probe; the week rail
   (EN/HU strings); empty-week state.
-- [ ] **Feature scoping + fence guard** — current-week-only gating of
+- [x] **Feature scoping + fence guard** — current-week-only gating of
   lead/pulse/countdown/prefetch; the forward-only lastVisit guard;
   switcher week-mapping; a lang×view×week verification sweep on the seeded
   rig.
