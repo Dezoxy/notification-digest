@@ -843,6 +843,17 @@ const CSS = `
      instead. */
   @media (prefers-reduced-motion: no-preference) {
     html { scroll-behavior: smooth; }
+    /* MPA view transitions (roadmap 2 step 7): one at-rule turns on the
+       browser's default crossfade between full-page navigations on this
+       origin; browsers without support (most, today) simply ignore an
+       at-rule they don't recognize — progressive, no fallback needed. No
+       custom ::view-transition-* choreography — ambient feel, not a show
+       (restraint, matching the "keep the default crossfade" decision). A
+       crossfade IS motion, so it gets the exact same reduced-motion gate as
+       scroll-behavior above, not a separate one. */
+    @view-transition {
+      navigation: auto;
+    }
   }
   body {
     margin: 0;
@@ -1242,7 +1253,27 @@ const CSS = `
 // no countdown paragraph at all. Only handleIndexPage/renderIndexPage ever
 // pass a value — digest pages never do (see renderDigestPage's call site;
 // the reader is mid-read, a ticking countdown would just be noise there).
-function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = null, countdownNewest = null) {
+//
+// `prefetchHref` defaults to null, same contract again (roadmap 2 step 7):
+// only renderIndexPage ever passes a value, and only when the index is
+// non-empty — the lead card's digest is the reader's most likely next tap,
+// so hint the browser to fetch it early. Digest pages never pass this
+// (deliberate restraint — prev/next COULD be prefetched too, but that's 2
+// extra fetches per read × 8 reads/day for what the roadmap scoped as
+// "lead only"; not worth it here). Two progressive, independent mechanisms
+// render from the one href: a <link rel="prefetch"> in <head> (Firefox and
+// other browsers without Speculation Rules support) and a
+// <script type="speculationrules"> in <body> (Chrome/Edge, the modern,
+// preferred hint). Both are best-effort: this site's pages are
+// `Cache-Control: private, no-store` (see the file-header comment / trust
+// model), and a browser is free to simply not prefetch a no-store response
+// — that's the deal with speculative loading in general, not a bug here, so
+// neither mechanism is load-bearing for anything. Privacy-wise this adds
+// nothing new: the JSON embeds the same capability-token URL that's already
+// sitting in the lead card's own href on the same page (same-document
+// exposure), and the speculation rules processor doesn't send that URL
+// anywhere the visible link wouldn't already send it on a click.
+function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = null, countdownNewest = null, prefetchHref = null) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   const { first, rest } = brandParts(host);
   const strings = STRINGS[lang];
@@ -1254,6 +1285,17 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
   // the filter input and theme toggle).
   const countdownHtml = countdownNewest
     ? `<p class="countdown" data-newest="${esc(countdownNewest)}" data-tmpl-next="${esc(strings.countdownNext)}" data-tmpl-due="${esc(strings.countdownDue)}" data-unit-hour="${esc(strings.countdownHourUnit)}" data-unit-minute="${esc(strings.countdownMinuteUnit)}" hidden></p>`
+    : "";
+  // Prefetch hints (roadmap 2 step 7) — see the param comment above for the
+  // full rationale. prefetchHref is already a same-origin, server-built path
+  // (digestHref: encodeURIComponent'd token + digit id), but esc()/
+  // JSON.stringify are applied anyway, same "free safety, not redundant
+  // trust" posture as addCiteTitles elsewhere in this file.
+  const prefetchLinkHtml = prefetchHref
+    ? `<link rel="prefetch" href="${esc(prefetchHref)}">`
+    : "";
+  const prefetchScriptHtml = prefetchHref
+    ? `<script type="speculationrules">${JSON.stringify({ prefetch: [{ urls: [prefetchHref] }] })}</script>`
     : "";
   return `<!doctype html>
 <html lang="${lang}">
@@ -1270,11 +1312,13 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfaf7">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17181c">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||""}catch(e){}</script>
 <style>${CSS}</style>
 </head>
 <body>
+${prefetchScriptHtml}
 <div class="wrap">
   <header class="mast">
     <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
@@ -1725,6 +1769,10 @@ function renderIndexPage(rows, token, host, lang, view, countdownNewest = null) 
   const strings = STRINGS[lang];
   const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
 
+  // Tracked outside the branch below so it's reachable for the prefetch
+  // href (roadmap 2 step 7) further down — null on the empty-index path,
+  // same as everywhere else in this function.
+  let leadRow = null;
   let body;
   if (rows.length === 0) {
     body = `<p class="empty">${esc(emptyMessage)}</p>`;
@@ -1735,6 +1783,7 @@ function renderIndexPage(rows, token, host, lang, view, countdownNewest = null) 
     // on the remainder, so if the newest digest was that day's only entry,
     // no empty day header is left behind.
     const [lead, ...rest] = rows;
+    leadRow = lead;
     const groups = groupByDay(rest, strings.locale);
     const ledger = groups
       .map(
@@ -1770,6 +1819,12 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // data-empty-filtered (roadmap 2 step 5): same pattern, for the
   // client-only "nothing matches the active filter(s)" message the bottom
   // script creates lazily — see applyFilters.
+  //
+  // Prefetch hint (roadmap 2 step 7): only when a lead exists, i.e. a
+  // non-empty index — see pageChrome's prefetchHref param comment for the
+  // full mechanism/rationale.
+  const prefetchHref = leadRow ? digestHref(token, lang, view, leadRow.id) : null;
+
   return pageChrome(
     host,
     token,
@@ -1779,6 +1834,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     `${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}">${body}</section>`,
     null,
     countdownNewest,
+    prefetchHref,
   );
 }
 
