@@ -408,7 +408,7 @@ so this pass contains no motion/lang work.
   new since your last visit" chip appears when the fence exists below the
   viewport and scrolls to it on tap. Progressive enhancement like the
   fence itself (no JS = no chip), current-week index only.
-- [ ] **Ledger density toggle** — compact/comfortable, a second small
+- [x] **Ledger density toggle** — compact/comfortable, a second small
   toggle beside the theme toggle, persisted in `localStorage` and applied
   pre-paint by the same head script pattern as the theme (`data-density`
   on `<html>`); compact tightens `.entry` padding and the excerpt clamp

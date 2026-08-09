@@ -949,6 +949,7 @@ const STRINGS = {
     filterPlaceholder: "Filter briefings…",
     emptyFiltered: "Nothing matches.",
     themeToggle: "Toggle light/dark",
+    densityToggle: "Toggle compact list",
     unreadFence: "new since your last visit",
     pulseLabel: "Recent volume",
     countdownNext: "next window closes in about {t}",
@@ -987,6 +988,7 @@ const STRINGS = {
     filterPlaceholder: "Szűrés…",
     emptyFiltered: "Nincs találat.",
     themeToggle: "Világos/sötét váltás",
+    densityToggle: "Kompakt lista be/ki",
     unreadFence: "új a legutóbbi látogatásod óta",
     pulseLabel: "Friss mennyiség",
     countdownNext: "a következő ablak kb. {t} múlva zárul",
@@ -1081,7 +1083,14 @@ function renderViewTabs(token, lang, view) {
 // below) and is un-hidden by the bottom script once it's known to be wired.
 function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   const strings = STRINGS[lang];
-  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}<button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button></div>`;
+  // Density toggle (roadmap 4 step 4): index pages only — it governs the
+  // ledger's .entry padding/clamp, which a digest page has none of, so the
+  // button would be a dead control there.
+  const densityToggleHtml =
+    pageKind === "index"
+      ? `<button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button>`
+      : "";
+  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}<button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button>${densityToggleHtml}</div>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -1300,13 +1309,14 @@ const CSS = `
   /* Manual theme toggle (roadmap step 6): small pill button after the lang
      switcher in .switchers. hidden by default, un-hidden by the bottom
      script — no JS, no button, same progressive-enhancement contract as the
-     index filter input below. */
-  .themetoggle {
+     index filter input below. The density toggle (roadmap 4 step 4) shares
+     this exact look — grouped into the same rules rather than duplicated. */
+  .themetoggle, .densitytoggle {
     background: none; border: 1px solid var(--hairline); border-radius: 999px;
     color: var(--text); font-size: 0.8em; padding: 0.05em 0.5em; cursor: pointer;
   }
-  .themetoggle:hover { border-color: var(--accent); }
-  .themetoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .themetoggle:hover, .densitytoggle:hover { border-color: var(--accent); }
+  .themetoggle:focus-visible, .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   .dayhead {
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
@@ -1385,6 +1395,18 @@ const CSS = `
   .entry-lead .excerpt {
     font-size: 1.02em; display: block; -webkit-line-clamp: unset; overflow: visible;
   }
+
+  /* Ledger density toggle (roadmap 4 step 4): compact tightens the ledger's
+     .entry padding and excerpt clamp when data-density="compact" is set
+     (persisted in localStorage, applied pre-paint by the head script, same
+     pattern as data-theme). Scoped to .entry:not(.entry-lead) — the lead
+     card is the day's headline, not ledger noise, and compaction is for the
+     ledger only; without :not() this compact clamp would win on specificity
+     over .entry-lead .excerpt's own un-clamp above, since both come later in
+     the cascade than plain .entry .excerpt. */
+  :root[data-density="compact"] .entry:not(.entry-lead) { padding: 0.55em 0; }
+  :root[data-density="compact"] .entry:not(.entry-lead) .excerpt { -webkit-line-clamp: 2; }
+  :root[data-density="compact"] .entry:not(.entry-lead) .excerpt.excerpt-daily { -webkit-line-clamp: 3; }
 
   /* The whole nav is prev/next times plus the "all digests" link — one word
      — so the entire block goes mono rather than singling out the times. */
@@ -1718,7 +1740,7 @@ const CSS = `
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
-    .filterrow, .themetoggle, .pulse, .resumechip {
+    .filterrow, .themetoggle, .densitytoggle, .pulse, .resumechip {
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
@@ -1820,7 +1842,7 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||""}catch(e){}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
 <style>${CSS}</style>
 </head>
 <body>
@@ -1906,6 +1928,31 @@ ${prefetchScriptHtml}
         localStorage.setItem("theme", next);
       } catch (e) {}
       syncThemeColorMetas(next);
+      reflect();
+    });
+  })();
+
+  // Ledger density toggle (roadmap 4 step 4). Same shape as the theme
+  // toggle just above: the head script already applied any stored
+  // preference to <html data-density> before first paint, so this only
+  // wires the button — unhide it, reflect the current state in
+  // aria-pressed, and on click flip compact<->comfortable and persist it.
+  // Unlike theme there's no OS-preference fallback to resolve — comfortable
+  // (empty string) IS the default, so effective state is just the dataset.
+  (function () {
+    var btn = document.querySelector(".densitytoggle");
+    if (!btn) return;
+    btn.hidden = false;
+    var reflect = function () {
+      btn.setAttribute("aria-pressed", String(document.documentElement.dataset.density === "compact"));
+    };
+    reflect();
+    btn.addEventListener("click", function () {
+      var next = document.documentElement.dataset.density === "compact" ? "" : "compact";
+      document.documentElement.dataset.density = next;
+      try {
+        localStorage.setItem("density", next);
+      } catch (e) {}
       reflect();
     });
   })();
