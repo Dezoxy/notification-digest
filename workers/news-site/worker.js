@@ -1430,6 +1430,23 @@ const CSS = `
     padding: 1em 1.2em; border-radius: 8px; margin: 0 0 2em; font-weight: 600;
     font-family: var(--font-prose); line-height: 1.65;
   }
+  /* The emailer's callout markup carries small eyebrow label spans
+     (tldr-label / attention-label) and a ⚠ collection-failed banner
+     paragraph, all previously presented by INLINE email styles the site now
+     strips at render time (see stripInlineStyles) — these rules are their
+     site-side, theme-aware replacements. Eyebrows in the mono data voice,
+     matching the wire dateline. */
+  .tldr .tldr-label, .attention .attention-label {
+    display: block; font-family: var(--font-data); font-size: 0.72em;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em;
+    margin-bottom: 0.4em;
+  }
+  .tldr .tldr-label { color: var(--accent); }
+  .digest .banner {
+    background: var(--attention-bg); color: var(--attention-text);
+    padding: 0.6em 1em; border-radius: 8px; margin: 0 0 1.2em;
+    font-size: 0.92em;
+  }
   /* Article h2s deliberately stay sans while the body below them goes serif
      (.digest p) — the newspaper pattern: sans heads announce, serif body
      reads. Not an omission. */
@@ -2586,6 +2603,15 @@ function addCiteTitles(html) {
   });
 }
 
+// Remove every style="…" attribute from the article html — see the call
+// site in renderDigestPage for the full story (email-oriented inline styles
+// fighting the site's theme CSS, and breaking downstream exact-shape
+// regexes). Runs on nh3-normalized + emailer-generated markup only, where
+// attributes are guaranteed double-quoted.
+function stripInlineStyles(html) {
+  return html.replace(/ style="[^"]*"/g, "");
+}
+
 function renderDigestPage(digest, older, newer, token, host, lang, view) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
@@ -2629,9 +2655,27 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
     }
   }
 
-  // TOC ids are injected into articleHtml itself (see buildSectionToc), so
+  // Strip the emailer's inline styles FIRST (owner-reported, 2026-08-09):
+  // the app renders ONE body_html for both the email and this site, and the
+  // email half bakes light-theme colors in as style="" attributes (mail
+  // clients can't do stylesheets). Served verbatim here, those attributes
+  // BEAT the site's class rules — in dark mode the TL;DR card stayed light
+  // and its citation chips went white-on-white. The classes (.tldr,
+  // .attention, .banner, .cite, .tldr-label, …) arrive alongside the
+  // styles, so stripping the attributes hands presentation fully to the
+  // site's own themed CSS. Order matters: the email's cite pills are
+  // `<a class="cite" style="…" href="…">`, and addCiteTitles' exact-shape
+  // regex below never matched that — hover domains (and the print
+  // stylesheet's cite[title] domains) were silently missing on real
+  // digests; stripping first restores the exact shape every downstream
+  // pass expects. The regex is safe here because this markup is
+  // nh3-normalized + emailer-generated: attributes are always
+  // double-quoted, never single-quoted or bare.
+  const articleHtmlThemed = stripInlineStyles(articleHtml);
+
+  // TOC ids are injected into the themed html (see buildSectionToc), so
   // the <article> below renders the id-bearing version, not the original.
-  const { html: articleHtmlWithIds, sections } = buildSectionToc(articleHtml);
+  const { html: articleHtmlWithIds, sections } = buildSectionToc(articleHtmlThemed);
   const tocHtml = renderToc(sections);
 
   // Separate pass, one job each (see addCiteTitles): citation chips gain a
