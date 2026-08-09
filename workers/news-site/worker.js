@@ -1938,21 +1938,37 @@ const CSS = `
 
   /* View tabs: the primary content navigation, centered on its own row.
      Bigger than the corner language toggle by design — switching between
-     the full stream and daily briefs is the main choice a reader makes. */
+     the full stream and daily briefs is the main choice a reader makes.
+     Owner-requested 2026-08-09: one connected segmented capsule instead of
+     three detached pills. The capsule (.viewtabs) carries the border,
+     radius and overflow: hidden; segments (.viewtab) are borderless and
+     share a hairline divider. No wrapper element — width: fit-content plus
+     auto side margins centers the capsule on its own row the same way the
+     old flex+justify-content did. The view selector remains the primary
+     navigation. */
   .viewtabs {
-    display: flex; justify-content: center; gap: 0.6em;
-    margin: 0.2em 0 1.7em;
+    display: flex; width: fit-content; margin: 0.2em auto 1.7em;
+    border: 1px solid var(--hairline); border-radius: 999px; overflow: hidden;
   }
   .viewtab {
-    padding: 0.42em 1.6em; border-radius: 999px;
+    padding: 0.42em 1.6em;
     font-size: 0.95em; font-weight: 600; text-decoration: none;
-    border: 1px solid var(--hairline); color: var(--accent);
+    color: var(--accent);
   }
+  .viewtab + .viewtab { border-left: 1px solid var(--hairline); }
   .viewtab.active {
-    background: var(--accent); color: var(--bg); border-color: var(--accent);
+    /* .viewtabs' overflow: hidden clips this fill to the capsule's own
+       rounded corner whenever the active segment is first or last. */
+    background: var(--accent); color: var(--bg);
   }
-  .viewtab:not(.active):hover { border-color: var(--accent); }
-  .viewtab:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  /* Segments have no border of their own to shift on hover anymore, so hint
+     hover with the same soft accent-tinted background the TL;DR block uses
+     (picked over an --accent-strong color shift — quieter against the
+     filled active segment sitting right next to it). */
+  .viewtab:not(.active):hover { background: var(--tldr-bg); }
+  /* Inset outline (negative offset): an outset ring would get clipped by
+     the capsule's overflow: hidden. */
+  .viewtab:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
 
   /* Week rail (roadmap 3 step 2): mono wire-style ← older · WEEK N · range ·
      newer → nav, between the view tabs and the filter row, ALL-view index
