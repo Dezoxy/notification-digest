@@ -1242,6 +1242,12 @@ const STRINGS = {
     emptyFiltered: "Nothing matches.",
     themeToggle: "Toggle light/dark",
     densityToggle: "Toggle compact list",
+    // Settings bubble (owner redesign): the gear button that collapses the
+    // language/theme/density cluster, plus its panel row labels.
+    settingsLabel: "Settings",
+    settingsLanguage: "Language",
+    settingsTheme: "Theme",
+    settingsDensity: "Density",
     unreadFence: "new since your last visit",
     pulseLabel: "Recent volume",
     countdownNext: "next window closes in about {t}",
@@ -1309,6 +1315,12 @@ const STRINGS = {
     emptyFiltered: "Nincs találat.",
     themeToggle: "Világos/sötét váltás",
     densityToggle: "Kompakt lista be/ki",
+    // Owner: please review — new HU strings, settings bubble (gear button +
+    // panel row labels), mirrors the EN block's pattern.
+    settingsLabel: "Beállítások",
+    settingsLanguage: "Nyelv",
+    settingsTheme: "Téma",
+    settingsDensity: "Sűrűség",
     unreadFence: "új a legutóbbi látogatásod óta",
     pulseLabel: "Friss mennyiség",
     countdownNext: "a következő ablak kb. {t} múlva zárul",
@@ -1420,21 +1432,25 @@ function renderViewTabs(token, lang, view) {
   return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}${tab("weekly", strings.viewWeekly)}</nav>`;
 }
 
-// The masthead's right cluster carries the language toggle plus the manual
-// theme toggle (roadmap step 6), on both index and digest pages — a reader
-// override of the OS theme is useful everywhere, not just on the index. The
-// button starts `hidden` (progressive enhancement, same as the filter input
-// below) and is un-hidden by the bottom script once it's known to be wired.
+// The masthead's top-right cluster (language, theme, density) collapses into
+// one gear button that opens a floating settings bubble (owner redesign) — a
+// native <details>/<summary> disclosure, so the panel opens with NO JS. The
+// language links inside keep working for no-JS readers exactly as before;
+// the theme/density buttons keep their existing classes and hidden-until-JS
+// contract untouched, so the bottom-script IIFEs that wire them need no
+// changes at all.
 function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   const strings = STRINGS[lang];
+  const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
+  const themeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTheme)}</span><button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button></div>`;
   // Density toggle (roadmap 4 step 4): index pages only — it governs the
   // ledger's .entry padding/clamp, which a digest page has none of, so the
-  // button would be a dead control there.
-  const densityToggleHtml =
+  // row would be a dead control there.
+  const densityRow =
     pageKind === "index"
-      ? `<button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button>`
+      ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
       : "";
-  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}<button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button>${densityToggleHtml}</div>`;
+  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙</summary><div class="settingspanel">${langRow}${themeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -1624,12 +1640,10 @@ const CSS = `
   }
   .mast .brand { font-weight: 700; font-size: 1.05em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
   .mast .brand .tld { color: var(--accent); }
-  /* Switchers (EN | HU, All | Daily) sit top-right in the masthead, paired
-     on one row via .switchers,
-     both right-aligned — same markup at both breakpoints, .switchers'
-     own flex-wrap (not header.mast's) is what keeps two small switchers
-     from crowding the brand on narrow viewports: they wrap onto their own
-     line under mastright rather than squeezing the header itself. */
+  /* The settings gear (language/theme/density, collapsed into one
+     details.settings disclosure — see renderSwitchers) sits top-right in
+     the masthead via .mastright, right-aligned — same markup at both
+     breakpoints. */
   .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; }
 
   /* Mobile masthead + phone font size (owner-tuned). */
@@ -1645,16 +1659,52 @@ const CSS = `
     }
     .mast .mastright { display: contents; }
   }
-  .mast .switchers { display: flex; gap: 0.6em; align-items: baseline; flex-wrap: wrap; justify-content: flex-end; }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
 
-  /* Manual theme toggle (roadmap step 6): small pill button after the lang
-     switcher in .switchers. hidden by default, un-hidden by the bottom
-     script — no JS, no button, same progressive-enhancement contract as the
-     index filter input below. The density toggle (roadmap 4 step 4) shares
-     this exact look — grouped into the same rules rather than duplicated. */
+  /* Settings bubble (owner redesign): the gear button collapses language,
+     theme, and density into one disclosure. details.settings — NOT
+     .mastright — is the positioning anchor for .settingspanel below:
+     .mastright goes display: contents in the ≤40em mobile block just
+     below, which erases it as a box entirely, so anything anchored to it
+     would have nowhere to be absolute relative to. The <details> element
+     itself survives that collapse and stays a real box, so it's the anchor. */
+  details.settings { position: relative; }
+  summary.gear {
+    list-style: none;
+    background: none; border: 1px solid var(--hairline); border-radius: 999px;
+    color: var(--text); font-size: 0.9em; padding: 0.05em 0.5em; cursor: pointer;
+  }
+  /* iOS Safari draws its own disclosure triangle on <summary> even with
+     list-style: none — this is the belt-and-suspenders rule that actually
+     suppresses it. */
+  summary.gear::-webkit-details-marker { display: none; }
+  summary.gear:hover { border-color: var(--accent); }
+  summary.gear:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  details.settings[open] > summary.gear { border-color: var(--accent); }
+  .settingspanel {
+    position: absolute; right: 0; top: calc(100% + 0.5em);
+    /* Must clear the sticky day headers (.dayhead, z-index: 1) or the panel
+       would open underneath the ledger once the reader has scrolled. */
+    z-index: 20;
+    background: var(--bg); border: 1px solid var(--hairline); border-radius: 14px;
+    padding: 0.9em 1.1em;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28); /* same recipe as .backfab's */
+    display: flex; flex-direction: column; gap: 0.7em; min-width: 13em;
+  }
+  .settingsrow { display: flex; justify-content: space-between; align-items: baseline; gap: 1.2em; }
+  .settingslabel {
+    font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted);
+  }
+
+  /* Manual theme toggle (roadmap step 6): small pill button, now living
+     inside the settings bubble's panel (see .settingspanel above). hidden by
+     default, un-hidden by the bottom script — no JS, no button, same
+     progressive-enhancement contract as the index filter input below. The
+     density toggle (roadmap 4 step 4) shares this exact look — grouped into
+     the same rules rather than duplicated. */
   .themetoggle, .densitytoggle {
     background: none; border: 1px solid var(--hairline); border-radius: 999px;
     color: var(--text); font-size: 0.8em; padding: 0.05em 0.5em; cursor: pointer;
@@ -2424,6 +2474,24 @@ ${prefetchScriptHtml}
         localStorage.setItem("density", next);
       } catch (e) {}
       reflect();
+    });
+  })();
+
+  // Settings bubble close polish (owner redesign). The disclosure itself
+  // needs no JS at all — details/summary opens and closes natively — this
+  // IIFE only adds the close-on-outside-click and close-on-Escape behavior
+  // readers expect from a floating panel.
+  (function () {
+    var settings = document.querySelector("details.settings");
+    if (!settings) return;
+    document.addEventListener("click", function (e) {
+      if (settings.open && !settings.contains(e.target)) settings.open = false;
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && settings.open) {
+        settings.open = false;
+        settings.querySelector("summary.gear").focus();
+      }
     });
   })();
 
