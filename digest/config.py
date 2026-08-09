@@ -175,6 +175,22 @@ class Config:
     # distinguishable from "not configured at all" -- which a 0-means-unset
     # convention could never represent.
     telegram_daily_thread_id: int | None = None
+    # Optional SEPARATE forum-topic thread for the weekly-brief feature
+    # (digest/main.py's `run_weekly`), one editorial rung up from
+    # `telegram_daily_thread_id` immediately above -- same rationale, same
+    # None-means-unset/0-means-group-root distinction, just for the weekly
+    # topic instead of the daily one: the weekly brief goes to its own
+    # topic, not the daily briefs' (or window digests') own topic, so the
+    # three don't interleave. `None` (unset, the default) means "no separate
+    # topic configured" -- main.py falls back to `telegram_notify_thread_id`
+    # with an INFO log, rather than a ConfigError, since a single-topic
+    # deployment is a completely valid configuration, not a misconfiguration.
+    # Deliberately `int | None`, not a "0 means unset" convention, for the
+    # identical reason `telegram_daily_thread_id`'s own comment gives: 0 is a
+    # legitimate EXPLICIT choice here too (post the weekly brief to the group
+    # root while other channels go to topics), and that must be
+    # distinguishable from "not configured at all".
+    telegram_weekly_thread_id: int | None = None
     # Reddit collector (digest/collectors/reddit.py). Like x_enabled/
     # polymarket_enabled, this is an explicit on/off flag rather than an
     # empty-means-disabled sentinel -- REDDIT_SUBREDDITS has no natural
@@ -278,6 +294,7 @@ class Config:
             "TELEGRAM_NOTIFY_THREAD_ID", default=0
         )
         telegram_daily_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_DAILY_THREAD_ID")
+        telegram_weekly_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_WEEKLY_THREAD_ID")
 
         # site_public_base is validated against the TELEGRAM channel (not the
         # site channel): its only consumer is send_telegram_tldr's reader
@@ -336,6 +353,7 @@ class Config:
             telegram_notify_chat_id=telegram_notify_chat_id,
             telegram_notify_thread_id=telegram_notify_thread_id,
             telegram_daily_thread_id=telegram_daily_thread_id,
+            telegram_weekly_thread_id=telegram_weekly_thread_id,
         )
 
 

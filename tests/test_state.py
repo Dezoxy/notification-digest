@@ -12,11 +12,13 @@ from digest.state import (
     create_digest,
     get_cursors,
     get_daily_allowed_urls,
+    get_daily_digests_since,
     get_digest_source_counts,
     get_pending_digests,
     get_polymarket_probs,
     get_recent_digests,
     get_unsummarized_items,
+    get_weekly_allowed_urls,
     get_window_digests_since,
     init_db,
     mark_digest_sent,
@@ -1725,6 +1727,125 @@ def test_get_daily_allowed_urls_excludes_items_of_another_daily_digest(conn):
 
 def test_get_daily_allowed_urls_empty_when_nothing_in_range(conn):
     urls = get_daily_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == set()
+
+
+# --- get_daily_digests_since (weekly-brief feature) ---
+
+
+def test_get_daily_digests_since_returns_only_daily_kind(conn):
+    daily_id = create_digest(conn, "daily body", [], kind="daily")
+    create_digest(conn, "window body", [])
+    create_digest(conn, "weekly body", [], kind="weekly")
+
+    result = get_daily_digests_since(conn, "2020-01-01T00:00:00+00:00")
+
+    assert [row[0] for row in result] == [daily_id]
+
+
+def test_get_daily_digests_since_excludes_rows_older_than_since(conn):
+    _insert_digest(conn, "2026-07-28T10:00:00+00:00", "outside", kind="daily")
+    _insert_digest(conn, "2026-07-29T09:00:00+00:00", "inside", kind="daily")
+
+    result = get_daily_digests_since(conn, "2026-07-29T00:00:00+00:00")
+
+    assert [row[3] for row in result] == ["inside"]
+
+
+def test_get_daily_digests_since_orders_ascending_by_id(conn):
+    _insert_digest(conn, "2026-07-29T12:00:00+00:00", "newest", kind="daily")
+    _insert_digest(conn, "2026-07-29T08:00:00+00:00", "oldest", kind="daily")
+    _insert_digest(conn, "2026-07-29T10:00:00+00:00", "middle", kind="daily")
+
+    result = get_daily_digests_since(conn, "2026-07-29T00:00:00+00:00")
+
+    # Insertion order (ascending id), NOT created_at order -- ascending id is
+    # the function's own documented contract, matching build_weekly_prompt's
+    # need to read each source daily brief chronologically.
+    assert [row[3] for row in result] == ["newest", "oldest", "middle"]
+
+
+def test_get_daily_digests_since_returns_id_created_at_item_count_body_md(conn):
+    daily_id = create_digest(conn, "body text", [], kind="daily", item_count=8)
+
+    result = get_daily_digests_since(conn, "2020-01-01T00:00:00+00:00")
+
+    assert len(result) == 1
+    row_id, created_at, item_count, body_md = result[0]
+    assert row_id == daily_id
+    assert item_count == 8
+    assert body_md == "body text"
+    assert isinstance(created_at, str)
+
+
+def test_get_daily_digests_since_empty_when_nothing_in_window(conn):
+    _insert_digest(conn, "2026-07-01T00:00:00+00:00", "ancient", kind="daily")
+
+    result = get_daily_digests_since(conn, "2026-07-29T00:00:00+00:00")
+
+    assert result == []
+
+
+# --- get_weekly_allowed_urls (weekly-brief delivery link-provenance fix) ---
+
+
+def test_get_weekly_allowed_urls_unions_in_window_window_digest_urls(conn):
+    _window_digest_with_url(conn, "2026-07-25T06:00:00+00:00", "1", "https://example.com/a")
+    _window_digest_with_url(conn, "2026-07-28T12:00:00+00:00", "2", "https://example.com/b")
+
+    urls = get_weekly_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == {"https://example.com/a", "https://example.com/b"}
+
+
+def test_get_weekly_allowed_urls_excludes_digest_older_than_lookback(conn):
+    _window_digest_with_url(conn, "2026-07-20T00:00:00+00:00", "1", "https://example.com/old")
+    _window_digest_with_url(conn, "2026-07-28T12:00:00+00:00", "2", "https://example.com/new")
+
+    # since = 2026-07-29T20:00 - 7d = 2026-07-22T20:00 -- the "old" digest
+    # (2026-07-20T00:00) falls outside that window, the "new" one doesn't.
+    urls = get_weekly_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == {"https://example.com/new"}
+
+
+def test_get_weekly_allowed_urls_excludes_digest_created_after_brief(conn):
+    _window_digest_with_url(conn, "2026-07-28T12:00:00+00:00", "1", "https://example.com/before")
+    _window_digest_with_url(conn, "2026-07-29T21:00:00+00:00", "2", "https://example.com/after")
+
+    # The upper bound is strict (< created_at): a window digest created AFTER
+    # the brief must never widen a later resend's allowlist -- see
+    # get_weekly_allowed_urls' own docstring on why this must be
+    # deterministic (mirrors get_daily_allowed_urls' identical reasoning).
+    urls = get_weekly_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == {"https://example.com/before"}
+
+
+def test_get_weekly_allowed_urls_excludes_items_of_a_daily_or_weekly_digest(conn):
+    # Nothing at the SQL level stops a "daily"/"weekly" digests row from
+    # carrying a digest_id on an items row -- this proves the `kind =
+    # 'window'` filter, not merely "any digest in range", is what keeps a
+    # daily or weekly brief's own items out of a weekly brief's allowlist.
+    daily_item = _item(
+        "1", fetched_at="2026-07-28T12:00:00+00:00", url="https://example.com/daily-item"
+    )
+    commit_new_items(conn, [daily_item], {})
+    daily_digest_id = create_digest(conn, "daily body", [daily_item], kind="daily")
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?",
+        ("2026-07-28T12:00:00+00:00", daily_digest_id),
+    )
+    conn.commit()
+
+    urls = get_weekly_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == set()
+
+
+def test_get_weekly_allowed_urls_empty_when_nothing_in_range(conn):
+    urls = get_weekly_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
 
     assert urls == set()
 
