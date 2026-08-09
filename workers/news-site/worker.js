@@ -2482,6 +2482,26 @@ ${prefetchScriptHtml}
 </div>
 <noscript><style>.backfab { opacity: 1; pointer-events: auto; }</style></noscript>
 <script>
+  // Animated preference swap (owner-requested), shared by the theme and
+  // text-size minisegs below: run a page-state mutation inside a
+  // same-document View Transition so the whole page crossfades to the new
+  // state instead of snapping — the same-document sibling of the
+  // at-view-transition navigation crossfade this site already ships, and
+  // the same restraint applies: the browser's default crossfade, no custom
+  // choreography. Unsupported browsers and reduced-motion readers get the
+  // instant switch they always had — the mutation itself runs either way,
+  // so correctness never depends on the animation.
+  function withPageTransition(mutate) {
+    if (
+      document.startViewTransition &&
+      !matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      document.startViewTransition(mutate);
+    } else {
+      mutate();
+    }
+  }
+
   // Show the floating back button only after the header nav has scrolled
   // away. Passive listener; runs once immediately so a mid-page reload
   // (browser scroll restoration) starts in the right state.
@@ -2553,28 +2573,12 @@ ${prefetchScriptHtml}
     // static per-meta content values above already ARE the auto values.
     var stored = document.documentElement.dataset.theme;
     if (stored === "dark" || stored === "light") syncThemeColorMetas(stored);
-    // Animated palette swap (owner-requested): wrap the theme mutation in a
-    // same-document View Transition, which crossfades the WHOLE page
-    // between the old and new palette — the same-document sibling of the
-    // at-view-transition navigation crossfade this site already ships, and
-    // the same restraint applies: the browser's default crossfade, no
-    // custom choreography. Unsupported browsers and reduced-motion readers
-    // get the instant switch they always had — the mutation itself runs
-    // either way, so correctness never depends on the animation.
-    var applyThemeChange = function (mutate) {
-      if (
-        document.startViewTransition &&
-        !matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
-        document.startViewTransition(mutate);
-      } else {
-        mutate();
-      }
-    };
     for (var j = 0; j < buttons.length; j++) {
       buttons[j].addEventListener("click", function () {
         var v = this.dataset.set;
-        applyThemeChange(function () {
+        // Crossfade the palette swap — see withPageTransition at the top
+        // of this script.
+        withPageTransition(function () {
         if (v === "auto") {
           document.documentElement.dataset.theme = "";
           try {
@@ -2616,12 +2620,17 @@ ${prefetchScriptHtml}
     for (var j = 0; j < buttons.length; j++) {
       buttons[j].addEventListener("click", function () {
         var v = this.dataset.set;
-        document.documentElement.dataset.fontsize = v === "m" ? "" : v;
-        try {
-          if (v === "m") localStorage.removeItem("fontsize");
-          else localStorage.setItem("fontsize", v);
-        } catch (e) {}
-        reflect();
+        // Crossfade the reflow — see withPageTransition at the top of this
+        // script. A size change reflows the prose, and the crossfade turns
+        // that layout jump into a dissolve, same as the theme swap.
+        withPageTransition(function () {
+          document.documentElement.dataset.fontsize = v === "m" ? "" : v;
+          try {
+            if (v === "m") localStorage.removeItem("fontsize");
+            else localStorage.setItem("fontsize", v);
+          } catch (e) {}
+          reflect();
+        });
       });
     }
   })();
