@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -370,6 +371,115 @@ def parse_failed_sources(body_md: str) -> list[str]:
     return failed
 
 
+# Mirrors the site's own MAX_TOPICS (toom-edge PR #107's `PUT /ingest/:id`
+# validator, which 400s a `topics` array past this length) -- capped here
+# too so a digest with many sections degrades to "the first 12, in
+# document order" instead of failing site publish outright.
+_MAX_TOPICS = 12
+
+# The site's label field, trimmed 1-80 chars.
+_MAX_TOPIC_LABEL_LEN = 80
+
+
+def _slugify(heading: str) -> str:
+    """Deterministically fold one heading into an ASCII slug, or "" if nothing survives.
+
+    THE SAME HEADING MUST ALWAYS PRODUCE THE SAME SLUG, run over run: the
+    site keys its "story arc" recurrence tracking (derive_topics' own
+    docstring has the full contract) on slug equality across digests
+    published days apart, so this has to be a pure, stable function of the
+    heading text alone -- no randomness, no locale dependence, nothing
+    that could drift between two runs of the same process or between two
+    different deploys of this code.
+
+    Unicode NFKD-normalizes the heading (splitting each precomposed
+    accented character into its base letter plus combining marks, e.g.
+    "ő" -> "o" + a combining double acute accent) and then encodes to
+    ASCII with `errors="ignore"`, which drops every remaining non-ASCII
+    codepoint outright -- the combining marks NFKD just split off, plus
+    anything with no ASCII decomposition at all (CJK, emoji, em dashes).
+    This is why "Középső árfolyam" folds to "kozepso arfolyam": each
+    accented letter loses only its diacritic, not the whole letter.
+
+    The result is lowercased, then every RUN of one or more characters
+    outside `[a-z0-9]` (whitespace, punctuation, whatever NFKD-ascii-drop
+    left behind) collapses to a single "-" -- so "Fed — Watch & Rates!"
+    (where the em dash vanishes in the ASCII-drop step, leaving a doubled
+    space) folds to "fed-watch-rates", one hyphen per gap, never a run of
+    them. Leading/trailing "-" are stripped, the result is truncated to 64
+    characters, and trailing "-" is stripped once more (a truncation can
+    land right after a hyphen).
+
+    Returns "" when nothing survives the fold (a heading that is entirely
+    punctuation, whitespace, or non-ASCII with no NFKD decomposition, e.g.
+    plain CJK) -- derive_topics' contract is to skip such a heading
+    entirely rather than send the site a topic with an empty slug.
+    """
+    ascii_text = unicodedata.normalize("NFKD", heading).encode("ascii", "ignore").decode("ascii")
+    collapsed = re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
+    return collapsed[:64].rstrip("-")
+
+
+def derive_topics(body_md: str) -> list[dict[str, str]]:
+    """Derive the site's `topics` ingest field from a digest's own `## ` section headings.
+
+    One `{"slug": ..., "label": ...}` entry per real heading (via
+    `_real_heading_lines`, the same fence-aware scan `section_link_targets`
+    and `count_sections` already rely on), in document order, EXCLUDING
+    "## Needs attention" via the identical case-insensitive check
+    `section_link_targets` uses against this module's own
+    `_NEEDS_ATTENTION_HEADING` constant -- it is the prompt's own routing
+    label, not a story, so it must never become a topic either.
+
+    `label` is the heading's own text, stripped, truncated to 80 characters
+    (the site's own label limit). `slug` is `_slugify(heading)` -- see that
+    function's docstring for the full fold; THE SLUG-STABILITY CONTRACT IS
+    THE WHOLE POINT of this function existing at all: the site counts a
+    story arc as "recurring" by matching `slug` across digests published up
+    to 7 days apart (toom-edge PR #107), so the same section title must
+    fold to the same slug on every run, forever -- there is no migration
+    path for a slug that quietly changes shape later.
+
+    A heading whose slug folds to "" (all punctuation, all CJK, ...) is
+    SKIPPED outright, never sent with an empty slug -- the site's ingest
+    validator 400s an empty slug, and `_slugify`'s docstring covers exactly
+    when this happens.
+
+    Deduplicated by slug, FIRST occurrence wins: two headings that happen
+    to fold to the same slug (e.g. differing only in punctuation the fold
+    strips) would otherwise produce two entries with the same slug, which
+    the site's ingest validator also 400s on (duplicate slugs rejected).
+    Capped at `_MAX_TOPICS` (12, matching the site's own `MAX_TOPICS`) in
+    document order, after dedup -- the prompt contract orders sections
+    most-important-first, so truncating here keeps the most relevant ones.
+
+    Never raises: like `count_sections`/`has_needs_attention`, this reads
+    only off `_real_heading_lines`' already-defensive scan, so a malformed
+    or empty `body_md` simply yields `[]`, not an exception -- there is
+    nothing here that can throw the way `extract_tldr`'s markdown-shape
+    parsing can.
+
+    Returns `[]` for a `body_md` with no real, non-"Needs attention"
+    heading at all (matching `parse_failed_sources`' own "no banner, empty
+    list" contract for the identical reason: this is a normal, common
+    case, not a parse failure).
+    """
+    topics: list[dict[str, str]] = []
+    seen_slugs: set[str] = set()
+    for heading in _real_heading_lines(body_md):
+        title = heading.strip()
+        if title.casefold() == _NEEDS_ATTENTION_HEADING:
+            continue
+        slug = _slugify(title)
+        if not slug or slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        topics.append({"slug": slug, "label": title[:_MAX_TOPIC_LABEL_LEN]})
+        if len(topics) >= _MAX_TOPICS:
+            break
+    return topics
+
+
 def publish_to_site(
     digest_id: int,
     body_md: str,
@@ -384,6 +494,7 @@ def publish_to_site(
     kind: str = "window",
     source_counts: dict[str, int] | None = None,
     failed_sources: list[str] | None = None,
+    topics: list[dict[str, str]] | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -439,6 +550,17 @@ def publish_to_site(
     absent field are treated identically there, so there is no correctness
     reason to send the empty shape over the wire).
 
+    `topics` (keyword-only, default None) is the up-to-12
+    `{"slug": ..., "label": ...}` list this module's own `derive_topics`
+    computes from `body_md` (see that function's docstring for the full
+    slug-stability contract) -- the site uses `slug` to detect a story arc
+    recurring across a trailing 7-day window of digests, rendering a "×N
+    this week" line for it. Included in the payload under the IDENTICAL
+    truthy-only rule as `source_counts`/`failed_sources` just above: an
+    empty list or None both mean "omit the field entirely", matching the
+    Worker's own `topics` contract (toom-edge PR #107), which treats an
+    empty array the same as a missing field.
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -480,6 +602,8 @@ def publish_to_site(
         payload["source_counts"] = source_counts
     if failed_sources:
         payload["failed_sources"] = failed_sources
+    if topics:
+        payload["topics"] = topics
     data = json.dumps(payload).encode("utf-8")
     url = f"{publish_url}/ingest/{digest_id}"
     headers = {
