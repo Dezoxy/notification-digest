@@ -7,6 +7,7 @@ dependency here, just a subprocess call.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import re
@@ -1215,6 +1216,161 @@ def enforce_link_allowlist(markdown_text: str, allowed_urls: Collection[str]) ->
     return result
 
 
+# Matches a citation link exactly as prompts/digest.md's contract emits one:
+# `[<superscript-digit(s)>](<url>)`, where the bracketed link TEXT is nothing
+# but one or more characters from the superscript-digit set and nothing
+# else. This is the identical discriminator digest/emailer.py's
+# `_style_citation_anchors` uses (`_SUPERSCRIPT_ONLY_RE.fullmatch`) to tell a
+# real citation apart from a normal-text link: matching on the link's exact
+# SHAPE, never on position or URL pattern, is what keeps this from ever
+# touching a link whose visible text is ordinary prose (a citation is never
+# anything else in this codebase's output) or a bare superscript character
+# sitting in prose that isn't link text at all -- e.g. "10²⁵ FLOPs" has a
+# superscript character but no enclosing `[...](...)`, so it can never match
+# this pattern regardless of what surrounds it.
+_CITATION_LINK_RE = re.compile(r"\[([⁰¹²³⁴⁵⁶⁷⁸⁹]+)\](\([^)]*\))")
+
+# Identifies the TL;DR paragraph: a line starting with the literal `**TL;DR`
+# marker (mirrors digest/publish.py's `_TLDR_PREFIX`/`extract_tldr`, which
+# cannot be imported here without introducing an import cycle -- publish.py
+# already imports `_real_heading_lines` from this module), captured through
+# to the first blank line, or the end of the string (`\Z`) for a briefing
+# that is nothing but the TL;DR. `re.MULTILINE` makes `^` match the start of
+# any line, not just the start of the string, since the TL;DR paragraph is
+# not always literally the first paragraph (a currently-disabled "## Needs
+# attention" section can precede it -- see prompts/digest.md's own comment
+# on that section). `re.DOTALL` makes `.` match newlines too, so a TL;DR
+# paragraph that wraps across multiple physical lines is captured whole; the
+# non-greedy `.*?` still stops at the FIRST blank-line boundary rather than
+# swallowing the rest of the document.
+_TLDR_PARAGRAPH_RE = re.compile(r"^\*\*TL;DR.*?(?=\n[ \t]*\n|\Z)", re.MULTILINE | re.DOTALL)
+
+# Collapses a run of two-or-more horizontal-whitespace characters left behind
+# by a deleted citation into a single space -- e.g. two adjacent citations
+# each deleted leaves a doubled gap. `[ \t]` only, never `\s`: a citation's
+# own removal can never span a newline, and this pass must never touch one
+# either -- paragraph structure is not this function's business.
+_TLDR_MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
+
+# Removes a single space that now sits directly before a closing-punctuation
+# character, left behind when a SPACE-separated citation (`5.21% [¹](u).`)
+# is deleted -- an ATTACHED citation (`5.21%[¹](u).`) never had this space
+# to begin with, so this is a no-op for that form. `[ \t]` only, for the
+# same reason as _TLDR_MULTI_SPACE_RE.
+_TLDR_SPACE_BEFORE_PUNCTUATION_RE = re.compile(r"[ \t]+([.,;:)])")
+
+
+def strip_tldr_citations(markdown_text: str) -> str:
+    """Delete every citation link inside the TL;DR paragraph, leaving the body untouched.
+
+    Why this is CODE, not a prompt instruction: PLAN.md §5's documented
+    lesson (see the file's ⚠ banner) is that a required output PROPERTY must
+    never depend on model compliance -- prompts/digest.md already instructs
+    the model at length about citation format and numbering, and the model
+    still drifts on formatting details run to run (see, e.g., summarize()'s
+    own soft TL;DR-opener check, or the banner saga in run_claude's
+    docstring). "The TL;DR paragraph carries zero citation links" is exactly
+    this kind of hard guarantee -- it must hold on every digest regardless of
+    what the model actually wrote -- so it is enforced here, deterministically,
+    after the model has already run. The companion prompt edit
+    (prompts/digest.md, prompts/daily.md) exists only to stop the model from
+    wasting citation numbers on a paragraph they will be deleted from anyway;
+    it is never relied on for the guarantee itself.
+
+    Operates ONLY on the TL;DR paragraph (`_TLDR_PARAGRAPH_RE`: the paragraph
+    whose first line starts with the literal `**TL;DR` marker, ending at the
+    first blank line or the end of the string) -- every other paragraph,
+    including every `## ` body section's own citations, is left
+    byte-for-byte untouched. Within that paragraph, every citation link
+    matching `_CITATION_LINK_RE` -- a link whose ENTIRE visible text is one
+    or more superscript digits and nothing else -- is deleted outright. This
+    is the same discriminator digest/emailer.py's `_style_citation_anchors`
+    uses to recognize a real citation (see `_CITATION_LINK_RE`'s own comment
+    for the full reasoning): matching on shape, not position, is what keeps
+    this from ever touching a prose-text link or a bare superscript
+    character sitting in prose that is not link text at all.
+
+    Cleans up the two whitespace shapes a deletion can leave behind: an
+    ATTACHED citation (`5.21%[¹](u).`) leaves no gap at all, while a
+    SPACE-separated one (`5.21% [¹](u).`) leaves a run that would otherwise
+    read as "5.21% ." -- a stray space before the period. After every
+    citation in the paragraph is deleted, a run of two-or-more horizontal-
+    whitespace characters collapses to one (`_TLDR_MULTI_SPACE_RE`), and a
+    single space directly before `.`/`,`/`;`/`:`/`)` is removed
+    (`_TLDR_SPACE_BEFORE_PUNCTUATION_RE`). Both passes match `[ \t]` only,
+    never `\\s` -- newlines are never touched.
+
+    Returns `markdown_text` completely unchanged when there is no TL;DR
+    paragraph (`_TLDR_PARAGRAPH_RE` finds no match -- e.g. a digest whose
+    model output omitted the TL;DR opener, which summarize()'s own soft
+    check already tolerates and ships anyway) or when the TL;DR paragraph
+    has no citations to strip in the first place.
+    """
+
+    def _clean(match: re.Match[str]) -> str:
+        paragraph = match.group(0)
+        cleaned = _CITATION_LINK_RE.sub("", paragraph)
+        if cleaned == paragraph:
+            return paragraph
+        cleaned = _TLDR_MULTI_SPACE_RE.sub(" ", cleaned)
+        cleaned = _TLDR_SPACE_BEFORE_PUNCTUATION_RE.sub(r"\1", cleaned)
+        return cleaned
+
+    return _TLDR_PARAGRAPH_RE.sub(_clean, markdown_text, count=1)
+
+
+# Only the digit-to-superscript direction is ever exercised by
+# renumber_citations (it counts matches by POSITION, never by reading a
+# citation's existing number back out of its superscript form -- see that
+# function's docstring), but the mapping is the same digit<->superscript
+# character correspondence used throughout this codebase's citation handling
+# (`0123456789` <-> `⁰¹²³⁴⁵⁶⁷⁸⁹`, matching _CITATION_LINK_RE's character
+# class), spelled out once here rather than re-derived per call.
+_DIGIT_TO_SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def renumber_citations(markdown_text: str) -> str:
+    """Renumber every remaining citation link sequentially from 1, in order of appearance.
+
+    Meant to run immediately after `strip_tldr_citations`: once the TL;DR's
+    own citations are gone, the body's surviving numbering starts mid-
+    sequence (e.g. at ⁵, if four citations were removed from the TL;DR) --
+    this closes that gap by rewriting every surviving citation's visible
+    number, first-to-last through the whole document, to ¹, ², ³, ... ,
+    regardless of what number it originally carried.
+
+    Only rewrites the link TEXT (the bracketed superscript digits), never
+    the URL: the captured `(...)` group from `_CITATION_LINK_RE` is
+    re-emitted verbatim, untouched. This is why summarize() and
+    summarize_daily() call this AFTER enforce_link_allowlist: renumbering
+    changes nothing about which URLs appear in the output, so it cannot
+    reintroduce a non-allowlisted link or otherwise affect that pass's
+    provenance guarantee -- provenance is a property of the URL, and the URL
+    never changes here.
+
+    Matches the same `_CITATION_LINK_RE` shape `strip_tldr_citations` uses --
+    a link whose entire visible text is superscript digits and nothing else
+    -- so a bare superscript sitting in ordinary prose (not link text at
+    all, e.g. "10²⁵ FLOPs") is never touched, for the identical reason given
+    in that function's docstring.
+
+    `str(n).translate(_DIGIT_TO_SUPERSCRIPT)` naturally produces the right
+    multi-digit sequence for n >= 10 (e.g. "10" -> "¹⁰" via per-character
+    translation) with no special-casing needed for the 10+ case -- this
+    function never needs to parse an EXISTING (possibly multi-digit)
+    superscript back into an int, since the new number comes from a plain
+    position counter, not from reading the old one.
+    """
+    counter = itertools.count(1)
+
+    def _renumber(match: re.Match[str]) -> str:
+        n = next(counter)
+        superscript = str(n).translate(_DIGIT_TO_SUPERSCRIPT)
+        return f"[{superscript}]{match.group(2)}"
+
+    return _CITATION_LINK_RE.sub(_renumber, markdown_text)
+
+
 def summarize(
     items: list[Item],
     failed_sources: list[str],
@@ -1260,6 +1416,16 @@ def summarize(
     failing the whole run (see that function's docstring for why repair,
     not rejection, is the right response here).
 
+    `strip_tldr_citations` then `renumber_citations` run last, after link
+    repair: the owner's requirement is that the TL;DR paragraph read as
+    clean prose with NO citation links anywhere, on every channel (site,
+    email, archive, Hungarian translation) -- so this is enforced here in
+    code rather than left to the prompt, per the same "never let a required
+    output property depend on model compliance" lesson the banner above
+    already follows. Every downstream consumer (create_digest, publish/
+    archive, translate_digest) reads this already-cleaned `body_md`, so the
+    guarantee propagates to all of them for free.
+
     The `⚠ <source> collection failed this run` banner is generated here,
     in code, rather than asked of the model: a live test against real Opus
     showed the model omits the banner even when the prompt explicitly and
@@ -1289,6 +1455,15 @@ def summarize(
     if not _MARKDOWN_LINK_RE.search(output):
         logger.warning("digest output contains no citation links — sending anyway")
     output = enforce_link_allowlist(output, allowed_urls={item.url for item in items})
+    # strip_tldr_citations/renumber_citations run last, after link-allowlist
+    # repair: the TL;DR paragraph must never carry citation links (owner
+    # requirement -- clean prose only), enforced deterministically here
+    # rather than left to prompt compliance, per this module's own PLAN.md
+    # §5 lesson. Renumbering only rewrites link TEXT, never URLs, so running
+    # it after enforce_link_allowlist cannot reintroduce a non-allowlisted
+    # link or otherwise affect that pass's provenance guarantee -- see
+    # renumber_citations' own docstring.
+    output = renumber_citations(strip_tldr_citations(output))
     if failed_sources:
         banner = "".join(
             f"⚠ {source} collection failed this run\n" for source in failed_sources

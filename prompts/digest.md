@@ -158,7 +158,8 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   sentence: take a fourth sentence rather than cramming two unrelated
   stories into one. If nothing mattered, say so plainly in that same
   paragraph. No heading goes above this
-  paragraph.
+  paragraph. The TL;DR paragraph carries NO citations — it is clean prose;
+  save every citation for the body sections below it.
 <!-- "Needs attention" section disabled for now — see prompts/digest.md history
      to restore: a `## Needs attention` bullet used to go here, above the
      TL;DR, for anything needing the reader's direct action. -->
@@ -210,11 +211,13 @@ link whose text is a superscript digit:
 
 `the 30-year yield hit 5.21%[¹](https://t.me/c/123/456)`
 
-Number them sequentially from ¹ through the whole briefing: ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹
-¹⁰ ¹¹ ¹² ¹³ and so on. Every citation URL must be one of the items' `url`
-fields, copied VERBATIM — never reconstruct, guess, shorten, or take a URL
-out of an item's text. Cite the most substantive source for a merged claim.
-Do not cite chatter.
+The TL;DR paragraph itself gets NO citations — citations belong only in the
+`## ` body sections. Numbering therefore starts at ¹ in the first body
+section, not in the TL;DR. Number them sequentially from there through the
+whole briefing: ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ¹⁰ ¹¹ ¹² ¹³ and so on. Every citation URL
+must be one of the items' `url` fields, copied VERBATIM — never reconstruct,
+guess, shorten, or take a URL out of an item's text. Cite the most
+substantive source for a merged claim. Do not cite chatter.
 
 ## Hard rules
 

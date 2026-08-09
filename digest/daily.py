@@ -27,7 +27,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from digest.summarize import enforce_link_allowlist, run_claude, validate_output
+from digest.summarize import (
+    enforce_link_allowlist,
+    renumber_citations,
+    run_claude,
+    strip_tldr_citations,
+    validate_output,
+)
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "daily.md"
 
@@ -192,6 +198,16 @@ def summarize_daily(
     must be copied verbatim from the input, never invented), so the
     provenance check is against exactly the URLs those briefings were
     themselves allowed to cite.
+
+    `strip_tldr_citations` then `renumber_citations` (imported from
+    digest/summarize.py, not reimplemented here -- the daily brief is
+    "briefing markdown" under the identical TL;DR/citation contract a window
+    digest has) run last, after link repair, for the identical reason
+    digest/summarize.py's own `summarize` applies them in that position: the
+    owner's requirement that the TL;DR paragraph carry no citation links
+    applies to every briefing this codebase produces, daily brief included,
+    and renumbering only rewrites link TEXT -- never a URL -- so it cannot
+    affect `enforce_link_allowlist`'s provenance guarantee.
     """
     # `now` is overridable (keyword-only) for the daily BACKFILL script,
     # which synthesizes briefs for PAST evenings and must frame NOW_LABEL at
@@ -201,4 +217,5 @@ def summarize_daily(
     output = run_claude(prompt, model, timeout_seconds, effort)
     validate_output(output)
     output = output.replace("\\u0060", "`")
-    return enforce_link_allowlist(output, allowed_urls)
+    output = enforce_link_allowlist(output, allowed_urls)
+    return renumber_citations(strip_tldr_citations(output))

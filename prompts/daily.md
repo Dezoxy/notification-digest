@@ -48,7 +48,9 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   any other heading: `**TL;DR:** ...` — two to three sentences naming only
   what the DAY actually amounted to, in plain language. If the day was
   genuinely quiet, say so plainly in that same paragraph rather than
-  inflating minor items to fill it.
+  inflating minor items to fill it. The TL;DR paragraph carries NO
+  citations — it is clean prose; save every citation for the sections below
+  it.
 - After the TL;DR, write one `## ` section per real arc — a story that
   developed, mattered, or is still unfolding. **At most about 5 sections.**
   Choose the heading from what the arc is actually about (e.g. `## Missile
@@ -86,10 +88,12 @@ superscript digit, e.g. `the 30-year yield hit 5.21%[¹](https://t.me/c/123/456)
 Every citation URL you use MUST be copied VERBATIM from a `[<digit(s)>](url)`
 link that already appears in one of the day's briefings below — never
 reconstruct, guess, shorten, or invent a URL of your own, and never cite a
-URL that isn't already sitting in the input. Renumber citations sequentially
-from ¹ through this brief, in the order they first appear here — the
-original briefings' own numbering does not carry over, since this is a new
-document with its own citation order.
+URL that isn't already sitting in the input. The TL;DR paragraph itself gets
+NO citations — citations belong only in the `## ` sections below it.
+Numbering therefore starts at ¹ in the first section, not in the TL;DR.
+Renumber citations sequentially from there through this brief, in the order
+they first appear here — the original briefings' own numbering does not
+carry over, since this is a new document with its own citation order.
 
 ## Hard rules
 
