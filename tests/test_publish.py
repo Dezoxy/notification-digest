@@ -314,6 +314,31 @@ def test_derive_topics_excludes_needs_attention():
     assert derive_topics(body_md) == [{"slug": "story-one", "label": "Story one"}]
 
 
+def test_derive_topics_excludes_structural_rubric_headings():
+    # "Also today" (prompts/daily.md), "Hungary" (standing rule in
+    # prompts/daily.md and prompts/weekly.md), and "Watching next week"
+    # (prompts/weekly.md) are prompt-mandated, not model-chosen -- they must
+    # never become topics, mirroring the Needs attention exclusion above.
+    body_md = (
+        "## Story one\n\ntext\n\n"
+        "## Also today\n\nminor items\n\n"
+        "## Hungary\n\nquiet day in Hungarian threads\n\n"
+        "## Story two\n\nmore text\n\n"
+        "## Watching next week\n\nwatchlist\n"
+    )
+
+    assert derive_topics(body_md) == [
+        {"slug": "story-one", "label": "Story one"},
+        {"slug": "story-two", "label": "Story two"},
+    ]
+
+
+def test_derive_topics_structural_rubric_headings_case_insensitive():
+    body_md = "## ALSO TODAY\n\nminor items\n\n## Real story\n\ntext\n"
+
+    assert derive_topics(body_md) == [{"slug": "real-story", "label": "Real story"}]
+
+
 def test_derive_topics_diacritics_fold_to_ascii_slug():
     body_md = "## Középső árfolyam\n\ntext\n"
 
