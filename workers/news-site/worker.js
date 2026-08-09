@@ -599,6 +599,7 @@ const STRINGS = {
     latest: "Latest",
     filterPlaceholder: "Filter briefings…",
     themeToggle: "Toggle light/dark",
+    unreadFence: "new since your last visit",
   },
   hu: {
     locale: "hu-HU",
@@ -621,6 +622,7 @@ const STRINGS = {
     latest: "Legfrissebb",
     filterPlaceholder: "Szűrés…",
     themeToggle: "Világos/sötét váltás",
+    unreadFence: "új a legutóbbi látogatásod óta",
   },
 };
 
@@ -1070,6 +1072,23 @@ const CSS = `
   /* Plain border otherwise; only :focus-visible gets a visible outline. */
   .filterrow .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+  /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
+     inserts between digests that arrived since the reader's last visit and
+     everything older — no-JS readers never see this class at all, so no
+     hidden-by-default dance is needed here (unlike .filter/.themetoggle
+     above, which exist in the markup from the start). */
+  .unreadfence { display: flex; align-items: center; gap: 0.7em; margin: 1.4em 0; }
+  .unreadfence .line { flex: 1 1 auto; height: 0; border-top: 1px solid var(--accent); }
+  .unreadfence .label {
+    flex: 0 0 auto; font-family: var(--font-data); font-size: 0.7em;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+  }
+  /* The filter IIFE hides the fence via the hidden attribute while a query
+     is active (it can get orphaned mid-filter otherwise) — this class sets
+     display unconditionally above, so it needs its own [hidden] override to
+     actually disappear rather than fight the browser's UA stylesheet. */
+  .unreadfence[hidden] { display: none; }
+
   footer.site {
     margin-top: 3.5em; padding-top: 1.2em; border-top: 1px solid var(--hairline);
     color: var(--muted); font-size: 0.8em;
@@ -1225,6 +1244,73 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
     });
   })();
 
+  // Unread fence (roadmap 2 step 2, index pages only — guarded on an
+  // .entry[data-created] existing, since digest pages carry neither). A
+  // localStorage last-visit timestamp turns the index into an inbox: one
+  // labeled hairline between digests that arrived since the reader was last
+  // here and everything older. No JS = no fence (progressive enhancement —
+  // the class is never in the server-rendered markup).
+  (function () {
+    var entries = Array.prototype.slice.call(document.querySelectorAll(".entry[data-created]"));
+    if (entries.length === 0) return;
+    var section = document.querySelector("section[data-unread-label]");
+    if (!section) return;
+
+    var lastVisit = null;
+    try {
+      lastVisit = localStorage.getItem("lastVisit");
+    } catch (e) {}
+
+    // entries are in document order = newest first (lead card first, see the
+    // renderIndexPage/renderLeadCard comments), so entries[0] is the newest
+    // digest in this view overall.
+    var newest = entries[0].getAttribute("data-created");
+
+    if (lastVisit) {
+      // Find the LAST entry (in document order) newer than lastVisit — i.e.
+      // the last "new" one before the "old" run begins. created_at is an
+      // ISO UTC string, so > is a correct lexicographic comparison.
+      var lastNewIndex = -1;
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].getAttribute("data-created") > lastVisit) lastNewIndex = i;
+      }
+      // Draw the fence only for a genuine mix: at least one new entry AND at
+      // least one old entry after it. lastNewIndex === -1 means nothing is
+      // new (skip); lastNewIndex === entries.length - 1 means EVERYTHING is
+      // new — typically a first-ever visit — and a fence above zero old
+      // entries would just be noise, so skip that too.
+      if (lastNewIndex >= 0 && lastNewIndex < entries.length - 1) {
+        var fence = document.createElement("div");
+        fence.className = "unreadfence";
+        fence.setAttribute("role", "separator");
+        var lineBefore = document.createElement("span");
+        lineBefore.className = "line";
+        var label = document.createElement("span");
+        label.className = "label";
+        label.textContent = section.getAttribute("data-unread-label");
+        var lineAfter = document.createElement("span");
+        lineAfter.className = "line";
+        fence.appendChild(lineBefore);
+        fence.appendChild(label);
+        fence.appendChild(lineAfter);
+
+        // Insertion point is strictly "after the last new .entry element" —
+        // if that entry's next sibling happens to be a .dayhead, the fence
+        // lands above the day header, which reads naturally.
+        var lastNewEntry = entries[lastNewIndex];
+        lastNewEntry.parentNode.insertBefore(fence, lastNewEntry.nextSibling);
+      }
+    }
+
+    // Update AFTER computing the fence above, and to the NEWEST entry's own
+    // data-created — not "now" — so clock skew between the reader's device
+    // and the server's stamped created_at can never make a digest look
+    // newer or older than it is on the next visit.
+    try {
+      localStorage.setItem("lastVisit", newest);
+    } catch (e) {}
+  })();
+
   // Index filter (roadmap step 6, index pages only — guarded on the input's
   // existence since digest pages have no .filter). Case-insensitive
   // substring match against each .entry's text content (the lead card is an
@@ -1253,6 +1339,12 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
           return e.hidden;
         });
       });
+      // The unread fence is a load-time artifact; while filtering it can end
+      // up orphaned between hidden entries, which isn't worth coupling the
+      // two features over — just hide it whenever a query is active
+      // (roadmap 2 step 2).
+      var fence = document.querySelector(".unreadfence");
+      if (fence) fence.hidden = Boolean(q);
     });
   })();
 </script>
@@ -1316,7 +1408,11 @@ function renderIndexEntry(row, token, lang, view) {
   const timeClass = isDaily ? "time time-accent" : "time";
   const excerptClass = isDaily ? "excerpt excerpt-daily" : "excerpt";
 
-  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}">
+  // data-created (roadmap 2 step 2, unread fence): the row's own created_at,
+  // straight from D1 as an ISO UTC string — lexicographically comparable
+  // without parsing, the same trick get_recent_digests (digest repo) relies
+  // on. esc()'d like every other D1-sourced value inserted as an attribute.
+  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
     <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${dailyFlag}${flag}${langChip}</span>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
@@ -1344,7 +1440,8 @@ function renderLeadCard(row, token, lang, view) {
 
   const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
 
-  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}">
+  // data-created: same contract as renderIndexEntry's — see comment there.
+  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
     <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${dailyFlag}${flag}${langChip}</span>
     <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
@@ -1380,13 +1477,17 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // no filter UI — un-hidden by the bottom script in pageChrome.
   const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div>`;
 
+  // data-unread-label (roadmap 2 step 2): the unread-fence label text,
+  // rendered server-side so the bottom script that builds the fence stays
+  // language-agnostic — it just reads this attribute rather than knowing
+  // about STRINGS/lang itself.
   return pageChrome(
     host,
     token,
     lang,
     view,
     renderSwitchers(token, lang, view, "index"),
-    `${filterRowHtml}<section>${body}</section>`,
+    `${filterRowHtml}<section data-unread-label="${esc(strings.unreadFence)}">${body}</section>`,
   );
 }
 
