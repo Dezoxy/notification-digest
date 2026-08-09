@@ -404,7 +404,7 @@ so this pass contains no motion/lang work.
   reusing the `title` attribute addCiteTitles already sets — the hover
   affordance doesn't exist on the phone the site is mostly read on (print
   already does exactly this with `.cite[title]::after`).
-- [ ] **Resume chip** — the unread fence is passive; a small floating "↓
+- [x] **Resume chip** — the unread fence is passive; a small floating "↓
   new since your last visit" chip appears when the fence exists below the
   viewport and scrolls to it on tap. Progressive enhancement like the
   fence itself (no JS = no chip), current-week index only.

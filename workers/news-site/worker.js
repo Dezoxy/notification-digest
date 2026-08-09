@@ -1642,6 +1642,30 @@ const CSS = `
      active — the global [hidden] rule near the top of this stylesheet is
      what makes that actually take effect over the display: flex above.) */
 
+  /* Resume chip (roadmap 4 step 3): a floating "jump to the fence" button,
+     built entirely by the unread-fence IIFE below and only when a fence was
+     actually inserted — it inherits every one of that IIFE's guards for
+     free (no-JS, archive week, nothing new, everything new). No display
+     rule needed for hiding — the global [hidden] override near the top of
+     this stylesheet already handles that, same as .unreadfence above. */
+  .resumechip {
+    position: fixed;
+    left: 50%; transform: translateX(-50%);
+    bottom: calc(1.1rem + env(safe-area-inset-bottom));
+    font-family: var(--font-data); font-size: 0.72em;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    background: var(--bg); color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px;
+    padding: 0.45em 1.1em; cursor: pointer;
+    /* One line, always: the body's inherited overflow-wrap breaks the
+       label across two lines well before the pill nears the viewport
+       edge, and a two-line floating pill reads as a banner, not a chip. */
+    white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    z-index: 10;
+  }
+  .resumechip:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+
   footer.site {
     margin-top: 3.5em; padding-top: 1.2em; border-top: 1px solid var(--hairline);
     color: var(--muted); font-size: 0.8em;
@@ -1694,7 +1718,7 @@ const CSS = `
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
-    .filterrow, .themetoggle, .pulse {
+    .filterrow, .themetoggle, .pulse, .resumechip {
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
@@ -1951,6 +1975,34 @@ ${prefetchScriptHtml}
         // lands above the day header, which reads naturally.
         var lastNewEntry = entries[lastNewIndex];
         lastNewEntry.parentNode.insertBefore(fence, lastNewEntry.nextSibling);
+
+        // Resume chip (roadmap 4 step 3): the fence above is passive — a
+        // reader landing at the top of a long index has no way to know it
+        // exists further down. Built only here, alongside the fence itself,
+        // so every guard that got us this far (no-JS, archive week, nothing
+        // new, everything new) already applies to it too. Shown only while
+        // the fence is below the viewport; tapping it scrolls the fence
+        // into view and hides the chip again.
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "resumechip";
+        chip.textContent = "↓ " + label.textContent;
+        document.body.appendChild(chip);
+        var updateChip = function () {
+          // Visible ONLY while the fence sits below the viewport's bottom
+          // edge — that's the state where the reader can't know it exists.
+          // In view, scrolled past, or filter-hidden: no chip.
+          chip.hidden = fence.hidden || fence.getBoundingClientRect().top <= window.innerHeight;
+        };
+        addEventListener("scroll", updateChip, { passive: true });
+        updateChip();
+        chip.addEventListener("click", function () {
+          fence.scrollIntoView({ block: "center" });
+          // The reader just navigated to the fence — hide the chip so it
+          // doesn't overlap what they scrolled to. The scroll listener
+          // above keeps it hidden for as long as the fence stays in view.
+          chip.hidden = true;
+        });
       }
     }
 
@@ -2010,6 +2062,14 @@ ${prefetchScriptHtml}
       // whenever a query is active (roadmap 2 step 2).
       var fence = document.querySelector(".unreadfence");
       if (fence) fence.hidden = Boolean(q);
+      // Resume chip (roadmap 4 step 3): the chip's own scroll listener owns
+      // its show/hide rule (fence hidden OR fence in view -> chip hidden),
+      // so after toggling the fence above, just re-trigger that listener
+      // rather than duplicating the rule here — setting chip.hidden
+      // directly would wrongly un-hide it on query clear even with the
+      // fence already in view. Harmless for the other scroll listeners
+      // (backfab, the chip's sibling), which are all idempotent recomputes.
+      dispatchEvent(new Event("scroll"));
 
       // Empty-filtered state (roadmap 2 step 5): lazily create the message
       // the first time the filter hides every entry, reusing .empty's
