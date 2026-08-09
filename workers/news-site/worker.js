@@ -951,7 +951,17 @@ const CSS = `
     overflow-wrap: break-word; /* inherited: see the overflow-x note above */
   }
   a { color: var(--accent); }
-  .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; }
+  /* overflow-x: clip HERE, on a non-root element, is the actual guarantee
+     against the phone layout-viewport bug (owner-reported twice,
+     2026-08-09): root-level clip demonstrably does NOT stop wide content
+     from expanding the layout viewport (measured: one long pre line took a
+     375px viewport to 1500px with the html rule in place), which detaches
+     fixed elements and opens pannable dead space past the footer on iOS.
+     Clipping inside .wrap means overflow can never widen the page geometry
+     again, whatever content shape causes it next. Sticky day headers keep
+     working (clip creates no scroll container) and the fixed back button is
+     unaffected (no containing-block change). */
+  .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; overflow-x: clip; }
 
   header.mast {
     display: flex; align-items: baseline; justify-content: space-between;
@@ -1142,6 +1152,12 @@ const CSS = `
     scroll-margin-top: 0.8em;
   }
   .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; }
+  /* nh3 allows pre/code through (digest repo, emailer.py's _ALLOWED_TAGS),
+     and pre's own white-space: pre is immune to the body's inherited
+     overflow-wrap — a fenced code block in a digest was exactly what
+     re-triggered the phone layout bug (see .wrap's comment). pre-wrap keeps
+     code readable while letting long lines break at the container edge. */
+  .digest pre { white-space: pre-wrap; overflow-wrap: break-word; }
   .cite {
     font-size: 0.7em; vertical-align: super; text-decoration: none;
     background: var(--chip-bg); color: var(--chip-text);
