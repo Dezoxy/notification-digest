@@ -1470,6 +1470,17 @@ const CSS = `
     scroll-margin-top: 0.8em;
   }
   .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; }
+  /* Reading polish (roadmap 4 step 2): hyphenate the serif prose blocks.
+     html lang is already correct per page (en/hu, set by pageChrome) —
+     the browser picks the right hyphenation dictionary on its own, this is
+     just opting the prose in. Hungarian's long compounds are the motivating
+     case on the 15px phone column, where an unbroken word can overflow a
+     narrow line; -webkit- is what iOS Safari actually honors. Headings and
+     chrome stay un-hyphenated on purpose — this is for reading paragraphs,
+     not labels. */
+  .digest p, .tldr, .entry .excerpt, .attention p {
+    hyphens: auto; -webkit-hyphens: auto;
+  }
   /* nh3 allows pre/code through (digest repo, emailer.py's _ALLOWED_TAGS),
      and pre's own white-space: pre is immune to the body's inherited
      overflow-wrap — a fenced code block in a digest was exactly what
@@ -1481,6 +1492,30 @@ const CSS = `
     background: var(--chip-bg); color: var(--chip-text);
     padding: 0 0.4em; border-radius: 99px; font-weight: 700; margin-left: 1px;
     font-family: var(--font-data);
+  }
+  /* Touch provenance (roadmap 4 step 2): on the phone — where this site is
+     mostly read — there's no hover, so the title attribute's domain never
+     surfaces; put it on the pill itself instead. Reuses the exact title
+     addCiteTitles already sets and the same attr(title) pattern the print
+     stylesheet below uses, so the chip reads "1 example.com" instead of a
+     bare number. Hover-capable devices are untouched and keep the bare chip
+     plus the native hover title. .cite[title], not bare .cite, so a chip
+     whose href failed to parse (no title) shows nothing extra — same
+     fail-safe as print. The bigger pill this produces is also a bigger,
+     easier-to-hit touch target. */
+  @media (hover: none) {
+    .cite[title]::after {
+      content: attr(title);
+      margin-left: 0.35em;
+      font-weight: 400;
+      letter-spacing: 0;
+      /* The prose hyphenation above inherits into the chip and was
+         auto-hyphenating the domain itself ("ex-ample1.com") — an inserted
+         hyphen inside a hostname reads as part of the hostname, which
+         misstates the provenance this feature exists to show. Long domains
+         still wrap (overflow-wrap), just never with an added hyphen. */
+      hyphens: none; -webkit-hyphens: none;
+    }
   }
   .closing {
     font-style: italic; color: var(--muted); border-top: 1px solid var(--hairline);

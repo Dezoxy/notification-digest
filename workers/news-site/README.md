@@ -396,7 +396,7 @@ so this pass contains no motion/lang work.
 
 - [x] **Roadmap (this section)** — record the fourth design pass in-repo.
   (This very PR.)
-- [ ] **Reading polish: hyphenation + touch provenance** — `hyphens: auto`
+- [x] **Reading polish: hyphenation + touch provenance** — `hyphens: auto`
   on the serif prose blocks (Hungarian's long compounds especially deserve
   it on the 15px phone column; `<html lang>` is already right so the
   hyphenation dictionaries are too); and citation-chip destination domains
