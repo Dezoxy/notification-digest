@@ -1233,7 +1233,7 @@ const STRINGS = {
     backFabLabel: "Back to all digests",
     enOnlyNote: null,
     dailyBrief: "daily brief",
-    weeklyBrief: "weekly brief",
+    weeklyBrief: "weekly report",
     viewAll: "All",
     viewDaily: "Daily",
     viewWeekly: "Weekly",
@@ -1711,6 +1711,13 @@ const CSS = `
   .entry .flag {
     font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
     background: var(--attention-bg); color: var(--attention-text);
+    /* Two-word badges ("weekly report", "daily brief") were wrapping into
+       two-line pills in the lead card's meta row (owner-reported from the
+       first live weekly). A badge is a tag, not a paragraph — one line,
+       always. The meta row itself stays nowrap: the pill's min-content
+       width just wins, and the eyebrow text (which wraps internally)
+       absorbs the squeeze; .wrap's overflow-x clip guards the extreme. */
+    white-space: nowrap;
   }
   /* Neutral/muted variant, reused by two chips: the "EN" fallback note on
      untranslated HU index entries, and the degraded-run badge (roadmap 2
