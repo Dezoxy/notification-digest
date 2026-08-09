@@ -11,6 +11,7 @@ from digest.publish import (
     has_needs_attention,
     parse_failed_sources,
     publish_to_site,
+    section_link_targets,
     send_telegram_tldr,
 )
 
@@ -167,6 +168,69 @@ def test_count_sections_ignores_headings_inside_fenced_code_blocks():
 
 def test_has_needs_attention_case_insensitive():
     assert has_needs_attention("## NEEDS ATTENTION\n\ntext\n") is True
+
+
+# --- section_link_targets ---
+
+
+def test_section_link_targets_eight_sections_returns_first_three_with_correct_numbers():
+    body_md = "\n\n".join(f"## Section {i}\n\ntext" for i in range(1, 9))
+
+    assert section_link_targets(body_md) == [
+        ("Section 1", "s1"),
+        ("Section 2", "s2"),
+        ("Section 3", "s3"),
+    ]
+
+
+def test_section_link_targets_needs_attention_first_consumes_no_number():
+    # "Needs attention" sits FIRST but must not consume s1 -- the site's
+    # worker.js splits it into its own div.attention before assigning
+    # ids to the remaining h2s, so the first real content section is s1.
+    body_md = (
+        "## Needs attention\n\nurgent\n\n"
+        "## Story one\n\ntext\n\n"
+        "## Story two\n\ntext\n\n"
+        "## Story three\n\ntext\n\n"
+        "## Story four\n\ntext\n"
+    )
+
+    assert section_link_targets(body_md) == [
+        ("Story one", "s1"),
+        ("Story two", "s2"),
+        ("Story three", "s3"),
+    ]
+
+
+def test_section_link_targets_backticked_heading_anywhere_returns_empty():
+    # A heading containing inline-markup-shaped punctuation renders on the
+    # site with nested tags (no id, no number assigned) -- ANY such heading
+    # anywhere desyncs every later anchor, so the fail-safe guard drops
+    # section links for the whole digest, not just the offending heading.
+    body_md = (
+        "## Story one\n\ntext\n\n"
+        "## `Story two`\n\ntext\n\n"
+        "## Story three\n\ntext\n"
+    )
+
+    assert section_link_targets(body_md) == []
+
+
+def test_section_link_targets_fenced_fake_heading_ignored():
+    # Mirrors test_summarize's fence-awareness style: a heading-shaped line
+    # (backticks and all) inside a fenced code block is not a real heading
+    # at all, so it neither counts toward numbering nor trips the inline-
+    # markup fail-safe guard.
+    body_md = "## Real section\n\n```\n## `Not a real heading`\n```\n\n## Another real one\n"
+
+    assert section_link_targets(body_md) == [
+        ("Real section", "s1"),
+        ("Another real one", "s2"),
+    ]
+
+
+def test_section_link_targets_no_headings_returns_empty():
+    assert section_link_targets("just some prose, no headings at all") == []
 
 
 # --- parse_failed_sources ---
@@ -652,3 +716,92 @@ def test_send_telegram_tldr_header_uses_europe_budapest_local_time(monkeypatch):
     )
 
     assert "12:00" in captured["body"]["text"]
+
+
+# --- send_telegram_tldr: section link button rows ---
+
+
+def test_send_telegram_tldr_keyboard_has_open_digest_plus_three_section_rows(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    body_md = (
+        "**TL;DR:** hi\n\n"
+        "## Story one\n\ntext\n\n"
+        "## Story two\n\ntext\n\n"
+        "## Story three\n\ntext\n\n"
+        "## Story four\n\ntext\n"
+    )
+
+    send_telegram_tldr(
+        7, body_md, "2026-07-29T10:00:00+00:00",
+        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+    )
+
+    rows = captured["body"]["reply_markup"]["inline_keyboard"]
+    assert len(rows) == 4
+    assert rows[0][0] == {"text": "Open the digest →", "url": "https://news.example.com/t/tok/d/7"}
+    assert rows[1][0] == {
+        "text": "→ Story one",
+        "url": "https://news.example.com/t/tok/d/7#s1",
+    }
+    assert rows[2][0] == {
+        "text": "→ Story two",
+        "url": "https://news.example.com/t/tok/d/7#s2",
+    }
+    assert rows[3][0] == {
+        "text": "→ Story three",
+        "url": "https://news.example.com/t/tok/d/7#s3",
+    }
+
+
+def test_send_telegram_tldr_long_section_title_truncated_to_30_with_ellipsis(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    long_title = "A" * 40
+    body_md = f"**TL;DR:** hi\n\n## {long_title}\n\ntext\n"
+
+    send_telegram_tldr(
+        7, body_md, "2026-07-29T10:00:00+00:00",
+        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+    )
+
+    rows = captured["body"]["reply_markup"]["inline_keyboard"]
+    button_text = rows[1][0]["text"]
+    assert len(button_text) == 30
+    assert button_text.endswith("…")
+    assert button_text == f"→ {long_title}"[:29] + "…"
+
+
+def test_send_telegram_tldr_zero_targets_keyboard_identical_to_today(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    # No real heading at all -- section_link_targets returns [], so the
+    # keyboard must stay exactly the single "Open the digest" row it had
+    # before this feature existed.
+    body_md = "**TL;DR:** hi\n\njust some prose, no headings at all\n"
+
+    send_telegram_tldr(
+        7, body_md, "2026-07-29T10:00:00+00:00",
+        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+    )
+
+    rows = captured["body"]["reply_markup"]["inline_keyboard"]
+    assert rows == [[{"text": "Open the digest →", "url": "https://news.example.com/t/tok/d/7"}]]

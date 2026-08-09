@@ -264,6 +264,75 @@ def has_needs_attention(body_md: str) -> bool:
     )
 
 
+# Characters whose presence in a heading title signals the model wrote
+# INLINE MARKUP there (e.g. a backtick-wrapped term, a `[link](url)`, a
+# stray `#`) rather than plain prose. The site's TOC-anchor injection
+# (cloudflare-terraform/workers/news-site/worker.js -- a separate repo,
+# not touched here) assigns `id="s1".."sN"` to rendered h2s by matching
+# ONLY the literal shape `<h2>plain text</h2>`; a heading containing any
+# of these characters renders with nested tags instead (e.g. `<h2>x
+# <code>y</code></h2>`), gets NO id from that regex, and consumes NO
+# number -- silently desynchronizing every later anchor. See
+# section_link_targets' docstring for the full guard this backs.
+_INLINE_MARKUP_CHARS = "`*_[]<>#"
+
+
+def section_link_targets(body_md: str) -> list[tuple[str, str]]:
+    """Return up to 3 (title, anchor) pairs for send_telegram_tldr's section link buttons.
+
+    Headings come from `_real_heading_lines` (imported from digest/
+    summarize.py -- the exact fence-aware, indentation-aware `## ` scan
+    validate_output and format_recent_coverage already rely on; see that
+    function's own docstring for the full CommonMark reasoning). Its output
+    already has the leading `## ` stripped, so a heading's title here is
+    just that line's remainder, further `.strip()`-ed of surrounding
+    whitespace.
+
+    "## Needs attention" is dropped before numbering (matched via
+    `.casefold()` against the module's own `_NEEDS_ATTENTION_HEADING`
+    constant, the same one `count_sections`/`has_needs_attention` use) and
+    consumes NO anchor number. This mirrors the site's own worker.js
+    exactly: it splits the "Needs attention" h2 out into its own
+    `div.attention` BEFORE walking the rest of the h2s to assign
+    `id="s1".."sN"`, so that heading never receives a site anchor either --
+    numbering it here would desync every anchor after it.
+
+    FAIL-SAFE GUARD: if ANY remaining heading's title contains a character
+    from `_INLINE_MARKUP_CHARS` (backtick, `*`, `_`, `[`, `]`, `<`, `>`,
+    `#`), this returns `[]` -- no section links at all for this digest.
+    Such a heading renders on the site with nested markup inside the `<h2>`
+    (e.g. `<h2>x <code>y</code></h2>`), which the site's TOC regex (see
+    _INLINE_MARKUP_CHARS' comment) does not recognize as a plain heading at
+    all: it gets no `id` AND consumes no number, which would silently shift
+    every later heading's true s-number away from whatever this function
+    computed for it. In practice the model's headings are plain prose, so
+    this almost never fires; when it does, the Telegram message simply
+    falls back to today's shape (just the "Open the digest" button, no
+    section rows). Correct links or no links -- never wrong links.
+
+    The surviving headings are numbered sequentially s1, s2, s3, ... in
+    document order, matching the site's own sequential assignment, and the
+    FIRST THREE are returned as (title, anchor) pairs: the prompt contract
+    (prompts/digest.md) orders sections most-important-first, so the first
+    three are already the right three to surface as buttons.
+
+    Returns `[]` when there are fewer than 1 remaining heading too (a
+    digest with no real, non-"Needs attention" section) -- the same empty
+    result the fail-safe guard produces above, since send_telegram_tldr
+    treats both cases identically: add no section-link rows.
+    """
+    headings = [
+        heading.strip()
+        for heading in _real_heading_lines(body_md)
+        if heading.strip().casefold() != _NEEDS_ATTENTION_HEADING
+    ]
+
+    if any(char in heading for heading in headings for char in _INLINE_MARKUP_CHARS):
+        return []
+
+    return [(title, f"s{i}") for i, title in enumerate(headings[:3], start=1)]
+
+
 def parse_failed_sources(body_md: str) -> list[str]:
     """Recover the failed-collector source list from a digest's own `⚠ ...` banner lines.
 
@@ -484,6 +553,17 @@ def send_telegram_tldr(
     a link preview card for the site page adds visual noise a short TL;DR
     notification doesn't need.
 
+    After the "Open the digest" button row, one additional row is appended
+    per `section_link_targets(body_md)` result (up to 3) -- each a single
+    button linking straight to that section's anchor on the site
+    (`f"{public_base}/d/{digest_id}#{anchor}"`), so a reader can jump
+    directly to the story that interests them instead of always landing at
+    the top of the page. When `section_link_targets` returns `[]` (the
+    digest's headings don't number cleanly against the site's own anchor
+    assignment -- see that function's fail-safe guard), the keyboard is
+    identical to today: just the one "Open the digest" row. The message
+    TEXT itself is unchanged either way; only the keyboard grows.
+
     Error handling: the request URL embeds the bot token
     (`.../bot{token}/sendMessage`) and a failure response body could echo
     request content back -- NEITHER may ever reach a log line or an
@@ -504,13 +584,25 @@ def send_telegram_tldr(
     # (an owner-requested change after seeing the first live messages).
     # Telegram renders the button below the message; tapping it opens the
     # digest page in the browser.
+    keyboard_rows: list[list[dict[str, str]]] = [[{"text": "Open the digest →", "url": link}]]
+    for title, anchor in section_link_targets(body_md):
+        button_text = f"→ {title}"
+        # Telegram's Bot API trims long inline-keyboard button text
+        # unpredictably (no fixed, documented cutoff observed in practice) --
+        # capping to 30 chars here, with a single trailing "…", keeps the
+        # rendered button under every truncation behavior seen rather than
+        # leaving it to the client's own opaque trimming.
+        if len(button_text) > 30:
+            button_text = button_text[:29] + "…"
+        keyboard_rows.append(
+            [{"text": button_text, "url": f"{public_base}/d/{digest_id}#{anchor}"}]
+        )
+
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
-        "reply_markup": {
-            "inline_keyboard": [[{"text": "Open the digest →", "url": link}]]
-        },
+        "reply_markup": {"inline_keyboard": keyboard_rows},
     }
     if thread_id:
         payload["message_thread_id"] = thread_id
