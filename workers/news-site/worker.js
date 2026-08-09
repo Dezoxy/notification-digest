@@ -248,8 +248,24 @@ async function handleIndexPage(env, token, url, lang, view) {
     `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind FROM digests ${kindFilter}ORDER BY created_at DESC, id DESC LIMIT 1000`,
   ).all();
 
+  // Next-briefing countdown (roadmap 2 step 3): the newest WINDOW digest's
+  // created_at, found in the rows already fetched above rather than an extra
+  // query — rows are created_at DESC, so this is just the first kind='window'
+  // row. In the daily view, kindFilter already restricts `results` to
+  // kind='daily' only, so no window row is ever found there and the
+  // countdown paragraph is simply omitted (see pageChrome's countdownNewest
+  // param) — cheap, no special-casing needed for that view.
+  const newestWindow = (results ?? []).find((row) => row.kind === "window");
+
   return htmlResponse(
-    renderIndexPage(results ?? [], token, url.hostname, lang, view),
+    renderIndexPage(
+      results ?? [],
+      token,
+      url.hostname,
+      lang,
+      view,
+      newestWindow?.created_at ?? null,
+    ),
   );
 }
 
@@ -601,6 +617,10 @@ const STRINGS = {
     themeToggle: "Toggle light/dark",
     unreadFence: "new since your last visit",
     pulseLabel: "Recent volume",
+    countdownNext: "next window closes in about {t}",
+    countdownDue: "next window closing about now",
+    countdownHourUnit: "h",
+    countdownMinuteUnit: "m",
   },
   hu: {
     locale: "hu-HU",
@@ -625,6 +645,10 @@ const STRINGS = {
     themeToggle: "Világos/sötét váltás",
     unreadFence: "új a legutóbbi látogatásod óta",
     pulseLabel: "Friss mennyiség",
+    countdownNext: "a következő ablak kb. {t} múlva zárul",
+    countdownDue: "a következő ablak kb. most zárul",
+    countdownHourUnit: "ó",
+    countdownMinuteUnit: "p",
   },
 };
 
@@ -1109,6 +1133,11 @@ const CSS = `
     color: var(--muted); font-size: 0.8em;
   }
   footer.site p { margin: 0.3em 0; }
+  /* Next-briefing countdown (roadmap 2 step 3): just another footer line —
+     size/color already inherited from footer.site — except set in the mono
+     data family since it's a live-updating time value, same family as every
+     other time-keyed piece of chrome on this site. */
+  .countdown { font-family: var(--font-data); }
 
   /* Desktop: the content column becomes a rounded "bubble" card hugging the
      42em text measure, floating on a darker, purple-tinted page background.
@@ -1184,15 +1213,37 @@ const CSS = `
 // history entry indistinguishable from each other (roadmap step 2); digest
 // pages now pass a per-digest title instead (see renderDigestPage). Escaped
 // here, once, same as the host fallback — callers pass the raw string.
-function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = null) {
+// `countdownNewest` defaults to null, same contract as `title`: null means
+// no countdown paragraph at all. Only handleIndexPage/renderIndexPage ever
+// pass a value — digest pages never do (see renderDigestPage's call site;
+// the reader is mid-read, a ticking countdown would just be noise there).
+function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = null, countdownNewest = null) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   const { first, rest } = brandParts(host);
   const strings = STRINGS[lang];
+  // Next-briefing countdown (roadmap 2 step 3): strings/unit letters are
+  // baked in server-side as data-* attributes so the bottom script stays
+  // language-agnostic — same pattern as the unread-fence's data-unread-label
+  // above. `hidden` by default; the bottom script computes and un-hides it
+  // (progressive enhancement — no JS, no countdown text, same contract as
+  // the filter input and theme toggle).
+  const countdownHtml = countdownNewest
+    ? `<p class="countdown" data-newest="${esc(countdownNewest)}" data-tmpl-next="${esc(strings.countdownNext)}" data-tmpl-due="${esc(strings.countdownDue)}" data-unit-hour="${esc(strings.countdownHourUnit)}" data-unit-minute="${esc(strings.countdownMinuteUnit)}" hidden></p>`
+    : "";
   return `<!doctype html>
 <html lang="${lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- theme-color must track the CSS palette blocks' --bg values above (light
+     #fbfaf7 / dark #17181c) so mobile browser chrome (URL bar/status bar
+     tint) melts into the page instead of showing a stock color. The
+     prefers-color-scheme media attrs cover the automatic case; a manual
+     theme-toggle override updates both metas' content directly (see the
+     bottom script) since a media-query meta can't react to a data-theme
+     attribute switch on its own. -->
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfaf7">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17181c">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${esc(title ?? host)}</title>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||""}catch(e){}</script>
@@ -1211,6 +1262,7 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
   <footer class="site">
     <p>${esc(strings.footerPrivate)}</p>
     <p>${esc(strings.footerNotIndexed)}</p>
+    ${countdownHtml}
   </footer>
 </div>
 <noscript><style>.backfab { opacity: 1; pointer-events: auto; }</style></noscript>
@@ -1240,21 +1292,45 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
     var btn = document.querySelector(".themetoggle");
     if (!btn) return;
     btn.hidden = false;
+    // theme-color meta values (roadmap 2 step 3): duplicated from the CSS
+    // palette's --bg light/dark values above — the third-copy problem again
+    // (the palette already lives 3x in CSS for the no-build-step manual
+    // override), but it changes rarely and there's no build step here to
+    // share one source between CSS and JS.
+    var THEME_COLORS = { light: "#fbfaf7", dark: "#17181c" };
     var effectiveTheme = function () {
       var stored = document.documentElement.dataset.theme;
       if (stored === "dark" || stored === "light") return stored;
       return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     };
+    // Set BOTH theme-color metas to the same value once a manual override is
+    // active — media queries stop mattering when both metas say the same
+    // thing. No "system" case to cover here: the toggle only ever sets
+    // "dark"/"light", never back to "system".
+    var syncThemeColorMetas = function (theme) {
+      document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+        m.setAttribute("content", THEME_COLORS[theme]);
+      });
+    };
     var reflect = function () {
       btn.setAttribute("aria-pressed", String(effectiveTheme() === "dark"));
     };
     reflect();
+    // On load, if a stored override is already in effect (the head script
+    // set data-theme from localStorage before first paint), sync the metas
+    // to match too. A momentary wrong chrome tint before this script runs is
+    // an acceptable tradeoff — there's no way to read localStorage and touch
+    // the DOM from the head script's synchronous one-liner and still keep
+    // this logic in one place.
+    var stored = document.documentElement.dataset.theme;
+    if (stored === "dark" || stored === "light") syncThemeColorMetas(stored);
     btn.addEventListener("click", function () {
       var next = effectiveTheme() === "dark" ? "light" : "dark";
       document.documentElement.dataset.theme = next;
       try {
         localStorage.setItem("theme", next);
       } catch (e) {}
+      syncThemeColorMetas(next);
       reflect();
     });
   })();
@@ -1361,6 +1437,39 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
       var fence = document.querySelector(".unreadfence");
       if (fence) fence.hidden = Boolean(q);
     });
+  })();
+
+  // Next-briefing countdown (roadmap 2 step 3, index pages only — guarded on
+  // .countdown existing, since digest pages never render the paragraph; see
+  // pageChrome's countdownNewest param). data-newest is the newest WINDOW
+  // digest's created_at (ISO UTC); the next window closes exactly 3h later,
+  // the digest service's own cadence. Ambient chrome, not a stopwatch — no
+  // seconds, refreshed once a minute.
+  (function () {
+    var el = document.querySelector(".countdown");
+    if (!el) return;
+    var next = new Date(new Date(el.getAttribute("data-newest")).getTime() + 3 * 60 * 60 * 1000);
+    var tmplNext = el.getAttribute("data-tmpl-next");
+    var tmplDue = el.getAttribute("data-tmpl-due");
+    var unitHour = el.getAttribute("data-unit-hour");
+    var unitMinute = el.getAttribute("data-unit-minute");
+    var render = function () {
+      var remainingMs = next.getTime() - Date.now();
+      if (remainingMs <= 0) {
+        el.textContent = tmplDue;
+      } else {
+        var totalMinutes = Math.round(remainingMs / 60000);
+        var hours = Math.floor(totalMinutes / 60);
+        var minutes = totalMinutes % 60;
+        var t = hours > 0
+          ? hours + unitHour + " " + minutes + unitMinute
+          : minutes + unitMinute;
+        el.textContent = tmplNext.replace("{t}", t);
+      }
+      el.hidden = false;
+    };
+    render();
+    setInterval(render, 60000);
   })();
 </script>
 </body>
@@ -1502,7 +1611,7 @@ function renderPulseStrip(rows, token, lang, view) {
   return `<nav class="pulse" aria-label="${esc(strings.pulseLabel)}">${bars}</nav>\n`;
 }
 
-function renderIndexPage(rows, token, host, lang, view) {
+function renderIndexPage(rows, token, host, lang, view, countdownNewest = null) {
   const strings = STRINGS[lang];
   const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
 
@@ -1549,6 +1658,8 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     view,
     renderSwitchers(token, lang, view, "index"),
     `${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}">${body}</section>`,
+    null,
+    countdownNewest,
   );
 }
 
