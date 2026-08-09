@@ -1243,10 +1243,16 @@ const STRINGS = {
     themeToggle: "Toggle light/dark",
     densityToggle: "Toggle compact list",
     // Settings bubble (owner redesign): the gear button that collapses the
-    // language/theme/density cluster, plus its panel row labels.
+    // language/theme/size/density cluster, plus its panel row labels.
     settingsLabel: "Settings",
     settingsLanguage: "Language",
     settingsTheme: "Theme",
+    // Three-state theme miniseg labels (owner redesign: light/auto/dark
+    // replaces the old two-state ◐ toggle) — see renderSwitchers.
+    themeLight: "Light",
+    themeAuto: "Auto",
+    themeDark: "Dark",
+    settingsTextSize: "Text size",
     settingsDensity: "Density",
     unreadFence: "new since your last visit",
     pulseLabel: "Recent volume",
@@ -1320,6 +1326,10 @@ const STRINGS = {
     settingsLabel: "Beállítások",
     settingsLanguage: "Nyelv",
     settingsTheme: "Téma",
+    themeLight: "Világos",
+    themeAuto: "Auto",
+    themeDark: "Sötét",
+    settingsTextSize: "Betűméret",
     settingsDensity: "Sűrűség",
     unreadFence: "új a legutóbbi látogatásod óta",
     pulseLabel: "Friss mennyiség",
@@ -1432,17 +1442,28 @@ function renderViewTabs(token, lang, view) {
   return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}${tab("weekly", strings.viewWeekly)}</nav>`;
 }
 
-// The masthead's top-right cluster (language, theme, density) collapses into
-// one gear button that opens a floating settings bubble (owner redesign) — a
-// native <details>/<summary> disclosure, so the panel opens with NO JS. The
-// language links inside keep working for no-JS readers exactly as before;
-// the theme/density buttons keep their existing classes and hidden-until-JS
-// contract untouched, so the bottom-script IIFEs that wire them need no
-// changes at all.
+// The masthead's top-right cluster (language, theme, size, density)
+// collapses into one gear button that opens a floating settings bubble
+// (owner redesign) — a native <details>/<summary> disclosure, so the panel
+// opens with NO JS. The language links inside keep working for no-JS
+// readers exactly as before; the density button keeps its existing class
+// and hidden-until-JS contract untouched. Theme and size are miniseg button
+// groups (owner upgrade: three-state theme, S/M/L text size) — same
+// hidden-until-JS contract, wired by their own IIFEs below in pageChrome.
 function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   const strings = STRINGS[lang];
   const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
-  const themeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTheme)}</span><button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button></div>`;
+  // Theme is now a three-state Light/Auto/Dark miniseg (owner redesign),
+  // not the old two-state ◐ toggle — see the theme IIFE in pageChrome for
+  // why Auto needs to be a real, distinct state rather than an implied
+  // default. Buttons start hidden (progressive enhancement, same contract
+  // the old toggle had); the IIFE unhides and wires them.
+  const themeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTheme)}</span><span class="miniseg miniseg-theme" role="group" aria-label="${esc(strings.themeToggle)}"><button class="minisegbtn" data-set="light" hidden>${esc(strings.themeLight)}</button><button class="minisegbtn" data-set="auto" hidden>${esc(strings.themeAuto)}</button><button class="minisegbtn" data-set="dark" hidden>${esc(strings.themeDark)}</button></span></div>`;
+  // Text size: S/M/L miniseg, same shape as theme's above — M is the
+  // absence of an override (owner-tuned defaults stay the single source of
+  // truth), so only s/l ever get set/stored. Letters are literal, not
+  // STRINGS-keyed — "S"/"M"/"L" read the same in both languages.
+  const sizeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTextSize)}</span><span class="miniseg miniseg-size" role="group" aria-label="${esc(strings.settingsTextSize)}"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div>`;
   // Density toggle (roadmap 4 step 4): index pages only — it governs the
   // ledger's .entry padding/clamp, which a digest page has none of, so the
   // row would be a dead control there.
@@ -1450,7 +1471,7 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
     pageKind === "index"
       ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
       : "";
-  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙</summary><div class="settingspanel">${langRow}${themeRow}${densityRow}</div></details>`;
+  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙</summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -1620,6 +1641,15 @@ const CSS = `
     font-size: 17px;
     overflow-wrap: break-word; /* inherited: see the overflow-x note above */
   }
+  /* Text size (owner upgrade): S/M/L scales the WHOLE body font-size, not
+     just prose, because the layout is em-built end to end — scaling only
+     the article text would break the meta rows' (dateline, chips, mono
+     eyebrows) rhythm relative to it. M is deliberately the ABSENCE of
+     data-fontsize, not its own rule: the owner-tuned 17px/15px defaults
+     above stay the single source of truth, and s/l are offsets from them,
+     never a competing definition of "normal". */
+  :root[data-fontsize="s"] body { font-size: 16px; }
+  :root[data-fontsize="l"] body { font-size: 19px; }
   a { color: var(--accent); }
   /* overflow-x: clip HERE, on a non-root element, is the actual guarantee
      against the phone layout-viewport bug (owner-reported twice,
@@ -1640,7 +1670,7 @@ const CSS = `
   }
   .mast .brand { font-weight: 700; font-size: 1.05em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
   .mast .brand .tld { color: var(--accent); }
-  /* The settings gear (language/theme/density, collapsed into one
+  /* The settings gear (language/theme/size/density, collapsed into one
      details.settings disclosure — see renderSwitchers) sits top-right in
      the masthead via .mastright, right-aligned — same markup at both
      breakpoints. */
@@ -1650,6 +1680,9 @@ const CSS = `
   @media (max-width: 40em) {
     /* 15px: phone type ran large even at 16 (owner feedback, twice). */
     body { font-size: 15px; }
+    /* Same S/M/L contract as the desktop rule above, phone-scaled. */
+    :root[data-fontsize="s"] body { font-size: 14px; }
+    :root[data-fontsize="l"] body { font-size: 16.5px; }
     /* Brand left, EN|HU right on one line (owner: the selector belongs
        on the right; the cadence line was removed entirely at the owner's
        request — the footer already carries the private-link warning). */
@@ -1699,18 +1732,72 @@ const CSS = `
     letter-spacing: 0.08em; color: var(--muted);
   }
 
-  /* Manual theme toggle (roadmap step 6): small pill button, now living
-     inside the settings bubble's panel (see .settingspanel above). hidden by
-     default, un-hidden by the bottom script — no JS, no button, same
-     progressive-enhancement contract as the index filter input below. The
-     density toggle (roadmap 4 step 4) shares this exact look — grouped into
-     the same rules rather than duplicated. */
-  .themetoggle, .densitytoggle {
+  /* Settings bubble open/close animation (owner-requested). details/summary
+     has no transition of its own to hook, so this is a fresh keyframe pair
+     rather than a transition. A NEW prefers-reduced-motion: no-preference
+     gate — not the global one near the top of this stylesheet, which is
+     scroll/view-transition territory and unrelated to this feature.
+     Opening plays on details.settings[open] .settingspanel directly (native
+     open needs no JS). Closing plays on a "panelclosing" class the
+     settings-close IIFE below adds before it sets details.open = false
+     itself — <details> snaps shut instantly with no hook to intercept, so
+     the class is what buys the mirrored animation time to play before
+     removal. Named "panelclosing", not the shorter "closing" the owner's
+     brief used, because .closing already exists on this page (the digest
+     article's closing-line paragraph, below) — reusing that name would
+     have leaked its border/italic/spacing styling onto the settings panel
+     for the animation's duration. The close rule below repeats the [open]
+     prefix (not just .settingspanel.panelclosing) SPECIFICALLY so it
+     outranks the open rule above on specificity: the "panelclosing" class
+     is added while open is still true — the JS only flips open to false at
+     the end of the delay — so both rules target the same element at once,
+     and without the matching prefix the open rule's animation would win by
+     cascade order and the close animation would never actually play. */
+  @media (prefers-reduced-motion: no-preference) {
+    details.settings[open] .settingspanel { animation: settingsopen 160ms ease-out; }
+    details.settings[open] .settingspanel.panelclosing { animation: settingsclose 120ms ease-in; }
+    @keyframes settingsopen {
+      from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes settingsclose {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(-4px) scale(0.98); }
+    }
+  }
+
+  /* Density toggle (roadmap 4 step 4): small pill button living inside the
+     settings bubble's panel (see .settingspanel above). hidden by default,
+     un-hidden by the bottom script — no JS, no button, same progressive-
+     enhancement contract as the index filter input below. Theme and text
+     size (owner upgrade) moved off this single-pill look onto the miniseg
+     control just below — density stays a pill since it's genuinely binary
+     (compact/comfortable), not a 3-way choice. */
+  .densitytoggle {
     background: none; border: 1px solid var(--hairline); border-radius: 999px;
     color: var(--text); font-size: 0.8em; padding: 0.05em 0.5em; cursor: pointer;
   }
-  .themetoggle:hover, .densitytoggle:hover { border-color: var(--accent); }
-  .themetoggle:focus-visible, .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .densitytoggle:hover { border-color: var(--accent); }
+  .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Mini segmented control (owner upgrade: three-state theme, S/M/L text
+     size) — the view tabs' segmented language (.viewtabs/.viewtab above)
+     miniaturized to panel scale, so the settings bubble reads as one family
+     with the site's primary navigation instead of inventing a new shape. */
+  .miniseg {
+    display: inline-flex; border: 1px solid var(--hairline); border-radius: 999px;
+    overflow: hidden;
+  }
+  .minisegbtn {
+    background: none; border: none; color: var(--accent);
+    font: inherit; font-size: 0.78em; padding: 0.18em 0.7em; cursor: pointer;
+  }
+  .minisegbtn + .minisegbtn { border-left: 1px solid var(--hairline); }
+  .minisegbtn.active { background: var(--accent); color: var(--bg); }
+  .minisegbtn:not(.active):hover { background: var(--tldr-bg); }
+  /* Inset outline: an outset ring would get clipped by .miniseg's
+     overflow: hidden — same note as .viewtab:focus-visible above. */
+  .minisegbtn:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
 
   .dayhead {
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
@@ -2171,7 +2258,7 @@ const CSS = `
   /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
      inserts between digests that arrived since the reader's last visit and
      everything older — no-JS readers never see this class at all, so no
-     hidden-by-default dance is needed here (unlike .filter/.themetoggle
+     hidden-by-default dance is needed here (unlike .filter/.minisegbtn
      above, which exist in the markup from the start). */
   .unreadfence { display: flex; align-items: center; gap: 0.7em; margin: 1.4em 0; }
   .unreadfence .line { flex: 1 1 auto; height: 0; border-top: 1px solid var(--accent); }
@@ -2259,7 +2346,7 @@ const CSS = `
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
-    .filterrow, .themetoggle, .densitytoggle, .pulse, .resumechip,
+    .filterrow, .miniseg, .densitytoggle, .pulse, .resumechip,
     .heatmapwrap, .archiveresults {
       display: none;
     }
@@ -2353,16 +2440,17 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
 <!-- theme-color must track the CSS palette blocks' --bg values above (light
      #fbfaf7 / dark #17181c) so mobile browser chrome (URL bar/status bar
      tint) melts into the page instead of showing a stock color. The
-     prefers-color-scheme media attrs cover the automatic case; a manual
-     theme-toggle override updates both metas' content directly (see the
-     bottom script) since a media-query meta can't react to a data-theme
-     attribute switch on its own. -->
+     prefers-color-scheme media attrs cover the automatic (Auto) case; a
+     manual Light/Dark override from the theme miniseg (see the bottom
+     script) updates both metas' content directly, since a media-query meta
+     can't react to a data-theme attribute switch on its own — and clicking
+     back to Auto restores each meta to its own media-appropriate value. -->
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfaf7">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17181c">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
 <style>${CSS}</style>
 </head>
 <body>
@@ -2397,40 +2485,53 @@ ${prefetchScriptHtml}
     onScroll();
   })();
 
-  // Manual theme toggle (roadmap step 6). The head script already applied
-  // any stored preference to <html data-theme> before first paint, so this
-  // just wires the button: unhide it (progressive enhancement — no JS, no
-  // button), reflect the current EFFECTIVE theme (stored, or the OS
-  // preference when nothing is stored) in aria-pressed, and on click flip
-  // light<->dark and persist it. There's no third "back to system" click —
-  // that would need clearing storage, which isn't worth its own UI; a reader
-  // who wants system-follow back can clear the site's local storage.
+  // Theme miniseg (owner upgrade: Light/Auto/Dark, replacing the old
+  // two-state ◐ toggle). The head script already applied any stored
+  // override to <html data-theme> before first paint, so this only wires
+  // the three buttons: unhide them (progressive enhancement — no JS, no
+  // buttons), reflect the active segment (stored theme, or "auto" when
+  // nothing is stored), and on click either set an override or, for Auto,
+  // clear it — the override is GONE, not stored-as-"auto" (the head
+  // script's || "" already renders absence as auto, same contract density
+  // and now size use).
   (function () {
-    var btn = document.querySelector(".themetoggle");
-    if (!btn) return;
-    btn.hidden = false;
+    var group = document.querySelector(".miniseg-theme");
+    if (!group) return;
+    var buttons = group.querySelectorAll(".minisegbtn");
+    for (var i = 0; i < buttons.length; i++) buttons[i].hidden = false;
     // theme-color meta values (roadmap 2 step 3): duplicated from the CSS
     // palette's --bg light/dark values above — the third-copy problem again
     // (the palette already lives 3x in CSS for the no-build-step manual
     // override), but it changes rarely and there's no build step here to
     // share one source between CSS and JS.
     var THEME_COLORS = { light: "#fbfaf7", dark: "#17181c" };
-    var effectiveTheme = function () {
-      var stored = document.documentElement.dataset.theme;
-      if (stored === "dark" || stored === "light") return stored;
-      return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    };
-    // Set BOTH theme-color metas to the same value once a manual override is
-    // active — media queries stop mattering when both metas say the same
-    // thing. No "system" case to cover here: the toggle only ever sets
-    // "dark"/"light", never back to "system".
+    // Light/Dark collapse both metas to the SAME value — media queries stop
+    // mattering once both metas say the same thing, same as the old
+    // two-state toggle did. Auto is the fix that toggle never had: it
+    // restores each meta to its OWN media-appropriate color (iterate the
+    // metas; a meta whose media attr mentions "light" gets the light color,
+    // otherwise the dark one) instead of leaving both stuck on whichever
+    // value the last manual click set. The old design collapsed both metas
+    // to one value and had no way back to "let the OS decide" — this is
+    // exactly what the Auto segment fixes.
     var syncThemeColorMetas = function (theme) {
       document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
-        m.setAttribute("content", THEME_COLORS[theme]);
+        var color =
+          theme === "auto"
+            ? m.media.indexOf("light") !== -1
+              ? THEME_COLORS.light
+              : THEME_COLORS.dark
+            : THEME_COLORS[theme];
+        m.setAttribute("content", color);
       });
     };
     var reflect = function () {
-      btn.setAttribute("aria-pressed", String(effectiveTheme() === "dark"));
+      var active = document.documentElement.dataset.theme || "auto";
+      for (var i = 0; i < buttons.length; i++) {
+        var isActive = buttons[i].dataset.set === active;
+        buttons[i].classList.toggle("active", isActive);
+        buttons[i].setAttribute("aria-pressed", String(isActive));
+      }
     };
     reflect();
     // On load, if a stored override is already in effect (the head script
@@ -2438,22 +2539,65 @@ ${prefetchScriptHtml}
     // to match too. A momentary wrong chrome tint before this script runs is
     // an acceptable tradeoff — there's no way to read localStorage and touch
     // the DOM from the head script's synchronous one-liner and still keep
-    // this logic in one place.
+    // this logic in one place. Nothing to do here for the auto case — the
+    // static per-meta content values above already ARE the auto values.
     var stored = document.documentElement.dataset.theme;
     if (stored === "dark" || stored === "light") syncThemeColorMetas(stored);
-    btn.addEventListener("click", function () {
-      var next = effectiveTheme() === "dark" ? "light" : "dark";
-      document.documentElement.dataset.theme = next;
-      try {
-        localStorage.setItem("theme", next);
-      } catch (e) {}
-      syncThemeColorMetas(next);
-      reflect();
-    });
+    for (var j = 0; j < buttons.length; j++) {
+      buttons[j].addEventListener("click", function () {
+        var v = this.dataset.set;
+        if (v === "auto") {
+          document.documentElement.dataset.theme = "";
+          try {
+            localStorage.removeItem("theme");
+          } catch (e) {}
+        } else {
+          document.documentElement.dataset.theme = v;
+          try {
+            localStorage.setItem("theme", v);
+          } catch (e) {}
+        }
+        syncThemeColorMetas(v);
+        reflect();
+      });
+    }
   })();
 
-  // Ledger density toggle (roadmap 4 step 4). Same shape as the theme
-  // toggle just above: the head script already applied any stored
+  // Text size miniseg (owner upgrade): S/M/L, same shape as the theme
+  // miniseg just above — unhide the buttons, reflect the active segment
+  // (stored size, or "m" when nothing is stored), and on click either set
+  // an override or, for M, clear it. M is the default expressed as the
+  // ABSENCE of data-fontsize (see the CSS), so only s/l ever touch storage.
+  (function () {
+    var group = document.querySelector(".miniseg-size");
+    if (!group) return;
+    var buttons = group.querySelectorAll(".minisegbtn");
+    for (var i = 0; i < buttons.length; i++) buttons[i].hidden = false;
+    var reflect = function () {
+      var stored = document.documentElement.dataset.fontsize;
+      var active = stored === "s" || stored === "l" ? stored : "m";
+      for (var i = 0; i < buttons.length; i++) {
+        var isActive = buttons[i].dataset.set === active;
+        buttons[i].classList.toggle("active", isActive);
+        buttons[i].setAttribute("aria-pressed", String(isActive));
+      }
+    };
+    reflect();
+    for (var j = 0; j < buttons.length; j++) {
+      buttons[j].addEventListener("click", function () {
+        var v = this.dataset.set;
+        document.documentElement.dataset.fontsize = v === "m" ? "" : v;
+        try {
+          if (v === "m") localStorage.removeItem("fontsize");
+          else localStorage.setItem("fontsize", v);
+        } catch (e) {}
+        reflect();
+      });
+    }
+  })();
+
+  // Ledger density toggle (roadmap 4 step 4). Same shape as the theme/size
+  // minisegs just above: the head script already applied any stored
   // preference to <html data-density> before first paint, so this only
   // wires the button — unhide it, reflect the current state in
   // aria-pressed, and on click flip compact<->comfortable and persist it.
@@ -2477,20 +2621,64 @@ ${prefetchScriptHtml}
     });
   })();
 
-  // Settings bubble close polish (owner redesign). The disclosure itself
-  // needs no JS at all — details/summary opens and closes natively — this
-  // IIFE only adds the close-on-outside-click and close-on-Escape behavior
-  // readers expect from a floating panel.
+  // Settings bubble close polish (owner redesign). Opening needs no JS at
+  // all — details/summary opens natively, and the CSS above animates that
+  // open state directly off the [open] attribute. Closing is different:
+  // <details> snaps shut the instant open is set false, with no hook to
+  // intercept, so this IIFE's close() gives the mirrored close animation
+  // (see the CSS above) somewhere to run before the panel actually leaves —
+  // then wires outside-click, Escape, AND the gear's own click (so every
+  // path that can close the bubble animates it the same way) through that
+  // one helper.
   (function () {
     var settings = document.querySelector("details.settings");
     if (!settings) return;
+    var panel = settings.querySelector(".settingspanel");
+    var summary = settings.querySelector("summary.gear");
+    var closing = false;
+    var close = function () {
+      if (!settings.open || closing) return;
+      closing = true;
+      // "panelclosing", not the shorter "closing" — .closing already names
+      // the digest article's closing-line style elsewhere on this page,
+      // and reusing it here would leak that border/italic/spacing onto the
+      // settings panel for the animation's duration (see the CSS above).
+      panel.classList.add("panelclosing");
+      // setTimeout, not transitionend/animationend: an end event can simply
+      // never fire (interrupted mid-animation, reduced motion turning the
+      // animation into a no-op, a stray browser quirk) and would strand the
+      // panel open with the "panelclosing" class stuck on it forever. A
+      // plain timer always fires. Under reduced motion the "panelclosing"
+      // class's animation is a no-op (it lives inside the
+      // prefers-reduced-motion: no-preference gate above), but this
+      // timeout still runs its full 120ms before the panel closes — an
+      // imperceptible, acceptable delay rather than a second, motion-aware
+      // code path.
+      setTimeout(function () {
+        panel.classList.remove("panelclosing");
+        settings.open = false;
+        closing = false;
+      }, 120);
+    };
     document.addEventListener("click", function (e) {
-      if (settings.open && !settings.contains(e.target)) settings.open = false;
+      if (settings.open && !settings.contains(e.target)) close();
     });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && settings.open) {
-        settings.open = false;
-        settings.querySelector("summary.gear").focus();
+        close();
+        summary.focus();
+      }
+    });
+    // Without this, clicking the gear while open would let <details> close
+    // itself natively and instantly, skipping the animation entirely — the
+    // native toggle already handles OPENING fine (nothing to intercept
+    // there), so this only ever preventDefaults the closing half of the
+    // click. No-JS readers keep the plain native open/close (progressive
+    // enhancement) — this listener simply never attaches for them.
+    summary.addEventListener("click", function (e) {
+      if (settings.open) {
+        e.preventDefault();
+        close();
       }
     });
   })();
