@@ -80,6 +80,16 @@ const MAX_TLDR_BYTES = 32 * 1024; // 32KB
 // effectively unbounded accept-anything limit.
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 
+// Ingest v2 (roadmap 2 step 8): source_counts/failed_sources are OPTIONAL,
+// backward-compatible fields on PUT /ingest/:id (see validateDigestPayload).
+// Deliberately no hardcoded list of "the app's known sources" here — the
+// site doesn't own that list, the digest app does, and a new collector must
+// never require a site deploy to start reporting. A source name only has to
+// match this shape; both fields cap at 16 entries as a sane ceiling on an
+// app that currently has five collectors.
+const SOURCE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const MAX_SOURCE_ENTRIES = 16;
+
 // ── entry point ─────────────────────────────────────────────────────────
 
 export default {
@@ -186,20 +196,22 @@ async function handleIngest(request, env, idParam) {
   try {
     await env.DB.prepare(
       `INSERT INTO digests
-         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-         created_at    = excluded.created_at,
-         tldr          = excluded.tldr,
-         item_count    = excluded.item_count,
-         section_count = excluded.section_count,
-         has_attention = excluded.has_attention,
-         body_html     = excluded.body_html,
-         body_md       = excluded.body_md,
-         tldr_hu       = excluded.tldr_hu,
-         body_html_hu  = excluded.body_html_hu,
-         body_md_hu    = excluded.body_md_hu,
-         kind          = excluded.kind`,
+         created_at     = excluded.created_at,
+         tldr           = excluded.tldr,
+         item_count     = excluded.item_count,
+         section_count  = excluded.section_count,
+         has_attention  = excluded.has_attention,
+         body_html      = excluded.body_html,
+         body_md        = excluded.body_md,
+         tldr_hu        = excluded.tldr_hu,
+         body_html_hu   = excluded.body_html_hu,
+         body_md_hu     = excluded.body_md_hu,
+         kind           = excluded.kind,
+         source_counts  = excluded.source_counts,
+         failed_sources = excluded.failed_sources`,
     )
       .bind(
         id,
@@ -218,6 +230,11 @@ async function handleIngest(request, env, idParam) {
         d.body_html_hu,
         d.body_md_hu,
         d.kind,
+        // Same NULL-on-absence, NULL-back-out-on-re-ingest contract as the hu
+        // fields above (roadmap 2 step 8) — already JSON-stringified (or
+        // null) by validateDigestPayload.
+        d.source_counts,
+        d.failed_sources,
       )
       .run();
   } catch {
@@ -245,7 +262,7 @@ async function handleIndexPage(env, token, url, lang, view) {
   // correct day bucket.
   const kindFilter = view === "daily" ? "WHERE kind = 'daily' " : "";
   const { results } = await env.DB.prepare(
-    `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind FROM digests ${kindFilter}ORDER BY created_at DESC, id DESC LIMIT 1000`,
+    `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests ${kindFilter}ORDER BY created_at DESC, id DESC LIMIT 1000`,
   ).all();
 
   // Next-briefing countdown (roadmap 2 step 3): the newest WINDOW digest's
@@ -337,6 +354,8 @@ function validateDigestPayload(payload) {
     body_html_hu,
     body_md_hu,
     kind,
+    source_counts,
+    failed_sources,
   } = payload;
 
   if (
@@ -430,6 +449,20 @@ function validateDigestPayload(payload) {
     }
   }
 
+  // source_counts/failed_sources (ingest v2, roadmap 2 step 8): both entirely
+  // optional and independent of each other and of everything above — see
+  // validateSourceCounts/validateFailedSources for the per-field shape
+  // rules. Stored as JSON-stringified TEXT (or null), same as every other
+  // "optional structured data" column on this table.
+  const sourceCountsResult = validateSourceCounts(source_counts);
+  if (!sourceCountsResult.ok) {
+    return { ok: false, error: sourceCountsResult.error };
+  }
+  const failedSourcesResult = validateFailedSources(failed_sources);
+  if (!failedSourcesResult.ok) {
+    return { ok: false, error: failedSourcesResult.error };
+  }
+
   return {
     ok: true,
     value: {
@@ -444,8 +477,59 @@ function validateDigestPayload(payload) {
       body_html_hu: huEnabled ? body_html_hu : null,
       body_md_hu: huEnabled ? body_md_hu : null,
       kind: kind ?? "window",
+      source_counts: sourceCountsResult.value ? JSON.stringify(sourceCountsResult.value) : null,
+      failed_sources: failedSourcesResult.value ? JSON.stringify(failedSourcesResult.value) : null,
     },
   };
+}
+
+// source_counts: absent/null is valid (nothing reported, stored NULL — see
+// the schema.sql comment). Present, it must be a plain JSON object (not an
+// array — typeof [] === "object" too, hence the explicit Array.isArray
+// check), every key matching SOURCE_NAME_RE, every value a non-negative
+// integer, at most MAX_SOURCE_ENTRIES keys. Any other shape is a 400, not a
+// value to silently coerce or drop keys from.
+function validateSourceCounts(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, error: "source_counts must be a JSON object" };
+  }
+  const keys = Object.keys(value);
+  if (keys.length > MAX_SOURCE_ENTRIES) {
+    return { ok: false, error: `source_counts must have at most ${MAX_SOURCE_ENTRIES} keys` };
+  }
+  for (const key of keys) {
+    if (!SOURCE_NAME_RE.test(key)) {
+      return { ok: false, error: `source_counts has an invalid source name: "${key}"` };
+    }
+    const count = value[key];
+    if (!Number.isInteger(count) || count < 0) {
+      return { ok: false, error: `source_counts["${key}"] must be a non-negative integer` };
+    }
+  }
+  return { ok: true, value };
+}
+
+// failed_sources: same optional/shape contract as source_counts, but a JSON
+// array of source-name strings rather than an object. A valid-but-empty
+// array is normalized to null here — "no failures reported" and "an old app
+// that doesn't send this field at all" would otherwise render identically
+// (no degraded badge either way), so storing "[]" would be a distinction
+// without a difference; see the schema.sql comment on the column itself.
+function validateFailedSources(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "failed_sources must be a JSON array" };
+  }
+  if (value.length > MAX_SOURCE_ENTRIES) {
+    return { ok: false, error: `failed_sources must have at most ${MAX_SOURCE_ENTRIES} entries` };
+  }
+  for (const name of value) {
+    if (typeof name !== "string" || !SOURCE_NAME_RE.test(name)) {
+      return { ok: false, error: `failed_sources has an invalid source name: "${name}"` };
+    }
+  }
+  return { ok: true, value: value.length === 0 ? null : value };
 }
 
 // ── auth helper (shared pattern with workers/polymarket-proxy) ─────────
@@ -623,6 +707,7 @@ const STRINGS = {
     countdownDue: "next window closing about now",
     countdownHourUnit: "h",
     countdownMinuteUnit: "m",
+    degraded: "partial",
   },
   hu: {
     locale: "hu-HU",
@@ -653,6 +738,7 @@ const STRINGS = {
     countdownDue: "a következő ablak kb. most zárul",
     countdownHourUnit: "ó",
     countdownMinuteUnit: "p",
+    degraded: "hiányos",
   },
 };
 
@@ -951,14 +1037,23 @@ const CSS = `
   .entry .time.time-accent { color: var(--accent); }
   /* 0.75em, not 0.8: same mono-runs-wide compensation as .entry .time. */
   .entry .count { color: var(--muted); font-size: 0.75em; font-family: var(--font-data); }
+  /* Source-spectrum micro-bar (roadmap 2 step 8, renderSpectrum): fixed
+     width so the meta row's layout doesn't jump depending on how many
+     sources reported this run; segments are sized purely by each <i>'s own
+     inline flex:N (N = that source's item count). */
+  .spectrum { display: inline-flex; width: 3.2em; height: 6px; border-radius: 3px; overflow: hidden; gap: 0; align-self: center; }
+  .spectrum i { display: block; height: 100%; }
   .entry .flag {
     font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
     background: var(--attention-bg); color: var(--attention-text);
   }
-  /* Neutral/muted variant for the "EN" fallback chip on untranslated HU
-     index entries — deliberately NOT the amber attention colors, this isn't
-     a warning, just a language note. Reuses .flag's shape/sizing. */
-  .entry .flag.flag-muted { background: var(--chip-bg); color: var(--chip-text); }
+  /* Neutral/muted variant, reused by two chips: the "EN" fallback note on
+     untranslated HU index entries, and the degraded-run badge (roadmap 2
+     step 8, renderDegradedBadge) — neither is a warning-colored call to
+     action, just metadata about the entry; the degraded badge's own ⚠
+     prefix (baked into the string, not CSS) is what tells the two apart.
+     Reuses .flag's shape/sizing. */
+  .entry .flag.flag-muted, .entry .flag.flag-degraded { background: var(--chip-bg); color: var(--chip-text); }
   /* Daily-brief badge — same indigo chip-bg/chip-text tokens as .flag-muted,
      but filled/inverted (solid indigo, not the soft pastel) so it reads as
      its own distinct badge rather than the muted EN language note, and
@@ -1658,6 +1753,79 @@ function renderExcerpt(row, lang) {
   return { excerptHtml, langChip };
 }
 
+// Source-spectrum palette (roadmap 2 step 8): a STABLE per-source hue for
+// the five collectors the digest app currently has, muted so the bar reads
+// as metadata rather than a call to action — distinct hues so sources stay
+// tellable apart, not a sequential/brand ramp. One palette for both light
+// and dark themes; a softened dark-mode variant isn't worth the complexity
+// for a 3.2em bar (see the CSS block below). Unknown source names (the app
+// ships a new collector before this map is updated — deliberately allowed,
+// see SOURCE_NAME_RE's comment) fall back to a neutral gray rather than
+// erroring or being dropped from the bar.
+const SOURCE_COLORS = {
+  telegram: "#4f8fd9",
+  x: "#8a8f9e",
+  news: "#c58f5a",
+  polymarket: "#7a5ad9",
+  reddit: "#d95a4f",
+};
+const SOURCE_COLOR_FALLBACK = "#9aa0ab";
+
+// Source-spectrum micro-bar (roadmap 2 step 8): one <i> per source with
+// inline style="flex:N" (N = that source's item count) inside a fixed-width
+// flex container, so the segments lay out proportionally without any JS —
+// see the .spectrum/.spectrum i CSS. sourceCountsJson is the raw D1 TEXT
+// column (JSON string, or null); JSON.parse is wrapped in try/catch and an
+// unparseable or wrong-shaped value renders nothing rather than throwing —
+// this Worker already validated the shape at ingest time, but rendering
+// stays defensive against a stored value that predates a validation change
+// or was written some other way. Sources with a zero count are skipped
+// entirely (nothing to draw); the whole span is omitted if nothing is left.
+function renderSpectrum(sourceCountsJson) {
+  if (!sourceCountsJson) return "";
+  let counts;
+  try {
+    counts = JSON.parse(sourceCountsJson);
+  } catch {
+    return "";
+  }
+  if (typeof counts !== "object" || counts === null || Array.isArray(counts)) return "";
+  // Descending by count for both the visual stacking order and the title
+  // attribute's "telegram 40 · x 12 · …" listing.
+  const entries = Object.entries(counts)
+    .filter(([, n]) => typeof n === "number" && n > 0)
+    .sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "";
+  const bars = entries
+    .map(([name, n]) => `<i style="flex:${n};background:${SOURCE_COLORS[name] ?? SOURCE_COLOR_FALLBACK}"></i>`)
+    .join("");
+  const title = entries.map(([name, n]) => `${name} ${n}`).join(" · ");
+  return `<span class="spectrum" title="${esc(title)}">${bars}</span>`;
+}
+
+// Degraded-run badge (roadmap 2 step 8): shown when failed_sources parses to
+// a non-empty array — same fail-safe JSON.parse contract as renderSpectrum
+// above, and for the same reason (defense against a stored value that
+// predates a validation change). Reuses the existing .flag pill shape, but
+// the muted .flag-muted colors rather than the amber attention ones — this
+// is a fact about a collection run, not something that needs the reader's
+// attention the way has_attention does — so the ⚠ prefix, not color, is what
+// marks it. `strings` is the caller's STRINGS[lang] (for the localized
+// "partial"/"hiányos" label); the failed source names themselves stay
+// untranslated in the title, same as source_counts' names in renderSpectrum.
+function renderDegradedBadge(failedSourcesJson, strings) {
+  if (!failedSourcesJson) return "";
+  let names;
+  try {
+    names = JSON.parse(failedSourcesJson);
+  } catch {
+    return "";
+  }
+  if (!Array.isArray(names) || names.length === 0) return "";
+  const title = names.join(", ");
+  return `<span class="flag flag-degraded" title="${esc(title)}">⚠ ${esc(strings.degraded)}</span>`;
+}
+
 function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
   const time = formatTime(new Date(row.created_at), strings.locale);
@@ -1678,6 +1846,12 @@ function renderIndexEntry(row, token, lang, view) {
   const timeClass = isDaily ? "time time-accent" : "time";
   const excerptClass = isDaily ? "excerpt excerpt-daily" : "excerpt";
 
+  // Source-spectrum micro-bar + degraded-run badge (roadmap 2 step 8): both
+  // render "" when the row has no data for them (older digests, or an app
+  // version that doesn't send it yet) — see renderSpectrum/renderDegradedBadge.
+  const spectrumHtml = renderSpectrum(row.source_counts);
+  const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
+
   // data-created (roadmap 2 step 2, unread fence): the row's own created_at,
   // straight from D1 as an ISO UTC string — lexicographically comparable
   // without parsing, the same trick get_recent_digests (digest repo) relies
@@ -1689,7 +1863,7 @@ function renderIndexEntry(row, token, lang, view) {
   // value to special-case.
   const attentionAttr = row.has_attention ? ' data-attention="1"' : "";
   return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}"${attentionAttr}>
-    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${dailyFlag}${flag}${langChip}</span>
+    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${spectrumHtml}${degradedHtml}${dailyFlag}${flag}${langChip}</span>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
@@ -1716,11 +1890,16 @@ function renderLeadCard(row, token, lang, view) {
 
   const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
 
+  // Source-spectrum micro-bar + degraded-run badge: same contract as
+  // renderIndexEntry's — see comments there.
+  const spectrumHtml = renderSpectrum(row.source_counts);
+  const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
+
   // data-created / data-attention: same contract as renderIndexEntry's — see
   // comments there.
   const attentionAttr = row.has_attention ? ' data-attention="1"' : "";
   return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}"${attentionAttr}>
-    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${dailyFlag}${flag}${langChip}</span>
+    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${spectrumHtml}${degradedHtml}${dailyFlag}${flag}${langChip}</span>
     <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }

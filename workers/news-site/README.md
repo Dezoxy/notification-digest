@@ -135,6 +135,7 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | --- | --- |
 | `0002-hu-columns.sql` | `tldr_hu`, `body_html_hu`, `body_md_hu` (nullable) on `digests`, for the Hungarian-translation feature. |
 | `0003-kind-column.sql` | `kind` (`NOT NULL DEFAULT 'window'`) on `digests`, distinguishing the once-daily 20:00 synthesis (`daily`) from the regular 3-hourly window digest (`window`). |
+| `0004-source-counts.sql` | `source_counts`, `failed_sources` (nullable) on `digests`, for the ingest v2 source-spectrum micro-bar and degraded-run badge. |
 
 ## Key rotation
 
