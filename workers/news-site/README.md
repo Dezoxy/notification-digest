@@ -314,3 +314,59 @@ of scope, unchanged from roadmap 1's deferrals: FTS search, pagination,
 PWA/offline (the capability-token-in-persistent-storage wrinkle) — plus
 story arcs and the calendar heatmap, which are wanted but need their own
 design pass (story identity is an app-side problem first).
+
+## Design roadmap 3 (2026-08-09): weekly pagination
+
+The All view's 1000-row backstop becomes real pagination, by ISO calendar
+week (Monday-start, Europe/Budapest — matching every other local-time
+rendering decision). A week is the natural briefing unit of a wire desk,
+week URLs are permanent bookmarkable addresses, and these same `w/` pages
+are the foundation the deferred calendar heatmap will link into later. Same
+execution contract as roadmaps 1–2 (one squash-merged PR per step; owner-
+tuned decisions never regress; EN/HU, both themes, no-JS baseline; single-
+file Worker; trust headers stay load-bearing). No schema change and no
+digest-repo involvement.
+
+The URL grammar gains one optional, always-LAST segment:
+`/t/:token/(hu/)?(daily/)?(w/2026-W32/)?`. Root index (no segment) = the
+CURRENT week, keeping every living-chrome feature; `w/…` pages = that
+week's day-grouped ledger only. Strict shape validation; garbage 404s
+indistinguishably. Valid-shaped future weeks render empty rather than
+special-casing. The daily view stays unpaginated (~3 years from feeling the
+backstop; the machinery is view-parameterized if ever wanted).
+
+A week rail sits under the view tabs on every index page: mono wire-style
+`← W31 · WEEK 32 · 3–9 AUG · W33 →`; "newer" absent on the current week,
+"older" ends at the oldest week with data (one MIN(created_at) probe).
+Empty mid-range weeks render as pages (empty state + rail), not
+skip-to-nonempty.
+
+Week bounds derive from Budapest-local date parts (never fixed UTC
+offsets — DST), compared as UTC ISO strings against created_at,
+lexicographically like every existing date comparison. ISO year boundaries
+(W52/W53→W01) carry the year in the label/URL.
+
+Feature scoping: lead card, pulse strip, countdown, and prefetch are
+CURRENT-WEEK-ONLY (on archive pages a "Latest" card would lie, the
+countdown would read "closing about now" forever). Filter + attention chip
+naturally scope to the rendered week. Language switcher keeps the week;
+view tabs drop it (they already always target a view's root index). Digest
+pages untouched — prev/next stays the pure created_at chain and crosses
+week boundaries invisibly.
+
+THE one called-out hazard: the unread fence's script advances
+`localStorage.lastVisit` to the newest entry on ANY index page today; on an
+archive page that would REGRESS the stamp and spawn a bogus fence next
+visit. The update becomes forward-only (store only if newer than stored).
+
+- [ ] **Roadmap (this section)** — (this very PR).
+- [ ] **Core week machinery** — Budapest ISO-week helpers; the `w/` route
+  segment; week-bounded index query + oldest-week probe; the week rail
+  (EN/HU strings); empty-week state.
+- [ ] **Feature scoping + fence guard** — current-week-only gating of
+  lead/pulse/countdown/prefetch; the forward-only lastVisit guard;
+  switcher week-mapping; a lang×view×week verification sweep on the seeded
+  rig.
+
+Ships with one `wrangler deploy`; the calendar heatmap remains deferred but
+now has its link targets waiting.
