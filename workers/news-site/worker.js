@@ -137,11 +137,30 @@ export default {
       return handleDigestPage(env, digestMatch[1], digestMatch[4], url, lang, view);
     }
 
-    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/)?$/);
+    // Roadmap 3 (weekly pagination): one optional, always-LAST segment,
+    // `w/YYYY-Www/` — the digest-page regex above stays untouched, digest
+    // pages have no week address (prev/next crosses week boundaries
+    // invisibly, unchanged). Root index (no w/ segment) = the current week.
+    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/);
     if (indexMatch && request.method === "GET") {
       const lang = indexMatch[2] ? "hu" : "en";
       const view = indexMatch[3] ? "daily" : "all";
-      return handleIndexPage(env, indexMatch[1], url, lang, view);
+      let weekParam = null;
+      if (indexMatch[4] !== undefined) {
+        const year = Number(indexMatch[4]);
+        const week = Number(indexMatch[5]);
+        // Strict shape/value validation: week 1-53, and 53 only for ISO
+        // years that actually have a 53rd week. Anything else 404s
+        // indistinguishably from an unknown path (same trust model as
+        // every other route here — no hint that the shape was "close").
+        // Valid-shaped FUTURE weeks are deliberately allowed through (they
+        // just render empty) — see handleIndexPage.
+        if (week < 1 || week > 53 || (week === 53 && isoWeeksInYear(year) !== 53)) {
+          return notFound();
+        }
+        weekParam = { year, week };
+      }
+      return handleIndexPage(env, indexMatch[1], url, lang, view, weekParam);
     }
 
     // Unknown path, or a token-gated route hit with the wrong method — same
@@ -244,34 +263,91 @@ async function handleIngest(request, env, idParam) {
   return json({ ok: true }, 200);
 }
 
-async function handleIndexPage(env, token, url, lang, view) {
+async function handleIndexPage(env, token, url, lang, view, weekParam) {
   if (!(await tokenMatches(env, token))) return notFound();
 
-  // LIMIT 1000 = ~4 months of 3-hourly digests. Not pagination, a page-weight
-  // backstop: every row carries a ~paragraph tldr, and an unbounded index
-  // would grow by ~1MB/quarter forever. Older digests stay reachable through
-  // each digest page's prev/next chain; add real pagination if the cap is
-  // ever actually felt. tldr_hu is always selected (cheap) even for the EN
-  // page — only the HU renderer reads it.
-  //
-  // Order by created_at, not id: daily briefs get BACKFILLED for past days,
-  // so a backfilled row can have a high id but an old, historical
-  // created_at — id order and chronological order are no longer the same
-  // thing. `id DESC` stays only as a deterministic tiebreak for same-instant
-  // rows. groupByDay below relies on this ordering to put each row in its
-  // correct day bucket.
-  const kindFilter = view === "daily" ? "WHERE kind = 'daily' " : "";
-  const { results } = await env.DB.prepare(
-    `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests ${kindFilter}ORDER BY created_at DESC, id DESC LIMIT 1000`,
-  ).all();
+  // Weekly pagination (roadmap 3 step 2): the daily view stays unpaginated
+  // (~3 years from feeling the old LIMIT-1000 backstop) — the route match
+  // above still grammatically allows "daily/w/…" (the "w/" segment can
+  // follow any view prefix), so an unpaginated view being asked for a week
+  // address 404s here rather than silently ignoring the segment or
+  // rendering something misleading for a URL that has no real page behind
+  // it.
+  if (view === "daily" && weekParam) return notFound();
+
+  // The week actually being rendered: the URL's w/ segment if present,
+  // otherwise the current Budapest-local ISO week. NOTE: this step (roadmap
+  // 3 "Core week machinery") deliberately does NOT gate the lead
+  // card/pulse strip/countdown/prefetch hint to the current week only —
+  // that's the next step ("Feature scoping"). They keep rendering
+  // unconditionally here, which can look a little odd on an archive week
+  // page (e.g. a "Latest" card that isn't) — expected and fine for now.
+  const current = isoWeekOf(new Date());
+  const effective = weekParam ?? current;
+  const isCurrentWeek = compareIsoWeek(effective, current) === 0;
+
+  let results;
+  let weekInfo = null;
+  if (view === "daily") {
+    // Unbounded, exactly as before this step — see the all-view branch
+    // below for why the old flat LIMIT 1000 was a page-weight backstop, not
+    // real pagination; the daily view isn't getting real pagination here.
+    // tldr_hu is always selected (cheap) even for the EN page — only the HU
+    // renderer reads it.
+    const { results: dailyResults } = await env.DB.prepare(
+      `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE kind = 'daily' ORDER BY created_at DESC, id DESC LIMIT 1000`,
+    ).all();
+    results = dailyResults;
+  } else {
+    // Week-bounded query replaces the old flat LIMIT-1000 backstop for the
+    // all view. created_at is UTC ISO text, so a lexicographic >=/< against
+    // the UTC boundary strings from weekBoundsUtc is a correct comparison
+    // without parsing — same trick every other created_at comparison in
+    // this file already relies on. Order by created_at, not id: daily
+    // briefs get BACKFILLED for past days, so a backfilled row can have a
+    // high id but an old, historical created_at; `id DESC` stays only as a
+    // deterministic tiebreak for same-instant rows. groupByDay relies on
+    // this ordering to put each row in its correct day bucket.
+    const { startIso, endIso } = weekBoundsUtc(effective.year, effective.week);
+    const { results: weekResults } = await env.DB.prepare(
+      `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC, id DESC LIMIT 1000`,
+    )
+      .bind(startIso, endIso)
+      .all();
+    results = weekResults;
+
+    // Oldest-week probe: one MIN(created_at) over the WHOLE table — not
+    // week-bounded, not kind-filtered, mirroring the all view's own "every
+    // digest, mixed" scope — locating the earliest week that has ever had
+    // data. The rail's "older" link renders only when the previous week is
+    // still >= that floor; a mid-range week with no data in between still
+    // gets its own page (empty state + rail), it just isn't itself a valid
+    // "older" TARGET past the floor.
+    const oldestRow = await env.DB.prepare("SELECT MIN(created_at) AS oldest FROM digests").first();
+    const oldestWeek = oldestRow?.oldest ? isoWeekOf(new Date(oldestRow.oldest)) : null;
+    const prevWeek = adjacentWeek(effective.year, effective.week, -1);
+    const olderAllowed = Boolean(oldestWeek) && compareIsoWeek(prevWeek, oldestWeek) >= 0;
+    // "Newer" only ever points toward the present: a future week (valid-
+    // shaped but effective > current) gets no newer link either, same as
+    // the current week itself.
+    const newerAllowed = compareIsoWeek(effective, current) < 0;
+
+    weekInfo = {
+      year: effective.year,
+      week: effective.week,
+      isCurrentWeek,
+      older: olderAllowed ? prevWeek : null,
+      newer: newerAllowed ? adjacentWeek(effective.year, effective.week, 1) : null,
+    };
+  }
 
   // Next-briefing countdown (roadmap 2 step 3): the newest WINDOW digest's
   // created_at, found in the rows already fetched above rather than an extra
   // query — rows are created_at DESC, so this is just the first kind='window'
-  // row. In the daily view, kindFilter already restricts `results` to
-  // kind='daily' only, so no window row is ever found there and the
-  // countdown paragraph is simply omitted (see pageChrome's countdownNewest
-  // param) — cheap, no special-casing needed for that view.
+  // row. In the daily view, `results` is already restricted to kind='daily'
+  // only, so no window row is ever found there and the countdown paragraph
+  // is simply omitted (see pageChrome's countdownNewest param) — cheap, no
+  // special-casing needed for that view.
   const newestWindow = (results ?? []).find((row) => row.kind === "window");
 
   return htmlResponse(
@@ -282,6 +358,7 @@ async function handleIndexPage(env, token, url, lang, view) {
       lang,
       view,
       newestWindow?.created_at ?? null,
+      weekInfo,
     ),
   );
 }
@@ -645,13 +722,16 @@ function formatShortDate(date, locale) {
   }).format(date);
 }
 
-function tzAbbr(date) {
-  // Recent ICU versions render timeZoneName:"short" for Europe/* zones as a
-  // GMT offset ("GMT+1"/"GMT+2") rather than "CET"/"CEST", so derive the
-  // abbreviation from the offset ourselves instead of trusting that string.
-  // Europe/Budapest only ever has these two offsets, so the mapping is exact.
-  // This is a locale-independent numeric parse (not user-facing text), so it
-  // stays on "en-GB" regardless of the page's language.
+// Budapest's UTC offset, in minutes, AT the given instant — the numeric
+// generalization of tzAbbr's CET/CEST lookup below, also reused by
+// weekBoundsUtc (roadmap 3 step 2) to convert Budapest-local midnight to a
+// UTC instant. Recent ICU versions render timeZoneName:"short" for Europe/*
+// zones as a GMT offset ("GMT+1"/"GMT+2") rather than "CET"/"CEST", so the
+// offset is derived ourselves instead of trusting a zone-abbreviation
+// string; Europe/Budapest only ever has these two (whole-hour) offsets, so
+// the parse is exact. Locale-independent numeric parse (not user-facing
+// text), so it stays on "en-GB" regardless of the page's language.
+function budapestOffsetMinutes(date) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: TIMEZONE,
     timeZoneName: "shortOffset",
@@ -659,10 +739,171 @@ function tzAbbr(date) {
   const offset = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
   // Match "+2" AND "+02" (ICU emits "GMT+2" for shortOffset today, but a
   // runtime that ever hands back the padded "GMT+02:00" long form must not
-  // silently fall through to CET in August — the exact bug this function
+  // silently fall through to +1h in August — the exact bug this function
   // exists to avoid).
-  const m = offset.match(/[+-]0?(\d)/);
-  return m && m[1] === "2" ? "CEST" : "CET";
+  const m = offset.match(/([+-])0?(\d)/);
+  const sign = m && m[1] === "-" ? -1 : 1;
+  const hours = m ? Number(m[2]) : 1; // fail-safe default: CET, +1h
+  return sign * hours * 60;
+}
+
+function tzAbbr(date) {
+  return budapestOffsetMinutes(date) === 120 ? "CEST" : "CET";
+}
+
+// ── ISO week helpers (roadmap 3 step 2 — "weekly pagination"): the
+// correctness core of this step. All Budapest-local, DST-safe, and built on
+// the same "convert to Budapest calendar y/m/d, then do plain date
+// arithmetic on a UTC-noon PROXY date" technique throughout — noon rather
+// than midnight so none of the day-shift arithmetic below can ever cross a
+// UTC calendar-date boundary next to an actual DST transition (which always
+// happens near local midnight, never near local noon). A "proxy" date's
+// UTC y/m/d fields are read back as the intended Budapest calendar date;
+// its actual instant-in-time value is never used for anything else. ────────
+
+// The Budapest-local calendar date (year/month/day) of a Date/instant, via
+// Intl.formatToParts rather than a fixed offset — DST-correct year-round.
+// Locale is irrelevant here (parts are picked by `type`, not parsed as
+// text), so "en-GB" is used unconditionally, same reasoning as tzAbbr.
+function budapestDateParts(date) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type) => Number(parts.find((p) => p.type === type).value);
+  return { y: get("year"), m: get("month"), d: get("day") };
+}
+
+// The ISO 8601 week (Monday-first, week 1 is the week containing Jan 4) of
+// the Budapest-local calendar date of `date`. Standard algorithm: shift the
+// proxy date to "this week's Thursday" (Thursday's calendar year is always
+// the correct ISO year, including at year boundaries), then count whole
+// weeks from that ISO year's own Jan 1.
+function isoWeekOf(date) {
+  const { y, m, d } = budapestDateParts(date);
+  const proxy = new Date(Date.UTC(y, m - 1, d, 12));
+  const isoWeekday = proxy.getUTCDay() || 7; // Mon=1 .. Sun=7 (Sun is 0 in JS)
+  proxy.setUTCDate(proxy.getUTCDate() + 4 - isoWeekday); // -> this week's Thursday
+  const isoYear = proxy.getUTCFullYear();
+  // Noon-vs-noon (not noon-vs-midnight) so the difference below is an exact
+  // whole-day count — see the block comment above on why noon is used
+  // throughout rather than midnight.
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1, 12));
+  const diffDays = (proxy - yearStart) / 86400000;
+  const week = Math.ceil((diffDays + 1) / 7);
+  return { year: isoYear, week };
+}
+
+// Whether ISO year `year` has 53 weeks (rather than the usual 52) — the
+// standard rule: true iff Jan 1 falls on a Thursday, or (in a leap year) on
+// a Wednesday. Pure calendar arithmetic, no timezone involved — an ISO week
+// YEAR is not a Budapest-local concept, just a numbering scheme. Used to
+// validate a "w/YYYY-W53/" URL: week 53 is only a real week for years this
+// returns true for (see the route match in fetch()).
+function isoWeeksInYear(year) {
+  const jan1Weekday = new Date(Date.UTC(year, 0, 1)).getUTCDay(); // 0=Sun..6=Sat
+  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return jan1Weekday === 4 || (isLeap && jan1Weekday === 3) ? 53 : 52;
+}
+
+// (year, week) tuple comparison, ISO-week-ordinal-aware (a week always
+// compares by year first, then week number within it) — same "compare the
+// tuple" pattern handleDigestPage already uses for (created_at, id) via
+// SQLite row values, just done in JS since these are two small integers,
+// not a SQL expression.
+function compareIsoWeek(a, b) {
+  return a.year !== b.year ? a.year - b.year : a.week - b.week;
+}
+
+// The Budapest calendar date of Jan 4 of `year`, as a UTC-noon proxy — Jan 4
+// is always in ISO week 1 by definition, which is what anchors the whole
+// per-year week grid below (mondayOfIsoWeek).
+function jan4Proxy(year) {
+  return new Date(Date.UTC(year, 0, 4, 12));
+}
+
+// Monday of ISO week `week` of `year`, as a UTC-noon proxy holding that
+// Monday's Budapest calendar date — the shared anchor for weekBoundsUtc,
+// adjacentWeek, and formatWeekRangeLabel below. Back up from Jan 4 (always
+// in week 1) to ITS OWN Monday to get week 1's Monday; every other week's
+// Monday is exactly (week-1)*7 days later. Plain day-count arithmetic, valid
+// across ISO year boundaries too with no special-casing: the Monday-to-
+// Monday sequence has no gaps, so "week 53's Monday + 7d" lands correctly on
+// next year's week-1 Monday on its own (see weekBoundsUtc's comment for why
+// this matters there). `week` may be 0 or negative or run past a year's own
+// week count — callers (weekBoundsUtc, adjacentWeek) rely on exactly that to
+// step across year boundaries without their own carry logic.
+function mondayOfIsoWeek(year, week) {
+  const jan4 = jan4Proxy(year);
+  const jan4Weekday = jan4.getUTCDay() || 7; // Mon=1 .. Sun=7
+  const monday = new Date(jan4);
+  monday.setUTCDate(monday.getUTCDate() - (jan4Weekday - 1) + (week - 1) * 7);
+  return monday;
+}
+
+// Budapest-local midnight of the given (UTC-noon-proxy-derived) calendar
+// date, as a UTC ISO string. Date.UTC(y, m-1, d) is a naive UTC-midnight
+// guess for that calendar date; subtracting Budapest's actual UTC offset at
+// that boundary shifts it to the real instant. The offset is sampled at the
+// NOON proxy of that same calendar date (not at the naive midnight guess
+// itself) so a DST transition landing exactly at local midnight can never
+// make the offset lookup read the wrong side of the transition.
+function budapestMidnightUtcIso(y, m, d) {
+  const offsetMinutes = budapestOffsetMinutes(new Date(Date.UTC(y, m - 1, d, 12)));
+  return new Date(Date.UTC(y, m - 1, d) - offsetMinutes * 60000).toISOString();
+}
+
+// UTC ISO bounds of ISO week `week` of `year`: Budapest-local Monday 00:00
+// of that week through Budapest-local Monday 00:00 of the following week —
+// a half-open [start, end) range, matching how every other created_at
+// comparison in this file works. Passing `week + 1` into mondayOfIsoWeek
+// for the end boundary — rather than computing "next week" via a separate
+// adjacentWeek call — is deliberate: it's the exact same plain day-count
+// arithmetic that makes ISO-year rollovers (week 52/53 -> next year's week 1)
+// fall out correctly with no extra branching, see mondayOfIsoWeek's comment.
+function weekBoundsUtc(year, week) {
+  const start = mondayOfIsoWeek(year, week);
+  const end = mondayOfIsoWeek(year, week + 1);
+  return {
+    startIso: budapestMidnightUtcIso(start.getUTCFullYear(), start.getUTCMonth() + 1, start.getUTCDate()),
+    endIso: budapestMidnightUtcIso(end.getUTCFullYear(), end.getUTCMonth() + 1, end.getUTCDate()),
+  };
+}
+
+// (year, week) shifted by `delta` ISO weeks — used for the week rail's
+// older/newer targets (delta ±1) in handleIndexPage. Goes through the
+// Monday-date + isoWeekOf round trip (add delta*7 days, then re-derive which
+// ISO week that Monday falls in) rather than hand-rolling year/week carry
+// arithmetic, so ISO year boundaries reuse the exact same logic as
+// weekBoundsUtc/isoWeekOf instead of a second, possibly-diverging copy of it.
+function adjacentWeek(year, week, delta) {
+  const monday = mondayOfIsoWeek(year, week);
+  monday.setUTCDate(monday.getUTCDate() + delta * 7);
+  return isoWeekOf(monday);
+}
+
+// The week rail's date-range text, e.g. "3–9 Aug" (en-GB) / "aug. 3–9."
+// (hu-HU) — Intl's formatRange collapses the shared month between the two
+// boundary dates on its own (this is NOT hand-built by formatting each date
+// separately and joining strings, which would repeat the month/produce the
+// wrong shape). A week's Mon-Sun span crosses a CALENDAR year boundary near
+// ISO year edges (ISO week 1 can start in late December) — show the year in
+// that one case so the range isn't ambiguous about which year each date
+// falls in; the common case omits it, matching the plain "3–9 Aug" shape.
+function formatWeekRangeLabel(year, week, locale) {
+  const monday = mondayOfIsoWeek(year, week);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(sunday.getUTCDate() + 6);
+  const spansCalendarYearBoundary = monday.getUTCFullYear() !== sunday.getUTCFullYear();
+  const fmt = new Intl.DateTimeFormat(locale, {
+    timeZone: TIMEZONE,
+    day: "numeric",
+    month: "short",
+    year: spansCalendarYearBoundary ? "numeric" : undefined,
+  });
+  return fmt.formatRange(monday, sunday);
 }
 
 // ── chrome strings (EN|HU) ──────────────────────────────────────────────
@@ -708,6 +949,13 @@ const STRINGS = {
     countdownHourUnit: "h",
     countdownMinuteUnit: "m",
     degraded: "partial",
+    // Week rail (roadmap 3 step 2). weekLabel is a placeholder template
+    // ({w} = week number, {range} = formatWeekRangeLabel's output) rather
+    // than hardcoded word order, so EN "Week 32 · 3–9 Aug" and HU
+    // "32. hét · aug. 3–9." can each put the week word/number on their own
+    // natural side of the range.
+    weekRailLabel: "Week navigation",
+    weekLabel: "Week {w} · {range}",
   },
   hu: {
     locale: "hu-HU",
@@ -739,6 +987,8 @@ const STRINGS = {
     countdownHourUnit: "ó",
     countdownMinuteUnit: "p",
     degraded: "hiányos",
+    weekRailLabel: "Heti navigáció",
+    weekLabel: "{w}. hét · {range}",
   },
 };
 
@@ -757,6 +1007,16 @@ function digestHref(token, lang, view, id) {
   const langSeg = lang === "hu" ? "hu/" : "";
   const viewSeg = view === "daily" ? "daily/" : "";
   return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}d/${esc(id)}`;
+}
+
+// Like indexHref, with the ISO week's URL segment appended (roadmap 3 step
+// 2) — week zero-padded to 2 digits ("W05", not "W5") so the address always
+// matches the ISO 8601 "Www" shape regardless of week number. Only ever
+// called with view="all" today (the daily view has no week address), but
+// takes `view` like every other href helper here rather than hardcoding it.
+function weekHref(token, lang, view, year, week) {
+  const weekSeg = String(week).padStart(2, "0");
+  return `${indexHref(token, lang, view)}w/${esc(year)}-W${esc(weekSeg)}/`;
 }
 
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
@@ -1209,6 +1469,24 @@ const CSS = `
   }
   .viewtab:not(.active):hover { border-color: var(--accent); }
   .viewtab:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Week rail (roadmap 3 step 2): mono wire-style ← older · WEEK N · range ·
+     newer → nav, between the view tabs and the filter row, ALL-view index
+     pages only (see renderIndexPage/renderWeekRail). Classic 3-column
+     centering trick: the two OUTER spans share flex:1 (so they're always
+     equal width regardless of their own content length, even when one side
+     is an empty spacer), which keeps the center label visually centered
+     without needing to measure anything. */
+  .weekrail {
+    display: flex; align-items: baseline; margin: 0 0 1.2em;
+    font-family: var(--font-data); font-size: 0.78em;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .weekrail .rail-older, .weekrail .rail-newer { flex: 1; }
+  .weekrail .rail-older { text-align: left; }
+  .weekrail .rail-newer { text-align: right; }
+  .weekrail .rail-center { flex: 0 1 auto; color: var(--muted); }
+  .weekrail a { color: var(--accent); text-decoration: none; }
 
   /* Index filter (roadmap step 6): tucks under the view tabs — negative
      top margin pulls it snug against .viewtabs' own bottom margin instead
@@ -1960,7 +2238,44 @@ function renderPulseStrip(rows, token, lang, view) {
   return `<nav class="pulse" aria-label="${esc(strings.pulseLabel)}">${bars}</nav>\n`;
 }
 
-function renderIndexPage(rows, token, host, lang, view, countdownNewest = null) {
+// Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
+// W33 →` nav, rendered on ALL-view index pages only — see the call site in
+// renderIndexPage, and the file-header roadmap notes on why the daily view
+// has no week address. `weekInfo` is handleIndexPage's { year, week,
+// isCurrentWeek, older, newer } (older/newer are {year,week} or null — see
+// that function). Absent older/newer render as empty (but still flex:1)
+// spacer spans, via the shared .rail-older/.rail-newer classes, so the
+// center label stays visually centered either way (see the .weekrail CSS).
+function renderWeekRail(token, lang, weekInfo, strings) {
+  const olderLink = weekInfo.older
+    ? `<a href="${weekHref(token, lang, "all", weekInfo.older.year, weekInfo.older.week)}">← W${esc(String(weekInfo.older.week).padStart(2, "0"))}</a>`
+    : "";
+
+  // The CURRENT week's own "newer" target is, by definition, the current
+  // week itself — recomputed here (isoWeekOf is a cheap pure function)
+  // rather than threaded through weekInfo, so weekInfo stays a plain
+  // description of THIS page's own week. When the newer target IS the
+  // current week, link to the ROOT index instead of a w/YYYY-Www/ address
+  // for it — one canonical URL for the current week, not two addresses for
+  // the same page.
+  const current = isoWeekOf(new Date());
+  let newerLink = "";
+  if (weekInfo.newer) {
+    const newerHref =
+      compareIsoWeek(weekInfo.newer, current) === 0
+        ? indexHref(token, lang, "all")
+        : weekHref(token, lang, "all", weekInfo.newer.year, weekInfo.newer.week);
+    newerLink = `<a href="${newerHref}">W${esc(String(weekInfo.newer.week).padStart(2, "0"))} →</a>`;
+  }
+
+  const centerLabel = strings.weekLabel
+    .replace("{w}", String(weekInfo.week))
+    .replace("{range}", formatWeekRangeLabel(weekInfo.year, weekInfo.week, strings.locale));
+
+  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}</span><span class="rail-newer">${newerLink}</span></nav>`;
+}
+
+function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null) {
   const strings = STRINGS[lang];
   const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
 
@@ -2000,6 +2315,13 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // by default, same progressive-enhancement contract as the input.
   const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><button class="attnfilter" aria-pressed="false" hidden>⚠ ${esc(strings.attentionFilter)}</button></div>`;
 
+  // Week rail (roadmap 3 step 2): between the view tabs (rendered by
+  // pageChrome, just above this) and the filter row — ALL-view index pages
+  // only (weekInfo is null for the daily view, see handleIndexPage). Sits
+  // above the empty-state message too, since both live inside the <section>
+  // wrapper assembled below.
+  const railHtml = view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings) : "";
+
   // Day-pulse strip (roadmap 2 step 3): between the filter row and the
   // <section> below, i.e. right above the lead card — renders "" (nothing)
   // outside the all view or with too few window digests, see
@@ -2026,7 +2348,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     lang,
     view,
     renderSwitchers(token, lang, view, "index"),
-    `${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}">${body}</section>`,
+    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}">${body}</section>`,
     null,
     countdownNewest,
     prefetchHref,
