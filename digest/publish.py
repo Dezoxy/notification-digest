@@ -57,6 +57,36 @@ _TELEGRAM_API_BASE = "https://api.telegram.org"
 # the site's "N sections" summary is describing.
 _NEEDS_ATTENTION_HEADING = "needs attention"
 
+# Section headings the prompts MANDATE by construction, not headings the
+# model chooses editorially -- derive_topics excludes these for the same
+# reason it excludes _NEEDS_ATTENTION_HEADING above: a heading that recurs
+# because a prompt rule says "include this" every time its trigger
+# condition holds, rather than because the same story kept developing, is
+# not a story arc. Feeding it to the site's "×N this week" recurrence
+# counter would manufacture a permanent false arc that never says anything
+# about what actually happened.
+#
+# - "Also today" -- prompts/daily.md's fixed second-tier section, present
+#   in nearly every daily brief by construction.
+# - "Hungary" -- the standing rule in prompts/daily.md and
+#   prompts/weekly.md: whenever an r/hungary item appears upstream, this
+#   section is mandatory, not a developing story. It is a standing PER-DAY
+#   (or per-week) rubric, not an arc -- if the owner ever wants Hungary
+#   arcs back, deleting it from this set is the whole change.
+# - "Watching next week" -- prompts/weekly.md's fixed forward-looking
+#   watchlist section.
+#
+# Casefolded (matching the `.casefold()` comparison derive_topics already
+# does for _NEEDS_ATTENTION_HEADING) so "## ALSO TODAY" is caught too.
+#
+# MAINTENANCE COUPLING: a prompt file that adds a new FIXED, mandated
+# rubric heading (as opposed to a model-chosen story heading) must add its
+# casefolded text here too, or the site will start growing a false arc for
+# it the same way it did for these three.
+_STRUCTURAL_RUBRIC_HEADINGS = frozenset(
+    {"also today", "hungary", "watching next week"}
+)
+
 # The banner line summarize.summarize() deterministically prepends ahead of
 # the model's own output, one line per failed collector (e.g.
 # "⚠ telegram collection failed this run"). Recognized here by its leading
@@ -429,7 +459,11 @@ def derive_topics(body_md: str) -> list[dict[str, str]]:
     "## Needs attention" via the identical case-insensitive check
     `section_link_targets` uses against this module's own
     `_NEEDS_ATTENTION_HEADING` constant -- it is the prompt's own routing
-    label, not a story, so it must never become a topic either.
+    label, not a story, so it must never become a topic either. Also
+    EXCLUDING every heading in `_STRUCTURAL_RUBRIC_HEADINGS` ("Also today",
+    "Hungary", "Watching next week") for the identical reason: see that
+    constant's own comment for which prompt mandates each and why their
+    recurrence is structural, not editorial.
 
     `label` is the heading's own text, stripped, truncated to 80 characters
     (the site's own label limit). `slug` is `_slugify(heading)` -- see that
@@ -468,7 +502,8 @@ def derive_topics(body_md: str) -> list[dict[str, str]]:
     seen_slugs: set[str] = set()
     for heading in _real_heading_lines(body_md):
         title = heading.strip()
-        if title.casefold() == _NEEDS_ATTENTION_HEADING:
+        casefolded = title.casefold()
+        if casefolded == _NEEDS_ATTENTION_HEADING or casefolded in _STRUCTURAL_RUBRIC_HEADINGS:
             continue
         slug = _slugify(title)
         if not slug or slug in seen_slugs:
