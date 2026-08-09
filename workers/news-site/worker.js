@@ -595,6 +595,7 @@ const STRINGS = {
     dailyBrief: "daily brief",
     viewAll: "All",
     viewDaily: "Daily",
+    latest: "Latest",
   },
   hu: {
     locale: "hu-HU",
@@ -613,6 +614,7 @@ const STRINGS = {
     dailyBrief: "napi összefoglaló",
     viewAll: "Minden",
     viewDaily: "Napi",
+    latest: "Legfrissebb",
   },
 };
 
@@ -788,10 +790,26 @@ const CSS = `
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
     color: var(--muted); margin: 2.2em 0 0.4em; font-weight: 600;
     font-family: var(--font-data); /* mono uppercase eyebrow = the wire look */
+    /* Sticky so mid-scroll position is always visible (roadmap step 4).
+       var(--bg) background keeps entry text from showing through as it
+       scrolls underneath — correct on both mobile (full-bleed) and desktop
+       (the bubble card is the scroll context's background too). */
+    position: sticky; top: 0; background: var(--bg); padding: 0.35em 0;
+    z-index: 1;
   }
   .entry {
     display: block; text-decoration: none; color: inherit;
     padding: 1.05em 0; border-bottom: 1px solid var(--hairline);
+  }
+  /* Lead card (roadmap step 4): the newest digest in the current view,
+     rendered above the ledger with visual weight but no new color — bigger
+     unclamped excerpt and a mono dateline eyebrow in place of the usual
+     time+count meta line. It's the first thing in the section, so no extra
+     top border beyond the shared .entry bottom hairline. */
+  .entry-lead { padding: 1.2em 0 1.4em; }
+  .entry-lead .eyebrow-text {
+    font-family: var(--font-data); font-size: 0.75em; letter-spacing: 0.08em;
+    color: var(--accent); text-transform: uppercase;
   }
   .entry:hover .excerpt, .entry:focus-visible .excerpt { color: var(--text); }
   .entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
@@ -830,6 +848,12 @@ const CSS = `
      extra clamped line of excerpt room. */
   .entry .excerpt.excerpt-daily { -webkit-line-clamp: 4; }
   .entry .excerpt strong { color: var(--text); }
+  /* Placed after .entry .excerpt (same specificity, later wins the cascade)
+     so the lead card's excerpt actually loses its clamp instead of being
+     silently overridden back to 3 lines. */
+  .entry-lead .excerpt {
+    font-size: 1.02em; display: block; -webkit-line-clamp: unset; overflow: visible;
+  }
 
   /* The whole nav is prev/next times plus the "all digests" link — one word
      — so the entire block goes mono rather than singling out the times. */
@@ -1035,6 +1059,24 @@ function groupByDay(rows, locale) {
   return groups;
 }
 
+// Shared TL;DR excerpt logic — HU page: prefer the translated tldr; if the
+// app never sent one for this digest, fall back to the English tldr and mark
+// it with a muted "EN" chip rather than silently presenting English text as
+// if translated. Used by both the compact ledger entries (renderIndexEntry)
+// and the lead card (renderLeadCard) so the two never drift apart.
+function renderExcerpt(row, lang) {
+  let excerptHtml = esc(row.tldr);
+  let langChip = "";
+  if (lang === "hu") {
+    if (row.tldr_hu) {
+      excerptHtml = esc(row.tldr_hu);
+    } else {
+      langChip = '<span class="flag flag-muted">EN</span>';
+    }
+  }
+  return { excerptHtml, langChip };
+}
+
 function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
   const time = formatTime(new Date(row.created_at), strings.locale);
@@ -1049,18 +1091,7 @@ function renderIndexEntry(row, token, lang, view) {
     ? `<span class="flag">${esc(strings.attention)}</span>`
     : "";
 
-  // HU page: prefer the translated tldr; if the app never sent one for this
-  // digest, fall back to the English tldr and mark it with a muted "EN"
-  // chip rather than silently presenting English text as if translated.
-  let excerptHtml = esc(row.tldr);
-  let langChip = "";
-  if (lang === "hu") {
-    if (row.tldr_hu) {
-      excerptHtml = esc(row.tldr_hu);
-    } else {
-      langChip = '<span class="flag flag-muted">EN</span>';
-    }
-  }
+  const { excerptHtml, langChip } = renderExcerpt(row, lang);
 
   const counts = `${esc(row.item_count)} ${esc(strings.itemsWord)} · ${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
   const timeClass = isDaily ? "time time-accent" : "time";
@@ -1072,19 +1103,57 @@ function renderIndexEntry(row, token, lang, view) {
   </a>`;
 }
 
+// The lead card (roadmap step 4): the newest digest in the current view,
+// rendered full-weight above the compact ledger — the reader's most common
+// task is "read the newest one". Structurally still one big clickable
+// `.entry` <a>, same pattern as renderIndexEntry, but the usual time+count
+// `.meta` row is replaced by a mono dateline eyebrow (same flex layout,
+// class="meta" reused) and the excerpt runs unclamped at a slightly larger
+// size (see the .entry-lead CSS).
+function renderLeadCard(row, token, lang, view) {
+  const strings = STRINGS[lang];
+  const date = new Date(row.created_at);
+  const isDaily = row.kind === "daily";
+  const dailyFlag = isDaily && view !== "daily"
+    ? `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>`
+    : "";
+  const flag = row.has_attention
+    ? `<span class="flag">${esc(strings.attention)}</span>`
+    : "";
+
+  const { excerptHtml, langChip } = renderExcerpt(row, lang);
+
+  const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
+
+  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}">
+    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${dailyFlag}${flag}${langChip}</span>
+    <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
+  </a>`;
+}
+
 function renderIndexPage(rows, token, host, lang, view) {
   const strings = STRINGS[lang];
-  const groups = groupByDay(rows, strings.locale);
   const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
-  const body =
-    groups.length === 0
-      ? `<p class="stamp">${esc(emptyMessage)}</p>`
-      : groups
-          .map(
-            (group) => `<div class="dayhead">${esc(group.label)}</div>
+
+  let body;
+  if (rows.length === 0) {
+    body = `<p class="stamp">${esc(emptyMessage)}</p>`;
+  } else {
+    // rows are ordered created_at DESC, so rows[0] is the newest digest in
+    // this view — it renders as the lead card above the ledger and is
+    // excluded from the grouped list below (no duplicate). groupByDay runs
+    // on the remainder, so if the newest digest was that day's only entry,
+    // no empty day header is left behind.
+    const [lead, ...rest] = rows;
+    const groups = groupByDay(rest, strings.locale);
+    const ledger = groups
+      .map(
+        (group) => `<div class="dayhead">${esc(group.label)}</div>
 ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}`,
-          )
-          .join("\n");
+      )
+      .join("\n");
+    body = `${renderLeadCard(lead, token, lang, view)}\n${ledger}`;
+  }
 
   return pageChrome(
     host,
