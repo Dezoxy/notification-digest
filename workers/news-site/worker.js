@@ -596,6 +596,8 @@ const STRINGS = {
     viewAll: "All",
     viewDaily: "Daily",
     latest: "Latest",
+    filterPlaceholder: "Filter briefings…",
+    themeToggle: "Toggle light/dark",
   },
   hu: {
     locale: "hu-HU",
@@ -615,6 +617,8 @@ const STRINGS = {
     viewAll: "Minden",
     viewDaily: "Napi",
     latest: "Legfrissebb",
+    filterPlaceholder: "Szűrés…",
+    themeToggle: "Világos/sötét váltás",
   },
 };
 
@@ -666,10 +670,14 @@ function renderViewTabs(token, lang, view) {
   return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}</nav>`;
 }
 
-// The masthead's right cluster now carries ONLY the language toggle (the
-// view tabs moved to their own centered row — see renderViewTabs).
+// The masthead's right cluster carries the language toggle plus the manual
+// theme toggle (roadmap step 6), on both index and digest pages — a reader
+// override of the OS theme is useful everywhere, not just on the index. The
+// button starts `hidden` (progressive enhancement, same as the filter input
+// below) and is un-hidden by the bottom script once it's known to be wired.
 function renderSwitchers(token, lang, view, pageKind, id) {
-  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id)}</div>`;
+  const strings = STRINGS[lang];
+  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id)}<button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button></div>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -735,6 +743,49 @@ const CSS = `
     }
   }
 
+  /* Manual theme override (roadmap step 6): a data-theme attribute on <html>,
+     set by the early head script from localStorage, has to beat BOTH the
+     base :root above and the prefers-color-scheme:dark block above it —
+     regardless of which way the OS is set. CSS has no way to reference a
+     media block's resolved values from outside it, so with no build step the
+     only option is a third, explicit copy of each palette. Three copies is
+     the price of a manual override without a build step, and the palette
+     changes rarely. Deliberately only the COLOR variables are duplicated —
+     --font-prose/--font-data are identical in every theme and stay defined
+     once, above. */
+  :root[data-theme="dark"] {
+    --bg: #17181c;
+    --page-bg: #0f0d17;
+    --text: #e6e6ea;
+    --muted: #8a8f9e;
+    --accent: #a5b4fc;
+    --accent-strong: #c7d2fe;
+    --tldr-bg: #262841;
+    --tldr-text: #dfe3ff;
+    --chip-bg: #33355c;
+    --chip-text: #c7d2fe;
+    --hairline: #2a2c33;
+    --h2-border: #6366f1;
+    --attention-bg: #4d3800;
+    --attention-text: #ffe69c;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfaf7;
+    --page-bg: #e9e9f2;
+    --text: #16181d;
+    --muted: #6e7380;
+    --accent: #4f46e5;
+    --accent-strong: #4338ca;
+    --tldr-bg: #eef2ff;
+    --tldr-text: #262a49;
+    --chip-bg: #dde3ff;
+    --chip-text: #4338ca;
+    --hairline: #e7e5e0;
+    --h2-border: #4f46e5;
+    --attention-bg: #fef3c7;
+    --attention-text: #78350f;
+  }
+
   * { box-sizing: border-box; }
   /* Reserve the scrollbar's gutter even when the page is too short to
      scroll: the All view scrolls, a near-empty Daily view doesn't, and
@@ -791,6 +842,17 @@ const CSS = `
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
+
+  /* Manual theme toggle (roadmap step 6): small pill button after the lang
+     switcher in .switchers. hidden by default, un-hidden by the bottom
+     script — no JS, no button, same progressive-enhancement contract as the
+     index filter input below. */
+  .themetoggle {
+    background: none; border: 1px solid var(--hairline); border-radius: 999px;
+    color: var(--text); font-size: 0.8em; padding: 0.05em 0.5em; cursor: pointer;
+  }
+  .themetoggle:hover { border-color: var(--accent); }
+  .themetoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   .dayhead {
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
@@ -980,6 +1042,20 @@ const CSS = `
   .viewtab:not(.active):hover { border-color: var(--accent); }
   .viewtab:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
+  /* Index filter (roadmap step 6): tucks under the view tabs — negative
+     top margin pulls it snug against .viewtabs' own bottom margin instead
+     of stacking two gaps. hidden by default (see renderIndexPage), so
+     this rule only ever paints once JS un-hides the input. */
+  .filterrow { margin: -0.6em 0 1.4em; }
+  .filterrow .filter {
+    display: block; width: 100%; font: inherit; font-size: 0.9em;
+    padding: 0.5em 0.9em; border-radius: 10px;
+    border: 1px solid var(--hairline); background: var(--bg); color: var(--text);
+  }
+  .filterrow .filter::placeholder { color: var(--muted); }
+  /* Plain border otherwise; only :focus-visible gets a visible outline. */
+  .filterrow .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   footer.site {
     margin-top: 3.5em; padding-top: 1.2em; border-top: 1px solid var(--hairline);
     color: var(--muted); font-size: 0.8em;
@@ -1034,6 +1110,7 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${esc(title ?? host)}</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||""}catch(e){}</script>
 <style>${CSS}</style>
 </head>
 <body>
@@ -1064,6 +1141,68 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
     };
     addEventListener("scroll", onScroll, { passive: true });
     onScroll();
+  })();
+
+  // Manual theme toggle (roadmap step 6). The head script already applied
+  // any stored preference to <html data-theme> before first paint, so this
+  // just wires the button: unhide it (progressive enhancement — no JS, no
+  // button), reflect the current EFFECTIVE theme (stored, or the OS
+  // preference when nothing is stored) in aria-pressed, and on click flip
+  // light<->dark and persist it. There's no third "back to system" click —
+  // that would need clearing storage, which isn't worth its own UI; a reader
+  // who wants system-follow back can clear the site's local storage.
+  (function () {
+    var btn = document.querySelector(".themetoggle");
+    if (!btn) return;
+    btn.hidden = false;
+    var effectiveTheme = function () {
+      var stored = document.documentElement.dataset.theme;
+      if (stored === "dark" || stored === "light") return stored;
+      return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    };
+    var reflect = function () {
+      btn.setAttribute("aria-pressed", String(effectiveTheme() === "dark"));
+    };
+    reflect();
+    btn.addEventListener("click", function () {
+      var next = effectiveTheme() === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = next;
+      try {
+        localStorage.setItem("theme", next);
+      } catch (e) {}
+      reflect();
+    });
+  })();
+
+  // Index filter (roadmap step 6, index pages only — guarded on the input's
+  // existence since digest pages have no .filter). Case-insensitive
+  // substring match against each .entry's text content (the lead card is an
+  // .entry too); a .dayhead hides once every entry in its group (its
+  // following siblings up to the next .dayhead) is hidden. No debounce at
+  // these list sizes; an empty query restores everything.
+  (function () {
+    var input = document.querySelector(".filter");
+    if (!input) return;
+    input.hidden = false;
+    var entries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
+    var dayheads = Array.prototype.slice.call(document.querySelectorAll(".dayhead"));
+    input.addEventListener("input", function () {
+      var q = input.value.trim().toLowerCase();
+      entries.forEach(function (el) {
+        el.hidden = q && !el.textContent.toLowerCase().includes(q);
+      });
+      dayheads.forEach(function (dh) {
+        var group = [];
+        var el = dh.nextElementSibling;
+        while (el && !el.classList.contains("dayhead")) {
+          if (el.classList.contains("entry")) group.push(el);
+          el = el.nextElementSibling;
+        }
+        dh.hidden = group.length > 0 && group.every(function (e) {
+          return e.hidden;
+        });
+      });
+    });
   })();
 </script>
 </body>
@@ -1184,13 +1323,19 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     body = `${renderLeadCard(lead, token, lang, view)}\n${ledger}`;
   }
 
+  // Client-side filter (roadmap step 6, index pages only): sits between the
+  // view tabs (rendered by pageChrome, just above this) and the lead card
+  // (the first thing inside <section> below). `hidden` by default — no JS,
+  // no filter UI — un-hidden by the bottom script in pageChrome.
+  const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div>`;
+
   return pageChrome(
     host,
     token,
     lang,
     view,
     renderSwitchers(token, lang, view, "index"),
-    `<section>${body}</section>`,
+    `${filterRowHtml}<section>${body}</section>`,
   );
 }
 
