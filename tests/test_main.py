@@ -431,6 +431,8 @@ def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
         body_md_hu=None,
         body_html_hu=None,
         kind="window",
+        source_counts=None,
+        failed_sources=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -816,6 +818,8 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
         body_md_hu=None,
         body_html_hu=None,
         kind="window",
+        source_counts=None,
+        failed_sources=None,
     ):
         captured.update(
             digest_id=digest_id_,
@@ -826,6 +830,8 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
             ingest_key=key,
             body_md_hu=body_md_hu,
             body_html_hu=body_html_hu,
+            source_counts=source_counts,
+            failed_sources=failed_sources,
         )
 
     monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
@@ -847,6 +853,11 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
     # English body_html must never get the Hungarian display-time label
     # swap -- localize_tldr_label_hu is only ever applied to body_html_hu.
     assert "Röviden" not in captured["body_html"]
+    # _deliver_site computes these itself (from conn/digest_id/body_md) and
+    # forwards them -- this digest has one telegram item and no failure
+    # banner, so that's exactly what publish_to_site should have received.
+    assert captured["source_counts"] == {"telegram": 1}
+    assert captured["failed_sources"] == []
     row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)
 
@@ -872,6 +883,8 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
         body_md_hu=None,
         body_html_hu=None,
         kind="window",
+        source_counts=None,
+        failed_sources=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 

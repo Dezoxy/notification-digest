@@ -9,6 +9,7 @@ from digest.publish import (
     count_sections,
     extract_tldr,
     has_needs_attention,
+    parse_failed_sources,
     publish_to_site,
     send_telegram_tldr,
 )
@@ -166,6 +167,48 @@ def test_count_sections_ignores_headings_inside_fenced_code_blocks():
 
 def test_has_needs_attention_case_insensitive():
     assert has_needs_attention("## NEEDS ATTENTION\n\ntext\n") is True
+
+
+# --- parse_failed_sources ---
+
+
+def test_parse_failed_sources_no_banner_returns_empty_list():
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff\n"
+
+    assert parse_failed_sources(body_md) == []
+
+
+def test_parse_failed_sources_one_banner_line():
+    body_md = "⚠ telegram collection failed this run\n\n**TL;DR:** hi\n\n## S\n\nx\n"
+
+    assert parse_failed_sources(body_md) == ["telegram"]
+
+
+def test_parse_failed_sources_two_banner_lines_preserve_order():
+    body_md = (
+        "⚠ telegram collection failed this run\n"
+        "⚠ x collection failed this run\n\n"
+        "**TL;DR:** hi\n\n## S\n\nx\n"
+    )
+
+    assert parse_failed_sources(body_md) == ["telegram", "x"]
+
+
+def test_parse_failed_sources_lookalike_not_at_head_is_ignored():
+    # A banner-shaped line that shows up later in the body (e.g. inside the
+    # model's own output) must never be picked up -- only the genuine,
+    # code-generated block at the very START of body_md counts.
+    body_md = (
+        "**TL;DR:** hi\n\n"
+        "## Worth knowing\n\n"
+        "⚠ x collection failed this run\n"
+    )
+
+    assert parse_failed_sources(body_md) == []
+
+
+def test_parse_failed_sources_empty_body_returns_empty_list():
+    assert parse_failed_sources("") == []
 
 
 # --- publish_to_site ---
@@ -403,6 +446,70 @@ def test_publish_to_site_forwards_explicit_daily_kind(monkeypatch):
     )
 
     assert captured["body"]["kind"] == "daily"
+
+
+# --- publish_to_site: source_counts / failed_sources (both truthy-only) ---
+
+
+def test_publish_to_site_includes_source_counts_and_failed_sources_when_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 3,
+        "https://news-site.example.workers.dev", "key",
+        source_counts={"telegram": 2, "x": 1},
+        failed_sources=["news"],
+    )
+
+    assert captured["body"]["source_counts"] == {"telegram": 2, "x": 1}
+    assert captured["body"]["failed_sources"] == ["news"]
+
+
+def test_publish_to_site_omits_source_counts_and_failed_sources_when_none(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+    )
+
+    assert "source_counts" not in captured["body"]
+    assert "failed_sources" not in captured["body"]
+
+
+def test_publish_to_site_omits_source_counts_and_failed_sources_when_empty(monkeypatch):
+    # Truthy-only inclusion: an explicit empty dict/list must be omitted
+    # exactly like None, matching the site's normalize-empty-to-NULL
+    # ingest contract.
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        source_counts={},
+        failed_sources=[],
+    )
+
+    assert "source_counts" not in captured["body"]
+    assert "failed_sources" not in captured["body"]
 
 
 # --- send_telegram_tldr ---

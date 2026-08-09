@@ -23,9 +23,15 @@ from zoneinfo import ZoneInfo
 
 from digest.config import Config
 from digest.emailer import localize_tldr_label_hu, render_body_html, send_digest
-from digest.publish import TelegramSendError, publish_to_site, send_telegram_tldr
+from digest.publish import (
+    TelegramSendError,
+    parse_failed_sources,
+    publish_to_site,
+    send_telegram_tldr,
+)
 from digest.state import (
     get_digest_item_urls,
+    get_digest_source_counts,
     get_pending_digests,
     mark_digest_sent,
     mark_digest_site_published,
@@ -193,6 +199,16 @@ def _deliver_site(
     that doesn't care to pass it, matching this codebase's habit of
     defaulting "window" everywhere `kind` was retrofitted onto an existing
     signature.
+
+    Also computes `source_counts` (digest/state.py's
+    `get_digest_source_counts`) and `failed_sources`
+    (digest/publish.py's `parse_failed_sources`, parsed off this same
+    `body_md`) and forwards both to `publish_to_site`, which decides whether
+    to include them in the payload. Both are derived HERE, from `conn`/
+    `digest_id`/`body_md`, rather than threaded in by the caller -- this
+    covers the fresh-digest and pending-resend delivery paths identically,
+    since both ultimately call this same function with the digest's own
+    `digest_id`/`body_md`.
     """
     body_html = render_body_html(body_md, allowed_urls)
     body_html_hu = (
@@ -200,6 +216,8 @@ def _deliver_site(
         if body_md_hu is not None
         else None
     )
+    source_counts = get_digest_source_counts(conn, digest_id)
+    failed_sources = parse_failed_sources(body_md)
     try:
         publish_to_site(
             digest_id,
@@ -212,6 +230,8 @@ def _deliver_site(
             body_md_hu=body_md_hu,
             body_html_hu=body_html_hu,
             kind=kind,
+            source_counts=source_counts,
+            failed_sources=failed_sources,
         )
     except Exception as exc:
         logger.error("site publish failed for digest %d: %s", digest_id, type(exc).__name__)
