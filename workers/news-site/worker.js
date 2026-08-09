@@ -2523,28 +2523,76 @@ ${prefetchScriptHtml}
   // instant switch they always had — the mutation itself runs either way,
   // so correctness never depends on the animation.
   function withPageTransition(mutate) {
+    // The animation must never poison the mutation (owner-reported via the
+    // soft-nav rollout: startViewTransition rejects with InvalidStateError
+    // in hidden/render-suppressed documents, and that rejection cascaded
+    // into the soft-nav promise chain, whose catch-all dutifully fell back
+    // to a HARD navigation — the exact reload the soft path exists to
+    // avoid). Three layers: skip the API outright when the document is
+    // hidden (a snapshot of an invisible page is meaningless), try/catch
+    // the call so a synchronous throw degrades to an instant mutate, and
+    // swallow the transition's own promise rejections (they are cosmetic —
+    // per spec the update callback still runs even when the visual
+    // transition is skipped).
     if (
       document.startViewTransition &&
+      !document.hidden &&
       !matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
-      document.startViewTransition(mutate);
-    } else {
-      mutate();
+      try {
+        var t = document.startViewTransition(mutate);
+        if (t && t.finished && t.finished.catch) t.finished.catch(function () {});
+        if (t && t.ready && t.ready.catch) t.ready.catch(function () {});
+        return;
+      } catch (e) {
+        // fall through to the plain mutate below
+      }
     }
+    mutate();
   }
 
-  // Show the floating back button only after the header nav has scrolled
-  // away. Passive listener; runs once immediately so a mid-page reload
-  // (browser scroll restoration) starts in the right state.
-  (function () {
-    var fab = document.querySelector(".backfab");
-    if (!fab) return;
-    var onScroll = function () {
-      fab.classList.toggle("show", window.scrollY > 320);
-    };
-    addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-  })();
+  // Soft-navigation re-wiring: every feature below used to be a standalone,
+  // parse-time IIFE that ran once. A soft nav (see the module at the bottom
+  // of this script) swaps .wrap's content in place without a fresh document
+  // load, so all of it has to be re-runnable — wirePage() bundles every
+  // feature into one function, called once on initial load and again after
+  // each soft-nav swap.
+  //
+  // Listener lifecycle: one AbortController per wirePage() pass. Aborting
+  // the previous pass's controller before making a fresh one drops every
+  // listener that pass attached, in a single stroke — no duplicate-listener
+  // buildup across swaps. Every addEventListener below carries this pass's
+  // { signal: signal } for exactly that reason.
+  //
+  // Non-listener state (a running setInterval, a DOM node parked outside
+  // .wrap) doesn't go away just because its listeners did, so it gets its
+  // own explicit cleanup: teardown collects one closure per such case, and
+  // wirePage runs and clears the whole list before rewiring.
+  var wireController = null;
+  var teardown = [];
+
+  function wirePage() {
+    if (wireController) wireController.abort();
+    wireController = new AbortController();
+    var signal = wireController.signal;
+
+    teardown.forEach(function (fn) {
+      fn();
+    });
+    teardown.length = 0;
+
+    // Show the floating back button only after the header nav has scrolled
+    // away. Passive listener; runs once immediately so a mid-page reload
+    // (browser scroll restoration) starts in the right state.
+    (function () {
+      var fab = document.querySelector(".backfab");
+      if (!fab) return;
+      var onScroll = function () {
+        fab.classList.toggle("show", window.scrollY > 320);
+      };
+      addEventListener("scroll", onScroll, { passive: true, signal: signal });
+      onScroll();
+    })();
 
   // Theme miniseg (owner upgrade: Light/Auto/Dark, replacing the old
   // two-state ◐ toggle). The head script already applied any stored
@@ -2624,7 +2672,7 @@ ${prefetchScriptHtml}
         syncThemeColorMetas(v);
         reflect();
         });
-      });
+      }, { signal: signal });
     }
   })();
 
@@ -2662,7 +2710,7 @@ ${prefetchScriptHtml}
           } catch (e) {}
           reflect();
         });
-      });
+      }, { signal: signal });
     }
   })();
 
@@ -2688,7 +2736,7 @@ ${prefetchScriptHtml}
         localStorage.setItem("density", next);
       } catch (e) {}
       reflect();
-    });
+    }, { signal: signal });
   })();
 
   // Settings bubble close polish (owner redesign). Opening needs no JS at
@@ -2747,7 +2795,7 @@ ${prefetchScriptHtml}
           close();
         }
       },
-      true,
+      { capture: true, signal: signal },
     );
     // Keep the bubble open across a language hop (owner-reported: switching
     // language closed the menu — it's a full navigation, so the fresh
@@ -2770,13 +2818,13 @@ ${prefetchScriptHtml}
           sessionStorage.setItem("settingsOpen", "1");
         } catch (err) {}
       }
-    });
+    }, { signal: signal });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && settings.open) {
         close();
         summary.focus();
       }
-    });
+    }, { signal: signal });
     // Without this, clicking the gear while open would let <details> close
     // itself natively and instantly, skipping the animation entirely — the
     // native toggle already handles OPENING fine (nothing to intercept
@@ -2788,7 +2836,7 @@ ${prefetchScriptHtml}
         e.preventDefault();
         close();
       }
-    });
+    }, { signal: signal });
   })();
 
   // Unread fence (roadmap 2 step 2, index pages only — guarded on an
@@ -2869,13 +2917,19 @@ ${prefetchScriptHtml}
         chip.className = "resumechip";
         chip.textContent = "↓ " + label.textContent;
         document.body.appendChild(chip);
+        // The chip lives on document.body, OUTSIDE .wrap — a soft-nav swap
+        // replaces .wrap's content but never touches this node, so it must
+        // be torn down explicitly before the next wirePage() pass runs.
+        teardown.push(function () {
+          chip.remove();
+        });
         var updateChip = function () {
           // Visible ONLY while the fence sits below the viewport's bottom
           // edge — that's the state where the reader can't know it exists.
           // In view, scrolled past, or filter-hidden: no chip.
           chip.hidden = fence.hidden || fence.getBoundingClientRect().top <= window.innerHeight;
         };
-        addEventListener("scroll", updateChip, { passive: true });
+        addEventListener("scroll", updateChip, { passive: true, signal: signal });
         updateChip();
         chip.addEventListener("click", function () {
           fence.scrollIntoView({ block: "center" });
@@ -2883,7 +2937,7 @@ ${prefetchScriptHtml}
           // doesn't overlap what they scrolled to. The scroll listener
           // above keeps it hidden for as long as the fence stays in view.
           chip.hidden = true;
-        });
+        }, { signal: signal });
       }
     }
 
@@ -2978,7 +3032,7 @@ ${prefetchScriptHtml}
       }
     };
 
-    input.addEventListener("input", applyFilters);
+    input.addEventListener("input", applyFilters, { signal: signal });
 
     // Unified search (owner UX pass): the same input also live-queries the
     // full-archive search route in the background and injects results below
@@ -3072,7 +3126,7 @@ ${prefetchScriptHtml}
           return;
         }
         archiveTimer = setTimeout(runArchiveSearch, 300);
-      });
+      }, { signal: signal });
 
       // Enter triggers the pending search immediately instead of waiting out
       // the debounce. The input has no form, so Enter is otherwise inert —
@@ -3081,7 +3135,7 @@ ${prefetchScriptHtml}
         if (e.key !== "Enter") return;
         if (archiveTimer) clearTimeout(archiveTimer);
         runArchiveSearch();
-      });
+      }, { signal: signal });
 
       // One box, not two: the standalone search link is the no-JS fallback
       // (see renderIndexPage) — once the enhanced archive box is wired up,
@@ -3123,7 +3177,13 @@ ${prefetchScriptHtml}
       el.hidden = false;
     };
     render();
-    setInterval(render, 60000);
+    // The interval keeps ticking after a soft-nav swap unless torn down —
+    // it doesn't belong to any listener the AbortController above would
+    // drop, so it gets its own teardown closure like the resume chip does.
+    var intervalId = setInterval(render, 60000);
+    teardown.push(function () {
+      clearInterval(intervalId);
+    });
   })();
 
   // Keyboard navigation (roadmap 2 step 4): desktop convenience, no visible
@@ -3145,10 +3205,16 @@ ${prefetchScriptHtml}
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
       if (e.key === "j" || e.key === "ArrowLeft") {
         var older = document.querySelector(".nav-older");
-        if (older) location.href = older.href;
+        // click(), not a location.href assignment: the anchor's click runs
+        // through the soft-nav interceptor at the bottom of this script —
+        // a direct href assignment is a HARD navigation that bypasses it,
+        // which was exactly the residual white-flash path once every
+        // pointer navigation had gone soft (keyboard steppers flashed,
+        // taps did not).
+        if (older) older.click();
       } else if (e.key === "k" || e.key === "ArrowRight") {
         var newer = document.querySelector(".nav-newer");
-        if (newer) location.href = newer.href;
+        if (newer) newer.click();
       } else if (e.key === "/") {
         var filter = document.querySelector(".filter");
         if (filter) {
@@ -3156,8 +3222,149 @@ ${prefetchScriptHtml}
           filter.focus();
         }
       }
+    }, { signal: signal });
+  })();
+  }
+
+  // ── soft navigation ────────────────────────────────────────────────────
+  // Every page here is Cache-Control: private, no-store (see the file-header
+  // comment / trust model) — load-bearing, never touched — so a plain link
+  // click is a full network round trip every time, and on a slow response
+  // iOS Safari's canvas gap white-flashes despite color-scheme and the
+  // cross-document view transition (see the :root comment above). The fix:
+  // for internal links, fetch the next page in the background while the
+  // CURRENT page stays fully visible, then swap the new content into the
+  // live document inside a same-document View Transition (withPageTransition,
+  // above) instead of letting the browser tear down and rebuild everything.
+  // Nothing here is ever persisted — in-memory fetch only, gone on reload —
+  // and a JS-off reader simply never gets this listener, so every link keeps
+  // working as a plain navigation for them.
+  //
+  // Attached ONCE, at module init, before the first wirePage() call — see
+  // the boot sequence at the bottom of this script.
+  (function () {
+    // The token lives in every href on this page already, but this script
+    // never hardcodes it — the prefix is DERIVED from the page's own URL
+    // (the first two path segments, "/t/<token>/") once, at module init.
+    var pathSegments = location.pathname.split("/");
+    var tokenPrefix = "/" + pathSegments[1] + "/" + pathSegments[2] + "/";
+
+    // One AbortController per soft nav: starting a new one aborts whatever
+    // was still in flight, and the reference comparison below (controller
+    // !== activeNav) catches the rarer case where an old response arrives
+    // AFTER a newer nav is already under way but wasn't itself cancelled in
+    // time — a rapid string of soft-navs must never let a stale response
+    // win the race and overwrite what the reader is now looking at.
+    var activeNav = null;
+
+    function doSoftNav(href, isPopstate) {
+      if (activeNav) activeNav.abort();
+      var controller = new AbortController();
+      activeNav = controller;
+      fetch(href, { signal: controller.signal })
+        .then(function (res) {
+          if (!res.ok) throw new Error("soft-nav: response not ok");
+          return res.text();
+        })
+        .then(function (html) {
+          if (controller !== activeNav) return; // superseded — the newer nav owns the screen
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var newWrap = doc.querySelector(".wrap");
+          var curWrap = document.querySelector(".wrap");
+          if (!newWrap || !curWrap) throw new Error("soft-nav: .wrap missing");
+          withPageTransition(function () {
+            // .wrap is the ENTIRE page body except the masthead-adjacent
+            // script tag and the resume chip (both live outside it) — see
+            // pageChrome's document skeleton above — so swapping just its
+            // innerHTML replaces everything a reader would call "the page"
+            // in one move. speculationrules/prefetch artifacts in the
+            // fetched document live in head/body root, never inside .wrap
+            // (see pageChrome), so this scoped swap sidesteps them for
+            // free — nothing to strip.
+            curWrap.innerHTML = newWrap.innerHTML;
+            document.title = doc.title;
+            // Language hops (EN/HU switcher) change the document's lang —
+            // carry that onto the live <html> along with the content.
+            document.documentElement.lang = doc.documentElement.lang;
+            // Deliberately UNCHANGED: html's data-theme/data-density/
+            // data-fontsize. Those are live preference state, not page
+            // content — leaving them alone is what makes the swap flicker-
+            // free (no re-applying a preference that was already in effect).
+            // Same for the theme-color metas in <head> — theme state is
+            // live-owned, the fetched document's copies are simply ignored.
+            //
+            // The fetched document's own <script> tag never runs — an
+            // innerHTML assignment inertly skips embedded scripts, and it's
+            // moot here anyway since .wrap never contained the script tag
+            // to begin with. The LIVE page's script owns behavior; that's
+            // the whole point of re-wiring instead of reloading.
+            wirePage();
+            // Scroll restoration is deliberately simple: both a forward
+            // soft-nav and a popstate soft-load land at the top. Safari's
+            // BFCache already resolves many real "back" cases before
+            // popstate ever fires; this covers what's left without trying
+            // to remember and restore scroll positions.
+            window.scrollTo(0, 0);
+          });
+          if (!isPopstate) history.pushState({ soft: true }, "", href);
+        })
+        .catch(function (err) {
+          if (err && err.name === "AbortError") return; // superseded fetch, silent
+          // Fetch failure, non-ok status, or any exception during the swap
+          // itself: fall back to the ordinary navigation the reader always
+          // had. Correctness never depends on the soft path working.
+          location.href = href;
+        });
+    }
+
+    // Capture phase, attached before wirePage's first call — see the
+    // settings-dismiss handler inside wirePage above. That handler also
+    // listens for document clicks in the capture phase; because this
+    // listener is registered first (module init, before the initial
+    // wirePage() call at the bottom of this script) and re-registering it
+    // inside wirePage never moves this one, this listener always runs
+    // FIRST in capture order, on every pass. That ordering is what the
+    // settings-open bail below depends on.
+    document.addEventListener(
+      "click",
+      function (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        if (e.button !== 0) return;
+        var a = e.target.closest ? e.target.closest("a[href]") : null;
+        if (!a) return;
+        if (a.target) return; // opens elsewhere (new tab, frame) — let it
+        if (a.hasAttribute("download")) return;
+        var dest;
+        try {
+          dest = new URL(a.href, location.href);
+        } catch (err) {
+          return;
+        }
+        if (dest.origin !== location.origin) return;
+        if (dest.pathname.indexOf(tokenPrefix) !== 0) return; // cite links, robots/favicon — not ours
+        // Hash-only change on the same path/query: let the browser do its
+        // native in-page anchor scroll instead of soft-navving nowhere.
+        if (dest.pathname === location.pathname && dest.search === location.search && dest.hash) return;
+        // Settings dismiss-swallow interplay: with the bubble open, a click
+        // OUTSIDE it belongs to the dismiss handler behind this listener
+        // (see above) — bail here with no preventDefault so that click
+        // reaches it untouched. The one exception is a click INSIDE the
+        // open panel itself (the language switcher) — those soft-nav
+        // normally, same as any other internal link.
+        var openSettings = document.querySelector("details.settings[open]");
+        if (openSettings && !openSettings.contains(a)) return;
+        e.preventDefault();
+        doSoftNav(dest.pathname + dest.search, false);
+      },
+      true,
+    );
+
+    addEventListener("popstate", function () {
+      doSoftNav(location.pathname + location.search, true);
     });
   })();
+
+  wirePage();
 </script>
 </body>
 </html>`;
