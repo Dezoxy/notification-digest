@@ -614,6 +614,8 @@ const STRINGS = {
     viewDaily: "Daily",
     latest: "Latest",
     filterPlaceholder: "Filter briefings…",
+    attentionFilter: "needed me",
+    emptyFiltered: "Nothing matches.",
     themeToggle: "Toggle light/dark",
     unreadFence: "new since your last visit",
     pulseLabel: "Recent volume",
@@ -642,6 +644,8 @@ const STRINGS = {
     viewDaily: "Napi",
     latest: "Legfrissebb",
     filterPlaceholder: "Szűrés…",
+    attentionFilter: "figyelmet kért",
+    emptyFiltered: "Nincs találat.",
     themeToggle: "Világos/sötét váltás",
     unreadFence: "új a legutóbbi látogatásod óta",
     pulseLabel: "Friss mennyiség",
@@ -1087,16 +1091,37 @@ const CSS = `
   /* Index filter (roadmap step 6): tucks under the view tabs — negative
      top margin pulls it snug against .viewtabs' own bottom margin instead
      of stacking two gaps. hidden by default (see renderIndexPage), so
-     this rule only ever paints once JS un-hides the input. */
-  .filterrow { margin: -0.6em 0 1.4em; }
+     this rule only ever paints once JS un-hides the input. Flex row (roadmap
+     2 step 5) so the text filter and the attention chip share one line; the
+     input keeps its old full-width feel via flex: 1, the chip sizes to its
+     own content. */
+  .filterrow { display: flex; gap: 0.5em; margin: -0.6em 0 1.4em; }
   .filterrow .filter {
-    display: block; width: 100%; font: inherit; font-size: 0.9em;
+    display: block; flex: 1; min-width: 0; font: inherit; font-size: 0.9em;
     padding: 0.5em 0.9em; border-radius: 10px;
     border: 1px solid var(--hairline); background: var(--bg); color: var(--text);
   }
   .filterrow .filter::placeholder { color: var(--muted); }
   /* Plain border otherwise; only :focus-visible gets a visible outline. */
   .filterrow .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Attention ledger toggle chip (roadmap 2 step 5): CLIENT-side, not a new
+     URL space — has_attention rows are sparse and the index already selects
+     every row, so a fourth URL dimension (lang×view×attention) isn't worth
+     the added route surface for what a few lines of JS already solve. Styled
+     like a viewtab-ish pill, but neutral at rest (this is a filter, not
+     primary navigation) — only the pressed state borrows the amber
+     attention colors already used for the per-entry .flag. */
+  .attnfilter {
+    font: inherit; font-size: 0.78em; padding: 0.22em 0.8em; border-radius: 999px;
+    border: 1px solid var(--hairline); background: transparent; color: var(--muted);
+    cursor: pointer; white-space: nowrap;
+  }
+  .attnfilter:hover { border-color: var(--accent); }
+  .attnfilter:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .attnfilter[aria-pressed="true"] {
+    background: var(--attention-bg); color: var(--attention-text); border-color: transparent;
+  }
 
   /* Day-pulse strip (roadmap 2 step 3, renderPulseStrip): ambient chrome, not
      a chart with axes — no numbers, no gridlines, no day-boundary markers on
@@ -1403,21 +1428,37 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
   })();
 
   // Index filter (roadmap step 6, index pages only — guarded on the input's
-  // existence since digest pages have no .filter). Case-insensitive
-  // substring match against each .entry's text content (the lead card is an
-  // .entry too); a .dayhead hides once every entry in its group (its
-  // following siblings up to the next .dayhead) is hidden. No debounce at
-  // these list sizes; an empty query restores everything.
+  // existence since digest pages have no .filter) + attention ledger chip
+  // (roadmap 2 step 5). Two independent filters that MUST compose: an entry
+  // is hidden if it fails the text query OR the attention toggle is on and
+  // it isn't flagged. applyFilters is the single place that recomputes
+  // visibility from both, shared by the input's "input" handler and the
+  // chip's "click" handler so neither duplicates the group-hiding/fence
+  // logic. Case-insensitive substring match against each .entry's text
+  // content (the lead card is an .entry too); a .dayhead hides once every
+  // entry in its group (its following siblings up to the next .dayhead) is
+  // hidden. No debounce at these list sizes; an empty query + toggle off
+  // restores everything.
   (function () {
     var input = document.querySelector(".filter");
     if (!input) return;
     input.hidden = false;
+    var attnBtn = document.querySelector(".attnfilter");
+    if (attnBtn) attnBtn.hidden = false;
     var entries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
     var dayheads = Array.prototype.slice.call(document.querySelectorAll(".dayhead"));
-    input.addEventListener("input", function () {
+    var section = document.querySelector("section[data-empty-filtered]");
+    var emptyEl = null;
+
+    var applyFilters = function () {
       var q = input.value.trim().toLowerCase();
+      var attnOn = Boolean(attnBtn) && attnBtn.getAttribute("aria-pressed") === "true";
+      var anyVisible = false;
       entries.forEach(function (el) {
-        el.hidden = q && !el.textContent.toLowerCase().includes(q);
+        var textMiss = q && !el.textContent.toLowerCase().includes(q);
+        var attnMiss = attnOn && !el.hasAttribute("data-attention");
+        el.hidden = textMiss || attnMiss;
+        if (!el.hidden) anyVisible = true;
       });
       dayheads.forEach(function (dh) {
         var group = [];
@@ -1430,13 +1471,41 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
           return e.hidden;
         });
       });
-      // The unread fence is a load-time artifact; while filtering it can end
-      // up orphaned between hidden entries, which isn't worth coupling the
-      // two features over — just hide it whenever a query is active
-      // (roadmap 2 step 2).
+      // The unread fence is a load-time artifact; while either filter is
+      // active it can end up orphaned between hidden entries, which isn't
+      // worth coupling the two features over — just hide it whenever any
+      // filter is active (roadmap 2 steps 2 and 5).
       var fence = document.querySelector(".unreadfence");
-      if (fence) fence.hidden = Boolean(q);
-    });
+      if (fence) fence.hidden = Boolean(q) || attnOn;
+
+      // Empty-filtered state (roadmap 2 step 5): lazily create the message
+      // the first time a filter hides every entry, reusing .empty's
+      // styling; hide it again once at least one entry is visible. Guarded
+      // on entries.length so a genuinely-empty index (server already
+      // rendered its own .empty message) never gets a second one.
+      if (entries.length > 0 && section) {
+        if (!anyVisible) {
+          if (!emptyEl) {
+            emptyEl = document.createElement("p");
+            emptyEl.className = "empty";
+            emptyEl.textContent = section.getAttribute("data-empty-filtered");
+            section.appendChild(emptyEl);
+          }
+          emptyEl.hidden = false;
+        } else if (emptyEl) {
+          emptyEl.hidden = true;
+        }
+      }
+    };
+
+    input.addEventListener("input", applyFilters);
+    if (attnBtn) {
+      attnBtn.addEventListener("click", function () {
+        var next = attnBtn.getAttribute("aria-pressed") !== "true";
+        attnBtn.setAttribute("aria-pressed", String(next));
+        applyFilters();
+      });
+    }
   })();
 
   // Next-briefing countdown (roadmap 2 step 3, index pages only — guarded on
@@ -1569,7 +1638,13 @@ function renderIndexEntry(row, token, lang, view) {
   // straight from D1 as an ISO UTC string — lexicographically comparable
   // without parsing, the same trick get_recent_digests (digest repo) relies
   // on. esc()'d like every other D1-sourced value inserted as an attribute.
-  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
+  //
+  // data-attention (roadmap 2 step 5, attention ledger): present ONLY when
+  // has_attention is truthy — omitted entirely otherwise, so the client
+  // filter's selector stays a plain hasAttribute() check with no "0"/"false"
+  // value to special-case.
+  const attentionAttr = row.has_attention ? ' data-attention="1"' : "";
+  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}"${attentionAttr}>
     <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${dailyFlag}${flag}${langChip}</span>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
@@ -1597,8 +1672,10 @@ function renderLeadCard(row, token, lang, view) {
 
   const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
 
-  // data-created: same contract as renderIndexEntry's — see comment there.
-  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
+  // data-created / data-attention: same contract as renderIndexEntry's — see
+  // comments there.
+  const attentionAttr = row.has_attention ? ' data-attention="1"' : "";
+  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}"${attentionAttr}>
     <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${dailyFlag}${flag}${langChip}</span>
     <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
@@ -1672,7 +1749,12 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // view tabs (rendered by pageChrome, just above this) and the lead card
   // (the first thing inside <section> below). `hidden` by default — no JS,
   // no filter UI — un-hidden by the bottom script in pageChrome.
-  const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div>`;
+  //
+  // Attention ledger chip (roadmap 2 step 5): lives inside the same
+  // .filterrow, right after the input — a second client-side filter, not a
+  // new URL space (see the .attnfilter CSS comment for why). Also `hidden`
+  // by default, same progressive-enhancement contract as the input.
+  const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><button class="attnfilter" aria-pressed="false" hidden>⚠ ${esc(strings.attentionFilter)}</button></div>`;
 
   // Day-pulse strip (roadmap 2 step 3): between the filter row and the
   // <section> below, i.e. right above the lead card — renders "" (nothing)
@@ -1684,13 +1766,17 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // rendered server-side so the bottom script that builds the fence stays
   // language-agnostic — it just reads this attribute rather than knowing
   // about STRINGS/lang itself.
+  //
+  // data-empty-filtered (roadmap 2 step 5): same pattern, for the
+  // client-only "nothing matches the active filter(s)" message the bottom
+  // script creates lazily — see applyFilters.
   return pageChrome(
     host,
     token,
     lang,
     view,
     renderSwitchers(token, lang, view, "index"),
-    `${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}">${body}</section>`,
+    `${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}">${body}</section>`,
     null,
     countdownNewest,
   );
