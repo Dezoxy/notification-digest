@@ -205,15 +205,15 @@ external requests (system font stacks only), and `Referrer-Policy:
 no-referrer` and its sibling headers (see "Trust model" above) stay
 load-bearing throughout.
 
-- [ ] **Roadmap (this section)** — record the design pass in-repo. (This
+- [x] **Roadmap (this section)** — record the design pass in-repo. (This
   very PR.)
-- [ ] **Must-fixes: page titles + bottom nav** — `<title>` is the bare
+- [x] **Must-fixes: page titles + bottom nav** — `<title>` is the bare
   hostname on every page, making history and open tabs indistinguishable;
   digest pages get `digest #N · <date> <time>` (localized, with a "napi
   összefoglaló" label for HU daily briefs), the index keeps the hostname.
   Digest prev/next nav is top-only today; mirror it below the article — after
   a 900-word read the natural gesture is "older/next", not scroll-to-top.
-- [ ] **Type system + palette** — the signature move: three type roles, all
+- [x] **Type system + palette** — the signature move: three type roles, all
   zero-byte system stacks. Prose (article body + TL;DR) moves to
   `ui-serif`/Iowan Old Style/Georgia; the data layer (times, counts, dateline
   stamps, citation chips) moves to `ui-monospace`/SF Mono; chrome (masthead,
@@ -221,22 +221,22 @@ load-bearing throughout.
   `#16181D` on barely-warm paper `#FBFAF7` with matching hairlines; dark
   theme unchanged. Time is this site's primary key — the typography should
   say so.
-- [ ] **Index: latest-briefing lead card + sticky day headers** — the newest
+- [x] **Index: latest-briefing lead card + sticky day headers** — the newest
   digest gets a lead card: mono dateline eyebrow (`LATEST · FRI 18:00 CEST ·
   74 ITEMS`), full unclamped TL;DR, visual weight; the reader's most common
   task is "read the newest one". Everything below stays the compact ledger.
   Day headers become `position: sticky` so mid-scroll position is always
   visible.
-- [ ] **Digest page: wire dateline + section index** — the muted stamp line
+- [x] **Digest page: wire dateline + section index** — the muted stamp line
   becomes a mono, letter-spaced dateline block (`FRI 08 AUG 2026 · 18:00
   CEST · DIGEST #412 · 74 ITEMS`). Below the TL;DR, a section index of anchor
   chips built from the article's `<h2>`s (ids injected at render time) —
   briefings run ~8 sections and deserve direct jumps.
-- [ ] **Index filter + theme toggle** — a client-side filter input that hides
+- [x] **Index filter + theme toggle** — a client-side filter input that hides
   non-matching entries by TL;DR text (inline JS, no backend — answers "where
   did I read about X"); a manual light/dark/system toggle persisted in
   `localStorage` for readers who want to override the OS theme.
-- [ ] **Polish** — citation chips get a `title` attribute naming the
+- [x] **Polish** — citation chips get a `title` attribute naming the
   destination domain (provenance at a glance); a print stylesheet for digest
   pages (strip chrome, black-on-white); empty states gain a voice ("No daily
   briefs yet — the first one lands at 20:00.", with a proper HU counterpart).
