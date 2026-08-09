@@ -795,6 +795,17 @@ const CSS = `
      centered bubble sideways by half a scrollbar (owner-reported). A
      no-op on overlay-scrollbar platforms, which never had the shift. */
   html { scrollbar-gutter: stable; }
+  /* A single unbreakable token wider than a phone screen (production
+     digests carry them — a defanged URL from the link allowlist is one
+     long word) widens the LAYOUT viewport past the visual one. On iOS
+     Safari that detaches position:fixed elements from the screen edge
+     (the back button floats mid-page) and opens pannable blank space
+     past the footer (owner-reported, 2026-08-09). Two guards:
+     overflow-wrap (inherited everywhere from body) breaks such tokens at
+     the container edge, and overflow-x: clip caps the layout viewport at
+     device width even if some future shape still overflows — clip, not
+     hidden, so html doesn't become a scroll container. */
+  html { overflow-x: clip; }
   /* Smooth-scroll the TOC's #sN anchor jumps (roadmap step 5), gated behind
      prefers-reduced-motion so motion-sensitive readers get the instant jump
      instead. */
@@ -808,6 +819,7 @@ const CSS = `
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     line-height: 1.6;
     font-size: 17px;
+    overflow-wrap: break-word; /* inherited: see the overflow-x note above */
   }
   a { color: var(--accent); }
   .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; }
