@@ -287,6 +287,10 @@ release/deploy path) and the site side ships first, backward-compatibly.
 - [x] **Attention ledger** — a filter chip by the view tabs showing only
   `has_attention` digests: "what needed me this week", answerable from a
   column the index already selects.
+  Removed 2026-08-09: the digest app's prompt contract disabled the "Needs
+  attention" section (see `prompts/digest.md`/`prompts/daily.md` in the
+  digest repo), so `has_attention` can never be true on a new digest again —
+  the chip had become a filter for a permanently-false flag.
 - [x] **Navigation feel: prefetch + view transitions** — a
   speculation-rules/prefetch hint for the lead card's digest so the
   most-likely tap opens instantly; `@view-transition` navigation crossfade
