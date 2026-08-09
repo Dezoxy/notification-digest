@@ -30,6 +30,7 @@ from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, 
 from digest.emailer import archive
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
+    DAILY_LOOKBACK_WINDOW,
     commit_new_items,
     connect,
     count_unsummarized_items,
@@ -70,7 +71,12 @@ _RECENT_COVERAGE_WINDOW = timedelta(hours=24)
 # systemd timer that invokes `python -m digest daily`) lives outside this
 # repo, so this window is what actually defines "one day" from this code's
 # point of view.
-_DAILY_LOOKBACK_WINDOW = timedelta(hours=24)
+#
+# This constant lives in digest/state.py as `DAILY_LOOKBACK_WINDOW` (imported
+# above), not here -- digest/deliver.py's deliver_channels needs the exact
+# same window (via state.py's get_daily_allowed_urls) to re-derive a daily
+# brief's link-provenance allowlist at delivery time, and the two uses must
+# never drift apart (see that constant's own docstring for why).
 
 logging.basicConfig(
     level=logging.INFO,
@@ -566,7 +572,7 @@ def run_daily(cfg: Config) -> bool:
        harmless (idempotent per channel) even though the every-3-hours job
        already covers that case on its own schedule.
     2. `rows = get_window_digests_since(conn, since)`, `since` being
-       `_DAILY_LOOKBACK_WINDOW` (24h) before now -- the day's worth of
+       `DAILY_LOOKBACK_WINDOW` (24h, digest/state.py) before now -- the day's worth of
        already-curated window briefings to synthesize (kind='window' only;
        see that function's docstring for why a prior daily brief can never
        feed a later one). Empty `rows` (no window digest ran in the last
@@ -618,7 +624,7 @@ def run_daily(cfg: Config) -> bool:
         all_ok = deliver_pending(conn, cfg, telegram_state)
 
         now = datetime.now(UTC)
-        since = now - _DAILY_LOOKBACK_WINDOW
+        since = now - DAILY_LOOKBACK_WINDOW
         rows = get_window_digests_since(conn, since.isoformat())
         if not rows:
             logger.info("no window digests in the last 24 hours, nothing to brief today")

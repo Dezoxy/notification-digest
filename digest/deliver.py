@@ -30,6 +30,7 @@ from digest.publish import (
     send_telegram_tldr,
 )
 from digest.state import (
+    get_daily_allowed_urls,
     get_digest_item_urls,
     get_digest_source_counts,
     get_pending_digests,
@@ -475,7 +476,19 @@ def deliver_channels(
     site_status = "disabled" if not site_enabled else "done" if site_done else None
     telegram_status = "disabled" if not telegram_enabled else "done" if telegram_done else None
 
-    allowed_urls = get_digest_item_urls(conn, digest_id)
+    # A "daily" digest stamps NO items of its own (it consumes a day's worth
+    # of window digests, never raw items -- see state.py's create_digest
+    # `kind` docstring), so get_digest_item_urls against it always returns
+    # the empty set -- deriving the allowlist that way here unconditionally
+    # used to defang EVERY citation link on a daily brief, on every channel
+    # (the bug get_daily_allowed_urls exists to fix; see its docstring).
+    # Both email and site still receive the SAME set either way -- they
+    # must render identical content, see this function's own docstring.
+    allowed_urls = (
+        get_daily_allowed_urls(conn, created_at)
+        if kind == "daily"
+        else get_digest_item_urls(conn, digest_id)
+    )
 
     if email_enabled and not email_done:
         email_done = _deliver_email(conn, cfg, digest_id, body_md, item_count, allowed_urls)

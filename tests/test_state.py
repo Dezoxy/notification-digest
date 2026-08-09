@@ -11,6 +11,7 @@ from digest.state import (
     count_unsummarized_items,
     create_digest,
     get_cursors,
+    get_daily_allowed_urls,
     get_digest_source_counts,
     get_pending_digests,
     get_polymarket_probs,
@@ -1649,6 +1650,83 @@ def test_get_window_digests_since_empty_when_nothing_in_window(conn):
     result = get_window_digests_since(conn, "2026-07-29T00:00:00+00:00")
 
     assert result == []
+
+
+# --- get_daily_allowed_urls (daily-brief delivery link-provenance fix) ---
+
+
+def _window_digest_with_url(
+    conn: sqlite3.Connection, created_at: str, source_id: str, url: str
+) -> int:
+    """Create a real WINDOW digest stamping one item at `url`, with `created_at` forced.
+
+    Mirrors tests/test_main.py's own `_window_digest` helper: get_daily_allowed_urls
+    reads real `items.url` rows via a SQL JOIN, not anything a hand-inserted
+    `_insert_digest` row (no items table involvement) could exercise.
+    """
+    item = _item(source_id, fetched_at=created_at, url=url)
+    commit_new_items(conn, [item], {})
+    digest_id = create_digest(conn, f"window {source_id}", [item])
+    conn.execute("UPDATE digests SET created_at = ? WHERE id = ?", (created_at, digest_id))
+    conn.commit()
+    return digest_id
+
+
+def test_get_daily_allowed_urls_unions_in_window_window_digest_urls(conn):
+    _window_digest_with_url(conn, "2026-07-29T06:00:00+00:00", "1", "https://example.com/a")
+    _window_digest_with_url(conn, "2026-07-29T12:00:00+00:00", "2", "https://example.com/b")
+
+    urls = get_daily_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == {"https://example.com/a", "https://example.com/b"}
+
+
+def test_get_daily_allowed_urls_excludes_digest_older_than_lookback(conn):
+    _window_digest_with_url(conn, "2026-07-28T00:00:00+00:00", "1", "https://example.com/old")
+    _window_digest_with_url(conn, "2026-07-29T12:00:00+00:00", "2", "https://example.com/new")
+
+    # since = 2026-07-29T20:00 - 24h = 2026-07-28T20:00 -- the "old" digest
+    # (2026-07-28T00:00) falls outside that window, the "new" one doesn't.
+    urls = get_daily_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == {"https://example.com/new"}
+
+
+def test_get_daily_allowed_urls_excludes_digest_created_after_brief(conn):
+    _window_digest_with_url(conn, "2026-07-29T12:00:00+00:00", "1", "https://example.com/before")
+    _window_digest_with_url(conn, "2026-07-29T21:00:00+00:00", "2", "https://example.com/after")
+
+    # The upper bound is strict (< created_at): a window digest created AFTER
+    # the brief must never widen a later resend's allowlist -- see
+    # get_daily_allowed_urls' own docstring on why this must be deterministic.
+    urls = get_daily_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == {"https://example.com/before"}
+
+
+def test_get_daily_allowed_urls_excludes_items_of_another_daily_digest(conn):
+    # Nothing at the SQL level stops a "daily" digests row from carrying a
+    # digest_id on an items row -- this proves the `kind = 'window'` filter,
+    # not merely "any digest in range", is what keeps one daily brief's own
+    # items out of a LATER daily brief's allowlist.
+    item = _item("1", fetched_at="2026-07-29T12:00:00+00:00", url="https://example.com/daily-item")
+    commit_new_items(conn, [item], {})
+    daily_digest_id = create_digest(conn, "daily body", [item], kind="daily")
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?",
+        ("2026-07-29T12:00:00+00:00", daily_digest_id),
+    )
+    conn.commit()
+
+    urls = get_daily_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == set()
+
+
+def test_get_daily_allowed_urls_empty_when_nothing_in_range(conn):
+    urls = get_daily_allowed_urls(conn, "2026-07-29T20:00:00+00:00")
+
+    assert urls == set()
 
 
 # --- prune_delivered_items (bounded state.db) ---
