@@ -123,6 +123,25 @@ _ITEMS_PRUNE_DAYS = 90
 # cycle risk either way.
 DAILY_LOOKBACK_WINDOW = timedelta(hours=24)
 
+# How far back a weekly brief looks for the daily briefs it synthesizes, and
+# -- via `get_weekly_allowed_urls` below -- for the item URLs it is allowed
+# to cite. One editorial rung up from `DAILY_LOOKBACK_WINDOW` immediately
+# above, and the same shared-constant relationship applies for the same
+# reason: digest/main.py's `run_weekly` uses it (via `get_daily_digests_since`)
+# to pick which daily briefs to synthesize into this week's report, and to
+# bound the SAME `get_window_digests_since` call it reuses to derive the
+# transitive citation allowlist (a daily brief stamps no items of its own
+# either, see `get_daily_allowed_urls`'s own docstring, so the real URLs live
+# one hop further down, on the WINDOW digests underneath); digest/deliver.py's
+# `deliver_channels` uses it (via `get_weekly_allowed_urls`) to re-derive that
+# identical allowlist at delivery time. They MUST be the same window, for the
+# identical reason `DAILY_LOOKBACK_WINDOW`'s own docstring gives -- letting
+# them diverge would let a weekly brief legitimately cite a URL its own
+# delivery-time allowlist doesn't cover, or vice versa. 7 days (not 24 hours)
+# because a weekly brief synthesizes a full week of daily briefs, one per
+# day, mirroring how a daily brief synthesizes a full day of window digests.
+WEEKLY_LOOKBACK_WINDOW = timedelta(days=7)
+
 # The complete set of valid `Item.source` / cursor-source values. This is
 # where source validity is enforced now that _SCHEMA's `source` columns have
 # no CHECK constraint (see _SCHEMA's comment on items.source and
@@ -1185,6 +1204,84 @@ def get_daily_allowed_urls(conn: sqlite3.Connection, created_at: str) -> set[str
     return {row[0] for row in rows}
 
 
+def get_weekly_allowed_urls(conn: sqlite3.Connection, created_at: str) -> set[str]:
+    """Return the link-provenance allowlist for a WEEKLY brief, re-derived from the DB.
+
+    Sibling of `get_daily_allowed_urls` immediately above, one editorial rung
+    up -- see its docstring for the shared rationale (identical here: this
+    function exists to fix the identical class of bug for the "weekly" kind).
+    A "weekly" digest (digest/weekly.py's `summarize_weekly`) stamps NO items
+    of its own either -- it consumes a week's worth of DAILY briefs, never
+    raw items or window digests directly (see `create_digest`'s `kind`
+    docstring) -- so `get_digest_item_urls` against a weekly digest_id always
+    returns the empty set too. But going through the DAILY rows themselves
+    would be a dead end: a daily digest ALSO stamps no items of its own (see
+    `get_daily_allowed_urls`'s own docstring), so `get_digest_item_urls` of a
+    source daily digest is *also* always empty. The only place actual item
+    URLs live is on the WINDOW digests underneath both layers -- so this
+    function skips the daily layer entirely and unions item URLs across
+    every WINDOW digest created within `WEEKLY_LOOKBACK_WINDOW` (7 days)
+    before `created_at`:
+
+        SELECT DISTINCT i.url FROM items i JOIN digests d ON i.digest_id = d.id
+        WHERE d.kind = 'window' AND d.created_at >= ? AND d.created_at < ?
+
+    with bounds = [created_at - WEEKLY_LOOKBACK_WINDOW, created_at) -- the
+    exact same query shape `get_daily_allowed_urls` runs, just widened to a
+    7-day window instead of 24 hours, mirroring `run_weekly`'s own build-time
+    derivation of this identical set (digest/main.py): a weekly brief cites
+    what its dailies cited, and a daily brief cites what its own windows
+    cited, so a weekly brief's real allowlist is the union of window item
+    URLs across the whole week -- this two-hop transitive derivation IS the
+    one structural difference `run_weekly` has from `run_daily` (see that
+    function's own docstring).
+
+    Re-deriving from the DB by `created_at` (rather than requiring the
+    caller to thread the original run's `allowed_urls` set through) is what
+    makes this work IDENTICALLY on a fresh delivery (main.py's `run_weekly`,
+    moments after `create_digest`) and on a pending resend in a much later
+    run (`deliver_pending`, which by then has only the digest_id and its
+    stored `created_at` to go on) -- the identical reason
+    `get_daily_allowed_urls` exists in the first place, see its own
+    docstring.
+
+    The upper bound (`< created_at`, strict) is what makes a RESEND
+    deterministic, for the identical reason `get_daily_allowed_urls`'s own
+    docstring gives: a window digest created AFTER this brief was originally
+    written -- but before a later resend attempt re-runs this query -- must
+    never widen the resend's allowlist beyond what the brief was actually
+    written against.
+
+    The same honest caveats `get_daily_allowed_urls` documents apply here
+    unchanged, just at the weekly boundary instead of the daily one: a
+    source window digest created within the few-second sliver right at the
+    7-day boundary could fall on the wrong side of two independently
+    computed windows (narrow, non-crashing -- at most one legitimately-cited
+    URL gets defanged to plain text for that one citation), and a very late
+    resend can find the source window digests' `items` rows already pruned
+    by `prune_delivered_items`'s 90-day prune, thinning or emptying this
+    allowlist.
+
+    `created_at` is parsed with `datetime.fromisoformat`, naive timestamps
+    treated as UTC -- the identical fallback `get_daily_allowed_urls` uses,
+    for the identical reason (every `created_at` this codebase writes is
+    `datetime.now(UTC).isoformat()`, so the naive-fallback branch is
+    defensive, not the expected path).
+    """
+    created = datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    window_start = created - WEEKLY_LOOKBACK_WINDOW
+    rows = conn.execute(
+        """
+        SELECT DISTINCT i.url FROM items i JOIN digests d ON i.digest_id = d.id
+        WHERE d.kind = 'window' AND d.created_at >= ? AND d.created_at < ?
+        """,
+        (window_start.isoformat(), created.isoformat()),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def get_digest_source_counts(conn: sqlite3.Connection, digest_id: int) -> dict[str, int]:
     """Return {source: item count} for the given digest.
 
@@ -1490,6 +1587,45 @@ def get_window_digests_since(
     rows = conn.execute(
         "SELECT id, created_at, item_count, body_md FROM digests "
         "WHERE created_at >= ? AND kind = 'window' ORDER BY id ASC",
+        (since_iso,),
+    ).fetchall()
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
+
+
+def get_daily_digests_since(
+    conn: sqlite3.Connection, since_iso: str
+) -> list[tuple[int, str, int, str]]:
+    """Return (id, created_at, item_count, body_md) for every DAILY digest at/after `since_iso`.
+
+    Sibling of `get_window_digests_since` immediately above, one editorial
+    rung up: feeds digest/weekly.py's `build_weekly_prompt`/`summarize_weekly`,
+    the same way `get_window_digests_since` feeds the daily brief. A weekly
+    brief is synthesized from the week's already-curated DAILY briefs, never
+    from raw window digests or raw items directly (see digest/main.py's
+    `run_weekly`). Only `kind = 'daily'` rows are ever returned -- the same
+    one-way editorial ladder `get_window_digests_since` enforces one rung
+    down, for the identical two reasons: a "weekly" row must never feed a
+    LATER weekly brief as one of its own inputs, both because that would be
+    summarizing a summary of a summary of a summary (compounding information
+    loss for no benefit) and because a prior weekly run failing mid-delivery
+    and being retried must not make it appear, to a LATER weekly run, as one
+    more daily brief to synthesize.
+
+    Ordered ASCENDING by id (oldest first), for the identical reason
+    `get_window_digests_since` is: `build_weekly_prompt` renders each source
+    daily brief under a chronological per-day separator so the model can
+    trace a thread's course across the week ("X was first reported Monday;
+    by Friday Y") -- that only reads correctly oldest-to-newest.
+
+    `since_iso` is compared lexicographically against `created_at`, safe for
+    the identical reason `get_window_digests_since` relies on: both are
+    ISO8601 UTC strings from `datetime.isoformat()`, whose fixed-width,
+    most-significant-field-first layout makes lexicographic and
+    chronological order coincide.
+    """
+    rows = conn.execute(
+        "SELECT id, created_at, item_count, body_md FROM digests "
+        "WHERE created_at >= ? AND kind = 'daily' ORDER BY id ASC",
         (since_iso,),
     ).fetchall()
     return [(row[0], row[1], row[2], row[3]) for row in rows]

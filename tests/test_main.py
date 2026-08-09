@@ -28,6 +28,7 @@ from digest.main import (
     _run_reddit_collector,
     _run_x_collector,
     run_daily,
+    run_weekly,
 )
 from digest.publish import TelegramSendError
 from digest.state import (
@@ -2282,6 +2283,120 @@ def test_deliver_telegram_daily_kind_uses_daily_thread(conn, monkeypatch):
     assert captured["thread_id"] == 555
 
 
+# --- _telegram_thread_id_for_kind / kind-aware Telegram thread selection
+#     (weekly-brief feature) ---
+
+
+def test_telegram_thread_id_for_kind_weekly_uses_configured_weekly_thread():
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=1, telegram_weekly_thread_id=141)
+
+    assert _telegram_thread_id_for_kind(cfg, "weekly") == 141
+
+
+def test_telegram_thread_id_for_kind_weekly_falls_back_when_unset(caplog):
+    cfg = replace(
+        _multichannel_cfg(), telegram_notify_thread_id=42, telegram_weekly_thread_id=None
+    )
+
+    with caplog.at_level("INFO"):
+        thread_id = _telegram_thread_id_for_kind(cfg, "weekly")
+
+    assert thread_id == 42
+    assert "TELEGRAM_WEEKLY_THREAD_ID" in caplog.text
+
+
+def test_telegram_thread_id_for_kind_weekly_explicit_zero_is_honored():
+    # 0 is a legitimate real thread id -- it must NOT be treated the same as
+    # "unset" and trigger the fallback.
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=42, telegram_weekly_thread_id=0)
+
+    assert _telegram_thread_id_for_kind(cfg, "weekly") == 0
+
+
+def test_deliver_telegram_weekly_kind_uses_weekly_thread(conn, monkeypatch):
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Section\n\nstuff", [], kind="weekly")
+
+    captured = {}
+    monkeypatch.setattr(
+        deliver_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            captured.update(thread_id=thread_id)
+        ),
+    )
+
+    cfg = replace(_multichannel_cfg(), telegram_notify_thread_id=1, telegram_weekly_thread_id=141)
+    ok = _deliver_telegram(
+        conn, cfg, digest_id, "**TL;DR:** hi\n\n## Section\n\nstuff",
+        _recent_created_at(), _fresh_telegram_state(), kind="weekly",
+    )
+
+    assert ok is True
+    assert captured["thread_id"] == 141
+
+
+def test_deliver_channels_weekly_kind_uses_get_weekly_allowed_urls(conn, monkeypatch):
+    # Regression test for the weekly-brief link-provenance bug, one editorial
+    # rung up from the daily-brief bug get_daily_allowed_urls fixes (see
+    # test_deliver_channels_daily_kind_uses_get_daily_allowed_urls above): a
+    # "weekly" digest stamps NO items of its own, and neither does the daily
+    # digest it would otherwise fall back to, so get_digest_item_urls against
+    # either always returns the empty set. deliver_channels must derive the
+    # allowlist via get_weekly_allowed_urls for kind="weekly" -- the union of
+    # item URLs across in-window WINDOW digests, two hops down -- which is
+    # non-empty here and contains the source window digest's own stamped
+    # item URL.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    window_digest_id = create_digest(conn, "window body", get_unsummarized_items(conn))
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?",
+        (_recent_created_at(hours_ago=1), window_digest_id),
+    )
+    conn.commit()
+    weekly_digest_id = create_digest(
+        conn, "**TL;DR:** the week\n\n## A thread\n\nstuff", [], kind="weekly"
+    )
+    weekly_created_at = _recent_created_at(hours_ago=0.5)
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?", (weekly_created_at, weekly_digest_id)
+    )
+    conn.commit()
+
+    captured = {}
+
+    def fake_send_digest(
+        host,
+        port,
+        user,
+        password,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
+    ):
+        captured["allowed_urls"] = allowed_urls
+
+    monkeypatch.setattr(deliver_mod, "send_digest", fake_send_digest)
+
+    ok = deliver_channels(
+        conn,
+        _cfg(),
+        weekly_digest_id,
+        "**TL;DR:** the week\n\n## A thread\n\nstuff",
+        1,
+        weekly_created_at,
+        _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
+        kind="weekly",
+    )
+
+    assert ok is True
+    assert captured["allowed_urls"] == {"https://t.me/c/123/1"}
+
+
 # --- run_daily / _deliver_pending (daily-brief feature) ---
 
 
@@ -2578,5 +2693,337 @@ def test_run_daily_retry_path_picks_daily_thread_from_stored_kind(conn, monkeypa
 
     assert ok is True
     assert telegram_calls == [555]
+    row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)
+
+
+# --- run_weekly / _deliver_pending (weekly-brief feature) ---
+
+
+def _weekly_cfg(**overrides) -> Config:
+    """_multichannel_cfg() plus a distinct weekly Telegram thread, for run_weekly tests.
+
+    Mirrors `_daily_cfg`'s own isolation rationale -- run_weekly's email
+    behavior is identical to run_daily's own (EMAIL_ENABLED gates it exactly
+    the same way), so it doesn't need its own coverage here.
+    """
+    return replace(
+        _multichannel_cfg(), email_enabled=False, telegram_weekly_thread_id=141, **overrides
+    )
+
+
+def _daily_digest(conn, body_md: str, item_count: int, created_at: str) -> int:
+    """Create a real, fully-delivered DAILY digest with no stamped items but a given item_count.
+
+    A "daily" digest genuinely stamps NO items of its own (see state.py's
+    create_digest `kind` docstring), unlike `_window_digest` above -- so
+    this passes `item_count` straight to create_digest's own override
+    parameter, exactly what run_daily itself does when it creates a real
+    daily digest. All three channel flags are marked done (as if the daily
+    job already delivered it) so run_weekly's own `_deliver_pending` pass
+    finds nothing left to retry for it -- isolating these tests to
+    run_weekly's OWN fresh weekly-digest delivery, which is what they're
+    checking.
+    """
+    digest_id = create_digest(conn, body_md, [], kind="daily", item_count=item_count)
+    conn.execute(
+        "UPDATE digests SET created_at = ?, email_sent = 1, site_published = 1, "
+        "telegram_sent = 1 WHERE id = ?",
+        (created_at, digest_id),
+    )
+    conn.commit()
+    return digest_id
+
+
+def test_run_weekly_empty_week_is_a_no_op_returns_true(monkeypatch, tmp_path, caplog):
+    def boom(*args, **kwargs):
+        raise AssertionError("must not be called when there are no daily briefs to brief")
+
+    cfg = replace(_cfg(), state_db_path=str(tmp_path / "state.db"))
+    real_conn = connect(cfg.state_db_path)
+    init_db(real_conn)
+    real_conn.close()
+
+    monkeypatch.setattr(main_mod, "summarize_weekly", boom)
+    monkeypatch.setattr(deliver_mod, "publish_to_site", boom)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", boom)
+    monkeypatch.setattr(main_mod, "archive", boom)
+
+    with caplog.at_level("INFO", logger=main_mod.logger.name):
+        ok = run_weekly(cfg)
+
+    assert ok is True
+
+    # run_summary must still fire on this early-return, empty-week path, with
+    # source_digests: 0 -- Loki's only way to tell "empty week" apart from a
+    # weekly run that actually failed further along.
+    line = next(r.message for r in caplog.records if r.message.startswith("run_summary "))
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["mode"] == "weekly"
+    assert payload["source_digests"] == 0
+    assert payload["delivered"] is True
+    assert payload["ok"] is True
+
+
+def test_run_weekly_happy_path_creates_and_delivers_weekly_digest(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _daily_digest(real_conn, "daily one", 3, _recent_created_at(hours_ago=48))
+    _daily_digest(real_conn, "daily two", 5, _recent_created_at(hours_ago=24))
+    # A window digest inside the same 7-day lookback: this is what
+    # allowed_urls is actually derived from (see run_weekly's own
+    # docstring), NOT the daily rows above -- those stamp no items at all.
+    _window_digest(real_conn, "window one", 8, _recent_created_at(hours_ago=12))
+    real_conn.close()
+
+    weekly_calls = []
+
+    def fake_summarize_weekly(daily_rows, allowed_urls, model, timeout_seconds, effort):
+        weekly_calls.append(
+            dict(
+                daily_rows=daily_rows,
+                allowed_urls=allowed_urls,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                effort=effort,
+            )
+        )
+        return "**TL;DR:** the week\n\n## A thread\n\nstuff"
+
+    monkeypatch.setattr(main_mod, "summarize_weekly", fake_summarize_weekly)
+
+    site_calls = []
+    telegram_calls = []
+    monkeypatch.setattr(
+        deliver_mod, "publish_to_site", lambda *a, **k: site_calls.append((a, k))
+    )
+    monkeypatch.setattr(
+        deliver_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            telegram_calls.append(thread_id)
+        ),
+    )
+    archived = {}
+    monkeypatch.setattr(
+        main_mod, "archive", lambda body_md, archive_dir, digest_id: archived.update(id=digest_id)
+    )
+
+    cfg = _weekly_cfg(state_db_path=db_path)
+    ok = run_weekly(cfg)
+
+    assert ok is True
+    assert len(weekly_calls) == 1
+    call = weekly_calls[0]
+    assert call["model"] == cfg.anthropic_model
+    assert call["timeout_seconds"] == cfg.claude_timeout_seconds
+    assert call["effort"] == cfg.claude_effort
+    # summarize_weekly is given the two DAILY rows, in ascending id order.
+    assert [row[3] for row in call["daily_rows"]] == ["daily one", "daily two"]
+    # allowed_urls is the union of the WINDOW digest's own stamped item
+    # URLs -- 8 items, matching that window digest's own item_count -- NOT
+    # anything derived from the (item-less) daily rows above.
+    assert len(call["allowed_urls"]) == 8
+
+    # The weekly digest's own thread, not the window or daily thread.
+    assert telegram_calls == [141]
+    assert len(site_calls) == 1
+    assert archived["id"] is not None
+
+    verify_conn = connect(db_path)
+    row = verify_conn.execute(
+        "SELECT kind, item_count FROM digests WHERE id = ?", (archived["id"],)
+    ).fetchone()
+    assert row == ("weekly", 8)  # SUM of the two source DAILY digests' item_counts (3 + 5)
+    verify_conn.close()
+
+
+def test_run_weekly_delivery_uses_allowed_urls_from_window_digest_not_daily(
+    conn, monkeypatch, tmp_path
+):
+    # Regression test, end to end, for the weekly-brief link-provenance
+    # derivation: allowed_urls must come from the week's WINDOW digests, not
+    # from the source DAILY rows (which stamp no items of their own -- see
+    # state.py's create_digest `kind` docstring, so their own
+    # get_digest_item_urls is always empty). This proves it two ways: (a) a
+    # real window item's URL survives into the delivered HTML, and (b) an
+    # item adversarially stamped directly onto a DAILY digest (bypassing the
+    # normal create_digest(items=[]) contract, mirroring
+    # tests/test_state.py's own get_weekly_allowed_urls exclusion test) does
+    # NOT survive -- proving the allowlist is scoped to `kind = 'window'`,
+    # not "any digest in the lookback window".
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+
+    window_item_url = "https://t.me/c/123/window-item"
+    window_item = Item(
+        source="telegram",
+        source_id="window-item",
+        chat_id="123",
+        author="alice",
+        text="hello",
+        url=window_item_url,
+        fetched_at=_recent_created_at(hours_ago=12),
+    )
+    commit_new_items(real_conn, [window_item], {})
+    window_digest_id = create_digest(real_conn, "window body", [window_item])
+    real_conn.execute(
+        "UPDATE digests SET created_at = ?, email_sent = 1, site_published = 1, "
+        "telegram_sent = 1 WHERE id = ?",
+        (_recent_created_at(hours_ago=12), window_digest_id),
+    )
+    real_conn.commit()
+
+    # Adversarially stamp an item directly onto a DAILY digest -- nothing at
+    # the SQL level stops this, and it is exactly what proves the `kind =
+    # 'window'` filter (not merely "any digest in range") is what keeps this
+    # URL out of the allowlist.
+    daily_item_url = "https://t.me/c/123/daily-item"
+    daily_item = Item(
+        source="telegram",
+        source_id="daily-item",
+        chat_id="123",
+        author="alice",
+        text="hello",
+        url=daily_item_url,
+        fetched_at=_recent_created_at(hours_ago=24),
+    )
+    commit_new_items(real_conn, [daily_item], {})
+    daily_digest_id = create_digest(real_conn, "daily body", [daily_item], kind="daily")
+    real_conn.execute(
+        "UPDATE digests SET created_at = ?, email_sent = 1, site_published = 1, "
+        "telegram_sent = 1 WHERE id = ?",
+        (_recent_created_at(hours_ago=24), daily_digest_id),
+    )
+    real_conn.commit()
+    real_conn.close()
+
+    body_md = f"**TL;DR:** the week\n\n## A thread\n\n[cite]({window_item_url})"
+    monkeypatch.setattr(main_mod, "summarize_weekly", lambda *a, **k: body_md)
+
+    render_calls = []
+    real_render_body_html = deliver_mod.render_body_html
+    monkeypatch.setattr(
+        deliver_mod,
+        "render_body_html",
+        lambda md, allowed_urls: (
+            render_calls.append(set(allowed_urls)) or real_render_body_html(md, allowed_urls)
+        ),
+    )
+    site_calls = []
+    monkeypatch.setattr(
+        deliver_mod, "publish_to_site", lambda *a, **k: site_calls.append((a, k))
+    )
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _weekly_cfg(state_db_path=db_path)
+    ok = run_weekly(cfg)
+
+    assert ok is True
+    assert len(render_calls) == 1
+    # Contains the WINDOW item's URL, and ONLY that URL -- the DAILY digest's
+    # own (adversarially stamped) item URL is excluded.
+    assert render_calls[0] == {window_item_url}
+
+    assert len(site_calls) == 1
+    body_html = site_calls[0][0][2]  # publish_to_site's positional body_html arg
+    assert f'href="{window_item_url}"' in body_html
+
+
+def test_run_weekly_translation_enabled_threads_hu_body_to_site(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _daily_digest(real_conn, "daily one", 1, _recent_created_at(hours_ago=24))
+    _window_digest(real_conn, "window one", 1, _recent_created_at(hours_ago=12))
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_weekly", lambda *a, **k: "**TL;DR:** the week\n\n## A thread\n\nstuff"
+    )
+    translate_calls = []
+
+    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+        translate_calls.append((body_md, fallback_model))
+        return "**TL;DR:** a het\n\n## Egy szal\n\ndolog"
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    site_calls = []
+    monkeypatch.setattr(
+        deliver_mod, "publish_to_site", lambda *a, **k: site_calls.append(k)
+    )
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _weekly_cfg(state_db_path=db_path, translate_hu_enabled=True)
+    ok = run_weekly(cfg)
+
+    assert ok is True
+    assert len(translate_calls) == 1
+    assert site_calls[0]["body_md_hu"] == "**TL;DR:** a het\n\n## Egy szal\n\ndolog"
+    # run_weekly must thread cfg.translate_model_fallback through too.
+    assert translate_calls[0][1] == cfg.translate_model_fallback
+
+
+def test_run_weekly_summarize_failure_returns_false(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _daily_digest(real_conn, "daily one", 1, _recent_created_at(hours_ago=24))
+    real_conn.close()
+
+    def boom(*args, **kwargs):
+        raise SummarizeError("claude -p exited 1")
+
+    monkeypatch.setattr(main_mod, "summarize_weekly", boom)
+
+    def must_not_be_called(*args, **kwargs):
+        raise AssertionError("must not create/archive/deliver a digest on summarize failure")
+
+    monkeypatch.setattr(main_mod, "archive", must_not_be_called)
+
+    cfg = _weekly_cfg(state_db_path=db_path)
+    ok = run_weekly(cfg)
+
+    assert ok is False
+    verify_conn = connect(db_path)
+    count = verify_conn.execute("SELECT COUNT(*) FROM digests WHERE kind = 'weekly'").fetchone()[0]
+    assert count == 0
+    verify_conn.close()
+
+
+def test_run_weekly_retry_path_picks_weekly_thread_from_stored_kind(conn, monkeypatch):
+    # A weekly digest that was created and got its site publish through, but
+    # whose Telegram send failed in a PREVIOUS run, must be retried through
+    # the pending pass with its Telegram send going to the WEEKLY thread --
+    # not the default "window" thread -- because get_pending_digests/
+    # digest_meta expose the row's own stored kind.
+    digest_id = create_digest(
+        conn, "**TL;DR:** the week\n\n## A thread\n\nstuff", [], kind="weekly"
+    )
+    conn.execute(
+        "UPDATE digests SET site_published = 1, created_at = ? WHERE id = ?",
+        (_recent_created_at(), digest_id),
+    )
+    conn.commit()
+
+    telegram_calls = []
+    monkeypatch.setattr(
+        deliver_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            telegram_calls.append(thread_id)
+        ),
+    )
+
+    cfg = _weekly_cfg()
+    ok = deliver_pending(conn, cfg, _fresh_telegram_state())
+
+    assert ok is True
+    assert telegram_calls == [141]
     row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)

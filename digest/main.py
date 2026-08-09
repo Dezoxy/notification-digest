@@ -31,11 +31,13 @@ from digest.emailer import archive
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
     DAILY_LOOKBACK_WINDOW,
+    WEEKLY_LOOKBACK_WINDOW,
     commit_new_items,
     connect,
     count_unsummarized_items,
     create_digest,
     get_cursors,
+    get_daily_digests_since,
     get_digest_item_urls,
     get_polymarket_probs,
     get_recent_digests,
@@ -52,6 +54,7 @@ from digest.summarize import (
     summarize,
 )
 from digest.translate import translate_digest
+from digest.weekly import summarize_weekly
 
 # How far back _deliver looks for prior digests when building the
 # {{RECENT_COVERAGE}} prompt block (digest/summarize.py's
@@ -77,6 +80,27 @@ _RECENT_COVERAGE_WINDOW = timedelta(hours=24)
 # same window (via state.py's get_daily_allowed_urls) to re-derive a daily
 # brief's link-provenance allowlist at delivery time, and the two uses must
 # never drift apart (see that constant's own docstring for why).
+
+# How far back run_weekly looks for daily briefs to synthesize into one
+# weekly report (digest/state.py's get_daily_digests_since), one editorial
+# rung up from DAILY_LOOKBACK_WINDOW immediately above. A full 7 days so a
+# report run Sunday evening covers exactly "since last Sunday's report",
+# with no gap or overlap at the boundary -- the scheduling itself (a third
+# systemd timer that invokes `python -m digest weekly`) lives outside this
+# repo, so this window is what actually defines "one week" from this code's
+# point of view.
+#
+# Also the SAME window run_weekly reuses for its own `get_window_digests_since`
+# call, to derive the transitive citation allowlist (see run_weekly's own
+# docstring for why a weekly brief's allowlist has to go two hops down, past
+# the daily layer, to the window digests underneath it).
+#
+# This constant lives in digest/state.py as `WEEKLY_LOOKBACK_WINDOW` (imported
+# above), not here -- for the identical reason DAILY_LOOKBACK_WINDOW does:
+# digest/deliver.py's deliver_channels needs the exact same window (via
+# state.py's get_weekly_allowed_urls) to re-derive a weekly brief's
+# link-provenance allowlist at delivery time, and the two uses must never
+# drift apart (see that constant's own docstring for why).
 
 logging.basicConfig(
     level=logging.INFO,
@@ -711,6 +735,207 @@ def run_daily(cfg: Config) -> bool:
         conn.close()
 
 
+def run_weekly(cfg: Config) -> bool:
+    """Run the once-a-week (Sunday-evening) brief synthesis + delivery cycle.
+
+    Returns True if it completed OK.
+
+    Invoked by `python -m digest weekly` -- a THIRD, separate systemd timer
+    on the homelab side (not this repo, see CLAUDE.md's Deploy note) fires
+    this once a week, independently of both the every-3-hours `python -m
+    digest` timer (`_run`/`_deliver`) and the once-a-day `python -m digest
+    daily` timer (`run_daily`). Deliberately synchronous (plain `def`, no
+    `asyncio.run` at the call site in `main()`), for the identical reason
+    `run_daily` is: this mode never touches Telethon/twikit either -- it
+    only reads already-summarized digests back out of SQLite and drives the
+    same synchronous summarize/translate/deliver machinery `run_daily` does,
+    so there is nothing here that needs an event loop.
+
+    Mirrors `run_daily` step-for-step -- same `deliver_pending`-first
+    ordering, same empty-input no-op contract, same `SummarizeError`-catches-
+    to-`False` contract, same soft-failing Hungarian translation step, same
+    unconditional `archive()`, same fresh `done` map into `deliver_channels`,
+    same `run_summary` logging shape -- with exactly ONE structural
+    difference, in step 3 below (`allowed_urls`); every other step differs
+    from `run_daily` only in which table/kind it reads or writes.
+
+    Pipeline:
+    1. Connect/init_db, then run `deliver_pending` FIRST -- identical
+       rationale to `run_daily`'s own step 1: a previous week's report that
+       got summarized but only partially delivered (e.g. site published,
+       Telegram 429'd) is retried before this week's new report is even
+       summarized. This also opportunistically retries any still-pending
+       WINDOW or DAILY digest this run happens to see, harmless (idempotent
+       per channel) for the identical reason `run_daily`'s own step 1 is.
+    2. `rows = get_daily_digests_since(conn, since)`, `since` being
+       `WEEKLY_LOOKBACK_WINDOW` (7 days, digest/state.py) before now -- the
+       week's worth of already-curated DAILY briefs to synthesize
+       (kind='daily' only; see that function's docstring for why a prior
+       weekly report can never feed a later one). Empty `rows` (no daily
+       brief ran in the last 7 days -- e.g. a very early deploy, or the
+       daily job was down all week) is logged and returns `all_ok` from
+       step 1 as-is: nothing to brief is a normal empty week, not a
+       failure, exactly like `run_daily`'s own empty-day branch.
+    3. `allowed_urls` -- THE ONE STRUCTURAL DIFFERENCE FROM `run_daily`. A
+       daily brief stamps NO items of its own (digest/state.py's
+       `create_digest` `kind` docstring), so `get_digest_item_urls` against
+       one of THIS week's source daily digests is always empty -- unlike
+       `run_daily`, which can union `get_digest_item_urls` straight over its
+       source (window) digests, that same approach here would produce an
+       allowlist that is always the empty set, defanging every citation the
+       model writes. The URLs a weekly brief is actually allowed to cite
+       live one hop further down: on the WINDOW digests underneath those
+       dailies. So this derives the TRANSITIVE provenance set instead --
+       `get_window_digests_since(conn, since)` over the SAME `since` bound
+       used for step 2, unioned with `get_digest_item_urls` per window
+       digest -- i.e. "every URL any of the week's window digests could
+       cite, hence every URL the week's dailies could cite, hence every URL
+       this weekly brief can cite." `get_weekly_allowed_urls`
+       (digest/state.py) re-derives this identical set at delivery time
+       (fresh or pending-resend), the same way `get_daily_allowed_urls` does
+       for `run_daily` one rung down.
+    4. `summarize_weekly` (digest/weekly.py) -- UNLIKE `_deliver`'s own
+       `summarize()` call, but exactly like `run_daily`'s own
+       `summarize_daily` call, a `SummarizeError` here is caught, logged,
+       and turned into a `False` return rather than propagating further:
+       this function's contract (like `run_daily`'s) is "return whether the
+       run succeeded", not "raise on failure".
+    5. The optional Hungarian translation -- identical `translate_digest`
+       call, identical soft-failing contract, as `run_daily` uses for a
+       daily brief (and `_deliver` for a window digest).
+    6. `create_digest(..., items=[], kind="weekly", item_count=...)` -- a
+       weekly report stamps NO items (it consumes daily digests, not items,
+       exactly like a daily brief consumes window digests, not items) but
+       its stored `item_count` is explicitly overridden to the SUM of the
+       source DAILY rows' own item_counts (each of which is ITSELF already
+       the sum of ITS OWN source window digests' item_counts -- see
+       `create_digest`'s docstring for why the override parameter exists) --
+       that sum is what the site's "N items" line and the closing-line count
+       sanity actually describe for a weekly report.
+    7. `archive()` it, exactly like any digest -- unconditional, not gated
+       on any channel's success, identical rationale to `run_daily`'s own
+       archiving.
+    8. `deliver_channels` with a FRESH `done` map (this digest was just
+       created, nothing attempted yet) and this function's own
+       `telegram_state` -- shared with step 1's `deliver_pending` call, for
+       the identical GUARD-2-circuit-breaker reason `run_daily` shares one
+       `TelegramRunState` across its own two `deliver_channels` call sites.
+       `kind="weekly"` here is what makes `deliver_channels` pick
+       `cfg.telegram_weekly_thread_id` (digest/deliver.py's
+       `_telegram_thread_id_for_kind`) and `get_weekly_allowed_urls` (step 3's
+       delivery-time counterpart) instead of the window/daily equivalents.
+
+    No same-week dedupe guard -- the systemd timer is the idempotency,
+    exactly like `run_daily` (which itself has no same-day dedupe guard, for
+    the identical reason): running this twice in the same week produces two
+    weekly digests, and nothing here prevents that on purpose. Preventing it
+    is the scheduling's job (one weekly timer firing once a week), not this
+    function's.
+
+    Returns True iff step 1's pending pass AND this run's own fresh delivery
+    (when a report was actually produced) both succeeded -- the AND of the
+    same two-part contract `run_daily` upholds for the daily-brief run mode.
+    """
+    conn = connect(cfg.state_db_path)
+    try:
+        init_db(conn)
+
+        telegram_state = TelegramRunState()
+        all_ok = deliver_pending(conn, cfg, telegram_state)
+
+        now = datetime.now(UTC)
+        since = now - WEEKLY_LOOKBACK_WINDOW
+        rows = get_daily_digests_since(conn, since.isoformat())
+        if not rows:
+            logger.info("no daily briefs in the last 7 days, nothing to brief this week")
+            # Exit code stays the sole alert trigger; this line lets a Loki
+            # query see this was an empty-week no-op (source_digests: 0)
+            # rather than a failed weekly report. Nothing was freshly
+            # delivered this run -- both fields fall back to the pending
+            # pass's own result, matching `delivered`/`ok`'s meaning below.
+            logger.info(
+                "run_summary %s",
+                json.dumps(
+                    {
+                        "mode": "weekly",
+                        "source_digests": 0,
+                        "delivered": all_ok,
+                        "ok": all_ok,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            return all_ok
+
+        # See this function's own docstring, step 3: the TRANSITIVE
+        # provenance set -- the union of item URLs across every WINDOW
+        # digest in the same 7-day lookback, NOT the (always-empty) union of
+        # the source DAILY rows' own stamped item URLs.
+        allowed_urls: set[str] = set()
+        window_rows = get_window_digests_since(conn, since.isoformat())
+        for source_digest_id, _created_at, _item_count, _body_md in window_rows:
+            allowed_urls |= get_digest_item_urls(conn, source_digest_id)
+
+        try:
+            body_md = summarize_weekly(
+                rows,
+                allowed_urls,
+                cfg.anthropic_model,
+                cfg.claude_timeout_seconds,
+                cfg.claude_effort,
+            )
+        except SummarizeError as exc:
+            logger.error("weekly brief summarization failed: %s", exc)
+            return False
+
+        # Hungarian translation: same optional, soft-failing production step
+        # `run_daily` runs for a daily brief -- see that call site's own
+        # comment for the full rationale, identical here.
+        body_md_hu: str | None = None
+        if cfg.translate_hu_enabled:
+            body_md_hu = translate_digest(
+                body_md,
+                allowed_urls,
+                cfg.translate_model,
+                cfg.claude_timeout_seconds,
+                fallback_model=cfg.translate_model_fallback,
+            )
+
+        total_items = sum(item_count for _, _, item_count, _ in rows)
+        digest_id = create_digest(
+            conn, body_md, [], body_md_hu=body_md_hu, kind="weekly", item_count=total_items
+        )
+        archive(body_md, cfg.archive_dir, digest_id)
+
+        item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
+        done = {"email": False, "site": False, "telegram": False}
+        ok = deliver_channels(
+            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            kind=kind,
+        )
+        result = all_ok and ok
+
+        # Exit code stays the sole alert trigger; this line is for Loki
+        # queries to see WHICH leg failed -- the pending-retry pass vs this
+        # run's own fresh report -- without a log dive.
+        logger.info(
+            "run_summary %s",
+            json.dumps(
+                {
+                    "mode": "weekly",
+                    "source_digests": len(rows),
+                    "delivered": ok,
+                    "ok": result,
+                },
+                sort_keys=True,
+            ),
+        )
+
+        return result
+    finally:
+        conn.close()
+
+
 def main() -> None:
     load_dotenv()
 
@@ -721,13 +946,16 @@ def main() -> None:
         sys.exit(2)
 
     # argv-based mode dispatch: `python -m digest daily` runs the once-a-day
-    # brief (run_daily); no argument (or anything else) keeps today's
+    # brief (run_daily); `python -m digest weekly` runs the once-a-week
+    # report (run_weekly); no argument (or anything else) keeps today's
     # behavior exactly -- the every-3-hours collect+deliver cycle (_run),
     # unchanged. The scheduling itself (which timer fires which mode, and
     # when) lives entirely outside this repo (see CLAUDE.md's Deploy note);
     # this is just the dispatch a systemd unit's ExecStart invokes into.
     if len(sys.argv) > 1 and sys.argv[1] == "daily":
         ok = run_daily(cfg)
+    elif len(sys.argv) > 1 and sys.argv[1] == "weekly":
+        ok = run_weekly(cfg)
     else:
         ok = asyncio.run(_run(cfg))
     sys.exit(0 if ok else 1)

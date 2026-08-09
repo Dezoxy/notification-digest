@@ -35,6 +35,7 @@ from digest.state import (
     get_digest_item_urls,
     get_digest_source_counts,
     get_pending_digests,
+    get_weekly_allowed_urls,
     mark_digest_sent,
     mark_digest_site_published,
     mark_digest_telegram_sent,
@@ -73,14 +74,15 @@ def digest_meta(conn: sqlite3.Connection, digest_id: int) -> tuple[int, str, str
     it back here rather than threading the local variable through keeps both
     paths going through one code path for this data.
 
-    `kind` ("window" or "daily") is returned alongside the other three
+    `kind` ("window", "daily", or "weekly") is returned alongside the other three
     fields for the identical reason `get_pending_digests` now exposes it:
     `_deliver_telegram` needs to know which digest kind it's sending in
     order to pick the right Telegram thread (digest/config.py's
-    `telegram_daily_thread_id` vs `telegram_notify_thread_id`), and that
-    decision must be correct on BOTH the fresh-digest path (which already
-    knows the kind it just created) and the pending-resend path (which does
-    not, until it reads the row back here).
+    `telegram_daily_thread_id`/`telegram_weekly_thread_id` vs
+    `telegram_notify_thread_id`), and that decision must be correct on BOTH
+    the fresh-digest path (which already knows the kind it just created) and
+    the pending-resend path (which does not, until it reads the row back
+    here).
     """
     row = conn.execute(
         "SELECT item_count, created_at, body_md_hu, kind FROM digests WHERE id = ?", (digest_id,)
@@ -193,7 +195,7 @@ def _deliver_site(
     message or the request URL/response body (digest/publish.py's
     `publish_to_site` never logs either itself).
 
-    `kind` ("window" or "daily", default "window") is threaded straight
+    `kind` ("window", "daily", or "weekly", default "window") is threaded straight
     through to `publish_to_site`'s own `kind` payload field unchanged -- see
     that function's docstring for why the site wants it (badging a daily
     brief distinctly). The caller (`deliver_channels`) always passes the
@@ -279,18 +281,21 @@ class TelegramRunState:
 
 
 def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
-    """Pick the Telegram forum-topic thread id for a digest's `kind` ("window" or "daily").
+    """Pick the Telegram forum-topic thread id for a digest's `kind` ("window"/"daily"/"weekly").
 
     A "daily" digest goes to `cfg.telegram_daily_thread_id` when the owner
     configured one -- a separate topic so daily briefs don't interleave with
-    the window digests' own TL;DR topic. When unset (`None`, the default),
-    this falls back to `cfg.telegram_notify_thread_id` -- the same topic
-    every digest used before the daily-brief feature existed -- and logs an
-    INFO line noting the fallback, since a single-topic deployment is a
-    valid, unremarkable configuration, not a misconfiguration worth a
+    the window digests' own TL;DR topic. A "weekly" digest goes to
+    `cfg.telegram_weekly_thread_id` the same way, one editorial rung up, so
+    the weekly brief doesn't interleave with either the window or daily
+    topic. When the relevant per-kind thread id is unset (`None`, the
+    default), this falls back to `cfg.telegram_notify_thread_id` -- the same
+    topic every digest used before the daily-brief feature existed -- and
+    logs an INFO line noting the fallback, since a single-topic deployment
+    is a valid, unremarkable configuration, not a misconfiguration worth a
     WARNING or ConfigError. Every other `kind` (currently only "window")
-    always uses `cfg.telegram_notify_thread_id` unconditionally; there is
-    only one non-default kind to special-case today.
+    always uses `cfg.telegram_notify_thread_id` unconditionally; there are
+    only two non-default kinds to special-case today.
     """
     if kind == "daily":
         if cfg.telegram_daily_thread_id is not None:
@@ -298,6 +303,13 @@ def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
         logger.info(
             "TELEGRAM_DAILY_THREAD_ID unset, falling back to the window digest's "
             "telegram thread for this daily brief"
+        )
+    elif kind == "weekly":
+        if cfg.telegram_weekly_thread_id is not None:
+            return cfg.telegram_weekly_thread_id
+        logger.info(
+            "TELEGRAM_WEEKLY_THREAD_ID unset, falling back to the window digest's "
+            "telegram thread for this weekly brief"
         )
     return cfg.telegram_notify_thread_id
 
@@ -350,7 +362,7 @@ def _deliver_telegram(
     the exception's TYPE NAME, never `str(exc)`, as one more layer against
     that secret ever reaching a log line.
 
-    `kind` ("window" or "daily", default "window") selects which forum
+    `kind` ("window", "daily", or "weekly", default "window") selects which forum
     topic this send targets, via `_telegram_thread_id_for_kind` -- see that
     function's docstring. The caller always passes the digest's own actual
     stored kind, on both the fresh-digest and pending-resend paths (the
@@ -462,7 +474,7 @@ def deliver_channels(
     trivially counts as "done" for this purpose, since there is nothing left
     for it to accomplish.
 
-    `kind` ("window" or "daily", default "window") is passed straight
+    `kind` ("window", "daily", or "weekly", default "window") is passed straight
     through to `_deliver_site` (the site's `kind` payload field) and
     `_deliver_telegram` (which forum topic to send to) -- neither channel's
     ENABLED-ness, done-ness, or ordering logic above depends on it at all;
@@ -490,14 +502,20 @@ def deliver_channels(
     # `kind` docstring), so get_digest_item_urls against it always returns
     # the empty set -- deriving the allowlist that way here unconditionally
     # used to defang EVERY citation link on a daily brief, on every channel
-    # (the bug get_daily_allowed_urls exists to fix; see its docstring).
-    # Both email and site still receive the SAME set either way -- they
-    # must render identical content, see this function's own docstring.
-    allowed_urls = (
-        get_daily_allowed_urls(conn, created_at)
-        if kind == "daily"
-        else get_digest_item_urls(conn, digest_id)
-    )
+    # (the bug get_daily_allowed_urls exists to fix; see its docstring). A
+    # "weekly" digest has the identical problem, one rung further up (it
+    # stamps no items either, and neither does the daily row it would
+    # otherwise fall back to) -- get_weekly_allowed_urls fixes it the same
+    # way, re-deriving the transitive allowlist from the WINDOW digests two
+    # hops down (see its own docstring). Both email and site still receive
+    # the SAME set either way -- they must render identical content, see
+    # this function's own docstring.
+    if kind == "daily":
+        allowed_urls = get_daily_allowed_urls(conn, created_at)
+    elif kind == "weekly":
+        allowed_urls = get_weekly_allowed_urls(conn, created_at)
+    else:
+        allowed_urls = get_digest_item_urls(conn, digest_id)
 
     if email_enabled and not email_done:
         email_done = _deliver_email(conn, cfg, digest_id, body_md, item_count, allowed_urls)
