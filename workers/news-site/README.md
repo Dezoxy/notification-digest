@@ -374,3 +374,81 @@ visit. The update becomes forward-only (store only if newer than stored).
 
 Ships with one `wrangler deploy`; the calendar heatmap remains deferred but
 now has its link targets waiting.
+
+## Design roadmap 4 (2026-08-09): the deep archive
+
+A fourth pass, agreed 2026-08-09, direction "the deep archive": the archive
+has grown past what one screen and one client-side filter can navigate, so
+this pass gives it depth (heatmap, search, story arcs) and finishes the
+phone-first reading polish. Same execution contract as roadmaps 1–3: one
+squash-merged PR per step below, in order; owner-tuned CSS decisions never
+regress; every change ships in EN/HU, both themes, and a working no-JS
+baseline; single-file Worker, no external requests; `Referrer-Policy:
+no-referrer` and the trust-model headers (see "Trust model" above) stay
+load-bearing throughout. Steps 1–7 are site-only and ship with one
+`wrangler deploy`; step 8's site side ships first, backward-compatibly, and
+the final step needs the digest app's cooperation (separate repo, its own
+release train). A pre-pass audit found reduced motion already fully
+handled (smooth-scroll and the view-transition crossfade are both gated
+behind `prefers-reduced-motion: no-preference`, and `.backfab` drops its
+transition under reduce) and `<html lang>` already correct on HU pages —
+so this pass contains no motion/lang work.
+
+- [x] **Roadmap (this section)** — record the fourth design pass in-repo.
+  (This very PR.)
+- [ ] **Reading polish: hyphenation + touch provenance** — `hyphens: auto`
+  on the serif prose blocks (Hungarian's long compounds especially deserve
+  it on the 15px phone column; `<html lang>` is already right so the
+  hyphenation dictionaries are too); and citation-chip destination domains
+  become visible on touch devices via an `@media (hover: none)` rule
+  reusing the `title` attribute addCiteTitles already sets — the hover
+  affordance doesn't exist on the phone the site is mostly read on (print
+  already does exactly this with `.cite[title]::after`).
+- [ ] **Resume chip** — the unread fence is passive; a small floating "↓
+  new since your last visit" chip appears when the fence exists below the
+  viewport and scrolls to it on tap. Progressive enhancement like the
+  fence itself (no JS = no chip), current-week index only.
+- [ ] **Ledger density toggle** — compact/comfortable, a second small
+  toggle beside the theme toggle, persisted in `localStorage` and applied
+  pre-paint by the same head script pattern as the theme (`data-density`
+  on `<html>`); compact tightens `.entry` padding and the excerpt clamp
+  for readers who want the wire-ledger look.
+- [ ] **Calendar heatmap** — the archive at a glance: a server-rendered
+  trailing-12-week day-grid (columns = ISO weeks, rows = Mon–Sun) at the
+  bottom of the CURRENT-week all-view index, cell intensity stepped by
+  that Budapest-local day's summed `item_count`, each cell titled (day +
+  count) and linking into its week's `w/` page (roadmap 3 built those
+  URLs as this feature's link targets; current week links to the root
+  index — one canonical URL). Pure HTML/CSS, no JS, no new data — one
+  bounded query over the trailing window, bucketed with the existing
+  Budapest date helpers.
+- [ ] **Archive week sparkline** — archive `w/` pages lost the pulse strip
+  by design (roadmap 3 gated it to the current week); the week rail's
+  center gains seven per-day micro-bars for the rendered week, from rows
+  the week query already returns — the pulse visual language, sized for
+  the rail.
+- [ ] **D1 FTS5 search** — the deferral finally comes due: the client-side
+  filter only sees the rendered week since roadmap 3. A numbered migration
+  adds an FTS5 table over `tldr`/`body_md` (+ their `_hu` twins) with sync
+  triggers and a one-time rebuild backfill; a `search` route (EN/HU twins,
+  same token check/headers/404 philosophy) serves a no-JS `<form
+  method=GET>` and server-rendered results (bm25 order, `snippet()`
+  excerpts, deep links). Query strings never contain the token beyond the
+  path it already lives in; results pages carry the same
+  no-store/no-referrer headers as every HTML response.
+- [ ] **Ingest v3: story arcs (site side)** — a numbered migration adds a
+  nullable `topics` column; `PUT /ingest/:id` accepts an OPTIONAL
+  validated `topics` array (slug + label, same shape discipline as
+  `source_counts`; absent = old payloads byte-identical). Digest pages
+  render an arc line for topics that also appeared in the prior 7 days
+  ("×3 this week"), turning isolated briefings into visible threads. Site
+  ships first; nothing renders until the app sends data.
+- [ ] **(digest repo) emit topics** — the app derives per-digest topic
+  slugs/labels (prompt contract + deterministic parse), adds them to the
+  site ingest payload; ships in the app's own release train (tag →
+  homelab bump → deploy), after which arcs light up on new digests.
+
+Steps 1–7 (and the site side of step 8) deploy with one `wrangler deploy`
+(the deploy is the release; smoke-test per the section above), with
+migrations 0005/0006 applied `--remote` first. Still deferred, unchanged:
+PWA/offline (the capability-token-in-persistent-storage wrinkle stands).
