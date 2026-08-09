@@ -7,6 +7,7 @@ import digest.publish as publish_mod
 from digest.publish import (
     TelegramSendError,
     count_sections,
+    derive_topics,
     extract_tldr,
     has_needs_attention,
     parse_failed_sources,
@@ -273,6 +274,92 @@ def test_parse_failed_sources_lookalike_not_at_head_is_ignored():
 
 def test_parse_failed_sources_empty_body_returns_empty_list():
     assert parse_failed_sources("") == []
+
+
+# --- derive_topics ---
+
+
+def test_derive_topics_basic_multi_section_digest():
+    body_md = (
+        "**TL;DR:** hi\n\n"
+        "## Story one\n\ntext\n\n"
+        "## Story two\n\ntext\n"
+    )
+
+    assert derive_topics(body_md) == [
+        {"slug": "story-one", "label": "Story one"},
+        {"slug": "story-two", "label": "Story two"},
+    ]
+
+
+def test_derive_topics_ignores_headings_inside_fenced_code_blocks():
+    # Mirrors test_count_sections_ignores_headings_inside_fenced_code_blocks
+    # and test_section_link_targets_fenced_fake_heading_ignored -- reuses
+    # _real_heading_lines, so a ## line inside a fence is not a real
+    # heading and must not become a topic.
+    body_md = "## Real section\n\n```\n## Not a real heading\n```\n\n## Another real one\n"
+
+    assert derive_topics(body_md) == [
+        {"slug": "real-section", "label": "Real section"},
+        {"slug": "another-real-one", "label": "Another real one"},
+    ]
+
+
+def test_derive_topics_excludes_needs_attention():
+    body_md = (
+        "## Needs attention\n\nurgent\n\n"
+        "## Story one\n\ntext\n"
+    )
+
+    assert derive_topics(body_md) == [{"slug": "story-one", "label": "Story one"}]
+
+
+def test_derive_topics_diacritics_fold_to_ascii_slug():
+    body_md = "## Középső árfolyam\n\ntext\n"
+
+    assert derive_topics(body_md) == [
+        {"slug": "kozepso-arfolyam", "label": "Középső árfolyam"}
+    ]
+
+
+def test_derive_topics_punctuation_and_spacing_collapse():
+    body_md = "## Fed — Watch & Rates!\n\ntext\n"
+
+    assert derive_topics(body_md) == [
+        {"slug": "fed-watch-rates", "label": "Fed — Watch & Rates!"}
+    ]
+
+
+def test_derive_topics_slug_collision_dedupes_first_occurrence_wins():
+    # "Fed Watch!" and "Fed Watch?" both fold to "fed-watch" -- the second
+    # must not produce a duplicate-slug entry (the site's ingest validator
+    # 400s on that), and the FIRST heading's own label is the one kept.
+    body_md = "## Fed Watch!\n\ntext\n\n## Fed Watch?\n\nmore text\n"
+
+    assert derive_topics(body_md) == [{"slug": "fed-watch", "label": "Fed Watch!"}]
+
+
+def test_derive_topics_more_than_twelve_sections_capped_at_twelve():
+    body_md = "\n\n".join(f"## Section {i}\n\ntext" for i in range(1, 21))
+
+    topics = derive_topics(body_md)
+
+    assert len(topics) == 12
+    assert topics[0] == {"slug": "section-1", "label": "Section 1"}
+    assert topics[-1] == {"slug": "section-12", "label": "Section 12"}
+
+
+def test_derive_topics_heading_that_slugifies_to_nothing_is_skipped():
+    # A heading that is entirely punctuation/CJK folds to "" -- must be
+    # skipped outright, never sent with an empty slug.
+    body_md = "## !!!\n\ntext\n\n## 中文标题\n\nmore\n\n## Real section\n\ntext\n"
+
+    assert derive_topics(body_md) == [{"slug": "real-section", "label": "Real section"}]
+
+
+def test_derive_topics_empty_body_returns_empty_list():
+    assert derive_topics("") == []
+    assert derive_topics("just some prose, no headings at all") == []
 
 
 # --- publish_to_site ---
@@ -574,6 +661,65 @@ def test_publish_to_site_omits_source_counts_and_failed_sources_when_empty(monke
 
     assert "source_counts" not in captured["body"]
     assert "failed_sources" not in captured["body"]
+
+
+# --- publish_to_site: topics (story-arcs feature, truthy-only) ---
+
+
+def test_publish_to_site_includes_topics_when_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        topics=[{"slug": "story-one", "label": "Story one"}],
+    )
+
+    assert captured["body"]["topics"] == [{"slug": "story-one", "label": "Story one"}]
+
+
+def test_publish_to_site_omits_topics_when_none(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+    )
+
+    assert "topics" not in captured["body"]
+
+
+def test_publish_to_site_omits_topics_when_empty(monkeypatch):
+    # Truthy-only inclusion, matching source_counts/failed_sources above: an
+    # explicit empty list must be omitted exactly like None -- the site
+    # itself treats an empty `topics` array the same as a missing field.
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        topics=[],
+    )
+
+    assert "topics" not in captured["body"]
 
 
 # --- send_telegram_tldr ---

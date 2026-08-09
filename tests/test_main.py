@@ -433,6 +433,7 @@ def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
         kind="window",
         source_counts=None,
         failed_sources=None,
+        topics=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -882,6 +883,7 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
         kind="window",
         source_counts=None,
         failed_sources=None,
+        topics=None,
     ):
         captured.update(
             digest_id=digest_id_,
@@ -894,6 +896,7 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
             body_html_hu=body_html_hu,
             source_counts=source_counts,
             failed_sources=failed_sources,
+            topics=topics,
         )
 
     monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
@@ -947,6 +950,7 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
         kind="window",
         source_counts=None,
         failed_sources=None,
+        topics=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -966,6 +970,50 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
     # marker completely untouched.
     assert ">Röviden</span>" in captured["body_html_hu"]
     assert ">TL;DR</span>" not in captured["body_html_hu"]
+
+
+def test_deliver_site_forwards_derive_topics_output_to_publish_to_site(conn, monkeypatch):
+    # _deliver_site computes topics itself (digest/publish.py's
+    # derive_topics, off this same English body_md) and forwards it --
+    # mirrors test_deliver_site_publishes_rendered_html_and_marks_site_
+    # published's own source_counts/failed_sources assertions above.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext\n\n## Story two\n\ntext"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+
+    def fake_publish(
+        digest_id_,
+        body_md_,
+        body_html,
+        created_at,
+        item_count,
+        publish_url,
+        key,
+        *,
+        body_md_hu=None,
+        body_html_hu=None,
+        kind="window",
+        source_counts=None,
+        failed_sources=None,
+        topics=None,
+    ):
+        captured.update(topics=topics)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+    )
+
+    assert ok is True
+    assert captured["topics"] == [
+        {"slug": "story-one", "label": "Story one"},
+        {"slug": "story-two", "label": "Story two"},
+    ]
 
 
 def test_deliver_telegram_delegates_with_configured_params_and_marks_telegram_sent(
