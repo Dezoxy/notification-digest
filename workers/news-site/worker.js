@@ -532,6 +532,19 @@ function formatTime(date, locale) {
   }).format(date);
 }
 
+function formatShortDate(date, locale) {
+  // A compact form for <title> (see pageChrome's `title` param): en-GB
+  // "Fri 8 Aug" · hu-HU "aug. 8., P" — same fields as formatDayHeader, just
+  // abbreviated, so a browser tab/history entry stays legible without
+  // eating the whole title budget.
+  return new Intl.DateTimeFormat(locale, {
+    timeZone: TIMEZONE,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(date);
+}
+
 function tzAbbr(date) {
   // Recent ICU versions render timeZoneName:"short" for Europe/* zones as a
   // GMT offset ("GMT+1"/"GMT+2") rather than "CET"/"CEST", so derive the
@@ -810,6 +823,14 @@ const CSS = `
   }
   nav.digestnav a { text-decoration: none; }
   nav.digestnav .spacer { flex: 1; }
+  /* Bottom mirror of the same nav, after </article> (roadmap step 2) — reads
+     as a continuation of the article's closing line, not a new nav block:
+     same top-hairline + padding treatment as .closing, font-size/behavior
+     otherwise identical to the top nav above. */
+  nav.digestnav.digestnav-bottom {
+    margin-top: 2.5em; padding-top: 1em;
+    border-top: 1px solid var(--hairline);
+  }
   .stamp { color: var(--muted); font-size: 0.85em; margin: 0 0 1.2em; font-variant-numeric: tabular-nums; }
   /* HU digest page, no body_html_hu on file: shown above the article,
      falling back to the English body. */
@@ -920,7 +941,12 @@ const CSS = `
   }
 `;
 
-function pageChrome(host, token, lang, view, switchersHtml, bodyHtml) {
+// `title` defaults to null, falling back to the bare host — that default IS
+// the index page's title. Bare-hostname titles made every browser tab and
+// history entry indistinguishable from each other (roadmap step 2); digest
+// pages now pass a per-digest title instead (see renderDigestPage). Escaped
+// here, once, same as the host fallback — callers pass the raw string.
+function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = null) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   const { first, rest } = brandParts(host);
   const strings = STRINGS[lang];
@@ -930,7 +956,7 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<title>${esc(host)}</title>
+<title>${esc(title ?? host)}</title>
 <style>${CSS}</style>
 </head>
 <body>
@@ -1054,6 +1080,10 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
   // for kind="daily".
   const kindLabel = digest.kind === "daily" ? strings.dailyBrief : "digest";
   const stamp = `${formatDayHeader(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${kindLabel} #${digest.id}`;
+  // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
+  // browser tab/history width is tight, and the token never appears here.
+  // pageChrome esc()s the whole composed string before inserting it.
+  const pageTitle = `${kindLabel} #${digest.id} · ${formatShortDate(date, strings.locale)} ${formatTime(date, strings.locale)}`;
 
   const navLinks = [
     `<a href="${indexHref(token, lang, view)}">${esc(strings.allDigests)}</a>`,
@@ -1085,11 +1115,20 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
     }
   }
 
-  const body = `<nav class="digestnav">${navLinks.join("\n")}</nav>
+  // Same links, top and bottom: after an ~900-word read the natural gesture
+  // is older/next, not scroll-to-top (roadmap step 2) — mirror the nav below
+  // the article rather than making the reader travel back to the header.
+  // Built once here, wrapped twice below; the bottom copy carries the extra
+  // digestnav-bottom class (own CSS: top hairline + spacing, same as
+  // .closing, since it follows the article's closing line).
+  const digestNavLinksHtml = navLinks.join("\n");
+
+  const body = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <p class="stamp">${esc(stamp)}</p>
 ${enOnlyNoteHtml}<article class="digest">
 ${articleHtml}
 </article>
+<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
 <a class="backfab" href="${indexHref(token, lang, view)}" aria-label="${esc(strings.backFabLabel)}">←</a>`;
 
   return pageChrome(
@@ -1099,5 +1138,6 @@ ${articleHtml}
     view,
     renderSwitchers(token, lang, view, "digest", digest.id),
     body,
+    pageTitle,
   );
 }

@@ -1,5 +1,7 @@
 # wrangler local cache/state
 .wrangler/
+# Local dev secrets for `wrangler dev` — never real values.
+.dev.vars
 # Local copies of the reader token / ingest key (generated at deploy time,
 # destined for Worker secrets + the digest service secret store). Never commit.
 .site-token.local
