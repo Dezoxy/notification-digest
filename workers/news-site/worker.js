@@ -1500,6 +1500,16 @@ const CSS = `
      which stays the existing body sans stack with no variable of its own.
      Time is this site's primary key; the typography should say so. */
   :root {
+    /* Owner-reported white flash when stepping between pages: every page
+       is a fresh no-store document, and in the network gap before its
+       first paint the browser shows its OWN canvas — which defaults to
+       WHITE unless the page declares color-scheme. (The navigation
+       crossfade usually hides the gap; a slow response outruns the
+       snapshot, which is why the flash was only intermittent.) light dark
+       lets the UA pick the canvas by OS preference — the Auto case; the
+       data-theme override blocks below pin it to one scheme, keeping the
+       between-pages canvas in lockstep with the manual theme choice. */
+    color-scheme: light dark;
     --font-prose: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
     --font-data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
@@ -1548,6 +1558,8 @@ const CSS = `
      --font-prose/--font-data are identical in every theme and stay defined
      once, above. */
   :root[data-theme="dark"] {
+    /* Pin the UA canvas too — see the color-scheme comment in :root. */
+    color-scheme: dark;
     --bg: #17181c;
     --page-bg: #0f0d17;
     --text: #e6e6ea;
@@ -1564,6 +1576,8 @@ const CSS = `
     --attention-text: #ffe69c;
   }
   :root[data-theme="light"] {
+    /* Pin the UA canvas too — see the color-scheme comment in :root. */
+    color-scheme: light;
     --bg: #fbfaf7;
     --page-bg: #e9e9f2;
     --text: #16181d;
@@ -1604,6 +1618,11 @@ const CSS = `
      centered bubble sideways by half a scrollbar (owner-reported). A
      no-op on overlay-scrollbar platforms, which never had the shift. */
   html { scrollbar-gutter: stable; }
+  /* Second layer of the anti-flash fix (see :root's color-scheme comment):
+     an explicit root background so overscroll and any pre-body-paint gap
+     show the theme's own paper/ink, never the UA default. The desktop
+     bubble layout overrides this to the purple page background below. */
+  html { background: var(--bg); }
   /* A single unbreakable token wider than a phone screen (production
      digests carry them — a defanged URL from the link allowlist is one
      long word) widens the LAYOUT viewport past the visual one. On iOS
@@ -2323,6 +2342,9 @@ const CSS = `
      42em measure it has on mobile. */
   @media (min-width: 52em) {
     body { background: var(--page-bg); padding: 2.5em 1.5em; }
+    /* Keep the root canvas in step with the desktop page background — see
+       the html background rule above. */
+    html { background: var(--page-bg); }
     .wrap {
       background: var(--bg);
       max-width: 48em;
