@@ -187,3 +187,67 @@ curl -s -X PUT "$HOST/ingest/1" \
 curl -s "$HOST/t/$TOKEN/"        # index page, should list digest #1
 curl -s "$HOST/t/$TOKEN/d/1"     # the digest page itself
 ```
+
+## Design roadmap (2026-08)
+
+A visual/reading-experience upgrade pass, agreed 2026-08-08 under the
+direction "the private wire desk": this site is a timestamped briefing wire
+for exactly one reader, and the design should encode that data/prose split
+instead of reading as a generic indigo dashboard. One PR per step below, in
+order, each squash-merged to `main` before the next step starts; after the
+last step merges, `wrangler deploy` ships the whole set at once. Every step
+must respect the owner-tuned decisions already documented in `worker.js`'s
+CSS comments — the 15px phone font, mobile masthead layout, FAB
+bubble-gutter anchoring, `scrollbar-gutter: stable`, and the desktop bubble
+card — none of that regresses. Every change ships in both languages (EN/HU)
+and both themes. This stays a single-file Worker with inline CSS and no
+external requests (system font stacks only), and `Referrer-Policy:
+no-referrer` and its sibling headers (see "Trust model" above) stay
+load-bearing throughout.
+
+- [ ] **Roadmap (this section)** — record the design pass in-repo. (This
+  very PR.)
+- [ ] **Must-fixes: page titles + bottom nav** — `<title>` is the bare
+  hostname on every page, making history and open tabs indistinguishable;
+  digest pages get `digest #N · <date> <time>` (localized, with a "napi
+  összefoglaló" label for HU daily briefs), the index keeps the hostname.
+  Digest prev/next nav is top-only today; mirror it below the article — after
+  a 900-word read the natural gesture is "older/next", not scroll-to-top.
+- [ ] **Type system + palette** — the signature move: three type roles, all
+  zero-byte system stacks. Prose (article body + TL;DR) moves to
+  `ui-serif`/Iowan Old Style/Georgia; the data layer (times, counts, dateline
+  stamps, citation chips) moves to `ui-monospace`/SF Mono; chrome (masthead,
+  tabs, nav, footer) stays system sans. Light theme sharpens to ink
+  `#16181D` on barely-warm paper `#FBFAF7` with matching hairlines; dark
+  theme unchanged. Time is this site's primary key — the typography should
+  say so.
+- [ ] **Index: latest-briefing lead card + sticky day headers** — the newest
+  digest gets a lead card: mono dateline eyebrow (`LATEST · FRI 18:00 CEST ·
+  74 ITEMS`), full unclamped TL;DR, visual weight; the reader's most common
+  task is "read the newest one". Everything below stays the compact ledger.
+  Day headers become `position: sticky` so mid-scroll position is always
+  visible.
+- [ ] **Digest page: wire dateline + section index** — the muted stamp line
+  becomes a mono, letter-spaced dateline block (`FRI 08 AUG 2026 · 18:00
+  CEST · DIGEST #412 · 74 ITEMS`). Below the TL;DR, a section index of anchor
+  chips built from the article's `<h2>`s (ids injected at render time) —
+  briefings run ~8 sections and deserve direct jumps.
+- [ ] **Index filter + theme toggle** — a client-side filter input that hides
+  non-matching entries by TL;DR text (inline JS, no backend — answers "where
+  did I read about X"); a manual light/dark/system toggle persisted in
+  `localStorage` for readers who want to override the OS theme.
+- [ ] **Polish** — citation chips get a `title` attribute naming the
+  destination domain (provenance at a glance); a print stylesheet for digest
+  pages (strip chrome, black-on-white); empty states gain a voice ("No daily
+  briefs yet — the first one lands at 20:00.", with a proper HU counterpart).
+
+After the last step above merges, `wrangler deploy` from `workers/news-site`
+ships everything in this roadmap at once — there is no version tag here, the
+deploy *is* the release; smoke-test per the section above before and after.
+
+Deliberately deferred, with reasons: D1 FTS5 full-text search (real work;
+revisit when the client-side filter stops being enough), pagination past the
+1000-row backstop (~4 months away from being felt at current volume), and
+PWA/add-to-home-screen (the manifest would be fetched tokenless and
+`start_url` would embed the capability token in a persisted, cached
+artifact — needs its own privacy think first).
