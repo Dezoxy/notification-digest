@@ -52,15 +52,19 @@
  *
  * Daily-brief view (All | Daily switcher in the masthead, next to EN | HU):
  * every digest carries a `kind` column, 'window' (the regular 3-hourly
- * digest, the default) or 'daily' (the once-daily 20:00 synthesis). The
- * "daily/" URL segment filters the index to kind='daily' and constrains a
- * digest page's prev/next to kind='daily' too, so a reader in that view hops
- * brief-to-brief instead of through every window digest in between. Since a
- * window digest has no home in the daily view, the view switcher's "other
- * view" link ALWAYS points at that view's index, never at a digest page —
- * true on the index itself (index -> index, the obvious case) and also when
- * switching view away from a digest page (digest -> that view's index,
- * because the current digest may not exist in the target view).
+ * digest, the default), 'daily' (the once-daily 20:00 synthesis), or
+ * 'weekly' (the once-a-week Sunday-evening synthesis of the week's daily
+ * briefs). The "daily/" URL segment filters the index to kind='daily' ONLY —
+ * a weekly brief is never in that view, it lives in the All view alongside
+ * window and daily rows, badged the same way a daily row is — and
+ * constrains a digest page's prev/next to kind='daily' too, so a reader in
+ * that view hops brief-to-brief instead of through every window digest in
+ * between. Since a window (or weekly) digest has no home in the daily view,
+ * the view switcher's "other view" link ALWAYS points at that view's index,
+ * never at a digest page — true on the index itself (index -> index, the
+ * obvious case) and also when switching view away from a digest page
+ * (digest -> that view's index, because the current digest may not exist in
+ * the target view).
  *
  * body_html and body_html_hu both arrive PRE-SANITIZED by the app (nh3) and
  * are stored/served verbatim — they are the only fields ever inserted into
@@ -320,7 +324,9 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
   let weekInfo = null;
   let heatmapRows = null;
   if (view === "daily") {
-    // Unbounded, exactly as before this step — see the all-view branch
+    // kind='daily' ONLY — a weekly brief never appears here, it lives in
+    // the All view (see the file-header "Daily-brief view" comment). Also
+    // unbounded, exactly as before this step — see the all-view branch
     // below for why the old flat LIMIT 1000 was a page-weight backstop, not
     // real pagination; the daily view isn't getting real pagination here.
     // tldr_hu is always selected (cheap) even for the EN page — only the HU
@@ -682,10 +688,12 @@ function validateDigestPayload(payload) {
   // `kind` is optional and backward-compatible: the pre-daily-brief app
   // version never sends it, and that must keep working unchanged, so absence
   // defaults to "window" rather than failing. Presence is strict, though —
-  // anything other than the two known values is a caller bug, not a value to
-  // silently coerce.
-  if (kind !== undefined && kind !== "window" && kind !== "daily") {
-    return { ok: false, error: 'kind must be "window" or "daily"' };
+  // anything other than the three known values is a caller bug, not a value
+  // to silently coerce. "weekly" is the once-a-week Sunday-evening synthesis
+  // of the week's daily briefs, one editorial rung above "daily" — same
+  // backward-compatible, opt-in shape as "daily" was when it was added.
+  if (kind !== undefined && kind !== "window" && kind !== "daily" && kind !== "weekly") {
+    return { ok: false, error: 'kind must be "window", "daily", or "weekly"' };
   }
 
   // Hungarian translation fields are entirely optional (older/untranslated
@@ -1170,11 +1178,11 @@ function formatWeekRangeLabel(year, week, locale) {
 // already translated (body_html_hu/tldr_hu) or a handful of untranslated
 // micro-labels ("digest #N") left as-is; the TL;DR excerpt label localizes
 // via STRINGS.tldrLabel ("Röviden:"). See README/PR notes for
-// the reasoning. dailyBrief is the one exception on the stamp line: for
-// kind="daily" it replaces the untranslated "digest" label, so the HU stamp
-// reads "napi összefoglaló #N" instead of "digest #N". Owner: please read
-// these for correctness, they're the only hardcoded Hungarian text in the
-// codebase.
+// the reasoning. dailyBrief and weeklyBrief are the exceptions on the stamp
+// line: for kind="daily"/"weekly" they replace the untranslated "digest"
+// label, so the HU stamp reads "napi összefoglaló #N" / "heti összefoglaló
+// #N" instead of "digest #N". Owner: please read these for correctness,
+// they're the only hardcoded Hungarian text in the codebase.
 const STRINGS = {
   en: {
     locale: "en-GB",
@@ -1191,6 +1199,7 @@ const STRINGS = {
     backFabLabel: "Back to all digests",
     enOnlyNote: null,
     dailyBrief: "daily brief",
+    weeklyBrief: "weekly brief",
     viewAll: "All",
     viewDaily: "Daily",
     latest: "Latest",
@@ -1246,6 +1255,8 @@ const STRINGS = {
     backFabLabel: "Vissza a hírlevelekhez",
     enOnlyNote: "Csak angolul elérhető",
     dailyBrief: "napi összefoglaló",
+    // Owner: please review — new HU string, mirrors dailyBrief's pattern.
+    weeklyBrief: "heti összefoglaló",
     viewAll: "Minden",
     viewDaily: "Napi",
     latest: "Legfrissebb",
@@ -2616,6 +2627,28 @@ function renderExcerpt(row, lang) {
   return { excerptHtml, langChip };
 }
 
+// Kind badge for daily/weekly rows — "" for a window row, and "" for a
+// daily row in the daily view (the badge is redundant there: every row is
+// already a daily brief; only the all view needs it to tell the kinds apart
+// at a glance). Weekly is the SAME visual family as daily, not a new kind of
+// thing — it's a synthesis too, just a wider window — so it reuses the
+// identical `flag-daily` class and filled-indigo look, only the label text
+// differs. A weekly row's badge is unconditional (no `view !== "daily"`
+// gate): it would keep the redundancy rule too if it ever showed up in the
+// daily view, but it never does (see the file-header "Daily-brief view"
+// comment) — the daily/ query filters strictly to kind='daily'. Used by
+// renderIndexEntry and renderLeadCard so the two never drift apart building
+// this separately.
+function kindBadge(row, view, strings) {
+  if (row.kind === "daily" && view !== "daily") {
+    return `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>`;
+  }
+  if (row.kind === "weekly") {
+    return `<span class="flag flag-daily">${esc(strings.weeklyBrief)}</span>`;
+  }
+  return "";
+}
+
 // Source-spectrum palette (roadmap 2 step 8): a STABLE per-source hue for
 // the five collectors the digest app currently has, muted so the bar reads
 // as metadata rather than a call to action — distinct hues so sources stay
@@ -2745,19 +2778,18 @@ function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
 function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
   const time = formatTime(new Date(row.created_at), strings.locale);
-  const isDaily = row.kind === "daily";
-  // The badge is redundant in the daily view itself (every row there is
-  // already a daily brief) — only the all view needs it to tell the two
-  // kinds apart at a glance.
-  const dailyFlag = isDaily && view !== "daily"
-    ? `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>`
-    : "";
+  // Weekly gets the same accent/clamp treatment as daily — both are a
+  // synthesis, just a different window — so this checks "not a plain
+  // window digest" rather than "is daily" specifically; see kindBadge for
+  // the badge itself.
+  const isSynthesis = row.kind !== "window";
+  const badgeHtml = kindBadge(row, view, strings);
 
   const { excerptHtml, langChip } = renderExcerpt(row, lang);
 
   const counts = `${esc(row.item_count)} ${esc(strings.itemsWord)} · ${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
-  const timeClass = isDaily ? "time time-accent" : "time";
-  const excerptClass = isDaily ? "excerpt excerpt-daily" : "excerpt";
+  const timeClass = isSynthesis ? "time time-accent" : "time";
+  const excerptClass = isSynthesis ? "excerpt excerpt-daily" : "excerpt";
 
   // Source-spectrum micro-bar + degraded-run badge (roadmap 2 step 8): both
   // render "" when the row has no data for them (older digests, or an app
@@ -2770,7 +2802,7 @@ function renderIndexEntry(row, token, lang, view) {
   // without parsing, the same trick get_recent_digests (digest repo) relies
   // on. esc()'d like every other D1-sourced value inserted as an attribute.
   return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
-    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${spectrumHtml}${degradedHtml}${dailyFlag}${langChip}</span>
+    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${spectrumHtml}${degradedHtml}${badgeHtml}${langChip}</span>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
@@ -2785,10 +2817,9 @@ function renderIndexEntry(row, token, lang, view) {
 function renderLeadCard(row, token, lang, view) {
   const strings = STRINGS[lang];
   const date = new Date(row.created_at);
-  const isDaily = row.kind === "daily";
-  const dailyFlag = isDaily && view !== "daily"
-    ? `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>`
-    : "";
+  // See kindBadge — same daily/weekly badge as renderIndexEntry's, so the
+  // two never drift apart building it separately.
+  const badgeHtml = kindBadge(row, view, strings);
 
   const { excerptHtml, langChip } = renderExcerpt(row, lang);
 
@@ -2801,7 +2832,7 @@ function renderLeadCard(row, token, lang, view) {
 
   // data-created: same contract as renderIndexEntry's — see comments there.
   return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
-    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${spectrumHtml}${degradedHtml}${dailyFlag}${langChip}</span>
+    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${spectrumHtml}${degradedHtml}${badgeHtml}${langChip}</span>
     <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
@@ -2811,8 +2842,10 @@ function renderLeadCard(row, token, lang, view) {
 // the day's pulse readable before a word is read. ALL view only: the daily
 // view's one-brief-per-day cadence has no intra-day pulse to show, so this
 // renders nothing there (the daily-brief digests themselves are also
-// excluded from the bars below, for the same reason). No day-boundary
-// markers are drawn — deliberate, the strip is a pulse, not a calendar.
+// excluded from the bars below, for the same reason — a weekly brief rides
+// the same kind !== "window" exclusion, it re-synthesizes the week's items
+// rather than reporting a fresh count of its own). No day-boundary markers
+// are drawn — deliberate, the strip is a pulse, not a calendar.
 function renderPulseStrip(rows, token, lang, view) {
   if (view !== "all") return "";
 
@@ -3269,9 +3302,14 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
   // "digest" itself stays an untranslated literal (see the STRINGS comment
-  // above) — only the daily-brief label is real HU vocabulary, swapped in
-  // for kind="daily".
-  const kindLabel = digest.kind === "daily" ? strings.dailyBrief : "digest";
+  // above) — only the daily-brief/weekly-brief labels are real HU
+  // vocabulary, swapped in for kind="daily"/kind="weekly" respectively.
+  const kindLabel =
+    digest.kind === "daily"
+      ? strings.dailyBrief
+      : digest.kind === "weekly"
+        ? strings.weeklyBrief
+        : "digest";
   const stamp = `${formatDayHeader(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${kindLabel} #${digest.id}`;
   // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
   // browser tab/history width is tight, and the token never appears here.
@@ -3413,14 +3451,17 @@ function renderSearchResult(row, token, lang) {
   const strings = STRINGS[lang];
   const date = new Date(row.created_at);
   const dateLabel = `${formatShortDate(date, strings.locale)} ${formatTime(date, strings.locale)}`;
-  const dailyFlag =
-    row.kind === "daily" ? `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>` : "";
+  // Search results are always in "all"-view address space (see the function
+  // comment above), which is also the exact view kindBadge needs to decide
+  // the daily-view redundancy rule — reused as-is rather than duplicating
+  // the daily/weekly badge logic here.
+  const badgeHtml = kindBadge(row, "all", strings);
 
   const { html: snippetHtml, usedHu } = renderSnippet(row, lang);
   const langChip = lang === "hu" && !usedHu ? '<span class="flag flag-muted">EN</span>' : "";
 
   return `<a class="entry" href="${digestHref(token, lang, "all", row.id)}">
-    <span class="meta"><span class="time">${esc(dateLabel)}</span>${dailyFlag}${langChip}</span>
+    <span class="meta"><span class="time">${esc(dateLabel)}</span>${badgeHtml}${langChip}</span>
     <p class="excerpt">${snippetHtml}</p>
   </a>`;
 }

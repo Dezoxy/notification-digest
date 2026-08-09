@@ -14,9 +14,11 @@ CREATE TABLE IF NOT EXISTS digests (
   tldr_hu       TEXT,
   body_html_hu  TEXT,
   body_md_hu    TEXT,
-  -- Distinguishes the once-daily 20:00 synthesis ("daily") from the regular
-  -- 3-hourly window digest ("window", the default). Same ingest path, same
-  -- table — see the ingest validation in worker.js for the allowed values.
+  -- Distinguishes the once-daily 20:00 synthesis ("daily") and the once-a-
+  -- week Sunday-evening synthesis of the week's daily briefs ("weekly") from
+  -- the regular 3-hourly window digest ("window", the default). Same ingest
+  -- path, same table — see the ingest validation in worker.js for the
+  -- allowed values.
   kind          TEXT NOT NULL DEFAULT 'window',
   -- Optional ingest v2 fields (roadmap 2 step 8), app-produced. NULL when the
   -- digest app didn't report them (older app version, or genuinely nothing to

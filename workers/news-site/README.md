@@ -79,6 +79,11 @@ stores and serves whatever the app sends.
   If a digest has no Hungarian translation yet, the `/hu/` pages fall back
   to the English `tldr`/`body_html` with a small in-page note rather than
   erroring or showing nothing.
+- **Weekly brief**: `kind="weekly"` digests (the once-a-week Sunday-evening
+  synthesis of the week's daily briefs) follow this exact same translation
+  contract and get their own HU stamp label ("heti összefoglaló"); unlike
+  daily briefs they have no dedicated URL view of their own — a weekly brief
+  only ever appears in the All view, badged like a daily brief.
 
 ## Deploy
 
@@ -134,7 +139,7 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | Migration | Adds |
 | --- | --- |
 | `0002-hu-columns.sql` | `tldr_hu`, `body_html_hu`, `body_md_hu` (nullable) on `digests`, for the Hungarian-translation feature. |
-| `0003-kind-column.sql` | `kind` (`NOT NULL DEFAULT 'window'`) on `digests`, distinguishing the once-daily 20:00 synthesis (`daily`) from the regular 3-hourly window digest (`window`). |
+| `0003-kind-column.sql` | `kind` (`NOT NULL DEFAULT 'window'`) on `digests`, distinguishing the once-daily 20:00 synthesis (`daily`) and the once-a-week Sunday-evening synthesis (`weekly`) from the regular 3-hourly window digest (`window`). |
 | `0004-source-counts.sql` | `source_counts`, `failed_sources` (nullable) on `digests`, for the ingest v2 source-spectrum micro-bar and degraded-run badge. |
 | `0005-fts-search.sql` | `digests_fts`, an external-content FTS5 virtual table over `tldr`/`body_md`/`tldr_hu`/`body_md_hu` plus its sync triggers and a one-time `rebuild` backfill, for the archive search route. |
 | `0006-topics.sql` | `topics` (nullable) on `digests`, for the ingest v3 story-arc line. |
