@@ -267,31 +267,31 @@ throughout. Steps 1–8 are site-only and ship with one `wrangler deploy`; the
 last two need the digest app's cooperation (separate repo, its own
 release/deploy path) and the site side ships first, backward-compatibly.
 
-- [ ] **Roadmap (this section)** — record the second design pass in-repo.
+- [x] **Roadmap (this section)** — record the second design pass in-repo.
   (This very PR.)
-- [ ] **Unread fence** — a `localStorage` last-visit timestamp; the index
+- [x] **Unread fence** — a `localStorage` last-visit timestamp; the index
   draws one labeled hairline between digests that arrived since the
   reader's last visit and everything older. The index becomes an inbox at a
   glance. No backend, progressive enhancement (no JS = no fence).
-- [ ] **Day-pulse strip** — a micro bar strip (one bar per window digest,
+- [x] **Day-pulse strip** — a micro bar strip (one bar per window digest,
   height = item_count) rendered from data the index query already returns;
   the day's news volume readable before a word is read. Pure CSS bars.
-- [ ] **Living chrome: theme-color + countdown** — `theme-color` metas for
+- [x] **Living chrome: theme-color + countdown** — `theme-color` metas for
   light/dark (and following the manual toggle) so mobile browser chrome
   melts into the page; a muted mono footer line counting down to the next
   window (newest `created_at` + 3h), refreshed by the existing inline
   script.
-- [ ] **Keyboard navigation** — j/k (and arrow keys) hop older/newer on
+- [x] **Keyboard navigation** — j/k (and arrow keys) hop older/newer on
   digest pages; "/" focuses the index filter. Desktop convenience; never
   intercepts typing in the filter input.
-- [ ] **Attention ledger** — a filter chip by the view tabs showing only
+- [x] **Attention ledger** — a filter chip by the view tabs showing only
   `has_attention` digests: "what needed me this week", answerable from a
   column the index already selects.
-- [ ] **Navigation feel: prefetch + view transitions** — a
+- [x] **Navigation feel: prefetch + view transitions** — a
   speculation-rules/prefetch hint for the lead card's digest so the
   most-likely tap opens instantly; `@view-transition` navigation crossfade
   for browsers that support it. Both progressive, both ignored gracefully.
-- [ ] **Ingest v2: source_counts + failed_sources (site side)** — `PUT
+- [x] **Ingest v2: source_counts + failed_sources (site side)** — `PUT
   /ingest/:id` accepts two OPTIONAL fields: `source_counts` (map of source
   → item count) and `failed_sources` (list of collector names); absent =
   old app payloads keep working byte-for-byte. Index entries render a
