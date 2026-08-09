@@ -1471,7 +1471,10 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
     pageKind === "index"
       ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
       : "";
-  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙</summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
+  // The gear carries a visible text label on desktop (owner-requested) and
+  // collapses to the bare icon on the phone — the label span is hidden by
+  // the mobile media block, the aria-label covers it everywhere.
+  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -1712,6 +1715,8 @@ const CSS = `
        S/M/L text-size rules need no phone twin — they're em factors off
        this base, see the data-fontsize block above. */
     body { font-size: 15px; }
+    /* Icon-only gear on the phone — see .gearlabel above. */
+    .gearlabel { display: none; }
     /* Brand left, EN|HU right on one line (owner: the selector belongs
        on the right; the cadence line was removed entirely at the owner's
        request — the footer already carries the private-link warning). */
@@ -1742,6 +1747,10 @@ const CSS = `
      list-style: none — this is the belt-and-suspenders rule that actually
      suppresses it. */
   summary.gear::-webkit-details-marker { display: none; }
+  /* Desktop shows the gear WITH its text label ("Settings"/"Beállítások" —
+     owner-requested); the phone masthead is tight, so the label collapses
+     there and the icon stands alone (see the mobile block below). */
+  .gearlabel { margin-left: 0.4em; font-size: 0.92em; }
   summary.gear:hover { border-color: var(--accent); }
   summary.gear:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
   details.settings[open] > summary.gear { border-color: var(--accent); }
