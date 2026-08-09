@@ -445,12 +445,13 @@ so this pass contains no motion/lang work.
   render an arc line for topics that also appeared in the prior 7 days
   ("×3 this week"), turning isolated briefings into visible threads. Site
   ships first; nothing renders until the app sends data.
-- [ ] **(digest repo) emit topics** — the app derives per-digest topic
+- [x] **(digest repo) emit topics** — the app derives per-digest topic
   slugs/labels (prompt contract + deterministic parse), adds them to the
   site ingest payload; ships in the app's own release train (tag →
   homelab bump → deploy), after which arcs light up on new digests.
 
-Steps 1–7 (and the site side of step 8) deploy with one `wrangler deploy`
-(the deploy is the release; smoke-test per the section above), with
-migrations 0005/0006 applied `--remote` first. Still deferred, unchanged:
+Steps 1–7 (and the site side of step 8) shipped 2026-08-09: migrations
+0005/0006 applied `--remote`, then `wrangler deploy` (version e4511cca);
+public-endpoint smoke test passed. The digest-repo step merged as
+notification-digest PR #56 and rides that repo's own release train. Still deferred, unchanged:
 PWA/offline (the capability-token-in-persistent-storage wrinkle stands).
