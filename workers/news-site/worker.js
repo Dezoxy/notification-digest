@@ -1471,6 +1471,39 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
     render();
     setInterval(render, 60000);
   })();
+
+  // Keyboard navigation (roadmap 2 step 4): desktop convenience, no visible
+  // UI hint — the nav arrows already show the model. j/ArrowLeft hop to the
+  // OLDER digest, k/ArrowRight to the NEWER one, via the stable nav-older/
+  // nav-newer classes renderDigestPage puts on both the top and bottom
+  // digestnav (index pages have neither, so this silently no-ops there).
+  // "/" focuses the index filter, when one exists on the page. j = older =
+  // down-the-archive, matching the index's newest-first reading order
+  // (vim-scroll intuition); the arrow keys mirror the nav's own visual
+  // ← older / newer → arrows. Never intercepts typing: bails on any
+  // input/textarea/select/contentEditable target, and on any ctrl/meta/alt
+  // modifier so browser shortcuts stay untouched.
+  (function () {
+    addEventListener("keydown", function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      var tag = t && t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+      if (e.key === "j" || e.key === "ArrowLeft") {
+        var older = document.querySelector(".nav-older");
+        if (older) location.href = older.href;
+      } else if (e.key === "k" || e.key === "ArrowRight") {
+        var newer = document.querySelector(".nav-newer");
+        if (newer) location.href = newer.href;
+      } else if (e.key === "/") {
+        var filter = document.querySelector(".filter");
+        if (filter) {
+          e.preventDefault();
+          filter.focus();
+        }
+      }
+    });
+  })();
 </script>
 </body>
 </html>`;
@@ -1763,12 +1796,12 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
   // newer) rather than showing a disabled placeholder.
   if (older) {
     navLinks.push(
-      `<a href="${digestHref(token, lang, view, older.id)}">← ${esc(formatTime(new Date(older.created_at), strings.locale))}</a>`,
+      `<a class="nav-older" href="${digestHref(token, lang, view, older.id)}">← ${esc(formatTime(new Date(older.created_at), strings.locale))}</a>`,
     );
   }
   if (newer) {
     navLinks.push(
-      `<a href="${digestHref(token, lang, view, newer.id)}">${esc(formatTime(new Date(newer.created_at), strings.locale))} →</a>`,
+      `<a class="nav-newer" href="${digestHref(token, lang, view, newer.id)}">${esc(formatTime(new Date(newer.created_at), strings.locale))} →</a>`,
     );
   }
 
