@@ -350,6 +350,15 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
   // special-casing needed for that view.
   const newestWindow = (results ?? []).find((row) => row.kind === "window");
 
+  // Current-week-only (roadmap 3 step 3): a countdown to "the next window"
+  // only makes sense on the page showing the actual present — on an archive
+  // week it would read "closing about now" forever, since that week's
+  // newest window digest closed long ago. isCurrentWeek is true
+  // unconditionally in the daily view too (weekParam is always null there —
+  // see the route match in fetch() — so effective === current above), which
+  // is exactly the "daily view keeps every living-chrome feature" contract.
+  const countdownNewest = isCurrentWeek ? (newestWindow?.created_at ?? null) : null;
+
   return htmlResponse(
     renderIndexPage(
       results ?? [],
@@ -357,7 +366,7 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       url.hostname,
       lang,
       view,
-      newestWindow?.created_at ?? null,
+      countdownNewest,
       weekInfo,
     ),
   );
@@ -1021,9 +1030,21 @@ function weekHref(token, lang, view, year, week) {
 
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
 // from a digest row's own `kind` column (window/daily) used elsewhere.
-function renderLangSwitcher(token, lang, view, pageKind, id) {
-  const enHref = pageKind === "index" ? indexHref(token, "en", view) : digestHref(token, "en", view, id);
-  const huHref = pageKind === "index" ? indexHref(token, "hu", view) : digestHref(token, "hu", view, id);
+// `archiveWeek` (roadmap 3 step 3): the CURRENT page's own {year, week} when
+// it's an index page rendering an ARCHIVE week, else null — index pages on
+// the current week or the (week-less) daily view pass null, and digest
+// pages always pass null (a digest has no week address). When set, the
+// other-language link must stay on that SAME week's index in the other
+// language (weekHref) — falling back to that language's root index would
+// silently bounce the reader from the archive week they're reading to the
+// current week instead.
+function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null) {
+  const otherLangIndexHref = (otherLang) =>
+    archiveWeek
+      ? weekHref(token, otherLang, view, archiveWeek.year, archiveWeek.week)
+      : indexHref(token, otherLang, view);
+  const enHref = pageKind === "index" ? otherLangIndexHref("en") : digestHref(token, "en", view, id);
+  const huHref = pageKind === "index" ? otherLangIndexHref("hu") : digestHref(token, "hu", view, id);
   // Current language: plain bold text, not a link (nothing to switch to).
   // Other language: a link to the SAME page (same index row / same digest
   // id) in the other language space, same view.
@@ -1041,6 +1062,10 @@ function renderLangSwitcher(token, lang, view, pageKind, id) {
 // accent pill (plain text, not a link); inactive = outlined link. On a
 // digest page the inactive tab targets that view's INDEX (a window digest
 // has no address in the daily view — long-standing design choice).
+// Unlike the language switcher, this deliberately does NOT thread a week
+// through (roadmap 3 step 3): a week page's tabs still target the view's
+// root index with no week segment — a week page has no daily twin to keep
+// the week address for, so there's nothing to preserve here.
 function renderViewTabs(token, lang, view) {
   const strings = STRINGS[lang];
   const tab = (v, label) =>
@@ -1055,9 +1080,9 @@ function renderViewTabs(token, lang, view) {
 // override of the OS theme is useful everywhere, not just on the index. The
 // button starts `hidden` (progressive enhancement, same as the filter input
 // below) and is un-hidden by the bottom script once it's known to be wired.
-function renderSwitchers(token, lang, view, pageKind, id) {
+function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   const strings = STRINGS[lang];
-  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id)}<button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button></div>`;
+  return `<div class="switchers">${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}<button class="themetoggle" aria-label="${esc(strings.themeToggle)}" hidden>◐</button></div>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -1804,6 +1829,16 @@ ${prefetchScriptHtml}
     if (entries.length === 0) return;
     var section = document.querySelector("section[data-unread-label]");
     if (!section) return;
+    // Archive-week bail (roadmap 3 step 3): data-week-archive marks the
+    // <section> on any non-current week (see renderIndexPage). An archive
+    // page's "newest" entry is old news by definition, so there's nothing
+    // to fence AND nothing here should ever be treated as the reader's most
+    // recent visit — bailing before the lastVisit read/write below is what
+    // stops a stray archive-page visit from regressing the stamp and
+    // spawning a bogus fence around content the reader has long since seen.
+    // The forward-only guard on the write itself (below) is the second,
+    // independent layer of the same protection.
+    if (section.hasAttribute("data-week-archive")) return;
 
     var lastVisit = null;
     try {
@@ -1854,9 +1889,15 @@ ${prefetchScriptHtml}
     // Update AFTER computing the fence above, and to the NEWEST entry's own
     // data-created — not "now" — so clock skew between the reader's device
     // and the server's stamped created_at can never make a digest look
-    // newer or older than it is on the next visit.
+    // newer or older than it is on the next visit. Forward-only (roadmap 3
+    // step 3): only ever advance the stamp, never regress it — the
+    // archive-week bail above is the primary guard (it keeps this line from
+    // running at all on an archive page), this comparison is the second,
+    // independent layer in case that ever changes.
     try {
-      localStorage.setItem("lastVisit", newest);
+      if (!lastVisit || newest > lastVisit) {
+        localStorage.setItem("lastVisit", newest);
+      }
     } catch (e) {}
   })();
 
@@ -2279,14 +2320,24 @@ function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, 
   const strings = STRINGS[lang];
   const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
 
+  // Current-week-only features (roadmap 3 step 3): the lead card, pulse
+  // strip, and prefetch hint below all imply "this is what's happening
+  // right now" — a "Latest" card on an archive week would lie, so they're
+  // gated on isCurrent, true on the (week-less) daily view and on the
+  // CURRENT week of the all view, false on any archive week. handleIndexPage
+  // applies the same gate to countdownNewest itself before it ever reaches
+  // this function (see there), so no separate check is needed for that one.
+  const isCurrent = weekInfo === null || weekInfo.isCurrentWeek;
+
   // Tracked outside the branch below so it's reachable for the prefetch
-  // href (roadmap 2 step 7) further down — null on the empty-index path,
-  // same as everywhere else in this function.
+  // href (roadmap 2 step 7) further down — null on the empty-index path and
+  // on an archive week (no lead there at all), same as everywhere else in
+  // this function.
   let leadRow = null;
   let body;
   if (rows.length === 0) {
     body = `<p class="empty">${esc(emptyMessage)}</p>`;
-  } else {
+  } else if (isCurrent) {
     // rows are ordered created_at DESC, so rows[0] is the newest digest in
     // this view — it renders as the lead card above the ledger and is
     // excluded from the grouped list below (no duplicate). groupByDay runs
@@ -2302,6 +2353,17 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
       )
       .join("\n");
     body = `${renderLeadCard(lead, token, lang, view)}\n${ledger}`;
+  } else {
+    // Archive week (roadmap 3 step 3): no lead card — every row, including
+    // rows[0], goes through the plain day-grouped ledger, same as the
+    // "rest" branch above minus the exclusion.
+    const groups = groupByDay(rows, strings.locale);
+    body = groups
+      .map(
+        (group) => `<div class="dayhead">${esc(group.label)}</div>
+${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}`,
+      )
+      .join("\n");
   }
 
   // Client-side filter (roadmap step 6, index pages only): sits between the
@@ -2319,14 +2381,24 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // pageChrome, just above this) and the filter row — ALL-view index pages
   // only (weekInfo is null for the daily view, see handleIndexPage). Sits
   // above the empty-state message too, since both live inside the <section>
-  // wrapper assembled below.
+  // wrapper assembled below. Renders on the current week too (unlike the
+  // lead/pulse/prefetch below) — the rail IS the archive navigation, so it
+  // stays regardless of isCurrent.
   const railHtml = view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings) : "";
 
   // Day-pulse strip (roadmap 2 step 3): between the filter row and the
-  // <section> below, i.e. right above the lead card — renders "" (nothing)
-  // outside the all view or with too few window digests, see
-  // renderPulseStrip.
-  const pulseHtml = renderPulseStrip(rows, token, lang, view);
+  // <section> below, i.e. right above the lead card — CURRENT-WEEK-ONLY as
+  // of roadmap 3 step 3 (a pulse of "recent volume" on an archive week
+  // would be showing volume from years ago, framed as if it were recent);
+  // renderPulseStrip's own all-view-only/too-few-bars checks still apply on
+  // top of this gate.
+  const pulseHtml = isCurrent ? renderPulseStrip(rows, token, lang, view) : "";
+
+  // data-week-archive (roadmap 3 step 3): marks the <section> on any
+  // non-current week so the bottom script's unread-fence IIFE can bail out
+  // entirely — see that script for why an archive page must never draw a
+  // fence or advance the lastVisit stamp.
+  const archiveAttr = isCurrent ? "" : ' data-week-archive="1"';
 
   // data-unread-label (roadmap 2 step 2): the unread-fence label text,
   // rendered server-side so the bottom script that builds the fence stays
@@ -2338,8 +2410,9 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // script creates lazily — see applyFilters.
   //
   // Prefetch hint (roadmap 2 step 7): only when a lead exists, i.e. a
-  // non-empty index — see pageChrome's prefetchHref param comment for the
-  // full mechanism/rationale.
+  // non-empty CURRENT-week index — see pageChrome's prefetchHref param
+  // comment for the full mechanism/rationale, and isCurrent above for why
+  // an archive week never has a leadRow to prefetch in the first place.
   const prefetchHref = leadRow ? digestHref(token, lang, view, leadRow.id) : null;
 
   return pageChrome(
@@ -2347,8 +2420,8 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     token,
     lang,
     view,
-    renderSwitchers(token, lang, view, "index"),
-    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}">${body}</section>`,
+    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
+    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>`,
     null,
     countdownNewest,
     prefetchHref,
