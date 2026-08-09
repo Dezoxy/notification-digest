@@ -1759,8 +1759,18 @@ const CSS = `
     font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
     letter-spacing: 0.06em; padding: 0.22em 0.8em; border-radius: 999px;
     background: var(--chip-bg); color: var(--chip-text);
+    /* Topics derive from section headings, which run headline-length in
+       production (owner-reported, 2026-08-09) — cap the chip at one line.
+       Only the LABEL ellipsizes (its own span, min-width: 0 so flex lets
+       it shrink); the count is the chip's actual information and must
+       never be the part the ellipsis eats. The label's tail is always
+       recoverable one scroll down in the TOC. */
+    max-width: 100%; display: inline-flex; align-items: baseline;
   }
-  .arcs .arc .arccount { font-weight: 700; margin-left: 0.45em; }
+  .arcs .arc .arclabel {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .arcs .arc .arccount { font-weight: 700; margin-left: 0.45em; flex: none; }
 
   .attention {
     background: var(--attention-bg); color: var(--attention-text);
@@ -3286,14 +3296,20 @@ function stripInlineStyles(html) {
 // not hand-composed pieces.
 function renderArcs(topicArcs, strings) {
   if (!topicArcs || topicArcs.length === 0) return "";
-  const chips = topicArcs
-    .map(({ label, count }) => {
-      const countHtml =
-        count >= 2
-          ? `<span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span>`
-          : "";
-      return `<span class="arc">${esc(label)}${countHtml}</span>`;
-    })
+  // RECURRING topics only (count >= 2) — this is what the roadmap 4 step 8
+  // spec always said ("topics that ALSO appeared in the prior 7 days"), and
+  // the first live digest showed why (owner-reported, 2026-08-09): topics
+  // derive from section headings, so a single-appearance topic's chip is a
+  // shouted duplicate of the TOC chip right below it. A digest whose topics
+  // are all first appearances gets no arc line at all — nothing is
+  // continuing, so there is no thread to point at.
+  const recurring = topicArcs.filter(({ count }) => count >= 2);
+  if (recurring.length === 0) return "";
+  const chips = recurring
+    .map(
+      ({ label, count }) =>
+        `<span class="arc"><span class="arclabel">${esc(label)}</span><span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></span>`,
+    )
     .join("");
   return `<nav class="arcs" aria-label="${esc(strings.arcsLabel)}">${chips}</nav>\n`;
 }
