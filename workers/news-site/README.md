@@ -81,9 +81,11 @@ stores and serves whatever the app sends.
   erroring or showing nothing.
 - **Weekly brief**: `kind="weekly"` digests (the once-a-week Sunday-evening
   synthesis of the week's daily briefs) follow this exact same translation
-  contract and get their own HU stamp label ("heti összefoglaló"); unlike
-  daily briefs they have no dedicated URL view of their own — a weekly brief
-  only ever appears in the All view, badged like a daily brief.
+  contract and get their own HU stamp label ("heti összefoglaló"); like daily
+  briefs, they also get a dedicated URL view — `GET /t/:token/weekly/` and
+  `GET /t/:token/hu/weekly/` — filtered to `kind='weekly'` only, alongside
+  their unfiltered appearance in the All view, badged the same way a daily
+  row is.
 
 ## Deploy
 

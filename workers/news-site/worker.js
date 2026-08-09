@@ -20,22 +20,26 @@
  *   Worker. Neither secret lives in source or wrangler.jsonc; both are set
  *   with `wrangler secret put`.
  *
- * Routes: URL grammar is /t/:token/(hu/)?(daily/)?( | d/:id) plus the
- * standalone /t/:token/(hu/)?search endpoint — the language segment always
- * comes first, then either an optional literal "daily/" view segment or the
- * literal "search" endpoint (search has no daily/week variant of its own —
- * it spans the whole archive, not one view). No "daily/" segment is the ALL
- * view (every digest, mixed).
+ * Routes: URL grammar is /t/:token/(hu/)?(daily/|weekly/)?( | d/:id) plus
+ * the standalone /t/:token/(hu/)?search endpoint — the language segment
+ * always comes first, then either an optional literal "daily/" or "weekly/"
+ * view segment or the literal "search" endpoint (search has no daily/
+ * weekly/week variant of its own — it spans the whole archive, not one
+ * view). No view segment is the ALL view (every digest, mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
  *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
  *   GET  /t/:token/               -> index (EN, all view), newest-first, grouped by day
  *   GET  /t/:token/d/:id          -> single digest (EN, all view), with prev/next nav
  *   GET  /t/:token/daily/         -> same index, EN, filtered to kind='daily' only
  *   GET  /t/:token/daily/d/:id    -> same digest page, EN, prev/next stays within kind='daily'
+ *   GET  /t/:token/weekly/        -> same index, EN, filtered to kind='weekly' only
+ *   GET  /t/:token/weekly/d/:id   -> same digest page, EN, prev/next stays within kind='weekly'
  *   GET  /t/:token/hu/            -> same index, Hungarian chrome + translations, all view
  *   GET  /t/:token/hu/d/:id       -> same digest page, Hungarian chrome + translations, all view
  *   GET  /t/:token/hu/daily/      -> same index, Hungarian chrome, daily view
  *   GET  /t/:token/hu/daily/d/:id -> same digest page, Hungarian chrome, daily view
+ *   GET  /t/:token/hu/weekly/     -> same index, Hungarian chrome, weekly view
+ *   GET  /t/:token/hu/weekly/d/:id -> same digest page, Hungarian chrome, weekly view
  *   GET  /t/:token/search         -> full-text search (EN), query text in ?q=, whole archive
  *   GET  /t/:token/hu/search      -> same search, Hungarian chrome
  *   anything else                 -> plain 404, wrong token included
@@ -50,21 +54,22 @@
  * handlers, same token check, same headers, same 404 philosophy — a wrong
  * token on a /hu/ path 404s byte-identically to a wrong token anywhere else.
  *
- * Daily-brief view (All | Daily switcher in the masthead, next to EN | HU):
- * every digest carries a `kind` column, 'window' (the regular 3-hourly
- * digest, the default), 'daily' (the once-daily 20:00 synthesis), or
- * 'weekly' (the once-a-week Sunday-evening synthesis of the week's daily
- * briefs). The "daily/" URL segment filters the index to kind='daily' ONLY —
- * a weekly brief is never in that view, it lives in the All view alongside
- * window and daily rows, badged the same way a daily row is — and
- * constrains a digest page's prev/next to kind='daily' too, so a reader in
- * that view hops brief-to-brief instead of through every window digest in
- * between. Since a window (or weekly) digest has no home in the daily view,
- * the view switcher's "other view" link ALWAYS points at that view's index,
- * never at a digest page — true on the index itself (index -> index, the
- * obvious case) and also when switching view away from a digest page
- * (digest -> that view's index, because the current digest may not exist in
- * the target view).
+ * Daily-brief view (All | Daily | Weekly switcher in the masthead, next to
+ * EN | HU): every digest carries a `kind` column, 'window' (the regular
+ * 3-hourly digest, the default), 'daily' (the once-daily 20:00 synthesis),
+ * or 'weekly' (the once-a-week Sunday-evening synthesis of the week's daily
+ * briefs). The "daily/" URL segment filters the index to kind='daily' ONLY,
+ * and "weekly/" filters it to kind='weekly' ONLY — each kind is never in
+ * the OTHER kind's view, only in the All view alongside every other kind,
+ * badged the same way — and constrains a digest page's prev/next to that
+ * same kind too, so a reader in one of those views hops brief-to-brief
+ * instead of through every window digest (or the other brief kind) in
+ * between. Since a digest of a different kind has no home in the daily or
+ * weekly view, the view switcher's "other view" link ALWAYS points at that
+ * view's index, never at a digest page — true on the index itself
+ * (index -> index, the obvious case) and also when switching view away from
+ * a digest page (digest -> that view's index, because the current digest
+ * may not exist in the target view).
  *
  * body_html and body_html_hu both arrive PRE-SANITIZED by the app (nh3) and
  * are stored/served verbatim — they are the only fields ever inserted into
@@ -143,23 +148,23 @@ export default {
     }
 
     // The optional "hu/" segment selects the Hungarian chrome/translations,
-    // and the optional "daily/" segment (only ever AFTER "hu/", never
-    // before) selects the daily-brief-only view; everything else about the
-    // route (token check, id shape, 404s) is identical across all four
-    // language×view combinations — see handleIndexPage/handleDigestPage,
+    // and the optional "daily/" or "weekly/" segment (only ever AFTER "hu/",
+    // never before) selects that brief-only view; everything else about the
+    // route (token check, id shape, 404s) is identical across every
+    // language×view combination — see handleIndexPage/handleDigestPage,
     // which take `lang` and `view` as plain parameters rather than being
-    // duplicated four times.
-    const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/)?d\/(\d+)$/);
+    // duplicated per combination.
+    const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?d\/(\d+)$/);
     if (digestMatch && request.method === "GET") {
       const lang = digestMatch[2] ? "hu" : "en";
-      const view = digestMatch[3] ? "daily" : "all";
+      const view = digestMatch[3] === "daily/" ? "daily" : digestMatch[3] === "weekly/" ? "weekly" : "all";
       return handleDigestPage(env, digestMatch[1], digestMatch[4], url, lang, view);
     }
 
     // Search (roadmap 4 step 7): a standalone endpoint, not part of the
-    // index/digest grammar below — no "daily/" or "w/" variant (search
-    // spans the whole archive, see the file-header comment). Query text
-    // comes from url.searchParams, never the path.
+    // index/digest grammar below — no "daily/"/"weekly/" or "w/" variant
+    // (search spans the whole archive, see the file-header comment). Query
+    // text comes from url.searchParams, never the path.
     const searchMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?search$/);
     if (searchMatch && request.method === "GET") {
       const lang = searchMatch[2] ? "hu" : "en";
@@ -170,10 +175,10 @@ export default {
     // `w/YYYY-Www/` — the digest-page regex above stays untouched, digest
     // pages have no week address (prev/next crosses week boundaries
     // invisibly, unchanged). Root index (no w/ segment) = the current week.
-    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/);
+    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/);
     if (indexMatch && request.method === "GET") {
       const lang = indexMatch[2] ? "hu" : "en";
-      const view = indexMatch[3] ? "daily" : "all";
+      const view = indexMatch[3] === "daily/" ? "daily" : indexMatch[3] === "weekly/" ? "weekly" : "all";
       let weekParam = null;
       if (indexMatch[4] !== undefined) {
         const year = Number(indexMatch[4]);
@@ -300,14 +305,15 @@ async function handleIngest(request, env, idParam) {
 async function handleIndexPage(env, token, url, lang, view, weekParam) {
   if (!(await tokenMatches(env, token))) return notFound();
 
-  // Weekly pagination (roadmap 3 step 2): the daily view stays unpaginated
-  // (~3 years from feeling the old LIMIT-1000 backstop) — the route match
-  // above still grammatically allows "daily/w/…" (the "w/" segment can
-  // follow any view prefix), so an unpaginated view being asked for a week
-  // address 404s here rather than silently ignoring the segment or
-  // rendering something misleading for a URL that has no real page behind
-  // it.
-  if (view === "daily" && weekParam) return notFound();
+  // Weekly pagination (roadmap 3 step 2): the daily and weekly views stay
+  // unpaginated (~3 years from feeling the old LIMIT-1000 backstop, and a
+  // weekly brief a week is even further out — see the weekly branch below)
+  // — the route match above still grammatically allows "daily/w/…" or
+  // "weekly/w/…" (the "w/" segment can follow any view prefix), so an
+  // unpaginated view being asked for a week address 404s here rather than
+  // silently ignoring the segment or rendering something misleading for a
+  // URL that has no real page behind it.
+  if (view !== "all" && weekParam) return notFound();
 
   // The week actually being rendered: the URL's w/ segment if present,
   // otherwise the current Budapest-local ISO week. NOTE: this step (roadmap
@@ -335,6 +341,17 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE kind = 'daily' ORDER BY created_at DESC, id DESC LIMIT 1000`,
     ).all();
     results = dailyResults;
+  } else if (view === "weekly") {
+    // Same shape as the daily branch above, kind='weekly' ONLY — a daily (or
+    // window) digest never appears here, it lives in the All view. Also
+    // unbounded and unpaginated, same reasoning as daily — a weekly brief a
+    // week is ~50 rows a year, even further from the LIMIT-1000 backstop
+    // than the daily view's ~365 rows a year, so real pagination is even
+    // less warranted here.
+    const { results: weeklyResults } = await env.DB.prepare(
+      `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE kind = 'weekly' ORDER BY created_at DESC, id DESC LIMIT 1000`,
+    ).all();
+    results = weeklyResults;
   } else {
     // Week-bounded query replaces the old flat LIMIT-1000 backstop for the
     // all view. created_at is UTC ISO text, so a lexicographic >=/< against
@@ -406,19 +423,20 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
   // Next-briefing countdown (roadmap 2 step 3): the newest WINDOW digest's
   // created_at, found in the rows already fetched above rather than an extra
   // query — rows are created_at DESC, so this is just the first kind='window'
-  // row. In the daily view, `results` is already restricted to kind='daily'
-  // only, so no window row is ever found there and the countdown paragraph
-  // is simply omitted (see pageChrome's countdownNewest param) — cheap, no
-  // special-casing needed for that view.
+  // row. In the daily or weekly view, `results` is already restricted to
+  // kind='daily' or kind='weekly' only, so no window row is ever found there
+  // and the countdown paragraph is simply omitted (see pageChrome's
+  // countdownNewest param) — cheap, no special-casing needed for those views.
   const newestWindow = (results ?? []).find((row) => row.kind === "window");
 
   // Current-week-only (roadmap 3 step 3): a countdown to "the next window"
   // only makes sense on the page showing the actual present — on an archive
   // week it would read "closing about now" forever, since that week's
   // newest window digest closed long ago. isCurrentWeek is true
-  // unconditionally in the daily view too (weekParam is always null there —
-  // see the route match in fetch() — so effective === current above), which
-  // is exactly the "daily view keeps every living-chrome feature" contract.
+  // unconditionally in the daily and weekly views too (weekParam is always
+  // null there — see the route match in fetch() — so effective === current
+  // above), which is exactly the "daily/weekly view keeps every living-
+  // chrome feature" contract.
   const countdownNewest = isCurrentWeek ? (newestWindow?.created_at ?? null) : null;
 
   return htmlResponse(
@@ -513,9 +531,10 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
     }));
   }
 
-  // In the daily view, prev/next stay within kind='daily' so a reader hops
-  // brief-to-brief rather than through every window digest in between — the
-  // all view keeps today's unconstrained chronological prev/next.
+  // In the daily or weekly view, prev/next stay within that same kind so a
+  // reader hops brief-to-brief rather than through every window digest (or
+  // the other brief kind) in between — the all view keeps today's
+  // unconstrained chronological prev/next.
   //
   // Neighbor = adjacent by (created_at, id) tuple order, not by id: daily
   // briefs get BACKFILLED for past days with historical created_at values,
@@ -523,7 +542,7 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   // SQLite row-value comparison ((created_at, id) < (?, ?)) does the tuple
   // compare/tiebreak in one expression — supported since SQLite 3.15, and
   // D1's SQLite is far newer.
-  const kindFilter = view === "daily" ? " AND kind = 'daily'" : "";
+  const kindFilter = view === "daily" ? " AND kind = 'daily'" : view === "weekly" ? " AND kind = 'weekly'" : "";
   const [older, newer] = await Promise.all([
     env.DB.prepare(
       `SELECT id, created_at FROM digests WHERE (created_at, id) < (?, ?)${kindFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -1192,6 +1211,7 @@ const STRINGS = {
     noDigests:
       "No briefings yet. The next window closes every three hours — the first one lands here on its own.",
     noDailyBriefs: "No daily briefs yet — the first one lands at 20:00.",
+    noWeeklyBriefs: "No weekly briefs yet — the first one lands Sunday at 21:00.",
     footerPrivate:
       "Private link — anyone with this URL can read. Don't share it outside the group.",
     footerNotIndexed: "Not indexed · generated by the digest service, every 3 hours",
@@ -1202,6 +1222,7 @@ const STRINGS = {
     weeklyBrief: "weekly brief",
     viewAll: "All",
     viewDaily: "Daily",
+    viewWeekly: "Weekly",
     latest: "Latest",
     filterPlaceholder: "Filter briefings…",
     emptyFiltered: "Nothing matches.",
@@ -1248,6 +1269,8 @@ const STRINGS = {
     noDigests:
       "Még nincs hírlevél. A következő ablak háromóránként zárul — az első magától megjelenik itt.",
     noDailyBriefs: "Még nincs napi összefoglaló — az első 20:00-kor érkezik.",
+    // Owner: please review — new HU string, mirrors noDailyBriefs's pattern.
+    noWeeklyBriefs: "Még nincs heti összefoglaló — az első vasárnap 21:00-kor érkezik.",
     footerPrivate:
       "Privát link — bárki olvashatja, akinél megvan ez az URL. Ne oszd meg a csoporton kívül.",
     footerNotIndexed: "Nem indexelt · a digest szolgáltatás generálja, 3 óránként",
@@ -1259,6 +1282,8 @@ const STRINGS = {
     weeklyBrief: "heti összefoglaló",
     viewAll: "Minden",
     viewDaily: "Napi",
+    // Owner: please review — new HU string, mirrors viewDaily's pattern.
+    viewWeekly: "Heti",
     latest: "Legfrissebb",
     filterPlaceholder: "Szűrés…",
     emptyFiltered: "Nincs találat.",
@@ -1292,18 +1317,18 @@ const STRINGS = {
 
 // ── language/view-space path helpers (keep every internal link inside the
 // current language×view space: index↔index, digest↔digest, EN pages never
-// link into /hu/ and vice versa, all-view pages never link into daily/ and
-// vice versa, except via the two explicit switchers) ────────────────────
+// link into /hu/ and vice versa, all-view pages never link into daily/ or
+// weekly/ and vice versa, except via the two explicit switchers) ─────────
 
 function indexHref(token, lang, view) {
   const langSeg = lang === "hu" ? "hu/" : "";
-  const viewSeg = view === "daily" ? "daily/" : "";
+  const viewSeg = view === "daily" ? "daily/" : view === "weekly" ? "weekly/" : "";
   return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}`;
 }
 
 function digestHref(token, lang, view, id) {
   const langSeg = lang === "hu" ? "hu/" : "";
-  const viewSeg = view === "daily" ? "daily/" : "";
+  const viewSeg = view === "daily" ? "daily/" : view === "weekly" ? "weekly/" : "";
   return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}d/${esc(id)}`;
 }
 
@@ -1352,24 +1377,25 @@ function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null)
 
 // The view switcher's "other view" link is ALWAYS an index href, on both
 // index and digest pages — see the file-header comment ("Daily-brief view")
-// for why a digest page can't link into the other view's own digest.
+// for why a digest page can't link into another view's own digest.
 // The view selector is the site's PRIMARY navigation (owner decision) —
 // rendered as centered pill tabs on their own row below the masthead, not
 // as a corner micro-link like the language toggle. Active tab = filled
 // accent pill (plain text, not a link); inactive = outlined link. On a
 // digest page the inactive tab targets that view's INDEX (a window digest
-// has no address in the daily view — long-standing design choice).
+// has no address in the daily or weekly view — long-standing design
+// choice).
 // Unlike the language switcher, this deliberately does NOT thread a week
 // through (roadmap 3 step 3): a week page's tabs still target the view's
-// root index with no week segment — a week page has no daily twin to keep
-// the week address for, so there's nothing to preserve here.
+// root index with no week segment — a week page has no daily or weekly
+// twin to keep the week address for, so there's nothing to preserve here.
 function renderViewTabs(token, lang, view) {
   const strings = STRINGS[lang];
   const tab = (v, label) =>
     view === v
       ? `<span class="viewtab active">${esc(label)}</span>`
       : `<a class="viewtab" href="${indexHref(token, lang, v)}">${esc(label)}</a>`;
-  return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}</nav>`;
+  return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}${tab("weekly", strings.viewWeekly)}</nav>`;
 }
 
 // The masthead's right cluster carries the language toggle plus the manual
@@ -2638,22 +2664,24 @@ function renderExcerpt(row, lang) {
 }
 
 // Kind badge for daily/weekly rows — "" for a window row, and "" for a
-// daily row in the daily view (the badge is redundant there: every row is
-// already a daily brief; only the all view needs it to tell the kinds apart
-// at a glance). Weekly is the SAME visual family as daily, not a new kind of
-// thing — it's a synthesis too, just a wider window — so it reuses the
-// identical `flag-daily` class and filled-indigo look, only the label text
-// differs. A weekly row's badge is unconditional (no `view !== "daily"`
-// gate): it would keep the redundancy rule too if it ever showed up in the
-// daily view, but it never does (see the file-header "Daily-brief view"
-// comment) — the daily/ query filters strictly to kind='daily'. Used by
-// renderIndexEntry and renderLeadCard so the two never drift apart building
-// this separately.
+// daily row in the daily view or a weekly row in the weekly view (the badge
+// is redundant there: every row is already that same kind of brief; only
+// the all view needs it to tell the kinds apart at a glance). Weekly is the
+// SAME visual family as daily, not a new kind of thing — it's a synthesis
+// too, just a wider window — so it reuses the identical `flag-daily` class
+// and filled-indigo look, only the label text differs. The redundancy rule
+// is symmetric: a daily row hides its badge in the daily view, a weekly row
+// hides its badge in the weekly view, and each kind always shows its badge
+// elsewhere — daily/ filters strictly to kind='daily' and weekly/ strictly
+// to kind='weekly' (see the file-header "Daily-brief view" comment), so a
+// daily row never actually reaches the weekly view or vice versa; the check
+// below is the simplest faithful form regardless. Used by renderIndexEntry
+// and renderLeadCard so the two never drift apart building this separately.
 function kindBadge(row, view, strings) {
   if (row.kind === "daily" && view !== "daily") {
     return `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>`;
   }
-  if (row.kind === "weekly") {
+  if (row.kind === "weekly" && view !== "weekly") {
     return `<span class="flag flag-daily">${esc(strings.weeklyBrief)}</span>`;
   }
   return "";
@@ -3067,7 +3095,8 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
 
 function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null, heatmapRows = null) {
   const strings = STRINGS[lang];
-  const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
+  const emptyMessage =
+    view === "daily" ? strings.noDailyBriefs : view === "weekly" ? strings.noWeeklyBriefs : strings.noDigests;
 
   // Current-week-only features (roadmap 3 step 3): the lead card, pulse
   // strip, and prefetch hint below all imply "this is what's happening
