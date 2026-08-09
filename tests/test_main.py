@@ -798,6 +798,68 @@ def test_deliver_channels_recovers_urls_for_a_pending_resend_from_a_prior_run(co
     assert captured["allowed_urls"] == {"https://t.me/c/123/1"}
 
 
+def test_deliver_channels_daily_kind_uses_get_daily_allowed_urls(conn, monkeypatch):
+    # Regression test for the daily-brief link-provenance bug (the reason
+    # get_daily_allowed_urls exists at all, see its docstring in
+    # digest/state.py): a "daily" digest stamps NO items of its own, so
+    # get_digest_item_urls(conn, digest_id) against it always returns the
+    # empty set. deliver_channels used to derive its allowlist that way
+    # UNCONDITIONALLY, which silently defanged every citation link on every
+    # channel for a daily brief. For kind="daily" it must instead derive the
+    # allowlist via get_daily_allowed_urls -- the union of item URLs across
+    # in-window WINDOW digests -- which is non-empty here and contains the
+    # source window digest's own stamped item URL.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    window_digest_id = create_digest(conn, "window body", get_unsummarized_items(conn))
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?",
+        (_recent_created_at(hours_ago=1), window_digest_id),
+    )
+    conn.commit()
+    daily_digest_id = create_digest(
+        conn, "**TL;DR:** the day\n\n## An arc\n\nstuff", [], kind="daily"
+    )
+    daily_created_at = _recent_created_at(hours_ago=0.5)
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?", (daily_created_at, daily_digest_id)
+    )
+    conn.commit()
+
+    captured = {}
+
+    def fake_send_digest(
+        host,
+        port,
+        user,
+        password,
+        from_,
+        from_name,
+        to,
+        subject,
+        body_md,
+        allowed_urls,
+        generated_at_label,
+    ):
+        captured["allowed_urls"] = allowed_urls
+
+    monkeypatch.setattr(deliver_mod, "send_digest", fake_send_digest)
+
+    ok = deliver_channels(
+        conn,
+        _cfg(),
+        daily_digest_id,
+        "**TL;DR:** the day\n\n## An arc\n\nstuff",
+        1,
+        daily_created_at,
+        _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
+        kind="daily",
+    )
+
+    assert ok is True
+    assert captured["allowed_urls"] == {"https://t.me/c/123/1"}
+
+
 def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
@@ -2307,6 +2369,74 @@ def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatc
     ).fetchone()
     assert row == ("daily", 8)  # SUM of the two source digests' item_counts (3 + 5)
     verify_conn.close()
+
+
+def test_run_daily_delivery_uses_non_empty_allowed_urls_from_source_window_digest(
+    conn, monkeypatch, tmp_path
+):
+    # Regression test, end to end, for the daily-brief link-provenance bug:
+    # before the fix, deliver_channels derived a daily digest's HTML
+    # link-provenance allowlist via get_digest_item_urls(conn, digest_id),
+    # which is always empty for a "daily" digest (it stamps no items of its
+    # own, see state.py's create_digest kind docstring) -- so publish_to_site
+    # was handed body_html with EVERY citation anchor already stripped. This
+    # drives the real delivery path (run_daily -> deliver_channels ->
+    # _deliver_site -> render_body_html) with a daily body_md that cites the
+    # source window digest's own item URL, and checks that citation survives
+    # into the HTML publish_to_site receives -- which is only possible if
+    # deliver_channels built a non-empty allowlist containing that URL.
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    item_url = "https://t.me/c/123/window-item"
+    item = Item(
+        source="telegram",
+        source_id="window-item",
+        chat_id="123",
+        author="alice",
+        text="hello",
+        url=item_url,
+        fetched_at=_recent_created_at(hours_ago=2),
+    )
+    commit_new_items(real_conn, [item], {})
+    window_digest_id = create_digest(real_conn, "window body", [item])
+    real_conn.execute(
+        "UPDATE digests SET created_at = ?, email_sent = 1, site_published = 1, "
+        "telegram_sent = 1 WHERE id = ?",
+        (_recent_created_at(hours_ago=2), window_digest_id),
+    )
+    real_conn.commit()
+    real_conn.close()
+
+    body_md = f"**TL;DR:** the day\n\n## An arc\n\n[cite]({item_url})"
+    monkeypatch.setattr(main_mod, "summarize_daily", lambda *a, **k: body_md)
+
+    render_calls = []
+    real_render_body_html = deliver_mod.render_body_html
+    monkeypatch.setattr(
+        deliver_mod,
+        "render_body_html",
+        lambda md, allowed_urls: (
+            render_calls.append(set(allowed_urls)) or real_render_body_html(md, allowed_urls)
+        ),
+    )
+    site_calls = []
+    monkeypatch.setattr(
+        deliver_mod, "publish_to_site", lambda *a, **k: site_calls.append((a, k))
+    )
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(render_calls) == 1
+    assert render_calls[0] == {item_url}  # non-empty, contains the source item's URL
+
+    assert len(site_calls) == 1
+    body_html = site_calls[0][0][2]  # publish_to_site's positional body_html arg
+    assert f'href="{item_url}"' in body_html
 
 
 def test_run_daily_translation_enabled_threads_hu_body_to_site(conn, monkeypatch, tmp_path):
