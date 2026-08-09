@@ -2731,11 +2731,16 @@ ${prefetchScriptHtml}
     reflect();
     btn.addEventListener("click", function () {
       var next = document.documentElement.dataset.density === "compact" ? "" : "compact";
-      document.documentElement.dataset.density = next;
-      try {
-        localStorage.setItem("density", next);
-      } catch (e) {}
-      reflect();
+      // Crossfade the ledger reflow — same withPageTransition treatment the
+      // theme and size minisegs get (owner-reported: density was the one
+      // preference left snapping; it predates the helper).
+      withPageTransition(function () {
+        document.documentElement.dataset.density = next;
+        try {
+          localStorage.setItem("density", next);
+        } catch (e) {}
+        reflect();
+      });
     }, { signal: signal });
   })();
 
