@@ -413,7 +413,7 @@ so this pass contains no motion/lang work.
   pre-paint by the same head script pattern as the theme (`data-density`
   on `<html>`); compact tightens `.entry` padding and the excerpt clamp
   for readers who want the wire-ledger look.
-- [ ] **Calendar heatmap** — the archive at a glance: a server-rendered
+- [x] **Calendar heatmap** — the archive at a glance: a server-rendered
   trailing-12-week day-grid (columns = ISO weeks, rows = Mon–Sun) at the
   bottom of the CURRENT-week all-view index, cell intensity stepped by
   that Budapest-local day's summed `item_count`, each cell titled (day +
