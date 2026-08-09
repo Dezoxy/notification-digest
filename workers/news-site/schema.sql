@@ -31,3 +31,33 @@ CREATE TABLE IF NOT EXISTS digests (
   failed_sources TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at DESC);
+
+-- Full-text search (roadmap 4 step 7) — see migrations/0005-fts-search.sql
+-- for the external-content/trigger rationale; identical here, just against
+-- an empty table, so a fresh install needs no 'rebuild' backfill.
+CREATE VIRTUAL TABLE digests_fts USING fts5(
+  tldr,
+  body_md,
+  tldr_hu,
+  body_md_hu,
+  content='digests',
+  content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER digests_fts_ai AFTER INSERT ON digests BEGIN
+  INSERT INTO digests_fts(rowid, tldr, body_md, tldr_hu, body_md_hu)
+  VALUES (new.id, new.tldr, new.body_md, new.tldr_hu, new.body_md_hu);
+END;
+
+CREATE TRIGGER digests_fts_ad AFTER DELETE ON digests BEGIN
+  INSERT INTO digests_fts(digests_fts, rowid, tldr, body_md, tldr_hu, body_md_hu)
+  VALUES ('delete', old.id, old.tldr, old.body_md, old.tldr_hu, old.body_md_hu);
+END;
+
+CREATE TRIGGER digests_fts_au AFTER UPDATE ON digests BEGIN
+  INSERT INTO digests_fts(digests_fts, rowid, tldr, body_md, tldr_hu, body_md_hu)
+  VALUES ('delete', old.id, old.tldr, old.body_md, old.tldr_hu, old.body_md_hu);
+  INSERT INTO digests_fts(rowid, tldr, body_md, tldr_hu, body_md_hu)
+  VALUES (new.id, new.tldr, new.body_md, new.tldr_hu, new.body_md_hu);
+END;

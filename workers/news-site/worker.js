@@ -20,9 +20,12 @@
  *   Worker. Neither secret lives in source or wrangler.jsonc; both are set
  *   with `wrangler secret put`.
  *
- * Routes: URL grammar is /t/:token/(hu/)?(daily/)?( | d/:id) — the language
- * segment always comes first, then an optional literal "daily/" view
- * segment. No "daily/" segment is the ALL view (every digest, mixed).
+ * Routes: URL grammar is /t/:token/(hu/)?(daily/)?( | d/:id) plus the
+ * standalone /t/:token/(hu/)?search endpoint — the language segment always
+ * comes first, then either an optional literal "daily/" view segment or the
+ * literal "search" endpoint (search has no daily/week variant of its own —
+ * it spans the whole archive, not one view). No "daily/" segment is the ALL
+ * view (every digest, mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
  *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
  *   GET  /t/:token/               -> index (EN, all view), newest-first, grouped by day
@@ -33,6 +36,8 @@
  *   GET  /t/:token/hu/d/:id       -> same digest page, Hungarian chrome + translations, all view
  *   GET  /t/:token/hu/daily/      -> same index, Hungarian chrome, daily view
  *   GET  /t/:token/hu/daily/d/:id -> same digest page, Hungarian chrome, daily view
+ *   GET  /t/:token/search         -> full-text search (EN), query text in ?q=, whole archive
+ *   GET  /t/:token/hu/search      -> same search, Hungarian chrome
  *   anything else                 -> plain 404, wrong token included
  *
  * Hungarian support (EN | HU switcher in the masthead): this Worker only
@@ -135,6 +140,16 @@ export default {
       const lang = digestMatch[2] ? "hu" : "en";
       const view = digestMatch[3] ? "daily" : "all";
       return handleDigestPage(env, digestMatch[1], digestMatch[4], url, lang, view);
+    }
+
+    // Search (roadmap 4 step 7): a standalone endpoint, not part of the
+    // index/digest grammar below — no "daily/" or "w/" variant (search
+    // spans the whole archive, see the file-header comment). Query text
+    // comes from url.searchParams, never the path.
+    const searchMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?search$/);
+    if (searchMatch && request.method === "GET") {
+      const lang = searchMatch[2] ? "hu" : "en";
+      return handleSearchPage(env, searchMatch[1], url, lang);
     }
 
     // Roadmap 3 (weekly pagination): one optional, always-LAST segment,
@@ -439,6 +454,76 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   return htmlResponse(
     renderDigestPage(digest, older, newer, token, url.hostname, lang, view),
   );
+}
+
+async function handleSearchPage(env, token, url, lang) {
+  if (!(await tokenMatches(env, token))) return notFound();
+
+  // Query text lives in ?q=, not the path — see the URL-grammar header
+  // comment. Truncated to 200 chars: nothing legitimate needs more, and it
+  // bounds how much work buildFtsMatch and the D1 query below ever do for
+  // one request.
+  const q = (url.searchParams.get("q") ?? "").trim().slice(0, 200);
+
+  // Empty query: render just the form, no search attempted. `results`
+  // staying null (vs. an empty array) is what tells renderSearchPage "no
+  // count line, no no-results message either" — see there.
+  if (q === "") {
+    return htmlResponse(renderSearchPage(null, q, token, url.hostname, lang));
+  }
+
+  const matchQuery = buildFtsMatch(q);
+
+  let results;
+  try {
+    // tldr/tldr_hu (snippet column indexes 0/2) weighted 10x over
+    // body_md/body_md_hu (1/3) in the bm25 ranking — a title-word match
+    // should outrank one buried in the body. snippet() wraps each matched
+    // fragment in CHAR(1)/CHAR(2) sentinel bytes rather than real HTML tags
+    // — body_md/body_md_hu are untrusted markdown, never HTML (see the
+    // file-header comment), so the actual <mark> tags get added later, in
+    // renderSearchPage/markSnippet, AFTER escaping the snippet text.
+    const { results: rows } = await env.DB.prepare(
+      `SELECT d.id, d.created_at, d.kind,
+              snippet(digests_fts, 1, CHAR(1), CHAR(2), '…', 12) AS snip,
+              snippet(digests_fts, 3, CHAR(1), CHAR(2), '…', 12) AS snip_hu
+         FROM digests_fts
+         JOIN digests d ON d.id = digests_fts.rowid
+        WHERE digests_fts MATCH ?
+        ORDER BY bm25(digests_fts, 10.0, 1.0, 10.0, 1.0)
+        LIMIT 50`,
+    )
+      // Bound as a parameter even though buildFtsMatch already neutralizes
+      // FTS5 syntax below — never string-interpolate user input into SQL,
+      // belt and suspenders.
+      .bind(matchQuery)
+      .all();
+    results = rows;
+  } catch {
+    // A MATCH string we built ourselves (see buildFtsMatch) should never
+    // error, but a 500 on a search box is a worse failure mode than an
+    // empty result — degrade to the no-results state instead of surfacing
+    // whatever went wrong.
+    results = [];
+  }
+
+  return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang));
+}
+
+// Turns free-text user input into a SAFE fts5 MATCH string. Raw user input
+// must never reach FTS5 query syntax directly: FTS5 has its own operators
+// (OR, NEAR, *, parentheses, "quoted phrases"), so an unquoted term like
+// `NEAR(` or `tldr:*` is either a syntax error (crashes the query) or a
+// query hijack (turns a reader's plain search into someone else's boolean
+// expression). Phrase-quoting every term neutralizes all of it — each term
+// becomes a literal string match, joined with implicit AND — and doubling
+// any internal double quote (fts5's own escape convention) keeps a quote
+// inside a term from closing the phrase early rather than being treated as
+// a special character. At most 8 terms: plenty for a briefing search, and a
+// hard cap on how many implicit-AND clauses one query can generate.
+function buildFtsMatch(q) {
+  const terms = q.split(/\s+/).filter(Boolean).slice(0, 8);
+  return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" ");
 }
 
 async function tokenMatches(env, token) {
@@ -995,6 +1080,14 @@ const STRINGS = {
     sourcesLabel: "Sources",
     // Calendar heatmap eyebrow label (roadmap 4 step 5, renderHeatmap).
     heatmapLabel: "Archive · last 12 weeks",
+    // Search (roadmap 4 step 7). searchResults is a placeholder template
+    // ({n} = result count), same convention as weekLabel above.
+    searchLabel: "Search the archive",
+    searchPlaceholder: "Search all briefings…",
+    searchButton: "Search",
+    searchLink: "Search ↗",
+    searchResults: "{n} results",
+    searchNone: "Nothing found.",
   },
   hu: {
     locale: "hu-HU",
@@ -1029,6 +1122,14 @@ const STRINGS = {
     weekLabel: "{w}. hét · {range}",
     sourcesLabel: "Források",
     heatmapLabel: "Archívum · elmúlt 12 hét",
+    // Search (roadmap 4 step 7) — owner: please review these, flagged HU
+    // strings same as everywhere else in this file.
+    searchLabel: "Keresés az archívumban",
+    searchPlaceholder: "Keresés az összes hírlevélben…",
+    searchButton: "Keresés",
+    searchLink: "Keresés ↗",
+    searchResults: "{n} találat",
+    searchNone: "Nincs találat a keresésre.",
   },
 };
 
@@ -1057,6 +1158,14 @@ function digestHref(token, lang, view, id) {
 function weekHref(token, lang, view, year, week) {
   const weekSeg = String(week).padStart(2, "0");
   return `${indexHref(token, lang, view)}w/${esc(year)}-W${esc(weekSeg)}/`;
+}
+
+// Like indexHref, but to the standalone search route (roadmap 4 step 7) —
+// no `view` parameter: search has no daily/week variant (it spans the whole
+// archive, see the file-header comment), so there's no view to select.
+function searchHref(token, lang) {
+  const langSeg = lang === "hu" ? "hu/" : "";
+  return `/t/${encodeURIComponent(token)}/${langSeg}search`;
 }
 
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
@@ -1545,6 +1654,11 @@ const CSS = `
     padding: 0 0.4em; border-radius: 99px; font-weight: 700; margin-left: 1px;
     font-family: var(--font-data);
   }
+  /* Search hit highlighting (roadmap 4 step 7, markSnippet): reuses the
+     citation chip's own chip-bg/chip-text tokens rather than a new color —
+     it's the same "this is metadata the site added, not article content"
+     visual family as .cite. */
+  mark { background: var(--chip-bg); color: var(--chip-text); border-radius: 3px; padding: 0 0.15em; }
   /* Touch provenance (roadmap 4 step 2): on the phone — where this site is
      mostly read — there's no hover, so the title attribute's domain never
      surfaces; put it on the pill itself instead. Reuses the exact title
@@ -1675,6 +1789,31 @@ const CSS = `
   .filterrow .filter::placeholder { color: var(--muted); }
   /* Plain border otherwise; only :focus-visible gets a visible outline. */
   .filterrow .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Entry point into search (roadmap 4 step 7, renderIndexPage's
+     filterRowHtml): a small uppercase mono link, NOT styled like the
+     filter input beside it — it's chrome/navigation, not a data field, so
+     it takes the mono chrome voice already used for eyebrows/dateline
+     labels elsewhere on this site. */
+  .searchlink {
+    font-family: var(--font-data); font-size: 0.78em; align-self: center;
+    text-decoration: none; letter-spacing: 0.06em; text-transform: uppercase;
+  }
+
+  /* Search page (roadmap 4 step 7): the form itself reuses .filter's input
+     styling (see above) — it's the SAME kind of control, just server-
+     functional here instead of a client-side enhancement (see
+     renderSearchPage). */
+  .searchform { display: flex; gap: 0.5em; margin: 0 0 1.6em; }
+  .searchform .filter { flex: 1; }
+  /* Styled like .viewtab's outlined pill (own rule above), not a filled
+     button — a search submit is a secondary action next to the input, not
+     the page's primary call to action. */
+  .searchbtn {
+    border: 1px solid var(--hairline); border-radius: 999px; color: var(--accent);
+    padding: 0.42em 1.2em; background: none; cursor: pointer; font: inherit; font-size: 0.9em;
+  }
+  .searchbtn:hover { border-color: var(--accent); }
+  .searchbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   /* Day-pulse strip (roadmap 2 step 3, renderPulseStrip): ambient chrome, not
      a chart with axes — no numbers, no gridlines, no day-boundary markers on
@@ -2145,6 +2284,12 @@ ${prefetchScriptHtml}
   (function () {
     var input = document.querySelector(".filter");
     if (!input) return;
+    // The SEARCH page's form input reuses the .filter class for its look
+    // (roadmap 4 step 7) but is a server-functional control, not this
+    // client-side filter — without this bail, typing a new query there
+    // would live-hide the previous results before the form ever submits.
+    // The index page's own filter input is the only .filter with no form.
+    if (input.form) return;
     input.hidden = false;
     var entries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
     var dayheads = Array.prototype.slice.call(document.querySelectorAll(".dayhead"));
@@ -2772,7 +2917,14 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // view tabs (rendered by pageChrome, just above this) and the lead card
   // (the first thing inside <section> below). `hidden` by default — no JS,
   // no filter UI — un-hidden by the bottom script in pageChrome.
-  const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div>`;
+  //
+  // Search link (roadmap 4 step 7): rides in the same row, right after the
+  // filter input, but is NOT hidden — it's a server-rendered affordance to
+  // the full-archive search page, not a client-side enhancement. With JS
+  // off the filter input stays hidden and this link is the row's only
+  // visible content, which is what finally gives a no-JS reader a working
+  // way to search at all.
+  const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div>`;
 
   // Week rail (roadmap 3 step 2): between the view tabs (rendered by
   // pageChrome, just above this) and the filter row — ALL-view index pages
@@ -3034,5 +3186,113 @@ ${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</n
     renderSwitchers(token, lang, view, "digest", digest.id),
     body,
     pageTitle,
+  );
+}
+
+// Search (roadmap 4 step 7): snip/snip_hu are excerpts of body_md/body_md_hu
+// — untrusted markdown, never HTML (see the file-header comment: only
+// body_html/body_html_hu are pre-sanitized and skip esc()). The SQL query in
+// handleSearchPage wraps each matched fragment in CHAR(1)/CHAR(2) sentinel
+// bytes rather than real <mark> tags SPECIFICALLY so this function can
+// escape the whole snippet FIRST — turning any HTML-like text that happens
+// to appear in the matched markdown into inert entities — and only THEN
+// replace the (esc()-untouched, since esc() doesn't rewrite control bytes)
+// sentinels with the real <mark>/</mark> tags. Escape-then-mark, never
+// mark-then-escape: doing it the other way round would esc() the <mark>
+// tags themselves right back into visible text.
+function markSnippet(rawSnippet) {
+  return esc(rawSnippet).replaceAll("\x01", "<mark>").replaceAll("\x02", "</mark>");
+}
+
+// HU page: prefer the translated snippet; if it's empty (untranslated
+// digest, so body_md_hu was NULL and snippet() returned an empty string) or
+// simply absent, fall back to the English snippet and flag it — same
+// fallback contract as renderExcerpt's index-ledger "EN" chip, just for
+// search results instead of TL;DR excerpts.
+function renderSnippet(row, lang) {
+  if (lang === "hu" && row.snip_hu) {
+    return { html: markSnippet(row.snip_hu), usedHu: true };
+  }
+  return { html: markSnippet(row.snip ?? ""), usedHu: false };
+}
+
+// One search result: reuses the index ledger's `.entry`/`.meta`/`.excerpt`
+// vocabulary (renderIndexEntry) rather than inventing a parallel result
+// style — a search hit and a ledger row are the same kind of thing, a link
+// to one digest. Always the all-view digest href (digestHref(..., "all",
+// ...)): search spans every kind, so a result has no "daily view" address
+// of its own to link into, same reasoning as the searchHref/view split
+// throughout this feature.
+function renderSearchResult(row, token, lang) {
+  const strings = STRINGS[lang];
+  const date = new Date(row.created_at);
+  const dateLabel = `${formatShortDate(date, strings.locale)} ${formatTime(date, strings.locale)}`;
+  const dailyFlag =
+    row.kind === "daily" ? `<span class="flag flag-daily">${esc(strings.dailyBrief)}</span>` : "";
+
+  const { html: snippetHtml, usedHu } = renderSnippet(row, lang);
+  const langChip = lang === "hu" && !usedHu ? '<span class="flag flag-muted">EN</span>' : "";
+
+  return `<a class="entry" href="${digestHref(token, lang, "all", row.id)}">
+    <span class="meta"><span class="time">${esc(dateLabel)}</span>${dailyFlag}${langChip}</span>
+    <p class="excerpt">${snippetHtml}</p>
+  </a>`;
+}
+
+// `results` is null when no search was attempted yet (empty ?q=, see
+// handleSearchPage) — renders just the form, no count line, no no-results
+// message. Non-null (possibly empty, including the try/catch error-fallback
+// case in handleSearchPage) means a search WAS attempted, so the count/
+// no-results line always renders.
+function renderSearchPage(results, q, token, host, lang) {
+  const strings = STRINGS[lang];
+
+  // No-JS baseline: a plain GET form, submitting back to this exact route
+  // with ?q= as the query string — works with JS entirely off. Reuses the
+  // `.filter` input's look (see the CSS) but, unlike the index page's own
+  // `.filter` input, is NOT hidden: that one is a client-side-only
+  // enhancement with "show everything" as its server fallback, while this
+  // input IS the server-functional control itself — hiding it would leave
+  // no-JS readers with no way to search at all.
+  const formHtml = `<form class="searchform" method="get" action="${searchHref(token, lang)}">
+    <input class="filter" type="search" name="q" value="${esc(q)}" placeholder="${esc(strings.searchPlaceholder)}" aria-label="${esc(strings.searchPlaceholder)}">
+    <button class="searchbtn" type="submit">${esc(strings.searchButton)}</button>
+  </form>`;
+
+  let resultsHtml = "";
+  if (results !== null) {
+    if (results.length === 0) {
+      resultsHtml = `<p class="empty">${esc(strings.searchNone)}</p>`;
+    } else {
+      // Count line reuses the existing `.empty` muted-metadata style — same
+      // "borrow the closest existing thing" approach as the rest of this
+      // feature, rather than adding a new CSS class for one line of text.
+      const countLabel = strings.searchResults.replace("{n}", String(results.length));
+      const items = results.map((row) => renderSearchResult(row, token, lang)).join("\n");
+      resultsHtml = `<p class="empty">${esc(countLabel)}</p>\n${items}`;
+    }
+  }
+
+  // Switchers: pageKind "index" (not a dedicated "search" kind) — the
+  // language switch on this page goes to the OTHER language's root index,
+  // not to that language's own search results for the same query. Losing
+  // the query string on a language hop is an accepted, deliberate
+  // simplification (threading `q` through renderLangSwitcher's index-href
+  // helpers isn't worth it for a corner every other switcher on this site
+  // already treats as "go to that language's home").
+  //
+  // `view` "all": search has no daily/week variant of its own (see the
+  // file-header comment and searchHref), so the view tabs/brand link just
+  // need SOME valid view to render against, and "all" is the closest
+  // meaning — clicking "Daily" from here goes to the daily index, not to a
+  // (nonexistent) daily-scoped search.
+  return pageChrome(
+    host,
+    token,
+    lang,
+    "all",
+    renderSwitchers(token, lang, "all", "index"),
+    `${formHtml}${resultsHtml}`,
+    strings.searchLabel,
   );
 }

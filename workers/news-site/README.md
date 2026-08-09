@@ -136,6 +136,7 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | `0002-hu-columns.sql` | `tldr_hu`, `body_html_hu`, `body_md_hu` (nullable) on `digests`, for the Hungarian-translation feature. |
 | `0003-kind-column.sql` | `kind` (`NOT NULL DEFAULT 'window'`) on `digests`, distinguishing the once-daily 20:00 synthesis (`daily`) from the regular 3-hourly window digest (`window`). |
 | `0004-source-counts.sql` | `source_counts`, `failed_sources` (nullable) on `digests`, for the ingest v2 source-spectrum micro-bar and degraded-run badge. |
+| `0005-fts-search.sql` | `digests_fts`, an external-content FTS5 virtual table over `tldr`/`body_md`/`tldr_hu`/`body_md_hu` plus its sync triggers and a one-time `rebuild` backfill, for the archive search route. |
 
 ## Key rotation
 
@@ -427,7 +428,7 @@ so this pass contains no motion/lang work.
   center gains seven per-day micro-bars for the rendered week, from rows
   the week query already returns — the pulse visual language, sized for
   the rail.
-- [ ] **D1 FTS5 search** — the deferral finally comes due: the client-side
+- [x] **D1 FTS5 search** — the deferral finally comes due: the client-side
   filter only sees the rendered week since roadmap 3. A numbered migration
   adds an FTS5 table over `tldr`/`body_md` (+ their `_hu` twins) with sync
   triggers and a one-time rebuild backfill; a `search` route (EN/HU twins,
