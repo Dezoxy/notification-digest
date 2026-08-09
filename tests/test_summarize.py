@@ -17,8 +17,10 @@ from digest.summarize import (
     build_prompt,
     enforce_link_allowlist,
     format_recent_coverage,
+    renumber_citations,
     run_claude,
     select_items_for_prompt,
+    strip_tldr_citations,
     summarize,
     validate_output,
 )
@@ -1821,3 +1823,165 @@ def test_summarize_threads_recent_coverage_through_to_build_prompt(monkeypatch):
     summarize([_item()], [], "- 3h ago: Some story", "claude-opus-5", 300, "high")
 
     assert calls["recent_coverage"] == "- 3h ago: Some story"
+
+
+# --- strip_tldr_citations ---
+
+
+def test_strip_tldr_citations_removes_all_citations_from_tldr_leaves_body_intact():
+    markdown = (
+        "**TL;DR:** Yields rose[¹](https://a.example) and traders "
+        "reacted[²](https://b.example) quickly[³](https://c.example).\n\n"
+        "## Section\n\nDetails here[⁴](https://d.example).\n"
+    )
+
+    result = strip_tldr_citations(markdown)
+
+    tldr_paragraph = result.split("\n\n", 1)[0]
+    assert "[¹]" not in tldr_paragraph
+    assert "[²]" not in tldr_paragraph
+    assert "[³]" not in tldr_paragraph
+    assert "https://a.example" not in tldr_paragraph
+    assert tldr_paragraph == "**TL;DR:** Yields rose and traders reacted quickly."
+    # The body section's own citation is untouched.
+    assert "Details here[⁴](https://d.example)." in result
+
+
+def test_strip_tldr_citations_cleans_up_attached_and_space_separated_forms():
+    markdown = (
+        "**TL;DR:** The 30-year yield hit 5.21%[¹](https://a.example). It later "
+        "moved to 5.30% [²](https://b.example).\n\n"
+        "## Body\n\nMore detail[³](https://c.example).\n"
+    )
+
+    result = strip_tldr_citations(markdown)
+
+    tldr_paragraph = result.split("\n\n", 1)[0]
+    assert tldr_paragraph == (
+        "**TL;DR:** The 30-year yield hit 5.21%. It later moved to 5.30%."
+    )
+    # No " ." artifact and no doubled space left behind by either form.
+    assert " ." not in tldr_paragraph
+    assert "  " not in tldr_paragraph
+
+
+def test_strip_tldr_citations_leaves_prose_text_link_in_tldr_untouched():
+    markdown = (
+        "**TL;DR:** Check [this report](https://a.example) for details.\n\n## Body\n"
+    )
+
+    result = strip_tldr_citations(markdown)
+
+    assert result == markdown
+    assert "[this report](https://a.example)" in result
+
+
+def test_strip_tldr_citations_leaves_bare_superscript_in_tldr_prose_untouched():
+    markdown = "**TL;DR:** Training used about 10²⁵ FLOPs this window.\n\n## Body\n"
+
+    result = strip_tldr_citations(markdown)
+
+    assert result == markdown
+    assert "10²⁵ FLOPs" in result
+
+
+def test_strip_tldr_citations_no_tldr_paragraph_returns_unchanged():
+    markdown = "## Body\n\nSomething happened[¹](https://a.example).\n"
+
+    assert strip_tldr_citations(markdown) == markdown
+
+
+def test_strip_tldr_citations_tldr_with_no_citations_returns_unchanged():
+    markdown = (
+        "**TL;DR:** Nothing much happened today.\n\n"
+        "## Body\n\nDetail[¹](https://a.example).\n"
+    )
+
+    assert strip_tldr_citations(markdown) == markdown
+
+
+# --- renumber_citations ---
+
+
+def test_renumber_citations_renumbers_sequentially_in_order_of_appearance():
+    markdown = (
+        "**TL;DR:** Quiet window.\n\n"
+        "## A\n\nFirst[⁵](https://a.example).\n\n"
+        "## B\n\nSecond[⁶](https://b.example) and third[⁷](https://c.example).\n"
+    )
+
+    result = renumber_citations(markdown)
+
+    assert "First[¹](https://a.example)" in result
+    assert "Second[²](https://b.example)" in result
+    assert "third[³](https://c.example)" in result
+    assert "⁵" not in result
+    assert "⁶" not in result
+    assert "⁷" not in result
+
+
+def test_renumber_citations_handles_multi_digit_numbering_past_nine():
+    parts = " ".join(f"[¹](https://x.example/{i})" for i in range(1, 12))
+    markdown = f"## Body\n\n{parts}\n"
+
+    result = renumber_citations(markdown)
+
+    assert "[¹](https://x.example/1)" in result
+    assert "[⁹](https://x.example/9)" in result
+    assert "[¹⁰](https://x.example/10)" in result
+    assert "[¹¹](https://x.example/11)" in result
+
+
+def test_renumber_citations_never_touches_urls():
+    markdown = "## Body\n\nA[⁹](https://a.example/x?y=1) and B[⁵](https://b.example/z).\n"
+
+    result = renumber_citations(markdown)
+
+    assert "https://a.example/x?y=1" in result
+    assert "https://b.example/z" in result
+    assert "[¹](https://a.example/x?y=1)" in result
+    assert "[²](https://b.example/z)" in result
+
+
+def test_renumber_citations_leaves_bare_superscripts_in_prose_untouched():
+    markdown = "## Body\n\nSome measure was 10²⁵ FLOPs and cite this[¹](https://a.example).\n"
+
+    result = renumber_citations(markdown)
+
+    assert "10²⁵ FLOPs" in result
+    assert "[¹](https://a.example)" in result
+
+
+# --- summarize(): end-to-end TL;DR citation cleanup ---
+
+
+def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(monkeypatch):
+    model_output = (
+        "**TL;DR:** Yields rose sharply[¹](https://known.example/a) and traders "
+        "reacted[²](https://known.example/b).\n\n"
+        "## Section\n\nMore detail[³](https://known.example/a) and further "
+        "detail[⁴](https://known.example/b).\n"
+    )
+    monkeypatch.setattr(
+        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+    )
+    monkeypatch.setattr(
+        summarize_mod,
+        "run_claude",
+        lambda prompt, model, timeout_seconds, effort: model_output,
+    )
+
+    items = [
+        dataclasses.replace(_item("a"), url="https://known.example/a"),
+        dataclasses.replace(_item("b"), url="https://known.example/b"),
+    ]
+    result = summarize(items, [], "", "claude-opus-5", 300, "high")
+
+    tldr_paragraph = result.split("\n\n", 1)[0]
+    assert "[¹]" not in tldr_paragraph
+    assert "[²]" not in tldr_paragraph
+    assert "https://known.example" not in tldr_paragraph
+    # The body's surviving citations are renumbered to close the gap left by
+    # the two citations stripped out of the TL;DR.
+    assert "[¹](https://known.example/a)" in result
+    assert "[²](https://known.example/b)" in result

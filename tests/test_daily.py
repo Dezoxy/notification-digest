@@ -230,3 +230,32 @@ def test_summarize_daily_passes_allowed_urls_through_unmodified(monkeypatch):
     )
 
     assert captured["allowed_urls"] == urls
+
+
+def test_summarize_daily_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
+    monkeypatch,
+):
+    model_output = (
+        "**TL;DR:** Yields rose sharply[¹](https://known.example/a) and traders "
+        "reacted[²](https://known.example/b).\n\n"
+        "## Arc\n\nMore detail[³](https://known.example/a) and further "
+        "detail[⁴](https://known.example/b).\n"
+    )
+    monkeypatch.setattr(daily_mod, "run_claude", lambda *a, **k: model_output)
+
+    result = summarize_daily(
+        [_row()],
+        allowed_urls={"https://known.example/a", "https://known.example/b"},
+        model="m",
+        timeout_seconds=60,
+        effort="high",
+    )
+
+    tldr_paragraph = result.split("\n\n", 1)[0]
+    assert "[¹]" not in tldr_paragraph
+    assert "[²]" not in tldr_paragraph
+    assert "https://known.example" not in tldr_paragraph
+    # The body's surviving citations are renumbered to close the gap left by
+    # the two citations stripped out of the TL;DR.
+    assert "[¹](https://known.example/a)" in result
+    assert "[²](https://known.example/b)" in result
