@@ -379,7 +379,7 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   if (!Number.isInteger(id) || id <= 0) return notFound();
 
   const digest = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind FROM digests WHERE id = ?",
+    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources FROM digests WHERE id = ?",
   )
     .bind(id)
     .first();
@@ -965,6 +965,8 @@ const STRINGS = {
     // natural side of the range.
     weekRailLabel: "Week navigation",
     weekLabel: "Week {w} · {range}",
+    // Digest-page source key label (rendered uppercase via .sklabel's CSS).
+    sourcesLabel: "Sources",
   },
   hu: {
     locale: "hu-HU",
@@ -998,6 +1000,7 @@ const STRINGS = {
     degraded: "hiányos",
     weekRailLabel: "Heti navigáció",
     weekLabel: "{w}. hét · {range}",
+    sourcesLabel: "Források",
   },
 };
 
@@ -1454,6 +1457,25 @@ const CSS = `
     padding-top: 1em; margin-top: 2.2em; font-size: 0.92em;
   }
 
+  /* Source key (roadmap 2 step 8 follow-up): the digest page's colophon —
+     the same source_counts/failed_sources data the index's .spectrum bar
+     summarizes, spelled out as concrete per-source numbers with color
+     swatches, sitting right after the article (renderSourceKey renders
+     nothing when both fields are absent — see the function for the
+     fail-safe JSON.parse contract shared with renderSpectrum/
+     renderDegradedBadge). */
+  .sourcekey {
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; align-items: center;
+    margin: 1.6em 0 0;
+  }
+  .sklabel { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+  .sk { display: inline-flex; align-items: center; }
+  .sk i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.45em; }
+  /* .sk-failed gets no color override — muted stays muted, the ⚠ prefix
+     baked into the string (not CSS) is what marks it, same "color is not
+     the warning signal" decision as .flag-degraded on the index. */
+
   /* Floating back-to-index button (digest pages only): fixed bottom-right
      in one-thumb reach, clear of the iPhone home bar via safe-area insets.
      Hidden until the reader scrolls past the top nav (the inline script in
@@ -1636,6 +1658,10 @@ const CSS = `
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
       color: #000;
     }
+    /* Numbers are provenance and stay visible in print; the swatches print
+       gray (acceptable) but the text itself forces to ink like every other
+       digest-page text block above. */
+    .sourcekey { color: #000; }
     /* TL;DR/attention stay boxes, but thin bordered outlines instead of
        tinted fills — a colored background wastes ink and won't reproduce
        reliably across printers anyway. */
@@ -2161,6 +2187,59 @@ function renderDegradedBadge(failedSourcesJson, strings) {
   return `<span class="flag flag-degraded" title="${esc(title)}">⚠ ${esc(strings.degraded)}</span>`;
 }
 
+// Source key (digest-page colophon, roadmap 2 step 8 follow-up): the digest
+// page's spelled-out counterpart to the index's .spectrum micro-bar —
+// concrete per-source numbers with the same color swatches, plus any failed
+// sources from a partial run. Same fail-safe JSON.parse contract as
+// renderSpectrum/renderDegradedBadge above (unparseable or wrong-shaped ->
+// treated as absent, never thrown); renders nothing at all when both fields
+// are absent/empty, so an old digest predating this data shows no key.
+function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
+  let counts = null;
+  if (sourceCountsJson) {
+    try {
+      const parsed = JSON.parse(sourceCountsJson);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        counts = parsed;
+      }
+    } catch {
+      // unparseable -> treat as absent
+    }
+  }
+  let failed = null;
+  if (failedSourcesJson) {
+    try {
+      const parsed = JSON.parse(failedSourcesJson);
+      if (Array.isArray(parsed) && parsed.length > 0) failed = parsed;
+    } catch {
+      // unparseable -> treat as absent
+    }
+  }
+
+  // Descending by count, same ordering as renderSpectrum's bar/title.
+  const countEntries = counts
+    ? Object.entries(counts)
+        .filter(([, n]) => typeof n === "number" && n > 0)
+        .sort((a, b) => b[1] - a[1])
+    : [];
+
+  if (countEntries.length === 0 && !failed) return "";
+
+  const countSpans = countEntries
+    .map(
+      ([name, n]) =>
+        `<span class="sk"><i style="background:${SOURCE_COLORS[name] ?? SOURCE_COLOR_FALLBACK}"></i>${esc(name)} ${esc(n)}</span>`,
+    )
+    .join("");
+  // No count next to a failed source — it failed, nothing to count; the ⚠
+  // is the marker, same "no new color" decision as renderDegradedBadge.
+  const failedSpans = failed
+    ? failed.map((name) => `<span class="sk sk-failed">⚠ ${esc(name)}</span>`).join("")
+    : "";
+
+  return `<div class="sourcekey"><span class="sklabel">${esc(strings.sourcesLabel)}</span>${countSpans}${failedSpans}</div>`;
+}
+
 function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
   const time = formatTime(new Date(row.created_at), strings.locale);
@@ -2567,6 +2646,11 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
   // .closing, since it follows the article's closing line).
   const digestNavLinksHtml = navLinks.join("\n");
 
+  // Source key (roadmap 2 step 8 follow-up): the article's colophon, same
+  // fail-safe absent-data contract as renderSpectrum/renderDegradedBadge —
+  // renders "" on an older digest with no source_counts/failed_sources.
+  const sourceKeyHtml = renderSourceKey(digest.source_counts, digest.failed_sources, strings);
+
   // Order: stamp -> en-only note -> TOC -> article. The TOC can't sit inside
   // the TL;DR-bearing article start as first imagined — the TL;DR callout is
   // itself inside body_html — so it renders above <article> instead.
@@ -2575,7 +2659,7 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
 ${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
-<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
+${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
 <a class="backfab" href="${indexHref(token, lang, view)}" aria-label="${esc(strings.backFabLabel)}">←</a>`;
 
   return pageChrome(
