@@ -137,6 +137,7 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | `0003-kind-column.sql` | `kind` (`NOT NULL DEFAULT 'window'`) on `digests`, distinguishing the once-daily 20:00 synthesis (`daily`) from the regular 3-hourly window digest (`window`). |
 | `0004-source-counts.sql` | `source_counts`, `failed_sources` (nullable) on `digests`, for the ingest v2 source-spectrum micro-bar and degraded-run badge. |
 | `0005-fts-search.sql` | `digests_fts`, an external-content FTS5 virtual table over `tldr`/`body_md`/`tldr_hu`/`body_md_hu` plus its sync triggers and a one-time `rebuild` backfill, for the archive search route. |
+| `0006-topics.sql` | `topics` (nullable) on `digests`, for the ingest v3 story-arc line. |
 
 ## Key rotation
 
@@ -437,7 +438,7 @@ so this pass contains no motion/lang work.
   excerpts, deep links). Query strings never contain the token beyond the
   path it already lives in; results pages carry the same
   no-store/no-referrer headers as every HTML response.
-- [ ] **Ingest v3: story arcs (site side)** — a numbered migration adds a
+- [x] **Ingest v3: story arcs (site side)** — a numbered migration adds a
   nullable `topics` column; `PUT /ingest/:id` accepts an OPTIONAL
   validated `topics` array (slug + label, same shape discipline as
   `source_counts`; absent = old payloads byte-identical). Digest pages

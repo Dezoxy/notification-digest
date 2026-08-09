@@ -95,6 +95,16 @@ const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const SOURCE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const MAX_SOURCE_ENTRIES = 16;
 
+// Ingest v3 (roadmap 4 step 8): topics is an OPTIONAL, backward-compatible
+// field on PUT /ingest/:id (see validateDigestPayload/validateTopics), same
+// shape-discipline pattern as source_counts/failed_sources above. Slugs are
+// caller-chosen (the digest app derives them, the site doesn't own the
+// vocabulary), lowercase-and-dash only so they're safe to use as-is if a
+// future step ever needs them in a URL; 12 is a sane ceiling on how many
+// distinct threads one briefing legitimately touches.
+const TOPIC_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const MAX_TOPICS = 12;
+
 // ── entry point ─────────────────────────────────────────────────────────
 
 export default {
@@ -230,8 +240,8 @@ async function handleIngest(request, env, idParam) {
   try {
     await env.DB.prepare(
       `INSERT INTO digests
-         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          created_at     = excluded.created_at,
          tldr           = excluded.tldr,
@@ -245,7 +255,8 @@ async function handleIngest(request, env, idParam) {
          body_md_hu     = excluded.body_md_hu,
          kind           = excluded.kind,
          source_counts  = excluded.source_counts,
-         failed_sources = excluded.failed_sources`,
+         failed_sources = excluded.failed_sources,
+         topics         = excluded.topics`,
     )
       .bind(
         id,
@@ -269,6 +280,10 @@ async function handleIngest(request, env, idParam) {
         // null) by validateDigestPayload.
         d.source_counts,
         d.failed_sources,
+        // Same NULL-on-absence, NULL-back-out-on-re-ingest contract (ingest
+        // v3, roadmap 4 step 8) — already JSON-stringified (or null) by
+        // validateDigestPayload.
+        d.topics,
       )
       .run();
   } catch {
@@ -421,11 +436,76 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   if (!Number.isInteger(id) || id <= 0) return notFound();
 
   const digest = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources FROM digests WHERE id = ?",
+    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources, topics FROM digests WHERE id = ?",
   )
     .bind(id)
     .first();
   if (!digest) return notFound();
+
+  // Story-arc counts (ingest v3, roadmap 4 step 8): fail-safe parse, same
+  // contract as renderSpectrum — an unparseable or wrong-shaped topics value
+  // is treated as "no topics" rather than thrown.
+  let topics = null;
+  if (digest.topics) {
+    try {
+      const parsed = JSON.parse(digest.topics);
+      if (Array.isArray(parsed)) {
+        // Per-entry shape check too, not just "is an array" — same defense
+        // against a stored value predating a validation change that every
+        // other renderer here applies (renderSpectrum, renderSourceKey); a
+        // wrong-shaped entry must drop out, not render "undefined".
+        const wellFormed = parsed.filter(
+          (t) => t !== null && typeof t === "object" && !Array.isArray(t) &&
+            typeof t.slug === "string" && typeof t.label === "string",
+        );
+        if (wellFormed.length > 0) topics = wellFormed;
+      }
+    } catch {
+      // unparseable -> treat as absent
+    }
+  }
+
+  let topicArcs = null;
+  if (topics) {
+    // One extra query, paid only when the digest actually has topics. The
+    // window is a TRAILING 7 days ending at THIS digest's own created_at
+    // (exclusive upper bound, and id != this digest so it never counts
+    // itself here) — not "now" — so an old digest's arc line is reproducible
+    // history: it must not change as newer digests arrive after it.
+    const windowStartIso = new Date(
+      new Date(digest.created_at).getTime() - 7 * 86400000,
+    ).toISOString();
+    const { results: priorRows } = await env.DB.prepare(
+      "SELECT topics FROM digests WHERE topics IS NOT NULL AND created_at >= ? AND created_at < ? AND id != ? LIMIT 200",
+    )
+      .bind(windowStartIso, digest.created_at, id)
+      .all();
+
+    // Per-digest, not per-occurrence: each prior row contributes at most one
+    // count per slug (a slug set, not a running tally), regardless of how
+    // many times that slug might otherwise appear.
+    const priorSlugSets = priorRows
+      .map((row) => {
+        try {
+          const parsed = JSON.parse(row.topics);
+          if (!Array.isArray(parsed)) return null;
+          return new Set(
+            parsed.map((t) => t?.slug).filter((slug) => typeof slug === "string"),
+          );
+        } catch {
+          return null;
+        }
+      })
+      .filter((set) => set !== null);
+
+    // count = prior occurrences + 1, i.e. total appearances including this
+    // digest itself — a topic seen only here renders as count 1 (bare label,
+    // see renderArcs).
+    topicArcs = topics.map((t) => ({
+      label: t.label,
+      count: priorSlugSets.filter((set) => set.has(t.slug)).length + 1,
+    }));
+  }
 
   // In the daily view, prev/next stay within kind='daily' so a reader hops
   // brief-to-brief rather than through every window digest in between — the
@@ -452,7 +532,7 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   ]);
 
   return htmlResponse(
-    renderDigestPage(digest, older, newer, token, url.hostname, lang, view),
+    renderDigestPage(digest, older, newer, token, url.hostname, lang, view, topicArcs),
   );
 }
 
@@ -554,6 +634,7 @@ function validateDigestPayload(payload) {
     kind,
     source_counts,
     failed_sources,
+    topics,
   } = payload;
 
   if (
@@ -661,6 +742,14 @@ function validateDigestPayload(payload) {
     return { ok: false, error: failedSourcesResult.error };
   }
 
+  // topics (ingest v3, roadmap 4 step 8): optional, independent of every
+  // field above — see validateTopics for the per-entry shape rules. Same
+  // JSON-stringified-TEXT-or-null storage as source_counts/failed_sources.
+  const topicsResult = validateTopics(topics);
+  if (!topicsResult.ok) {
+    return { ok: false, error: topicsResult.error };
+  }
+
   return {
     ok: true,
     value: {
@@ -677,6 +766,7 @@ function validateDigestPayload(payload) {
       kind: kind ?? "window",
       source_counts: sourceCountsResult.value ? JSON.stringify(sourceCountsResult.value) : null,
       failed_sources: failedSourcesResult.value ? JSON.stringify(failedSourcesResult.value) : null,
+      topics: topicsResult.value ? JSON.stringify(topicsResult.value) : null,
     },
   };
 }
@@ -728,6 +818,52 @@ function validateFailedSources(value) {
     }
   }
   return { ok: true, value: value.length === 0 ? null : value };
+}
+
+// topics (ingest v3, roadmap 4 step 8): absent/null is valid (nothing
+// reported, stored NULL). Present, it must be a JSON array (not an object —
+// Array.isArray, not typeof, same reasoning as source_counts' inverse
+// check), at most MAX_TOPICS entries, each entry a plain object (not an
+// array, not null — typeof null === "object" too) with EXACTLY two keys:
+// slug (matching TOPIC_SLUG_RE) and label (a string whose trimmed length is
+// 1..80 — the trimmed form is what gets stored, same "store the normalized
+// value" contract as everywhere else in this validator). Duplicate slugs
+// within one payload are a caller bug, not something to silently dedupe.
+// Same empty-array-normalizes-to-null reasoning as failed_sources — "no
+// topics reported" and "an old app that doesn't send this field" would
+// otherwise render identically, so storing "[]" is a distinction without a
+// difference.
+function validateTopics(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "topics must be a JSON array" };
+  }
+  if (value.length > MAX_TOPICS) {
+    return { ok: false, error: `topics must have at most ${MAX_TOPICS} entries` };
+  }
+  const seenSlugs = new Set();
+  const normalized = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, error: "each topics entry must be an object" };
+    }
+    const { slug, label, ...rest } = entry;
+    if (Object.keys(rest).length > 0) {
+      return { ok: false, error: "each topics entry must have exactly slug and label" };
+    }
+    if (typeof slug !== "string" || !TOPIC_SLUG_RE.test(slug)) {
+      return { ok: false, error: `topics has an invalid slug: "${slug}"` };
+    }
+    if (typeof label !== "string" || label.trim().length < 1 || label.trim().length > 80) {
+      return { ok: false, error: `topics["${slug}"].label must be 1-80 characters` };
+    }
+    if (seenSlugs.has(slug)) {
+      return { ok: false, error: `topics has a duplicate slug: "${slug}"` };
+    }
+    seenSlugs.add(slug);
+    normalized.push({ slug, label: label.trim() });
+  }
+  return { ok: true, value: normalized.length === 0 ? null : normalized };
 }
 
 // ── auth helper (shared pattern with workers/polymarket-proxy) ─────────
@@ -1088,6 +1224,12 @@ const STRINGS = {
     searchLink: "Search ↗",
     searchResults: "{n} results",
     searchNone: "Nothing found.",
+    // Story-arc line (roadmap 4 step 8, renderArcs). arcRepeat is a
+    // placeholder template ({n} = total appearances including this digest),
+    // same convention as weekLabel/searchResults above — the whole "×{n}
+    // this week" string comes from the template, never hand-composed.
+    arcsLabel: "Story threads",
+    arcRepeat: "×{n} this week",
   },
   hu: {
     locale: "hu-HU",
@@ -1130,6 +1272,10 @@ const STRINGS = {
     searchLink: "Keresés ↗",
     searchResults: "{n} találat",
     searchNone: "Nincs találat a keresésre.",
+    // Story arcs (roadmap 4 step 8) — owner: please review these, flagged HU
+    // strings same as everywhere else in this file.
+    arcsLabel: "Történetszálak",
+    arcRepeat: "×{n} ezen a héten",
   },
 };
 
@@ -1591,6 +1737,19 @@ const CSS = `
   }
   .toc a:hover { border-color: var(--accent); }
   .toc a:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Story-arc line (roadmap 4 step 8, renderArcs): chips in the mono data
+     voice, same family as .sourcekey's .sk swatches below — these are
+     labels, not navigation, so unlike .toc's accent link chips they're not
+     links (the site has no topic pages, yet; the arc line is provenance,
+     stating which threads this briefing continues). */
+  .arcs { display: flex; flex-wrap: wrap; gap: 0.45em; margin: 0 0 1.2em; }
+  .arcs .arc {
+    font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
+    letter-spacing: 0.06em; padding: 0.22em 0.8em; border-radius: 999px;
+    background: var(--chip-bg); color: var(--chip-text);
+  }
+  .arcs .arc .arccount { font-weight: 700; margin-left: 0.45em; }
 
   .attention {
     background: var(--attention-bg); color: var(--attention-text);
@@ -3084,7 +3243,29 @@ function stripInlineStyles(html) {
   return html.replace(/ style="[^"]*"/g, "");
 }
 
-function renderDigestPage(digest, older, newer, token, host, lang, view) {
+// Story-arc line (ingest v3, roadmap 4 step 8): the digest page's per-topic
+// thread summary, built from handleDigestPage's topicArcs — null (no topics
+// on this digest, query never ran) or an empty array both render "", same
+// absent-data contract as renderSpectrum/renderSourceKey. A topic with
+// count 1 (seen only in this digest) renders as the bare label; count >= 2
+// appends the "×N this week" suffix via strings.arcRepeat's template
+// replace — see the STRINGS comment for why that's a whole-string template,
+// not hand-composed pieces.
+function renderArcs(topicArcs, strings) {
+  if (!topicArcs || topicArcs.length === 0) return "";
+  const chips = topicArcs
+    .map(({ label, count }) => {
+      const countHtml =
+        count >= 2
+          ? `<span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span>`
+          : "";
+      return `<span class="arc">${esc(label)}${countHtml}</span>`;
+    })
+    .join("");
+  return `<nav class="arcs" aria-label="${esc(strings.arcsLabel)}">${chips}</nav>\n`;
+}
+
+function renderDigestPage(digest, older, newer, token, host, lang, view, topicArcs) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
   // "digest" itself stays an untranslated literal (see the STRINGS comment
@@ -3167,12 +3348,17 @@ function renderDigestPage(digest, older, newer, token, host, lang, view) {
   // renders "" on an older digest with no source_counts/failed_sources.
   const sourceKeyHtml = renderSourceKey(digest.source_counts, digest.failed_sources, strings);
 
-  // Order: stamp -> en-only note -> TOC -> article. The TOC can't sit inside
-  // the TL;DR-bearing article start as first imagined — the TL;DR callout is
-  // itself inside body_html — so it renders above <article> instead.
+  // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics
+  // — see renderArcs and the topicArcs computation in handleDigestPage.
+  const arcsHtml = renderArcs(topicArcs, strings);
+
+  // Order: stamp -> arc line -> en-only note -> TOC -> article. The TOC
+  // can't sit inside the TL;DR-bearing article start as first imagined — the
+  // TL;DR callout is itself inside body_html — so it renders above <article>
+  // instead.
   const body = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <p class="stamp">${esc(stamp)}</p>
-${enOnlyNoteHtml}${tocHtml}<article class="digest">
+${arcsHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
 ${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>

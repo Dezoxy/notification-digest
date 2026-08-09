@@ -28,7 +28,13 @@ CREATE TABLE IF NOT EXISTS digests (
   -- degraded-run badge; normalized to NULL rather than "[]" when empty (see
   -- the ingest validation for why that distinction isn't worth storing).
   source_counts  TEXT,
-  failed_sources TEXT
+  failed_sources TEXT,
+  -- Optional ingest v3 field (roadmap 4 step 8), app-produced. NULL when the
+  -- digest app didn't send topics for this digest (older app version, or
+  -- genuinely no topics to report). JSON array of {slug,label} objects — see
+  -- validateTopics in worker.js for the shape rules, and renderArcs for how
+  -- it turns into the digest page's story-arc line.
+  topics TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at DESC);
 
