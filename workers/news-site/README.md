@@ -444,7 +444,11 @@ so this pass contains no motion/lang work.
   method=GET>` and server-rendered results (bm25 order, `snippet()`
   excerpts, deep links). Query strings never contain the token beyond the
   path it already lives in; results pages carry the same
-  no-store/no-referrer headers as every HTML response.
+  no-store/no-referrer headers as every HTML response. Owner UX pass: the
+  index page's own filter box now also live-fetches this route
+  (`?fragment=1`, a bare-results partial) and surfaces archive hits in-page
+  as you type, deduped against what's already in the rendered ledger; the
+  standalone search page above stays the no-JS/deep-link path, unchanged.
 - [x] **Ingest v3: story arcs (site side)** — a numbered migration adds a
   nullable `topics` column; `PUT /ingest/:id` accepts an OPTIONAL
   validated `topics` array (slug + label, same shape discipline as

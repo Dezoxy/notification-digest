@@ -570,10 +570,22 @@ async function handleSearchPage(env, token, url, lang) {
   // one request.
   const q = (url.searchParams.get("q") ?? "").trim().slice(0, 200);
 
-  // Empty query: render just the form, no search attempted. `results`
-  // staying null (vs. an empty array) is what tells renderSearchPage "no
-  // count line, no no-results message either" — see there.
+  // Fragment mode (unified search, owner UX pass): ?fragment=1 asks for just
+  // the results markup, no pageChrome, no form — this is what the index
+  // page's own filter box fetches in the background (see the bottom
+  // script's archive-search IIFE) so a reader never has to leave the index
+  // to see full-archive hits. The standalone route above (no fragment=1)
+  // stays exactly as before: full page, no-JS form, deep-linkable.
+  const isFragment = url.searchParams.get("fragment") === "1";
+
+  // Empty query: with fragment=1 there's nothing to show — the ledger's own
+  // empty-filtered message already speaks, so an empty body is correct, not
+  // a degraded case. Full-page mode keeps its existing behavior: render
+  // just the form, no search attempted (`results` staying null is what
+  // tells renderSearchPage "no count line, no no-results message either" —
+  // see there).
   if (q === "") {
+    if (isFragment) return htmlResponse("");
     return htmlResponse(renderSearchPage(null, q, token, url.hostname, lang));
   }
 
@@ -611,6 +623,8 @@ async function handleSearchPage(env, token, url, lang) {
     // whatever went wrong.
     results = [];
   }
+
+  if (isFragment) return htmlResponse(renderSearchFragment(results, token, lang));
 
   return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang));
 }
@@ -1254,6 +1268,12 @@ const STRINGS = {
     searchLink: "Search ↗",
     searchResults: "{n} results",
     searchNone: "Nothing found.",
+    // Unified search (owner UX pass): eyebrow label above the archive
+    // results the index page's own filter box surfaces in-page — see
+    // renderSearchFragment/the .archivelabel CSS. Same mono-eyebrow voice
+    // as heatmapLabel above, not a template (no {n} — the count line stays
+    // on the standalone search page only).
+    archiveResults: "From the archive",
     // Story-arc line (roadmap 4 step 8, renderArcs). arcRepeat is a
     // placeholder template ({n} = total appearances including this digest),
     // same convention as weekLabel/searchResults above — the whole "×{n}
@@ -1308,6 +1328,8 @@ const STRINGS = {
     searchLink: "Keresés ↗",
     searchResults: "{n} találat",
     searchNone: "Nincs találat a keresésre.",
+    // Owner: please review — new HU string, mirrors searchLabel's pattern.
+    archiveResults: "Az archívumból",
     // Story arcs (roadmap 4 step 8) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     arcsLabel: "Történetszálak",
@@ -2021,6 +2043,21 @@ const CSS = `
     text-decoration: none; letter-spacing: 0.06em; text-transform: uppercase;
   }
 
+  /* Unified search results (owner UX pass): the index page's own box for
+     archive hits fetched in the background by the bottom script — see
+     renderIndexPage's archiveResultsHtml. .archivelabel is the same mono
+     eyebrow recipe as .hmlabel below (same look, deliberately its own
+     class rather than sharing .hmlabel's — coupling two unrelated features
+     to one class just because they currently render alike is the kind of
+     thing that bites later). .archiveresults[hidden] needs no rule of its
+     own: the global [hidden] override near the top of this stylesheet
+     already covers it, same as every other hide-by-attribute element here. */
+  .archivelabel {
+    font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.6em;
+  }
+  .archiveresults { margin-top: 1.6em; }
+
   /* Search page (roadmap 4 step 7): the form itself reuses .filter's input
      styling (see above) — it's the SAME kind of control, just server-
      functional here instead of a client-side enhancement (see
@@ -2166,7 +2203,7 @@ const CSS = `
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
     .filterrow, .themetoggle, .densitytoggle, .pulse, .resumechip,
-    .heatmapwrap {
+    .heatmapwrap, .archiveresults {
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
@@ -2571,6 +2608,118 @@ ${prefetchScriptHtml}
     };
 
     input.addEventListener("input", applyFilters);
+
+    // Unified search (owner UX pass): the same input also live-queries the
+    // full-archive search route in the background and injects results below
+    // the ledger — extending THIS IIFE rather than adding a second one,
+    // since it already owns the input (a second listener would just fight
+    // this one for the same element). Guarded on the archiveresults
+    // container existing (see renderIndexPage) — digest/search pages never
+    // reach here anyway (both guards above already return before this
+    // point), but the query stays defensive rather than assuming that.
+    var archiveBox = document.querySelector(".archiveresults");
+    if (archiveBox) {
+      // Token/lang-scoped search route, read off the container rather than
+      // hardcoded — keeps this script token/lang-agnostic like every other
+      // data-* consumer here.
+      var archiveHref = archiveBox.getAttribute("data-search-href");
+      var archiveTimer = null;
+      var archiveInFlight = null;
+
+      var clearArchive = function () {
+        archiveBox.innerHTML = "";
+        archiveBox.hidden = true;
+      };
+
+      var runArchiveSearch = function () {
+        var query = input.value.trim();
+        if (query.length < 2) {
+          clearArchive();
+          return;
+        }
+        // Abort whatever's still in flight before starting a new request —
+        // a slow earlier response landing after a faster later one must
+        // never render stale results over fresh ones.
+        if (archiveInFlight) archiveInFlight.abort();
+        var controller = new AbortController();
+        archiveInFlight = controller;
+        fetch(archiveHref + "?q=" + encodeURIComponent(query) + "&fragment=1", { signal: controller.signal })
+          .then(function (res) {
+            if (!res.ok) throw new Error("archive search fetch failed");
+            return res.text();
+          })
+          .then(function (text) {
+            if (!text) {
+              clearArchive();
+              return;
+            }
+            // Safe to inject verbatim: this is our own server-rendered,
+            // fully-escaped HTML from the fragment route (see
+            // handleSearchPage/renderSearchFragment) — same origin, same
+            // token path, every string in it already ran through esc().
+            archiveBox.innerHTML = text;
+            // Dedupe (roadmap: data-id): hide any injected result already
+            // present in the rendered ledger above, so the reader never
+            // sees the same digest twice on one page.
+            var shown = new Set(
+              entries.map(function (el) {
+                return el.getAttribute("data-id");
+              }),
+            );
+            var injected = Array.prototype.slice.call(archiveBox.querySelectorAll(".entry"));
+            var anyLeft = false;
+            injected.forEach(function (el) {
+              if (shown.has(el.getAttribute("data-id"))) {
+                el.hidden = true;
+              } else {
+                anyLeft = true;
+              }
+            });
+            // Every hit was a dupe of something already on the page: hide
+            // the whole container, including its "From the archive" label —
+            // an empty-looking label is worse than no box at all.
+            archiveBox.hidden = !anyLeft;
+          })
+          .catch(function (err) {
+            if (err && err.name === "AbortError") return; // superseded, not a failure
+            // Search degrading to filter-only is the correct quiet failure —
+            // a broken archive fetch must never surface as an error to a
+            // reader who just wanted to filter the visible ledger.
+            clearArchive();
+          });
+      };
+
+      input.addEventListener("input", function () {
+        if (archiveTimer) clearTimeout(archiveTimer);
+        // Same <2-char rule as runArchiveSearch's own guard, but applied
+        // synchronously here (not through the debounce) so an empty/short
+        // query can never leave a stale container visible while a 300ms
+        // timer is still pending.
+        if (input.value.trim().length < 2) {
+          if (archiveInFlight) archiveInFlight.abort();
+          clearArchive();
+          return;
+        }
+        archiveTimer = setTimeout(runArchiveSearch, 300);
+      });
+
+      // Enter triggers the pending search immediately instead of waiting out
+      // the debounce. The input has no form, so Enter is otherwise inert —
+      // this keeps it that way; no navigation, no submit.
+      input.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        if (archiveTimer) clearTimeout(archiveTimer);
+        runArchiveSearch();
+      });
+
+      // One box, not two: the standalone search link is the no-JS fallback
+      // (see renderIndexPage) — once the enhanced archive box is wired up,
+      // hide it. Lives in the same .filterrow, so a null guard costs
+      // nothing even though this code path only runs where it's known to
+      // exist.
+      var searchLink = document.querySelector(".searchlink");
+      if (searchLink) searchLink.hidden = true;
+    }
   })();
 
   // Next-briefing countdown (roadmap 2 step 3, index pages only — guarded on
@@ -2855,7 +3004,11 @@ function renderIndexEntry(row, token, lang, view) {
   // straight from D1 as an ISO UTC string — lexicographically comparable
   // without parsing, the same trick get_recent_digests (digest repo) relies
   // on. esc()'d like every other D1-sourced value inserted as an attribute.
-  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
+  //
+  // data-id (unified search, owner UX pass): same contract as
+  // renderSearchResult's — see comments there. Lets the archive-results
+  // script tell "already in this ledger" from "genuinely archive-only".
+  return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
     <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${spectrumHtml}${degradedHtml}${badgeHtml}${langChip}</span>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
@@ -2884,8 +3037,9 @@ function renderLeadCard(row, token, lang, view) {
   const spectrumHtml = renderSpectrum(row.source_counts);
   const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
 
-  // data-created: same contract as renderIndexEntry's — see comments there.
-  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}">
+  // data-created / data-id: same contract as renderIndexEntry's — see
+  // comments there.
+  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
     <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${spectrumHtml}${degradedHtml}${badgeHtml}${langChip}</span>
     <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
@@ -3173,6 +3327,16 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // way to search at all.
   const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div>`;
 
+  // Unified search (owner UX pass): the container the bottom script's
+  // archive-search IIFE fills with fragments fetched from the search route
+  // (see handleSearchPage's fragment=1 branch and renderSearchFragment).
+  // `hidden` by default, same "no-JS/pre-fetch default state" contract as
+  // the filter input above — un-hidden only once a fetch actually returns
+  // results. data-search-href carries the token/lang-scoped search route so
+  // the script itself stays token/lang-agnostic, same pattern as every
+  // other data-* hook on this page (data-created, data-unread-label, …).
+  const archiveResultsHtml = `<div class="archiveresults" data-search-href="${searchHref(token, lang)}" hidden></div>`;
+
   // Week rail (roadmap 3 step 2): between the view tabs (rendered by
   // pageChrome, just above this) and the filter row — ALL-view index pages
   // only (weekInfo is null for the daily view, see handleIndexPage). Sits
@@ -3236,7 +3400,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     lang,
     view,
     renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
-    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${heatmapHtml}`,
+    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}${heatmapHtml}`,
     null,
     countdownNewest,
     prefetchHref,
@@ -3521,10 +3685,34 @@ function renderSearchResult(row, token, lang) {
   const { html: snippetHtml, usedHu } = renderSnippet(row, lang);
   const langChip = lang === "hu" && !usedHu ? '<span class="flag flag-muted">EN</span>' : "";
 
-  return `<a class="entry" href="${digestHref(token, lang, "all", row.id)}">
+  // data-id (unified search, owner UX pass): lets the index page's
+  // archive-results script drop fragment entries already visible in the
+  // rendered ledger above it — see renderIndexEntry/renderLeadCard, which
+  // carry the same attribute for exactly this comparison, and the bottom
+  // script's archive-search IIFE that reads it.
+  return `<a class="entry" href="${digestHref(token, lang, "all", row.id)}" data-id="${esc(row.id)}">
     <span class="meta"><span class="time">${esc(dateLabel)}</span>${badgeHtml}${langChip}</span>
     <p class="excerpt">${snippetHtml}</p>
   </a>`;
+}
+
+// Fragment mode (unified search, owner UX pass): what handleSearchPage's
+// ?fragment=1 branch returns — bare results only, no pageChrome, no form.
+// Built entirely from the SAME server-side renderers as the full search
+// page (renderSearchResult -> markSnippet's escape-then-mark, esc()
+// everywhere), so every escaping guarantee documented there is inherited
+// unchanged; nothing here bypasses it. This is what makes the client's
+// innerHTML injection of this fragment (see the bottom script) safe: it is
+// our own server-rendered, fully-escaped HTML from the same origin and
+// token path. This function must NEVER be handed anything that hasn't gone
+// through esc() first — notably, `q` itself is deliberately not echoed back
+// into this fragment (unlike the full search page's form, which must echo
+// it into the input's value) for exactly that reason.
+function renderSearchFragment(results, token, lang) {
+  if (results.length === 0) return "";
+  const strings = STRINGS[lang];
+  const items = results.map((row) => renderSearchResult(row, token, lang)).join("\n");
+  return `<div class="archivelabel">${esc(strings.archiveResults)}</div>\n${items}`;
 }
 
 // `results` is null when no search was attempted yet (empty ?q=, see
