@@ -2553,9 +2553,28 @@ ${prefetchScriptHtml}
     // static per-meta content values above already ARE the auto values.
     var stored = document.documentElement.dataset.theme;
     if (stored === "dark" || stored === "light") syncThemeColorMetas(stored);
+    // Animated palette swap (owner-requested): wrap the theme mutation in a
+    // same-document View Transition, which crossfades the WHOLE page
+    // between the old and new palette — the same-document sibling of the
+    // at-view-transition navigation crossfade this site already ships, and
+    // the same restraint applies: the browser's default crossfade, no
+    // custom choreography. Unsupported browsers and reduced-motion readers
+    // get the instant switch they always had — the mutation itself runs
+    // either way, so correctness never depends on the animation.
+    var applyThemeChange = function (mutate) {
+      if (
+        document.startViewTransition &&
+        !matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
+        document.startViewTransition(mutate);
+      } else {
+        mutate();
+      }
+    };
     for (var j = 0; j < buttons.length; j++) {
       buttons[j].addEventListener("click", function () {
         var v = this.dataset.set;
+        applyThemeChange(function () {
         if (v === "auto") {
           document.documentElement.dataset.theme = "";
           try {
@@ -2569,6 +2588,7 @@ ${prefetchScriptHtml}
         }
         syncThemeColorMetas(v);
         reflect();
+        });
       });
     }
   })();
