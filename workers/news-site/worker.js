@@ -2721,8 +2721,46 @@ ${prefetchScriptHtml}
         closing = false;
       }, 120);
     };
-    document.addEventListener("click", function (e) {
-      if (settings.open && !settings.contains(e.target)) close();
+    // Dismiss-tap swallowing (owner-reported): with the bubble open, a tap
+    // outside used to close it AND activate whatever sat under the finger —
+    // closing the panel by tapping an article link opened the article. An
+    // open bubble behaves like a modal with an invisible scrim now: the
+    // first outside tap only dismisses. Capture phase + preventDefault +
+    // stopPropagation is what actually swallows the click before the
+    // underlying link/button ever sees it — a bubble-phase listener would
+    // run after the link's default navigation was already committed.
+    document.addEventListener(
+      "click",
+      function (e) {
+        if (settings.open && !closing && !settings.contains(e.target)) {
+          e.preventDefault();
+          e.stopPropagation();
+          close();
+        }
+      },
+      true,
+    );
+    // Keep the bubble open across a language hop (owner-reported: switching
+    // language closed the menu — it's a full navigation, so the fresh
+    // document rendered with the details in its default closed state).
+    // sessionStorage, not localStorage: "the settings were open" is
+    // navigation state, not a preference — it must not resurrect the panel
+    // tomorrow. Set on language-link click inside the panel, consumed
+    // (removed) on the very next load. No animation on the restore —
+    // the panel was never closed from the reader's point of view.
+    try {
+      if (sessionStorage.getItem("settingsOpen")) {
+        sessionStorage.removeItem("settingsOpen");
+        settings.open = true;
+      }
+    } catch (e) {}
+    panel.addEventListener("click", function (e) {
+      var link = e.target.closest ? e.target.closest(".langswitch a") : null;
+      if (link) {
+        try {
+          sessionStorage.setItem("settingsOpen", "1");
+        } catch (err) {}
+      }
     });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && settings.open) {
