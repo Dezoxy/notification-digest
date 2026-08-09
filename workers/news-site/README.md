@@ -297,12 +297,12 @@ release/deploy path) and the site side ships first, backward-compatibly.
   old app payloads keep working byte-for-byte. Index entries render a
   five-segment source-spectrum micro-bar and a degraded-run badge when the
   data exists. Needs a numbered migration for the new columns.
-- [ ] **(digest repo) publish source_counts + failed_sources** — the app
+- [x] **(digest repo) publish source_counts + failed_sources** — the app
   computes per-source counts from the digest's own stamped items and parses
   failed sources from the deterministic ⚠ banner; ships in the app's own
   release train (tag → homelab bump → deploy), after which new digests
   light up the spectrum/badge.
-- [ ] **(digest repo) Telegram section deep links** — the TL;DR bot message
+- [x] **(digest repo) Telegram section deep links** — the TL;DR bot message
   gains up to three section links targeting the site's `#sN` anchors,
   derived from `body_md`'s `## ` headings with the same needs-attention
   exclusion rule the site's TOC numbering uses — the two implementations
