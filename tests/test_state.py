@@ -11,6 +11,7 @@ from digest.state import (
     count_unsummarized_items,
     create_digest,
     get_cursors,
+    get_digest_source_counts,
     get_pending_digests,
     get_polymarket_probs,
     get_recent_digests,
@@ -1743,3 +1744,28 @@ def test_prune_delivered_items_keeps_fresh_rows_even_if_fully_delivered(conn):
 
     assert deleted == 0
     assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+# --- get_digest_source_counts ---
+
+
+def test_get_digest_source_counts_returns_counts_across_sources(conn):
+    items = [
+        _item("1"),
+        _item("2"),
+        _item("100", source="x", chat_id=None, url="https://x.com/i/status/100"),
+    ]
+    commit_new_items(
+        conn, items, {("telegram", "123"): "2", ("x", "notifications"): "100"}
+    )
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    assert get_digest_source_counts(conn, digest_id) == {"telegram": 2, "x": 1}
+
+
+def test_get_digest_source_counts_empty_for_daily_digest_with_no_items(conn):
+    # A daily brief stamps no items at all (see create_digest's docstring) --
+    # this must return {} rather than raise or query nothing meaningful.
+    digest_id = create_digest(conn, "daily body", [], kind="daily")
+
+    assert get_digest_source_counts(conn, digest_id) == {}

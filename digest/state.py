@@ -1089,6 +1089,27 @@ def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
     return {row[0] for row in rows}
 
 
+def get_digest_source_counts(conn: sqlite3.Connection, digest_id: int) -> dict[str, int]:
+    """Return {source: item count} for the given digest.
+
+    Feeds the site channel's `source_counts` ingest field.
+
+    A "daily" digest (digest/daily.py's `summarize_daily`) stamps no items at
+    all (see create_digest's `item_count` docstring), so this returns `{}`
+    for one; digest/publish.py's `publish_to_site` then omits the
+    `source_counts` field entirely for an empty dict rather than sending one
+    (see that function's truthy-only inclusion contract). Note also that
+    `prune_delivered_items` can thin (or empty) this count for an OLD,
+    already-fully-delivered digest on a late re-publish -- accepted, since
+    these counts are display metadata, not the digest body itself.
+    """
+    rows = conn.execute(
+        "SELECT source, COUNT(*) FROM items WHERE digest_id = ? GROUP BY source",
+        (digest_id,),
+    ).fetchall()
+    return {source: count for source, count in rows}
+
+
 def get_pending_digests(
     conn: sqlite3.Connection,
     email_enabled: bool,

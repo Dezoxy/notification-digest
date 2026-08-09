@@ -264,6 +264,43 @@ def has_needs_attention(body_md: str) -> bool:
     )
 
 
+def parse_failed_sources(body_md: str) -> list[str]:
+    """Recover the failed-collector source list from a digest's own `⚠ ...` banner lines.
+
+    digest/summarize.py's `summarize()` deterministically prepends one
+    `⚠ <source> collection failed this run` line per failed source, in the
+    given order, followed by a blank line, ahead of the model's own output
+    (see that function's docstring, "The `⚠ <source> collection failed this
+    run` banner"). This walks `body_md` line by line FROM THE START,
+    collecting the source name off of every leading line that matches that
+    exact shape, and stops at the first line that neither matches nor is
+    blank -- so a banner-lookalike line appearing later in the body (inside
+    the model's own output, say) is never picked up, only the genuine
+    code-generated block at the very top.
+
+    Deliberately parses this back out of `body_md` rather than reading it
+    off a dedicated schema column: the banner is code-generated with a fixed,
+    stable shape, already stored durably as part of every digest's `body_md`
+    (digest/state.py's `create_digest`), and this same parse works
+    identically for a pending resend (digest/deliver.py's `_deliver_site`
+    runs on both the fresh-digest and pending-resend paths) with no schema
+    migration required to add a new column just to duplicate what `body_md`
+    already records.
+
+    Returns `[]` when `body_md` carries no banner at all -- the common case,
+    a run where every collector succeeded.
+    """
+    failed: list[str] = []
+    for line in body_md.splitlines():
+        match = re.match(r"^⚠ (\S+) collection failed this run$", line)
+        if match:
+            failed.append(match.group(1))
+            continue
+        if line.strip():
+            break
+    return failed
+
+
 def publish_to_site(
     digest_id: int,
     body_md: str,
@@ -276,6 +313,8 @@ def publish_to_site(
     body_md_hu: str | None = None,
     body_html_hu: str | None = None,
     kind: str = "window",
+    source_counts: dict[str, int] | None = None,
+    failed_sources: list[str] | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -320,6 +359,17 @@ def publish_to_site(
     daily brief is labeled correctly however many runs it takes to actually
     publish.
 
+    `source_counts` (keyword-only, default None) is the {source: item count}
+    map (digest/state.py's `get_digest_source_counts`) the site renders as a
+    per-entry source-spectrum bar; `failed_sources` (keyword-only, default
+    None) is the list of collectors that failed this run
+    (`parse_failed_sources`, above), which the site badges "partial". Both
+    are included in the payload ONLY when truthy -- an empty dict/list or
+    None all mean the field is left out entirely, matching the site ingest
+    endpoint's normalize-empty-to-NULL contract (an explicit `{}`/`[]` and an
+    absent field are treated identically there, so there is no correctness
+    reason to send the empty shape over the wire).
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -354,6 +404,13 @@ def publish_to_site(
         payload["tldr_hu"] = extract_tldr(body_md_hu) or "(no summary)"
         payload["body_html_hu"] = body_html_hu
         payload["body_md_hu"] = body_md_hu
+    # Truthy-only inclusion: an empty dict/list or None all mean "omit the
+    # field", matching the site's normalize-empty-to-NULL ingest contract --
+    # see this function's docstring.
+    if source_counts:
+        payload["source_counts"] = source_counts
+    if failed_sources:
+        payload["failed_sources"] = failed_sources
     data = json.dumps(payload).encode("utf-8")
     url = f"{publish_url}/ingest/{digest_id}"
     headers = {
