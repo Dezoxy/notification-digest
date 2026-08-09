@@ -600,6 +600,7 @@ const STRINGS = {
     filterPlaceholder: "Filter briefings…",
     themeToggle: "Toggle light/dark",
     unreadFence: "new since your last visit",
+    pulseLabel: "Recent volume",
   },
   hu: {
     locale: "hu-HU",
@@ -623,6 +624,7 @@ const STRINGS = {
     filterPlaceholder: "Szűrés…",
     themeToggle: "Világos/sötét váltás",
     unreadFence: "új a legutóbbi látogatásod óta",
+    pulseLabel: "Friss mennyiség",
   },
 };
 
@@ -1072,6 +1074,19 @@ const CSS = `
   /* Plain border otherwise; only :focus-visible gets a visible outline. */
   .filterrow .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+  /* Day-pulse strip (roadmap 2 step 3, renderPulseStrip): ambient chrome, not
+     a chart with axes — no numbers, no gridlines, no day-boundary markers on
+     purpose, just relative bar heights with a title-attribute tooltip per
+     bar. Anchor (.pulsebar) is a fixed-height flex box so the span inside
+     can be anchored to its bottom via align-items: flex-end and sized purely
+     by its own height percentage. */
+  .pulse { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin: 0 0 1.6em; }
+  .pulsebar { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; }
+  .pulsebar span { display: block; width: 100%; background: var(--chip-bg); border-radius: 2px 2px 0 0; }
+  .pulsebar.now span { background: var(--accent); }
+  .pulsebar:hover span { background: var(--accent); }
+  .pulsebar:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
   /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
      inserts between digests that arrived since the reader's last visit and
      everything older — no-JS readers never see this class at all, so no
@@ -1136,7 +1151,7 @@ const CSS = `
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
-    .filterrow, .themetoggle {
+    .filterrow, .themetoggle, .pulse {
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
@@ -1447,6 +1462,46 @@ function renderLeadCard(row, token, lang, view) {
   </a>`;
 }
 
+// Day-pulse strip (roadmap 2 step 3): a micro bar chart of recent news
+// volume, rendered server-side from data the index query already returns —
+// the day's pulse readable before a word is read. ALL view only: the daily
+// view's one-brief-per-day cadence has no intra-day pulse to show, so this
+// renders nothing there (the daily-brief digests themselves are also
+// excluded from the bars below, for the same reason). No day-boundary
+// markers are drawn — deliberate, the strip is a pulse, not a calendar.
+function renderPulseStrip(rows, token, lang, view) {
+  if (view !== "all") return "";
+
+  const strings = STRINGS[lang];
+  // rows arrive created_at DESC (newest first, see handleIndexPage) — take
+  // the most recent 16 window digests, then reverse so time reads
+  // left-to-right: oldest of the 16 on the left, newest on the right.
+  const windowRows = rows
+    .filter((row) => row.kind === "window")
+    .slice(0, 16)
+    .reverse();
+  if (windowRows.length < 2) return ""; // a one-bar chart is noise
+
+  // Heights normalize against the max item_count in the shown set, with a
+  // floor so a low-volume window's bar stays visible/tappable rather than
+  // collapsing to nothing.
+  const max = Math.max(...windowRows.map((row) => row.item_count));
+
+  const bars = windowRows
+    .map((row, i) => {
+      const date = new Date(row.created_at);
+      const time = formatTime(date, strings.locale);
+      const pct = max > 0 ? Math.max(8, Math.round((row.item_count / max) * 100)) : 8;
+      // Rightmost bar (last after the reverse above) is the newest digest.
+      const nowClass = i === windowRows.length - 1 ? " now" : "";
+      const title = `${time} · ${row.item_count} ${strings.itemsWord}`;
+      return `<a class="pulsebar${nowClass}" href="${digestHref(token, lang, view, row.id)}" title="${esc(title)}"><span style="height:${pct}%"></span></a>`;
+    })
+    .join("\n");
+
+  return `<nav class="pulse" aria-label="${esc(strings.pulseLabel)}">${bars}</nav>\n`;
+}
+
 function renderIndexPage(rows, token, host, lang, view) {
   const strings = STRINGS[lang];
   const emptyMessage = view === "daily" ? strings.noDailyBriefs : strings.noDigests;
@@ -1477,6 +1532,12 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // no filter UI — un-hidden by the bottom script in pageChrome.
   const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div>`;
 
+  // Day-pulse strip (roadmap 2 step 3): between the filter row and the
+  // <section> below, i.e. right above the lead card — renders "" (nothing)
+  // outside the all view or with too few window digests, see
+  // renderPulseStrip.
+  const pulseHtml = renderPulseStrip(rows, token, lang, view);
+
   // data-unread-label (roadmap 2 step 2): the unread-fence label text,
   // rendered server-side so the bottom script that builds the fence stays
   // language-agnostic — it just reads this attribute rather than knowing
@@ -1487,7 +1548,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     lang,
     view,
     renderSwitchers(token, lang, view, "index"),
-    `${filterRowHtml}<section data-unread-label="${esc(strings.unreadFence)}">${body}</section>`,
+    `${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}">${body}</section>`,
   );
 }
 
