@@ -689,18 +689,27 @@ function brandParts(host) {
 }
 
 const CSS = `
+  /* Three type roles, all zero-byte system stacks (roadmap step 3 — "the
+     private wire desk"): PROSE for the sit-back-and-read register (article
+     body, TL;DR, excerpts), DATA for anything keyed on time (times, counts,
+     datelines, citation chips), and chrome — the masthead/tabs/nav/footer —
+     which stays the existing body sans stack with no variable of its own.
+     Time is this site's primary key; the typography should say so. */
   :root {
-    --bg: #ffffff;
+    --font-prose: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --font-data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --bg: #fbfaf7; /* barely-warm paper — deliberately NOT cream */
     --page-bg: #e9e9f2;
-    --text: #1f2430;
-    --muted: #8a8f9e;
+    --text: #16181d; /* ink */
+    --muted: #6e7380; /* old #8a8f9e was ~3.4:1 on the new paper; this clears 4.5:1 */
     --accent: #4f46e5;
     --accent-strong: #4338ca;
     --tldr-bg: #eef2ff;
     --tldr-text: #262a49;
     --chip-bg: #dde3ff;
     --chip-text: #4338ca;
-    --hairline: #e5e7eb;
+    --hairline: #e7e5e0; /* warmed to match the new paper */
     --h2-border: #4f46e5;
     --attention-bg: #fef3c7;
     --attention-text: #78350f;
@@ -778,6 +787,7 @@ const CSS = `
   .dayhead {
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
     color: var(--muted); margin: 2.2em 0 0.4em; font-weight: 600;
+    font-family: var(--font-data); /* mono uppercase eyebrow = the wire look */
   }
   .entry {
     display: block; text-decoration: none; color: inherit;
@@ -789,12 +799,15 @@ const CSS = `
     display: flex; align-items: baseline; gap: 0.7em; margin-bottom: 0.25em;
     font-variant-numeric: tabular-nums;
   }
-  .entry .time { font-weight: 700; font-size: 0.95em; }
+  /* 0.85em, not 0.95: mono runs wide, so the time nudges down to keep its
+     old visual weight in the meta row now that it's set in --font-data. */
+  .entry .time { font-weight: 700; font-size: 0.85em; font-family: var(--font-data); }
   /* Daily-brief entries carry the indigo accent on their time instead of the
      default text color — the "slightly heavier presence" this one entry
      type gets in an otherwise undifferentiated list. */
   .entry .time.time-accent { color: var(--accent); }
-  .entry .count { color: var(--muted); font-size: 0.8em; }
+  /* 0.75em, not 0.8: same mono-runs-wide compensation as .entry .time. */
+  .entry .count { color: var(--muted); font-size: 0.75em; font-family: var(--font-data); }
   .entry .flag {
     font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
     background: var(--attention-bg); color: var(--attention-text);
@@ -810,6 +823,7 @@ const CSS = `
   .entry .flag.flag-daily { background: var(--chip-text); color: var(--chip-bg); }
   .entry .excerpt {
     margin: 0; color: var(--muted); font-size: 0.93em;
+    font-family: var(--font-prose);
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
   /* Daily-brief entries summarize a whole day, not a 3-hour window — one
@@ -817,9 +831,12 @@ const CSS = `
   .entry .excerpt.excerpt-daily { -webkit-line-clamp: 4; }
   .entry .excerpt strong { color: var(--text); }
 
+  /* The whole nav is prev/next times plus the "all digests" link — one word
+     — so the entire block goes mono rather than singling out the times. */
   nav.digestnav {
     display: flex; justify-content: space-between; gap: 1em;
     font-size: 0.85em; margin-bottom: 1.8em;
+    font-family: var(--font-data);
   }
   nav.digestnav a { text-decoration: none; }
   nav.digestnav .spacer { flex: 1; }
@@ -831,7 +848,9 @@ const CSS = `
     margin-top: 2.5em; padding-top: 1em;
     border-top: 1px solid var(--hairline);
   }
-  .stamp { color: var(--muted); font-size: 0.85em; margin: 0 0 1.2em; font-variant-numeric: tabular-nums; }
+  /* font-variant-numeric dropped here: --font-data is monospace, so digits
+     are already fixed-width — tabular-nums would be redundant. */
+  .stamp { color: var(--muted); font-size: 0.8em; margin: 0 0 1.2em; font-family: var(--font-data); }
   /* HU digest page, no body_html_hu on file: shown above the article,
      falling back to the English body. */
   .en-only-note { color: var(--muted); font-size: 0.85em; font-style: italic; margin: 0 0 1em; }
@@ -841,21 +860,26 @@ const CSS = `
     padding: 0.8em 1em; border-radius: 8px; margin: 0 0 1.4em;
   }
   .attention h2 { margin: 0 0 0.3em; border: 0; padding: 0; font-size: 0.95em; }
-  .attention p { margin: 0; font-size: 0.95em; }
+  .attention p { margin: 0; font-size: 0.95em; font-family: var(--font-prose); }
 
   .tldr {
     background: var(--tldr-bg); color: var(--tldr-text);
     padding: 1em 1.2em; border-radius: 8px; margin: 0 0 2em; font-weight: 600;
+    font-family: var(--font-prose); line-height: 1.65;
   }
+  /* Article h2s deliberately stay sans while the body below them goes serif
+     (.digest p) — the newspaper pattern: sans heads announce, serif body
+     reads. Not an omission. */
   .digest h2 {
     font-size: 1.15em; border-left: 3px solid var(--h2-border);
     padding-left: 0.6em; margin: 1.9em 0 0.6em; text-wrap: balance;
   }
-  .digest p { margin: 0.7em 0; }
+  .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; }
   .cite {
     font-size: 0.7em; vertical-align: super; text-decoration: none;
     background: var(--chip-bg); color: var(--chip-text);
     padding: 0 0.4em; border-radius: 99px; font-weight: 700; margin-left: 1px;
+    font-family: var(--font-data);
   }
   .closing {
     font-style: italic; color: var(--muted); border-top: 1px solid var(--hairline);
