@@ -251,3 +251,65 @@ revisit when the client-side filter stops being enough), pagination past the
 PWA/add-to-home-screen (the manifest would be fetched tokenless and
 `start_url` would embed the capability token in a persisted, cached
 artifact — needs its own privacy think first).
+
+## Design roadmap 2 (2026-08-09)
+
+A second pass, agreed 2026-08-09, exploiting three unused veins: structured
+data the site never sees, the reader's 8-pulses-a-day rhythm, and knowledge
+the pipeline computes but discards at render time. Same execution contract
+as roadmap 1: one squash-merged PR per step below, in order; the owner-tuned
+CSS decisions from roadmap 1 never regress; every change ships in EN/HU,
+both themes, and a working no-JS baseline; this stays a single-file Worker
+with no external requests; and `Referrer-Policy: no-referrer` and the rest
+of the trust-model headers (see "Trust model" above) stay load-bearing
+throughout. Steps 1–8 are site-only and ship with one `wrangler deploy`; the
+last two need the digest app's cooperation (separate repo, its own
+release/deploy path) and the site side ships first, backward-compatibly.
+
+- [ ] **Roadmap (this section)** — record the second design pass in-repo.
+  (This very PR.)
+- [ ] **Unread fence** — a `localStorage` last-visit timestamp; the index
+  draws one labeled hairline between digests that arrived since the
+  reader's last visit and everything older. The index becomes an inbox at a
+  glance. No backend, progressive enhancement (no JS = no fence).
+- [ ] **Day-pulse strip** — a micro bar strip (one bar per window digest,
+  height = item_count) rendered from data the index query already returns;
+  the day's news volume readable before a word is read. Pure CSS bars.
+- [ ] **Living chrome: theme-color + countdown** — `theme-color` metas for
+  light/dark (and following the manual toggle) so mobile browser chrome
+  melts into the page; a muted mono footer line counting down to the next
+  window (newest `created_at` + 3h), refreshed by the existing inline
+  script.
+- [ ] **Keyboard navigation** — j/k (and arrow keys) hop older/newer on
+  digest pages; "/" focuses the index filter. Desktop convenience; never
+  intercepts typing in the filter input.
+- [ ] **Attention ledger** — a filter chip by the view tabs showing only
+  `has_attention` digests: "what needed me this week", answerable from a
+  column the index already selects.
+- [ ] **Navigation feel: prefetch + view transitions** — a
+  speculation-rules/prefetch hint for the lead card's digest so the
+  most-likely tap opens instantly; `@view-transition` navigation crossfade
+  for browsers that support it. Both progressive, both ignored gracefully.
+- [ ] **Ingest v2: source_counts + failed_sources (site side)** — `PUT
+  /ingest/:id` accepts two OPTIONAL fields: `source_counts` (map of source
+  → item count) and `failed_sources` (list of collector names); absent =
+  old app payloads keep working byte-for-byte. Index entries render a
+  five-segment source-spectrum micro-bar and a degraded-run badge when the
+  data exists. Needs a numbered migration for the new columns.
+- [ ] **(digest repo) publish source_counts + failed_sources** — the app
+  computes per-source counts from the digest's own stamped items and parses
+  failed sources from the deterministic ⚠ banner; ships in the app's own
+  release train (tag → homelab bump → deploy), after which new digests
+  light up the spectrum/badge.
+- [ ] **(digest repo) Telegram section deep links** — the TL;DR bot message
+  gains up to three section links targeting the site's `#sN` anchors,
+  derived from `body_md`'s `## ` headings with the same needs-attention
+  exclusion rule the site's TOC numbering uses — the two implementations
+  must agree on numbering or links jump wrong.
+
+Steps 1–8 deploy with one `wrangler deploy` (the deploy is the release); the
+two digest-repo steps ride that repo's own versioned release. Explicitly out
+of scope, unchanged from roadmap 1's deferrals: FTS search, pagination,
+PWA/offline (the capability-token-in-persistent-storage wrinkle) — plus
+story arcs and the calendar heatmap, which are wanted but need their own
+design pass (story identity is an app-side problem first).
