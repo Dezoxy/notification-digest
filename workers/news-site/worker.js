@@ -1641,15 +1641,26 @@ const CSS = `
     font-size: 17px;
     overflow-wrap: break-word; /* inherited: see the overflow-x note above */
   }
-  /* Text size (owner upgrade): S/M/L scales the WHOLE body font-size, not
-     just prose, because the layout is em-built end to end — scaling only
-     the article text would break the meta rows' (dateline, chips, mono
-     eyebrows) rhythm relative to it. M is deliberately the ABSENCE of
-     data-fontsize, not its own rule: the owner-tuned 17px/15px defaults
-     above stay the single source of truth, and s/l are offsets from them,
-     never a competing definition of "normal". */
-  :root[data-fontsize="s"] body { font-size: 16px; }
-  :root[data-fontsize="l"] body { font-size: 19px; }
+  /* Text size (owner upgrade): S/M/L scales the READING text only — the
+     article body (.digest, which carries the TL;DR callout and section
+     h2s proportionally inside it) and the index/search excerpts. The
+     first cut scaled the whole body instead and the owner immediately
+     flagged it: the entire UI zoomed, which reads as a broken viewport,
+     not a text-size preference — chrome (masthead, tabs, pills, meta
+     rows) must hold its owner-tuned rhythm while only the prose moves.
+     em factors, not px, so the 17px/15px desktop/phone bases scale
+     without a second media-scoped set of rules. M stays the ABSENCE of
+     data-fontsize: the defaults above remain the single source of truth,
+     s/l are offsets from them, never a competing "normal". The
+     .entry-lead .excerpt variants exist because these :root-prefixed
+     rules outrank the lead card's own base font-size — without them,
+     compact S would shrink the lead below its deliberate extra weight. */
+  :root[data-fontsize="s"] .digest { font-size: 0.94em; }
+  :root[data-fontsize="l"] .digest { font-size: 1.12em; }
+  :root[data-fontsize="s"] .entry .excerpt { font-size: 0.87em; }
+  :root[data-fontsize="l"] .entry .excerpt { font-size: 1.04em; }
+  :root[data-fontsize="s"] .entry-lead .excerpt { font-size: 0.96em; }
+  :root[data-fontsize="l"] .entry-lead .excerpt { font-size: 1.14em; }
   a { color: var(--accent); }
   /* overflow-x: clip HERE, on a non-root element, is the actual guarantee
      against the phone layout-viewport bug (owner-reported twice,
@@ -1678,11 +1689,10 @@ const CSS = `
 
   /* Mobile masthead + phone font size (owner-tuned). */
   @media (max-width: 40em) {
-    /* 15px: phone type ran large even at 16 (owner feedback, twice). */
+    /* 15px: phone type ran large even at 16 (owner feedback, twice). The
+       S/M/L text-size rules need no phone twin — they're em factors off
+       this base, see the data-fontsize block above. */
     body { font-size: 15px; }
-    /* Same S/M/L contract as the desktop rule above, phone-scaled. */
-    :root[data-fontsize="s"] body { font-size: 14px; }
-    :root[data-fontsize="l"] body { font-size: 16.5px; }
     /* Brand left, EN|HU right on one line (owner: the selector belongs
        on the right; the cadence line was removed entirely at the owner's
        request — the footer already carries the private-link warning). */
