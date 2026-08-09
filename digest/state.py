@@ -105,6 +105,24 @@ _POLYMARKET_PROB_PRUNE_DAYS = 30
 # succeeds.
 _ITEMS_PRUNE_DAYS = 90
 
+# How far back a daily brief looks for the window digests it synthesizes,
+# and -- via `get_daily_allowed_urls` below -- for the item URLs it is
+# allowed to cite. This one constant defines BOTH halves of that
+# relationship: digest/main.py's `run_daily` uses it (via
+# `get_window_digests_since`) to pick which window digests to summarize
+# into today's brief, and digest/deliver.py's `deliver_channels` uses it
+# (via `get_daily_allowed_urls`) to re-derive the link-provenance allowlist
+# for that same brief at delivery time. They MUST be the same window: if
+# they were allowed to diverge, a daily brief could legitimately cite a URL
+# that its own delivery-time allowlist doesn't cover (a window digest
+# included in synthesis but excluded from the allowlist, or vice versa) --
+# exactly the class of bug a single shared constant rules out by
+# construction, rather than by two call sites happening to agree. Public
+# (no leading underscore) because both main.py and deliver.py import it
+# directly -- state.py sits below both in the import graph, so there is no
+# cycle risk either way.
+DAILY_LOOKBACK_WINDOW = timedelta(hours=24)
+
 # The complete set of valid `Item.source` / cursor-source values. This is
 # where source validity is enforced now that _SCHEMA's `source` columns have
 # no CHECK constraint (see _SCHEMA's comment on items.source and
@@ -1085,6 +1103,84 @@ def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
     """
     rows = conn.execute(
         "SELECT url FROM items WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def get_daily_allowed_urls(conn: sqlite3.Connection, created_at: str) -> set[str]:
+    """Return the link-provenance allowlist for a DAILY brief, re-derived from the DB.
+
+    A "daily" digest (digest/daily.py's `summarize_daily`) stamps NO items of
+    its own -- it consumes a day's worth of window digests, never raw items
+    (see `create_digest`'s `kind` docstring) -- so `get_digest_item_urls`
+    against a daily digest_id always returns the empty set. Before this
+    function existed, digest/deliver.py's `deliver_channels` derived its
+    link-provenance allowlist the SAME way for every digest kind, which for
+    a daily brief meant an empty allowlist and every citation link defanged
+    to plain text on every channel (site, email, and the Hungarian
+    translation alike) -- this function exists to fix exactly that.
+
+    The allowlist is the union of item URLs across every WINDOW digest
+    created within `DAILY_LOOKBACK_WINDOW` (24h) before `created_at`:
+
+        SELECT DISTINCT i.url FROM items i JOIN digests d ON i.digest_id = d.id
+        WHERE d.kind = 'window' AND d.created_at >= ? AND d.created_at < ?
+
+    with bounds = [created_at - DAILY_LOOKBACK_WINDOW, created_at) -- one
+    query, no per-digest loop, mirroring `get_window_digests_since`'s own
+    `kind = 'window'` scoping (a daily row must never feed into, or here
+    license the citations of, another daily row).
+
+    Re-deriving from the DB by `created_at` (rather than requiring the
+    caller to thread the original run's `allowed_urls` set through) is what
+    makes this work IDENTICALLY on a fresh delivery (main.py's `run_daily`,
+    moments after `create_digest`) and on a pending resend in a much later
+    run (`deliver_pending`, which by then has only the digest_id and its
+    stored `created_at` to go on) -- the same reason `get_digest_item_urls`
+    exists for window digests in the first place, see its own docstring.
+
+    The upper bound (`< created_at`, strict) is what makes a RESEND
+    deterministic. Without it, a window digest created AFTER this brief was
+    originally written -- but before a later resend attempt re-runs this
+    query -- would widen the resend's allowlist beyond what the brief was
+    actually written against: a resend must reproduce the exact same
+    allowlist the original delivery would have used, not a bigger one just
+    because more time has since passed.
+
+    Honest caveat: `created_at` here is the daily digest's OWN stored
+    `created_at`, which is within seconds of -- but not byte-for-byte
+    identical to -- the `now` the original `run_daily` call used to compute
+    its `since` bound for `get_window_digests_since`. A source window digest
+    created within that few-second sliver right at the 24h boundary could
+    therefore fall on the wrong side of one of these two independently
+    computed windows. The consequence is narrow and non-crashing: at most
+    one legitimately-cited URL ends up outside this re-derived allowlist, so
+    its anchor gets defanged to plain text for that one citation -- not a
+    crash, not a wrong-content bug elsewhere.
+
+    Also depends on the source window digests' `items` rows still existing:
+    a very late resend, after `prune_delivered_items`'s 90-day prune has
+    already removed them, can thin or even empty this allowlist -- the same
+    accepted trade-off already documented on `get_digest_source_counts` for
+    an old digest's `source_counts`, not a new one introduced here.
+
+    `created_at` is parsed with `datetime.fromisoformat`, naive timestamps
+    treated as UTC -- the same fallback digest/deliver.py's Telegram
+    freshness guard (`_deliver_telegram`) and digest/summarize.py's
+    `_format_digest_age` both use. Every `created_at` this codebase writes is
+    `datetime.now(UTC).isoformat()` (see `create_digest`), so the
+    naive-fallback branch is defensive, not the expected path.
+    """
+    created = datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    window_start = created - DAILY_LOOKBACK_WINDOW
+    rows = conn.execute(
+        """
+        SELECT DISTINCT i.url FROM items i JOIN digests d ON i.digest_id = d.id
+        WHERE d.kind = 'window' AND d.created_at >= ? AND d.created_at < ?
+        """,
+        (window_start.isoformat(), created.isoformat()),
     ).fetchall()
     return {row[0] for row in rows}
 
