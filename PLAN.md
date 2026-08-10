@@ -474,6 +474,7 @@ Phases 1–4 below shipped long ago; everything past them (the site/Telegram del
 2. **RESOLVED — SMTP provider:** iCloud Custom Email Domain SMTP (`smtp.mail.me.com:587`), not a third-party relay. `toomhorvath.com` mail is already an iCloud Custom Email Domain (MX, SPF, iCloud DKIM, strict DMARC all managed in the owner's cloudflare-terraform repo); sending from an alias on that domain (e.g. `digest@toomhorvath.com`, to be created in iCloud settings) means iCloud's own DKIM already satisfies the domain's strict DMARC — no DNS changes needed. A third-party relay (Resend etc.) was rejected — it would require new DKIM records in the Terraform zone.
 3. **OPEN — Telegram group allowlist:** which chat IDs go into `TG_CHAT_ALLOWLIST` — owner will supply before Phase 1 testing.
 4. **RESOLVED — X scope:** notifications timeline only, no home timeline. Affects `collectors/x.py` fetch surface and volume/cost assumptions in §8.
+5. **RESOLVED — site audience (§11.5 blocker a):** the owner answered "community product" on 2026-08-10. news.tomhorvath.me is the web companion for the closed Telegram community the digest already delivers into, not a personal instrument. Community-facing consequences ripple into future §11 work: shared-token access is the distribution model, client-side state (catch-up, follows) is per-reader by construction, HU strings carry real audience weight.
 
 ## 10. Improvement plan (2026-08)
 
@@ -768,33 +769,89 @@ of the 3-hourly one).
 - [ ] (toom-edge, later) Render per-story status chips from the
       verification output — only after this entry ships.
 
-### 11.5 Community signals — trending, radar, discuss-in-Telegram (PARKED)
+### 11.5 Community signals — engagement on the digest's own Telegram posts (audience question RESOLVED, attribution design PROPOSED)
 
-**Status:** proposed 2026-08-10, PARKED. Origin: Codex redesign brief for
-news.tomhorvath.me, triaged 2026-08-10.
+**Status:** audience question RESOLVED (community product, §9); attribution
+design PROPOSED below, awaiting owner approval before any implementation.
+Origin: Codex redesign brief for news.tomhorvath.me, triaged 2026-08-10;
+parked 2026-08-10 pending §9; re-opened 2026-08-10 with a pivoted design
+after the audience question resolved.
 
-**What & why.** Per-arc Telegram message/reaction counts, a "trending in
-the community" list, an attention radar, and deep links into the Telegram
-discussion behind a story. Parked behind two named blockers.
+**What & why.** The parked entry assumed attribution meant fuzzy-matching
+member messages in SOURCE groups to arcs — a new model-driven pipeline with
+a privacy boundary problem (blocker (b) in the original entry). The pivot:
+the digest already POSTS into the community's Telegram group. Every window,
+daily, and weekly digest ships a TL;DR there via `send_telegram_tldr`
+(`digest/publish.py`), a Bot API call (`https://api.telegram.org/bot{token}/
+sendMessage`) driven by `_deliver_telegram`/`_telegram_thread_id_for_kind`
+in `digest/deliver.py`, using `cfg.telegram_notify_bot_token` /
+`cfg.telegram_notify_chat_id` (env `TELEGRAM_NOTIFY_BOT_TOKEN` /
+`TELEGRAM_NOTIFY_CHAT_ID`) and one of `cfg.telegram_notify_thread_id` /
+`cfg.telegram_daily_thread_id` / `cfg.telegram_weekly_thread_id` to route
+into the right forum topic. Engagement signals therefore attach to the
+digest's OWN messages: reaction counts and reply counts on each posted
+TL;DR, read via the EXISTING Telethon MTProto user session — `digest/
+collectors/telegram.py`'s `TelegramClientLike` (`TG_API_ID`/`TG_API_HASH`/
+`TG_SESSION`), the same session `digest/collectors/telegram.py`'s `collect()`
+already uses to read the SOURCE groups on `TG_CHAT_ALLOWLIST` — reading the
+delivery group instead. The collector boundary already owns Telegram I/O;
+this adds a second read path inside it, not a new one. Attribution to arcs
+is then a deterministic join: engagement is per-digest; digests already map
+to arcs via `derive_topics`' slugs and §11.3's per-arc delta rows; an arc's
+community signal = engagement-weighted sum over the digests that carried
+it. Zero model calls anywhere in this pipeline — pure counts.
 
-**Guardrails:**
-- (a) **The audience question is unanswered.** Is the site a personal
-  instrument or a community product? Building this first designs that
-  answer by accident instead of deciding it.
-- (b) **The attribution pipeline doesn't exist.** Mapping a Telegram
-  discussion message back to a specific arc is a new fuzzy pipeline, none
-  of it built today. Surfacing per-member message/reaction counts also
-  moves member activity across a boundary it doesn't cross today — right
-  now the digest reports content, never who said what how often — a
-  boundary to cross by explicit decision, not scope creep. (The Codex
-  round-2 brief reframes this toward Reddit vote/comment signals instead
-  of Telegram — more tractable, since the Reddit collector exists, but
-  per-item metrics aren't stored today and blocker (a) applies unchanged.)
+**Guardrails (name each explicitly):**
+1. Aggregate-only, always: reaction/reply COUNTS per digest message, never
+   usernames, never message text, never per-member anything — member
+   activity stays inside Telegram; only the community's aggregate pulse
+   leaves. This is the §11.5 boundary blocker (b) named, now crossed
+   deliberately and narrowly, not by scope creep.
+2. Feature-flagged like X and verify: `TELEGRAM_ENGAGEMENT_ENABLED`
+   (matching the `X_ENABLED`/`VERIFY_DAILY_ENABLED` naming and default-off
+   convention in `digest/config.py`), collector-boundary isolation, failure
+   produces a banner/log — not a crashed run, matching the existing
+   collector failure contract (§8 risk table).
+3. Idempotent snapshots: one row per digest, last-write-wins upsert
+   (engagement grows over time; each run re-samples recent digests within a
+   bounded window, e.g. the trailing 7 days) — keyed digest_id, same hard-
+   rule discipline as items/deltas.
+4. Data-derived ranking only: if engagement later feeds NOW/trending
+   ranking, it enters as a transparent numeric term — never severity/
+   importance vocabulary the data doesn't back (same guardrail class as
+   §11.1 momentum).
+5. Site half is ingest v5, optional field, truthy-only — validator ordering
+   proven irrelevant (§11.3 correction), but validation still lands
+   site-side before rendering claims anything.
 
-**Steps:**
-- [ ] Answer the audience question (owner decision — recorded in §9).
-- [ ] Only then: design the message→arc attribution pipeline as its own
-      §11 entry.
+**Steps (unticked):**
+- [ ] (digest) Engagement sampler in the Telegram collector boundary,
+      reading reactions/replies on the bot's own delivery-thread messages
+      for digests in the trailing window, behind
+      `TELEGRAM_ENGAGEMENT_ENABLED`. Prerequisite gap to close first:
+      `send_telegram_tldr` currently discards the Bot API response
+      (`response.read()` with no `message_id` captured or stored) — the
+      sampler needs that message_id to know which message to read
+      reactions/replies on, so capturing and persisting it becomes part of
+      this step, not an assumed given.
+- [ ] (digest) `engagement` table via the next `PRAGMA user_version`
+      migration, upsert keyed digest_id.
+- [ ] (digest) Publish payload optional `engagement` field.
+- [ ] (toom-edge) Ingest v5 validation + storage.
+- [ ] (toom-edge) Render: community pulse on brief entries and arc pages;
+      optional engagement term in NOW ranking as a follow-up decision.
+- [ ] Validate on real data with the flag on before any ranking use.
+
+**Cost:** moderate; no model calls; the main risk is Telegram API surface
+for reading reactions via Telethon — unverified in this pass. Telethon
+message objects can expose aggregate reaction counts (`message.reactions`)
+for messages the user session can see, which fits guardrail 1's
+aggregate-only shape, but this needs live confirmation against a real bot-
+posted message in the delivery group before the sampler is built. Reply
+counts likely need `iter_messages(entity, reply_to=message_id)` rather than
+a direct field. If reaction reading turns out limited or unreliable, reply
+counts alone are the v1 signal — say so honestly in the implementation PR
+rather than shipping a sampler that silently under-counts.
 
 ### 11.6 Context mode — "60-second context" per arc (deferred)
 
