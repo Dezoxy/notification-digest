@@ -5544,8 +5544,28 @@ function renderArcs(topicArcs, strings, token, lang) {
 // row can predate one field while already carrying the other. Same
 // "something imperfect beats nothing/an error" posture as
 // findArcSectionAnchor's null-anchor fallback elsewhere in this file.
+// Delta prose is English-only today: §11.3 stores exactly ONE `deltas`
+// payload, extracted from the English window digest by the app's
+// extract_deltas choke point BEFORE translation ever runs, so no Hungarian
+// variant of these sentences exists anywhere. Rendering it on a /hu/ page
+// produced a Hungarian heading ("MI VÁLTOZOTT") wrapped around entirely
+// English sentences — owner-reported, and worse than showing nothing.
+// Suppressed there instead, which costs the HU reader nothing substantive:
+// the same delta-only stories are already written as prose in the
+// Hungarian body right below (the app writes them that way; the fenced
+// block is a convenience layer over information the body already carries).
+//
+// THE single hook for the eventual `deltas_hu` payload (ingest v5): widen
+// this to "true when text exists in `lang`", and pass that text through at
+// the two call sites below (renderDeltas here, renderArcAppearance's own
+// deltaHtml on the arc page). Both consult this, so neither can be
+// forgotten.
+function deltasRenderableIn(lang) {
+  return lang === "en";
+}
+
 function renderDeltas(deltas, topicArcs, strings, token, lang) {
-  if (!deltas || deltas.length === 0) return "";
+  if (!deltas || deltas.length === 0 || !deltasRenderableIn(lang)) return "";
   const labelBySlug = new Map((topicArcs ?? []).map((t) => [t.slug, t.label]));
   const rows = deltas
     .map(
@@ -5762,9 +5782,12 @@ function renderArcAppearance(row, token, lang) {
   // with the digest page's own "What changed" block (renderDeltas) — same
   // quiet typographic treatment, no separate label span here since the
   // appearance's own `.excerpt` line right above already names the story.
-  const deltaHtml = row.delta
-    ? `<p class="deltatext"><span class="deltaprev">${esc(row.delta.previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(row.delta.now)}</span></p>`
-    : "";
+  // deltasRenderableIn: English-only text, suppressed on /hu/ pages — see
+  // that function's comment for why and for the deltas_hu hook.
+  const deltaHtml =
+    row.delta && deltasRenderableIn(lang)
+      ? `<p class="deltatext"><span class="deltaprev">${esc(row.delta.previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(row.delta.now)}</span></p>`
+      : "";
   return `<a class="entry" href="${href}" data-created="${esc(row.created_at)}">
     <span class="meta"><span class="time">${esc(time)}</span>${badgeHtml}</span>
     <p class="excerpt">${esc(row.label)}</p>
