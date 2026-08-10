@@ -2466,14 +2466,13 @@ const CSS = `
      pageChrome). The two side zones carry flex: 1 1 0 so they grow equally
      from nothing — that equal growth is what centers the capsule on the
      row's true midpoint instead of on the leftover space after a wider
-     brand. This is the COMPACT one-line masthead — digest/search/arc pages
-     (pageKind !== "index", see pageChrome's bigMasthead param) — small brand
-     left, view tabs + settings/search right, a single heavy 4px rule
-     underneath in place of the old 1px hairline (masthead rule weight now
-     matches .digest h2's own top rule and the colophon's, see below —
-     one consistent "heavy rule = structural divider" vocabulary across the
-     page). Desktop is one nowrap row; the ≤40em block below rewraps the
-     capsule onto its own centered second line. */
+     brand. ONE masthead for every page (owner follow-up — it must not
+     change shape between the index and a digest page; see pageChrome):
+     display-scale brand left, tabs centered, search/settings right, a
+     heavy 4px rule underneath (rule weight matches .digest h2's own top
+     rule and the colophon's — one "heavy rule = structural divider"
+     vocabulary across the page). Desktop is one nowrap row; the ≤40em
+     block below rewraps the capsule onto its own centered second line. */
   header.mast {
     display: flex; align-items: center;
     gap: 0.6em 1em; padding: 1.1em 0 0.9em;
@@ -2560,9 +2559,11 @@ const CSS = `
     letter-spacing: 0.11em; text-transform: uppercase; color: var(--muted);
     padding-top: 1.4em;
   }
-  /* Slimmer padding than the compact mast: the display-scale brand already
-     carries the vertical presence. */
-  .mast-big { padding: 0.5em 0 0.7em; }
+  /* Slimmer top padding only when an issue line sits above (index/digest);
+     a page without one (arc, search) keeps the base masthead padding so the
+     brand never crowds the viewport edge. */
+  .issueline + header.mast { padding-top: 0.5em; }
+  .mast-big { padding-bottom: 0.7em; }
   .mast-big .brand {
     font-size: clamp(1.5em, 4.5vw, 2.1em);
     letter-spacing: -0.03em; line-height: 0.98;
@@ -3719,18 +3720,14 @@ const CSS = `
 // sitting in the lead card's own href on the same page (same-document
 // exposure), and the speculation rules processor doesn't send that URL
 // anywhere the visible link wouldn't already send it on a click.
-// `bigMasthead` (Front Page redesign, index pages only): the mono issue
-// line (edition number/date/editions-today, see renderIndexPage's
-// buildIssueLine) above ONE masthead row — big brand left, view tabs
-// centered, search/settings right (owner follow-up: no separate nav band;
-// same three-zone row as the compact masthead, just with the display-scale
-// brand). The row reuses the compact masthead's exact structure and
-// classes (mastleft/viewtabs/mastright), so the true-centering flex and
-// the phone wrap rules apply to both layouts from one CSS block.
+// The masthead is ONE layout on every page (owner follow-up: it must not
+// change shape between the index and a digest page): big brand left,
+// view-tab capsule centered, search/settings right, with an optional mono
+// issue line above — the index passes buildIssueLine's edition line, the
+// digest page passes its own "No. {id} · {date}", and pages with nothing
+// to say (arc, search) pass none, keeping the row itself identical.
 // `issueLineText` is the RAW (unescaped) issue-line string; pageChrome
-// esc()s it once here, same convention as `title` just below. Both default
-// to the compact/off state so every other pageChrome call site is
-// untouched.
+// esc()s it once here, same convention as `title` just below.
 function pageChrome(
   host,
   token,
@@ -3740,7 +3737,6 @@ function pageChrome(
   bodyHtml,
   title = null,
   prefetchHref = null,
-  bigMasthead = false,
   issueLineText = "",
 ) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
@@ -3802,9 +3798,7 @@ ${prefetchLinkHtml}
 <body>
 ${prefetchScriptHtml}
 <div class="wrap">
-  ${
-    bigMasthead
-      ? `${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
+  ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
   <header class="mast mast-big">
     <div class="mastleft">
       <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}</a>
@@ -3813,17 +3807,7 @@ ${prefetchScriptHtml}
     <div class="mastright">
       ${switchersHtml}
     </div>
-  </header>`
-      : `<header class="mast">
-    <div class="mastleft">
-      <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}</a>
-    </div>
-    ${viewTabsHtml}
-    <div class="mastright">
-      ${switchersHtml}
-    </div>
-  </header>`
-  }
+  </header>
   ${paletteConfigHtml}
   ${bodyHtml}
 </div>
@@ -4561,10 +4545,15 @@ ${prefetchScriptHtml}
     // would live-hide the previous results before the form ever submits.
     // The index page's own filter input is the only .filter with no form.
     if (input.form) return;
+    // Digest/arc pages carry the same masthead search bubble as the index
+    // (consistent-masthead follow-up) but have no ledger to filter — bail
+    // BEFORE the reveal, so their bubble shows only the archive search
+    // link and this input never surfaces as a dead control.
+    var section = document.querySelector("section[data-empty-filtered]");
+    if (!section) return;
     input.hidden = false;
     var entries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
     var dayheads = Array.prototype.slice.call(document.querySelectorAll(".dayhead"));
-    var section = document.querySelector("section[data-empty-filtered]");
     var emptyEl = null;
 
     var applyFilters = function () {
@@ -6063,7 +6052,6 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     prefetchHref,
-    true,
     buildIssueLine(leadRow, rows, view, strings),
   );
 }
@@ -6427,9 +6415,18 @@ ${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</n
     token,
     lang,
     view,
-    renderSwitchers(token, lang, view, "digest", digest.id),
+    // showSearch true (consistent-masthead follow-up): the digest page
+    // carries the same search bubble as the index; its client-side filter
+    // input stays hidden here (the filter IIFE bails without a ledger
+    // section), so the bubble offers just the archive search link.
+    renderSwitchers(token, lang, view, "digest", digest.id, null, true),
     body,
     pageTitle,
+    null,
+    // Same issue-line slot the index fills — the digest's own edition
+    // number and full date (the date the edhead eyebrow deliberately
+    // dropped lives here now, one line, one place).
+    `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
   );
 }
 
@@ -6627,7 +6624,7 @@ ${timelineHtml}`;
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "arc", identity),
+    renderSwitchers(token, lang, "all", "arc", identity, null, true),
     body,
     title,
   );
