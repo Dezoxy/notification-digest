@@ -2206,11 +2206,13 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
     pageKind === "index"
       ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
       : "";
-  // The gear carries a visible text label on desktop (owner-requested) and
-  // collapses to the bare icon on the phone — the label span is hidden by
-  // the mobile media block, the aria-label covers it everywhere.
+  // The settings trigger is TEXT-ONLY on desktop and ICON-ONLY on the phone
+  // (owner follow-up: no gear glyph next to the label; the phone button
+  // matches the search icon's size). Both halves live in their own spans so
+  // each breakpoint hides one — .gearicon desktop-hidden, .gearlabel
+  // phone-hidden (see the CSS) — and the aria-label covers it everywhere.
   const searchHtml = showSearch ? renderSearchBubble(token, lang, strings) : "";
-  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
+  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -2490,14 +2492,11 @@ const CSS = `
      .brand) at a fraction of the size, so the two masthead sizes read as
      one family, not two different logotypes. */
   .mast .brand { font-weight: 800; font-size: 0.95em; letter-spacing: -0.02em; text-transform: uppercase; text-decoration: none; color: var(--text); }
-  .brand .tld { color: var(--accent); }
   /* The settings gear (language/theme/size/density, collapsed into one
      details.settings disclosure — see renderSwitchers) sits top-right in
      the masthead via .mastright, right-aligned — same markup at both
-     breakpoints, and in both the compact (inside header.mast) and big
-     (inside .mastnav, see pageChrome) masthead layouts — this selector is
-     deliberately NOT scoped under .mast alone, since the big masthead's
-     .mastnav row is a sibling of header.mast, not a descendant. */
+     breakpoints and in both masthead layouts (compact and .mast-big both
+     use the identical three-zone row, see pageChrome). */
   .mastright {
     display: flex; align-items: center; justify-content: flex-end;
     gap: 0.55em; flex: 1 1 0;
@@ -2509,8 +2508,24 @@ const CSS = `
        S/M/L text-size rules need no phone twin — they're em factors off
        this base, see the data-fontsize block above. */
     body { font-size: 15px; }
-    /* Icon-only gear on the phone — see .gearlabel above. */
+    /* Icon-only gear on the phone — the desktop half-swap of .gearicon/
+       .gearlabel, reversed. The desktop .gearicon { display: none } rule
+       sits LATER in this stylesheet (source order beats equal specificity,
+       media block or not — live-caught as an empty settings circle), so
+       this reveal needs the extra summary.gear ancestor to outweigh it. */
     .gearlabel { display: none; }
+    summary.gear .gearicon { display: inline; }
+    /* The two toolbar toggles become EQUAL circles (owner follow-up: the
+       gear must match the search icon's size). Fixed rem box on both — the
+       gear's mono chip type and the search svg have different natural
+       metrics, so equal padding alone never lines them up. letter-spacing
+       reset: the mono chip tracking adds a trailing gap that shoves a
+       single glyph off-center in a fixed box. */
+    summary.gear, summary.searchtoggle {
+      width: 1.9rem; height: 1.9rem; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    summary.gear { font-size: 0.9em; letter-spacing: 0; }
     /* Masthead phone posture (true-centering revision): three zones don't
        fit at 375px, so the capsule takes its own SECOND line, centered.
        The line break must be FORCED, not hoped for: the side zones carry
@@ -2524,41 +2539,33 @@ const CSS = `
        on the capsule itself would have stretched its border full-bleed.
        .mastright stays a real box (the settings bubble never depended on
        it — details.settings is its own anchor, see that comment below). */
-    header.mast, .mastnav { flex-wrap: wrap; }
-    header.mast::before, .mastnav::before { content: ""; flex-basis: 100%; order: 3; }
-    .mast .viewtabs, .mastnav .viewtabs { order: 4; margin-left: auto; margin-right: auto; }
+    header.mast { flex-wrap: wrap; }
+    header.mast::before { content: ""; flex-basis: 100%; order: 3; }
+    .mast .viewtabs { order: 4; margin-left: auto; margin-right: auto; }
   }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
 
-  /* Big edition masthead (index pages only — pageChrome's bigMasthead param):
-     a mono uppercase issue line (edition number · full date · editions-today
-     count, see renderIndexPage's buildIssueLine) stacked over a large
-     800-weight uppercase brand, then a SEPARATE second band (.mastnav) that
-     carries the same view-tab capsule + settings/search cluster the compact
-     masthead keeps inline — kept as its own row rather than crammed beside
-     the big brand, both because the brand needs the full width to read as a
-     poster headline and because it lets every page — big or compact
-     masthead — share the exact same .mastright/.viewtabs markup and CSS
-     (see renderSwitchers/pageChrome), nothing JS-facing changes shape
-     between the two layouts. */
-  .mast-big {
-    display: flex; flex-direction: column; gap: 0.5em;
-    padding: 1.3em 0 0.9em; border-bottom: 4px solid var(--rule-heavy); margin-bottom: 0;
-  }
+  /* Big edition masthead (index pages only — pageChrome's bigMasthead
+     param, owner follow-up): the mono issue line sits ABOVE the masthead
+     as its own quiet block, and the masthead itself is the SAME three-zone
+     row as every other page — brand left, view-tab capsule centered by the
+     equal-growth side zones, search/settings right — just with the brand
+     at display scale ("NEWS", the bare first host label; the .tld tail was
+     dropped with the two-tone treatment). One structure, one CSS block,
+     two brand sizes. */
   .issueline {
     font-family: var(--font-data); font-size: 0.66em;
     letter-spacing: 0.11em; text-transform: uppercase; color: var(--muted);
+    padding-top: 1.4em;
   }
+  /* Slimmer padding than the compact mast: the display-scale brand already
+     carries the vertical presence. */
+  .mast-big { padding: 0.5em 0 0.7em; }
   .mast-big .brand {
-    font-weight: 800; font-size: clamp(1.7em, 5.5vw, 2.5em);
-    letter-spacing: -0.03em; line-height: 0.98; text-transform: uppercase;
-    text-decoration: none; color: var(--text); text-wrap: balance;
-  }
-  .mastnav {
-    display: flex; align-items: center; gap: 0.6em 1em;
-    padding: 0.7em 0; border-bottom: 1px solid var(--hairline); margin-bottom: 1.6em;
+    font-size: clamp(1.5em, 4.5vw, 2.1em);
+    letter-spacing: -0.03em; line-height: 0.98;
   }
 
   /* Settings bubble (owner redesign): the gear button collapses language,
@@ -2592,9 +2599,19 @@ const CSS = `
   /* Desktop shows the gear WITH its text label ("Settings"/"Beállítások" —
      owner-requested); the phone masthead is tight, so the label collapses
      there and the icon stands alone (see the mobile block below). */
-  .gearlabel { margin-left: 0.5em; }
-  summary.gear:hover, summary.gear:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none; }
-  details.settings[open] > summary.gear { background: var(--rule-heavy); border-color: var(--rule-heavy); color: var(--bg); }
+  /* Desktop: text-only trigger (owner follow-up) — the glyph half of the
+     summary is hidden here and shown by the phone block below, where the
+     LABEL half hides instead. */
+  .gearicon { display: none; }
+  /* Quiet hover (owner: no full fill that "highlights all the text" — just
+     a light ring around it): the pill border and text pick up the accent,
+     background stays put. Same recipe on every toolbar control below
+     (searchtoggle/densitytoggle/searchbtn). The OPEN state keeps a solid
+     accent fill — that's a state, not a hover, and it matches the active
+     view tab. */
+  summary.gear:hover { border-color: var(--accent); color: var(--accent); }
+  summary.gear:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  details.settings[open] > summary.gear { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   .settingspanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     /* Must clear the sticky day headers (.dayhead, z-index: 1) or the panel
@@ -2670,7 +2687,8 @@ const CSS = `
     background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
     color: var(--text); font-family: var(--font-data); font-size: 0.75em; padding: 0.15em 0.55em; cursor: pointer;
   }
-  .densitytoggle:hover, .densitytoggle:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none; }
+  .densitytoggle:hover { border-color: var(--accent); color: var(--accent); }
+  .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   /* Mini segmented control (three-state theme, S/M/L text size) — the view
      tabs' segmented language (.viewtabs/.viewtab above) miniaturized to
@@ -2838,7 +2856,9 @@ const CSS = `
   .entry .count { color: var(--muted); font-size: 0.75em; font-family: var(--font-data); }
   .entry .flag {
     font-size: 0.68em; font-weight: 400; font-family: var(--font-data); letter-spacing: 0.04em;
-    padding: 0.15em 0.5em;
+    /* Rounded tag (owner follow-up — tags join the rounded family with the
+       controls; only rules/panels/structural chrome stay square). */
+    padding: 0.15em 0.55em; border-radius: 99px;
     background: var(--attention-bg); color: var(--attention-text);
     /* Two-word badges ("weekly report", "daily brief") were wrapping into
        two-line pills in the lead card's meta row (owner-reported from the
@@ -3017,7 +3037,8 @@ const CSS = `
   .arcs { display: flex; flex-wrap: wrap; gap: 0.45em; margin: 0 0 1.2em; }
   .arcs .arc {
     font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
-    letter-spacing: 0.06em; padding: 0.22em 0.8em;
+    /* Rounded tag — same owner follow-up as .entry .flag above. */
+    letter-spacing: 0.06em; padding: 0.22em 0.8em; border-radius: 999px;
     background: var(--chip-bg); color: var(--chip-text); text-decoration: none;
     /* Topics derive from section headings, which run headline-length in
        production (owner-reported, 2026-08-09) — cap the chip at one line.
@@ -3330,9 +3351,11 @@ const CSS = `
     color: var(--text); line-height: 0;
     padding: 0.45em; cursor: pointer;
   }
-  summary.searchtoggle:hover, details.searchpop[open] > summary.searchtoggle,
-  summary.searchtoggle:focus-visible {
-    background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none;
+  /* Quiet hover / filled open — same split as summary.gear above. */
+  summary.searchtoggle:hover { border-color: var(--accent); color: var(--accent); }
+  summary.searchtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  details.searchpop[open] > summary.searchtoggle {
+    background: var(--accent); border-color: var(--accent); color: var(--bg);
   }
   summary.searchtoggle::-webkit-details-marker { display: none; }
   .searchpanel {
@@ -3496,7 +3519,8 @@ const CSS = `
     font-family: var(--font-data); font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase;
     padding: 0.5em 1.2em; background: none; cursor: pointer;
   }
-  .searchbtn:hover, .searchbtn:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none; }
+  .searchbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .searchbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
      inserts between digests that arrived since the reader's last visit and
@@ -3559,33 +3583,37 @@ const CSS = `
   @media (min-width: 52em) {
     body { padding: 2.5em 1.5em; }
     .wrap {
-      max-width: 48em;
+      /* 61em (owner follow-up on the Front Page redesign: "desktop text
+         should be wider about 30 percent") — up from 48em, i.e. a ~55em
+         text measure after the 3em side padding, ~31% over the old 42em.
+         This supersedes the earlier size-not-width decision recorded
+         below for the SINGLE-column era: the Front Page index is a
+         two-column grid now, so the extra width goes to two honest ~26em
+         columns instead of one over-long line, and the digest page's
+         longer measure is the owner's explicit call. */
+      max-width: 61em;
       padding: 0.4em 3em 3.5em;
     }
-    /* NOTE — no prose max-width clamp here, deliberately. A pass on
-       2026-08-10 tried widening this card to 56em while holding prose at
-       41em, on the theory that chrome should use width prose shouldn't.
-       Live, that read as a broken right edge rather than as hierarchy:
-       the TL;DR box and every ledger excerpt stopped dead mid-card with
-       nothing beside them (owner-reported, twice). Even at this 48em card
-       a clamp left the smaller-font ledger excerpts ~74px short of the
-       content box — same artifact, smaller. This site is mostly prose, so
-       the width it can honestly fill is the width its text wants: content
-       box and text edge are one and the same again. Screen real estate is
-       bought with TYPE SIZE instead — see the wide-viewport font-size
-       steps above, which scale the whole em-based layout together and
-       leave the character measure where it is. */
+    /* NOTE — still no prose max-width clamp here, deliberately. A pass on
+       2026-08-10 tried widening the column while holding prose narrower,
+       on the theory that chrome should use width prose shouldn't. Live,
+       that read as a broken right edge rather than as hierarchy: the
+       TL;DR and every ledger excerpt stopped dead mid-column with nothing
+       beside them (owner-reported, twice). Whatever the column's width
+       is, text fills it: content box and text edge stay one and the same.
+       The wide-viewport font-size steps above still apply on top. */
     /* Anchor the floating back button to the COLUMN, not the bare viewport
-       edge: the column is 48em centered, so its right edge sits at
-       50% + 24em — park the button 1rem past it. min() clamps back to the
-       viewport edge on narrow desktop windows so the button can never be
-       pushed off-screen. Mobile keeps the base viewport-corner placement. */
+       edge: the column is 61em centered, so its right edge sits at
+       50% + 30.5em — park the button 1rem past it. min() clamps back to
+       the viewport edge on narrow desktop windows so the button can never
+       be pushed off-screen. Mobile keeps the base viewport-corner
+       placement. */
     .backfab {
       /* em would resolve against the fab's own 1.35em font — overshooting
          by ~150px (live-measured). rem resolves against the root: the
-         column is 48em of the 17px body = 816px wide, half = 408px =
-         25.5rem at the 16px root default. */
-      left: min(calc(50% + 25.5rem + 1rem), calc(100vw - 48px - 1.1rem));
+         column is 61em of the 17px body = 1037px wide, half = 518px =
+         32.4rem at the 16px root default. */
+      left: min(calc(50% + 32.4rem + 1rem), calc(100vw - 48px - 1.1rem));
       right: auto;
     }
   }
@@ -3599,7 +3627,7 @@ const CSS = `
   @media print {
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; border: 0; }
-    .mast, .mast-big, .mastnav, .issueline, .viewtabs, nav.digestnav, .backfab, .toc,
+    .mast, .mast-big, .issueline, .viewtabs, nav.digestnav, .backfab, .toc,
     .searchpop, .miniseg, .densitytoggle, .resumechip,
     .archiveresults, .catchup, .followtoggle {
       display: none;
@@ -3676,15 +3704,18 @@ const CSS = `
 // sitting in the lead card's own href on the same page (same-document
 // exposure), and the speculation rules processor doesn't send that URL
 // anywhere the visible link wouldn't already send it on a click.
-// `bigMasthead` (Front Page redesign, index pages only): renders the large
-// edition masthead — mono issue line (edition number/date/editions-today,
-// see renderIndexPage's buildIssueLine) stacked over a big display brand,
-// with view tabs + settings/search in a SEPARATE band below (.mastnav) —
-// instead of the compact one-line masthead every other page keeps (brand +
-// view tabs + gear all in one row, see the CSS). `issueLineText` is the
-// RAW (unescaped) issue-line string; pageChrome esc()s it once here, same
-// convention as `title` just below. Both default to the compact/off state
-// so every other pageChrome call site is untouched.
+// `bigMasthead` (Front Page redesign, index pages only): the mono issue
+// line (edition number/date/editions-today, see renderIndexPage's
+// buildIssueLine) above ONE masthead row — big brand left, view tabs
+// centered, search/settings right (owner follow-up: no separate nav band;
+// same three-zone row as the compact masthead, just with the display-scale
+// brand). The row reuses the compact masthead's exact structure and
+// classes (mastleft/viewtabs/mastright), so the true-centering flex and
+// the phone wrap rules apply to both layouts from one CSS block.
+// `issueLineText` is the RAW (unescaped) issue-line string; pageChrome
+// esc()s it once here, same convention as `title` just below. Both default
+// to the compact/off state so every other pageChrome call site is
+// untouched.
 function pageChrome(
   host,
   token,
@@ -3698,7 +3729,9 @@ function pageChrome(
   issueLineText = "",
 ) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
-  const { first, rest } = brandParts(host);
+  // Only the first host label renders now — the brand is just "NEWS"
+  // (owner follow-up); brandParts' rest/tld tail is unused here.
+  const { first } = brandParts(host);
   const strings = STRINGS[lang];
   const prefetchLinkHtml = prefetchHref
     ? `<link rel="prefetch" href="${esc(prefetchHref)}">`
@@ -3756,19 +3789,19 @@ ${prefetchScriptHtml}
 <div class="wrap">
   ${
     bigMasthead
-      ? `<header class="mast mast-big">
-    ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
-    <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
-  </header>
-  <nav class="mastnav">
+      ? `${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
+  <header class="mast mast-big">
+    <div class="mastleft">
+      <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}</a>
+    </div>
     ${viewTabsHtml}
     <div class="mastright">
       ${switchersHtml}
     </div>
-  </nav>`
+  </header>`
       : `<header class="mast">
     <div class="mastleft">
-      <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
+      <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}</a>
     </div>
     ${viewTabsHtml}
     <div class="mastright">
