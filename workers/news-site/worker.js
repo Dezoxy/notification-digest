@@ -3077,11 +3077,33 @@ const CSS = `
     html { background: var(--page-bg); }
     .wrap {
       background: var(--bg);
-      max-width: 48em;
+      max-width: 56em;
       padding: 0.4em 3em 3.5em;
       border-radius: 28px;
       border: 1px solid var(--hairline);
     }
+    /* Desktop optimisation (owner-requested): the card widens 48em -> 56em,
+       but the READING MEASURE does not move — every prose-bearing block
+       below is clamped to the same 42em it has always had (measured: ~83
+       characters per line at the 17px body size, already at the wide end of
+       the 45-75 convention, so widening the prose itself would cost
+       readability rather than buy anything). What the extra 8em actually
+       buys is the chrome: NOW rows stop ellipsising long arc labels, the
+       week rail's three zones separate properly, catch-up/source-key/TOC
+       chips wrap less. This is the "controlled variation" the design
+       guidance asks for — narrow prose, wider situational overview.
+       Clamped, deliberately NOT centred: prose and chrome keep one shared
+       left edge (chrome simply runs further right), because two different
+       left edges on the same page reads as misalignment, not hierarchy.
+
+       41em, not 42: the old 48em card minus its 3em padding left prose at
+       712px, and an em clamp resolves against each block's OWN font-size,
+       so a bare 42em measured 728px here — 2 characters WIDER than before.
+       41em lands at 711px, holding the shipped measure to the pixel. It
+       also normalises it: every prose block now has the same character
+       measure regardless of its font-size (the lead card's larger excerpt
+       used to run visibly shorter inside a fixed-px card). */
+    .digest, .excerpt, .deltatext, .en-only-note, .catchuptext, .empty { max-width: 41em; }
     /* Anchor the floating back button to the BUBBLE, not the viewport:
        the card is 48em centered, so its right edge sits at 50% + 24em —
        park the button 1rem into the purple gutter beside its bottom
