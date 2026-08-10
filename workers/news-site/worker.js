@@ -2749,6 +2749,14 @@ const CSS = `
        hidden clips the active segment's fill to the rounded ends. */
     border-radius: 999px; overflow: hidden;
   }
+  /* Belt and suspenders for the capsule ends (owner-reported from Safari:
+     an active END segment's fill poked square corners past the capsule's
+     curve — Safari doesn't reliably clip children to a rounded inline-flex
+     container). The end segments carry their own matching radii, so the
+     fill is rounded at the source and no longer depends on the parent's
+     overflow clip. Same treatment on .viewtab below. */
+  .minisegbtn:first-child { border-radius: 999px 0 0 999px; }
+  .minisegbtn:last-child { border-radius: 0 999px 999px 0; }
   .minisegbtn {
     background: none; border: none; color: var(--muted);
     font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.06em; text-transform: uppercase;
@@ -3364,6 +3372,9 @@ const CSS = `
     color: var(--text);
   }
   .viewtab + .viewtab { border-left: 1px solid var(--hairline); }
+  /* Same Safari capsule-clip insurance as .minisegbtn above. */
+  .viewtab:first-child { border-radius: 999px 0 0 999px; }
+  .viewtab:last-child { border-radius: 0 999px 999px 0; }
   .viewtab.active {
     background: var(--accent); color: var(--bg);
   }
