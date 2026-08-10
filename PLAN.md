@@ -512,9 +512,13 @@ a tag is cut and homelab bumps it.
 
 ### 11.1 Storyline-first site IA — NOW homepage and arc pages (approved)
 
-**Status:** APPROVED 2026-08-10 (owner: "start the implementation");
-execution in toom-edge begins with the arc-chain/NOW work. Origin: Codex
-redesign brief for news.tomhorvath.me, triaged 2026-08-10.
+**Status:** SHIPPED 2026-08-10 — toom-edge #127 (arc pages + deep links),
+#128 (NOW section), #129 (Archive nav + ⌘K + j/k), #130 (soft-nav scroll
+fix caught in live browser verification), all deployed; production D1
+data cleaned of pre-#60 structural-rubric topics the same day. The
+"(digest) only if a ranking signal is missing" step resolved as expected:
+none needed. Origin: Codex redesign brief for news.tomhorvath.me, triaged
+2026-08-10.
 
 **What & why.** The site's primary browsing unit stops being the
 chronological brief and becomes the story arc — the same story-arc topics
@@ -545,32 +549,35 @@ still reachable, no longer the front page.
   them. Same overclaiming class as confidence badges (§11.4).
 
 **Steps:**
-- [ ] (toom-edge) Arc-chain reconstruction: extend the existing
+- [x] (toom-edge) Arc-chain reconstruction: extend the existing
       slug-matching recurrence logic (toom-edge PR #107, 7-day window) to
       the full archive — an arc = every digest sharing a slug, in time
       order.
-- [ ] (toom-edge) Decide + implement the NOW ranking rule (recency ×
+- [x] (toom-edge) Decide + implement the NOW ranking rule (recency ×
       appearance volume) from data already published; no new digest fields
       expected.
-- [ ] (toom-edge) Data-derived momentum indicator per arc: appearance
+- [x] (toom-edge) Data-derived momentum indicator per arc: appearance
       frequency across recent digests → ↑/→/↓ arrows. Frequency only — no
       severity vocabulary (see guardrail above).
-- [ ] (toom-edge) Arc detail page: current state, appearance timeline, deep
+- [x] (toom-edge) Arc detail page: current state, appearance timeline, deep
       links into each brief's section anchor.
-- [ ] (toom-edge) Homepage becomes NOW (top 3–5 arcs); chronological brief
+- [x] (toom-edge) Homepage becomes NOW (top 3–5 arcs); chronological brief
       feed demotes to Archive navigation.
-- [ ] (toom-edge) ⌘K command palette (arcs, briefs, commands) plus j/k
+- [x] (toom-edge) ⌘K command palette (arcs, briefs, commands) plus j/k
       keyboard navigation — polish inside this entry, client-side only.
-- [ ] (digest) Only if a ranking signal turns out missing: expose it in the
+- [x] (digest) Only if a ranking signal turns out missing: expose it in the
       publish payload — expected outcome is "none needed".
-- [ ] Deploy and verify on real data: slugs resolve, deep links land on the
+- [x] Deploy and verify on real data: slugs resolve, deep links land on the
       right sections, Archive still reachable.
 
-### 11.2 Client-side catch-up — since your last visit (approved)
+### 11.2 Client-side catch-up — since your last visit (shipped)
 
-**Status:** APPROVED 2026-08-10 (owner: "not just 11.1 but all the plan
-md" — execute the roadmap through). Origin: Codex redesign brief for
-news.tomhorvath.me, triaged 2026-08-10.
+**Status:** SHIPPED 2026-08-10 — toom-edge #131, deployed. The existing
+unread-fence `lastVisit` store is the single source of truth (the fence IS
+the "you were here" marker); banner math runs before the stamp advances,
+so the two can never disagree. Live-browser-verified incl. the follow
+list. Origin: Codex redesign brief for news.tomhorvath.me, triaged
+2026-08-10.
 
 **What & why.** Store a last-visit timestamp in `localStorage`; on load,
 diff it against published brief/arc timestamps and show "since your last
@@ -585,26 +592,32 @@ never leaves the reader's own browser.
   (links to briefs without arc pages, into arc pages once §11.1 ships).
 
 **Steps:**
-- [ ] (toom-edge) Store last-visit timestamp in `localStorage`; diff on
+- [x] (toom-edge) Store last-visit timestamp in `localStorage`; diff on
       load against published brief/arc timestamps.
-- [ ] (toom-edge) "Since your last visit: N briefs, M arc updates" banner
+- [x] (toom-edge) "Since your last visit: N briefs, M arc updates" banner
       linking straight to what's new.
-- [ ] (toom-edge) "You were here" marker in the briefing timeline at the
+- [x] (toom-edge) "You were here" marker in the briefing timeline at the
       last-seen position — a subtle rule line inside the flow, not a
       second banner.
-- [ ] (toom-edge, optional) Follow list in localStorage: followed arcs
+- [x] (toom-edge, optional) Follow list in localStorage: followed arcs
       rank slightly higher in the catch-up view. The site must stay fully
       functional with nothing followed — automatic-first, configuration
       optional.
-- [ ] Verify: zero new publish fields, zero server state.
+- [x] Verify: zero new publish fields, zero server state.
 
-### 11.3 Delta persistence — "what changed" as data, not prose (approved)
+### 11.3 Delta persistence — "what changed" as data, not prose (shipped)
 
-**Status:** APPROVED 2026-08-10 (owner: "not just 11.1 but all the plan
-md"). Deploy ordering note: the site's ingest validator must accept the
-new optional `deltas` field BEFORE the app ships it — same two-repo
-ordering the weekly kind used. Origin: Codex redesign brief for
-news.tomhorvath.me, triaged 2026-08-10.
+**Status:** SHIPPED 2026-08-10 — app side digest #63 (v0.12.0), site side
+toom-edge #132 (ingest v4, migration 0007 applied --remote), release
+train run end-to-end (tag → GHCR → homelab #690 → deploy converged; first
+dispatch hit a transient sudo-timeout at the image pre-pull, retry
+converged clean). CORRECTION to the earlier ordering note: the site
+validator IGNORES unknown top-level fields (verified by reading
+validateDigestPayload), so the site-first ordering assumed by analogy
+with the weekly kind was never actually required — both halves shipped
+the same day regardless. Remaining open box below: contract validation
+against real digests, which starts with the first 0.12.0 window run.
+Origin: Codex redesign brief for news.tomhorvath.me, triaged 2026-08-10.
 
 **What & why.** The delta-only reasoning lives in the WINDOW digest, not
 the daily: `prompts/digest.md` instructs each 3-hourly run to write repeat
@@ -636,19 +649,19 @@ arc timelines can consume it as data instead of re-deriving it from prose.
   window must not duplicate delta rows.
 
 **Steps:**
-- [ ] (digest) Extend `prompts/digest.md`: per repeat story a structured
+- [x] (digest) Extend `prompts/digest.md`: per repeat story a structured
       delta block (previously / now / changed-at) tied to the section
       heading whose slug `derive_topics` already derives.
-- [ ] (digest) Parser for the block in `digest/summarize.py` — pure
+- [x] (digest) Parser for the block in `digest/summarize.py` — pure
       function, tested, malformed block degrades loudly, never silently
       drops.
-- [ ] (digest) Migration: delta storage keyed (arc slug, digest), next
+- [x] (digest) Migration: delta storage keyed (arc slug, digest), next
       `user_version` step.
-- [ ] (digest) Publish payload carries deltas; confirm daily/weekly prompt
+- [x] (digest) Publish payload carries deltas; confirm daily/weekly prompt
       inputs remain byte-identical (fencing check).
 - [ ] (digest) Validate the new contract against real digests before
       flag-on.
-- [ ] (toom-edge) "What changed" rendering + arc-timeline consumption of
+- [x] (toom-edge) "What changed" rendering + arc-timeline consumption of
       the same data.
 - [ ] (digest, optional rider) While the window contract is open anyway,
       decide whether repeat-story sections adopt the four-part structure
@@ -656,7 +669,7 @@ arc timelines can consume it as data instead of re-deriving it from prose.
       the Codex round-2 brief — "Watching next week" already exists as a
       weekly structural rubric, so the pattern has precedent. Same
       validate-on-real-digests gate; skipping it is a fine outcome.
-- [ ] (homelab) Release train: tag → image → Renovate bump → deploy.
+- [x] (homelab) Release train: tag → image → Renovate bump → deploy.
 
 ### 11.4 Verified briefing — cross-reference the daily brief against the open web (proposed)
 
