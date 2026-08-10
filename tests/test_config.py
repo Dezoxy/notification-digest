@@ -1017,3 +1017,30 @@ def test_verify_daily_effort_invalid_choice_raises_config_error(monkeypatch):
 
     with pytest.raises(ConfigError, match="VERIFY_DAILY_EFFORT must be one of"):
         Config.from_env()
+
+
+# --- ARC_KEYS_SITE_ENABLED (stable-arc-keys feature) ---
+
+
+def test_arc_keys_site_enabled_defaults_to_true(monkeypatch):
+    # Defaults ON because the site half shipped and deployed FIRST
+    # (toom-edge PR #140): its validateTopics accepts the optional
+    # per-entry "key". That ordering was mandatory -- validateTopics 400s
+    # the whole PUT on an UNKNOWN per-entry field, so this could never have
+    # defaulted on before #140 landed. The flag survives as a kill switch
+    # for a site rollback; see digest/config.py's own docstring.
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("ARC_KEYS_SITE_ENABLED", raising=False)
+
+    config = Config.from_env()
+
+    assert config.arc_keys_site_enabled is True
+
+
+def test_arc_keys_site_enabled_true_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("ARC_KEYS_SITE_ENABLED", "true")
+
+    config = Config.from_env()
+
+    assert config.arc_keys_site_enabled is True

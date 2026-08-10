@@ -31,6 +31,7 @@ from digest.publish import (
     send_telegram_tldr,
 )
 from digest.state import (
+    get_arc_keys,
     get_daily_allowed_urls,
     get_deltas,
     get_digest_item_urls,
@@ -234,6 +235,29 @@ def _deliver_site(
     pending resend (which never re-summarizes, so `write_deltas` is never
     called again -- see that function's own docstring for why this table is
     written exactly once per digest).
+
+    `topics`' per-entry "key" (stable-arc-keys feature) is handled the SAME
+    way `deltas` is, for the identical reason: `derive_topics(body_md)` is
+    called here WITHOUT an `arc_keys` argument, since the raw ```arcs fence
+    this data came from is already stripped out of `body_md` by the time it
+    is stored (digest/summarize.py's `extract_arc_keys`). The persisted
+    `{slug: key}` mapping (digest/state.py's `get_arc_keys`, written once by
+    `write_arc_keys` right after this digest's original creation) is read
+    back by `digest_id` and merged into the freshly-derived `topics` by slug
+    -- this works identically on the fresh-digest and pending-resend paths,
+    the same "read state back instead of re-deriving it" pattern `deltas`
+    already uses.
+
+    The merged-in "key" is only ever sent to the site when
+    `cfg.arc_keys_site_enabled` is True (see that field's own docstring):
+    the site's ingest validator, as of this writing, 400s the WHOLE PUT on
+    an unrecognized per-entry field on `topics`, unlike its top-level
+    fields' own "unknown field silently ignored" precedent -- so shipping
+    "key" unconditionally would break every site publish until the site's
+    own PR lands. The digest's OWN `arc_keys` table is still written
+    unconditionally by digest/main.py's `_deliver` regardless of this flag,
+    so flipping it on later needs no backfill -- the data is already there,
+    waiting to be sent.
     """
     body_html = render_body_html(body_md, allowed_urls)
     body_html_hu = (
@@ -244,6 +268,12 @@ def _deliver_site(
     source_counts = get_digest_source_counts(conn, digest_id)
     failed_sources = parse_failed_sources(body_md)
     topics = derive_topics(body_md)
+    if cfg.arc_keys_site_enabled:
+        arc_key_map = get_arc_keys(conn, digest_id)
+        for topic in topics:
+            key = arc_key_map.get(topic["slug"])
+            if key:
+                topic["key"] = key
     deltas = get_deltas(conn, digest_id)
     try:
         publish_to_site(

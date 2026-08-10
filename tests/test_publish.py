@@ -459,6 +459,82 @@ def test_derive_topics_heading_that_slugifies_to_nothing_is_skipped():
     assert derive_topics(body_md) == [{"slug": "real-section", "label": "Real section"}]
 
 
+# --- derive_topics(body_md, arc_keys) -- stable-arc-keys feature ---
+
+
+def test_derive_topics_arc_keys_none_is_byte_identical_to_omitting_it():
+    # The slug-stability contract: passing arc_keys=None (the default)
+    # reproduces today's {"slug", "label"}-only output exactly.
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext\n\n## Story two\n\ntext\n"
+
+    assert derive_topics(body_md, arc_keys=None) == derive_topics(body_md)
+    assert derive_topics(body_md, arc_keys=None) == [
+        {"slug": "story-one", "label": "Story one"},
+        {"slug": "story-two", "label": "Story two"},
+    ]
+
+
+def test_derive_topics_arc_keys_empty_list_adds_no_keys():
+    body_md = "## Story one\n\ntext\n"
+
+    assert derive_topics(body_md, arc_keys=[]) == [
+        {"slug": "story-one", "label": "Story one"}
+    ]
+
+
+def test_derive_topics_arc_keys_matching_heading_adds_key():
+    body_md = "**TL;DR:** hi\n\n## Hormuz tension escalates\n\ntext\n\n## Story two\n\ntext\n"
+    arc_keys = [{"heading": "Hormuz tension escalates", "key": "hormuz"}]
+
+    assert derive_topics(body_md, arc_keys) == [
+        {"slug": "hormuz-tension-escalates", "label": "Hormuz tension escalates", "key": "hormuz"},
+        {"slug": "story-two", "label": "Story two"},
+    ]
+
+
+def test_derive_topics_arc_keys_no_matching_heading_omits_key():
+    body_md = "## Real section\n\ntext\n"
+    arc_keys = [{"heading": "A heading that does not exist", "key": "some-key"}]
+
+    assert derive_topics(body_md, arc_keys) == [
+        {"slug": "real-section", "label": "Real section"}
+    ]
+
+
+def test_derive_topics_arc_keys_structural_rubric_heading_never_gets_a_key():
+    # "Also this window" is excluded from the topics list entirely -- an
+    # arcs-fence entry citing it (model drift) must not somehow attach a key
+    # to a topic that doesn't exist.
+    body_md = "## Also this window\n\ntext\n\n## Real story\n\ntext\n"
+    arc_keys = [{"heading": "Also this window", "key": "should-never-appear"}]
+
+    assert derive_topics(body_md, arc_keys) == [{"slug": "real-story", "label": "Real story"}]
+
+
+def test_derive_topics_arc_keys_matches_by_slug_not_raw_heading_text():
+    # The matching rule folds BOTH sides through _slugify (mirroring
+    # map_deltas_to_slugs), so an arcs-fence heading differing only in
+    # punctuation/case from the real `## ` heading still matches.
+    body_md = "## Fed Rate Decision!\n\ntext\n"
+    arc_keys = [{"heading": "fed rate decision", "key": "fed-rates"}]
+
+    assert derive_topics(body_md, arc_keys) == [
+        {"slug": "fed-rate-decision", "label": "Fed Rate Decision!", "key": "fed-rates"}
+    ]
+
+
+def test_derive_topics_arc_keys_duplicate_heading_slug_first_occurrence_wins():
+    body_md = "## Story\n\ntext\n"
+    arc_keys = [
+        {"heading": "Story", "key": "first-key"},
+        {"heading": "Story", "key": "second-key"},
+    ]
+
+    assert derive_topics(body_md, arc_keys) == [
+        {"slug": "story", "label": "Story", "key": "first-key"}
+    ]
+
+
 def test_derive_topics_empty_body_returns_empty_list():
     assert derive_topics("") == []
     assert derive_topics("just some prose, no headings at all") == []
