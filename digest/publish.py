@@ -86,6 +86,12 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 #   PER-WINDOW (or per-day, or per-week) rubric, not an arc -- if the owner
 #   ever wants Hungary arcs back, deleting it from this set is the whole
 #   change.
+# - "Verification notes" -- prompts/verify-daily.md's (PLAN.md §11.4)
+#   closing per-story corroboration ledger, appended by the optional
+#   VERIFY_DAILY_ENABLED pass. It is a standing rubric on every verified
+#   daily brief, not a developing story -- without this entry it would grow
+#   a permanent false "Verification notes" arc on every single verified
+#   day.
 #
 # Casefolded (matching the `.casefold()` comparison derive_topics already
 # does for _NEEDS_ATTENTION_HEADING) so "## ALSO TODAY" is caught too.
@@ -106,6 +112,7 @@ _STRUCTURAL_RUBRIC_HEADINGS = frozenset(
         "also this week",
         "watching next week",
         "hungary",
+        "verification notes",
     }
 )
 

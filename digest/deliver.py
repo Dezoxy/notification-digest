@@ -439,8 +439,18 @@ def deliver_channels(
     telegram_state: TelegramRunState,
     body_md_hu: str | None = None,
     kind: str = "window",
+    extra_allowed_urls: Collection[str] = (),
 ) -> bool:
     """Attempt every ENABLED, not-yet-done channel for one digest, independently.
+
+    `extra_allowed_urls` (PLAN.md §11.4) widens the `kind == "daily"`
+    allowlist beyond what `get_daily_allowed_urls` alone re-derives from the
+    DB -- see that branch below for the full rationale. Defaults to `()`, a
+    no-op for every OTHER call site (window/weekly digests, and the
+    pending-resend path via `deliver_pending`, which has no verification
+    session's widened set to thread through and simply omits this
+    argument): a caller that doesn't pass it gets byte-identical behavior to
+    before this parameter existed.
 
     `body_md_hu`, when not None, is passed straight through to
     `_deliver_site` -- the only channel that carries a Hungarian field (see
@@ -528,7 +538,30 @@ def deliver_channels(
     # the SAME set either way -- they must render identical content, see
     # this function's own docstring.
     if kind == "daily":
-        allowed_urls = get_daily_allowed_urls(conn, created_at)
+        # PLAN.md §11.4: when the daily brief went through the verify pass,
+        # its citations can also include URLs the verifier itself fetched
+        # (plus their normalize_url/trailing-slash variants -- see
+        # digest/verify.py's `widen_allowed_urls`), which get_daily_
+        # allowed_urls alone has no way to know about -- it only re-derives
+        # the DB-backed allowlist (the source window digests' own stamped
+        # item URLs). Without this union, a citation `verify_daily` already
+        # enforced successfully during summarization would get stripped a
+        # SECOND time right here, at render time, defeating verification
+        # even within the SAME run that produced it. `extra_allowed_urls`
+        # defaults to `()`, so every other call (window/weekly digests, and
+        # a pending-resend retry of an old verified daily brief -- which has
+        # no live verification session's widened set to thread through) is
+        # a no-op union with the DB-derived set, unchanged from before this
+        # parameter existed. A resend's own narrow caveat: if channel
+        # delivery is only partially done during the SAME run that produced
+        # a verified brief (the fresh path just below still has
+        # extra_allowed_urls), a LATER run's pending-resend pass has no way
+        # to recover this run's widened set (it isn't persisted anywhere) --
+        # its own verifier-only citations degrade to plain text on that
+        # later retry, same non-crashing, narrow-blast-radius shape as the
+        # boundary-sliver caveat get_daily_allowed_urls' own docstring
+        # already documents.
+        allowed_urls = get_daily_allowed_urls(conn, created_at) | set(extra_allowed_urls)
     elif kind == "weekly":
         allowed_urls = get_weekly_allowed_urls(conn, created_at)
     else:

@@ -56,6 +56,7 @@ from digest.summarize import (
     summarize,
 )
 from digest.translate import translate_digest
+from digest.verify import VerificationUnavailable, verify_daily
 from digest.weekly import summarize_weekly
 
 # How far back _deliver looks for prior digests when building the
@@ -110,6 +111,26 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+# PLAN.md §11.4: the code-prepended banner `run_daily` stamps on the DRAFT
+# when the optional verification pass (VERIFY_DAILY_ENABLED) is on but fails
+# for any reason (CLI failure, transcript surprise, or output that fails the
+# daily contract -- digest/verify.py's `verify_daily` folds all three into
+# either `VerificationUnavailable` or `SummarizeError`). Deliberately
+# code-generated, never model-written -- mirrors digest/summarize.py's own
+# `⚠ <source> collection failed this run` collector-failure banner (see
+# `summarize()`'s docstring for why a required output property must never
+# depend on model compliance) and reuses the IDENTICAL rendering mechanism
+# for free: digest/emailer.py's `_BANNER_PARAGRAPH_RE`/`_wrap_banner_paragraph`
+# style ANY leading `⚠`-prefixed paragraph as a warning callout, regardless
+# of its exact wording, so this banner gets the same visual treatment with
+# no rendering-side change needed. Deliberately WORDED DIFFERENTLY from the
+# collector banner (no "collection failed", no per-source name) so
+# digest/publish.py's `parse_failed_sources` -- which matches the stricter
+# `^⚠ (\S+) collection failed this run$` shape -- correctly does NOT treat
+# this as a failed-collector banner; verification unavailability is its own
+# distinct condition, not a collector failure.
+_VERIFY_UNAVAILABLE_BANNER = "⚠ verification unavailable this run\n\n"
 
 # Bounds how many unsummarized items a single Claude call is given. Each
 # allowlisted chat can contribute up to 500 messages per run, and a failed
@@ -626,10 +647,23 @@ def run_daily(cfg: Config) -> bool:
        turned into a `False` return rather than propagating further: this
        function's contract (like `_deliver`'s) is "return whether the run
        succeeded", not "raise on failure".
-    5. The optional Hungarian translation -- identical `translate_digest`
+    5. PLAN.md §11.4's OPTIONAL verification pass (`VERIFY_DAILY_ENABLED`,
+       default off): `digest/verify.py`'s `verify_daily` cross-checks the
+       draft against the open web and returns a corrected/corroborated
+       brief plus a WIDENED allowlist. Any failure (CLI/transcript trouble,
+       or output failing the daily contract) soft-fails -- the draft ships
+       unchanged except for a code-prepended `⚠ verification unavailable
+       this run` banner (`_VERIFY_UNAVAILABLE_BANNER`), and the allowlist
+       stays un-widened. Never raises, never returns `False` -- unlike step
+       4's `summarize_daily`, an unverified brief on time still beats no
+       brief at all.
+    6. The optional Hungarian translation -- identical `translate_digest`
        call, identical soft-failing contract, as `_deliver` uses for a
-       window digest.
-    6. `create_digest(..., items=[], kind="daily", item_count=...)` -- a
+       window digest -- checked against step 5's (possibly widened)
+       allowlist, not step 3's original one, so a verified brief's
+       translation isn't stripped of citations the English verified body
+       was allowed to keep.
+    7. `create_digest(..., items=[], kind="daily", item_count=...)` -- a
        daily brief stamps NO items (it consumes digests, not items; the
        empty-items path is exercised and supported, see digest/state.py's
        `create_digest` and its test coverage) but its stored `item_count` is
@@ -639,15 +673,17 @@ def run_daily(cfg: Config) -> bool:
        the closing-line count sanity actually describe for a daily brief,
        not "0 items" (which `len(items)` would otherwise store) and not any
        single source digest's own count.
-    7. `archive()` it, exactly like any digest -- unconditional, not gated
+    8. `archive()` it, exactly like any digest -- unconditional, not gated
        on any channel's success, identical rationale to `_deliver`'s own
        archiving.
-    8. `deliver_channels` with a FRESH `done` map (this digest was just
-       created, nothing attempted yet) and this function's own
+    9. `deliver_channels` with a FRESH `done` map (this digest was just
+       created, nothing attempted yet), this function's own
        `telegram_state` -- shared with step 1's `deliver_pending` call, for
        the identical GUARD-2-circuit-breaker reason `_deliver` shares one
        `TelegramRunState` across its own two `deliver_channels` call
-       sites.
+       sites -- and step 5's allowlist as `extra_allowed_urls`, so a
+       verified brief's own widened citations survive render time too, not
+       just this function's own translation call in step 6.
 
     Returns True iff step 1's pending pass AND this run's own fresh delivery
     (when a brief was actually produced) both succeeded -- the AND of the
@@ -700,14 +736,58 @@ def run_daily(cfg: Config) -> bool:
             logger.error("daily brief summarization failed: %s", exc)
             return False
 
+        # PLAN.md §11.4: optional verification pass, draft -> verify ->
+        # translate -> deliver. `delivery_allowed_urls` starts as the
+        # draft's own allowlist and is only ever WIDENED (never narrowed) if
+        # verification succeeds -- both `translate_digest` below and
+        # `deliver_channels`' own `extra_allowed_urls` (further down) must
+        # see the SAME widened set the verified `body_md`'s own citations
+        # were checked against, or a citation `verify_daily` already
+        # enforced successfully would get stripped again downstream, on the
+        # Hungarian translation or at render time, defeating verification
+        # within the very run that produced it.
+        #
+        # ANY failure (a `VerificationUnavailable` from `run_claude_verify`
+        # -- CLI failure, timeout, or a transcript-shape surprise -- or a
+        # `SummarizeError` from `validate_output` -- the verified text
+        # failed the same structural contract every briefing in this
+        # codebase has to satisfy) soft-fails to the SAME place: the
+        # unmodified draft ships, with the code-prepended banner, and
+        # `delivery_allowed_urls` stays the draft's own un-widened set --
+        # PLAN.md §11.4's own contract, matching `translate_digest`'s
+        # existing soft-fail semantics: an unverified brief on time beats no
+        # brief.
+        delivery_allowed_urls = allowed_urls
+        verified = False
+        if cfg.verify_daily_enabled:
+            try:
+                verified_body_md, widened_urls = verify_daily(
+                    body_md,
+                    allowed_urls,
+                    cfg.verify_daily_model,
+                    cfg.verify_daily_timeout_seconds,
+                    cfg.verify_daily_effort,
+                    cfg.verify_daily_max_web_ops,
+                )
+            except (VerificationUnavailable, SummarizeError) as exc:
+                logger.warning("daily brief verification unavailable: %s", exc)
+                body_md = _VERIFY_UNAVAILABLE_BANNER + body_md
+            else:
+                body_md = verified_body_md
+                delivery_allowed_urls = widened_urls
+                verified = True
+
         # Hungarian translation: same optional, soft-failing production step
         # `_deliver` runs for a window digest -- see that call site's own
-        # comment for the full rationale, identical here.
+        # comment for the full rationale, identical here. Checked against
+        # `delivery_allowed_urls` (see above), not the draft's own narrower
+        # `allowed_urls`, so a verified brief's translation isn't stripped
+        # of citations the English verified body was allowed to keep.
         body_md_hu: str | None = None
         if cfg.translate_hu_enabled:
             body_md_hu = translate_digest(
                 body_md,
-                allowed_urls,
+                delivery_allowed_urls,
                 cfg.translate_model,
                 cfg.claude_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
@@ -724,12 +804,18 @@ def run_daily(cfg: Config) -> bool:
         ok = deliver_channels(
             conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
             kind=kind,
+            extra_allowed_urls=delivery_allowed_urls,
         )
         result = all_ok and ok
 
         # Exit code stays the sole alert trigger; this line is for Loki
         # queries to see WHICH leg failed -- the pending-retry pass vs this
-        # run's own fresh brief -- without a log dive.
+        # run's own fresh brief -- without a log dive. `verified` (PLAN.md
+        # §11.4) is always `false` while VERIFY_DAILY_ENABLED defaults off;
+        # once flagged on, it's the one field that lets a Loki query tell
+        # "verification ran and succeeded" apart from "shipped the draft
+        # with the banner" without grepping the WARNING line above -- exactly
+        # the visibility the flag-on live-validation step needs.
         logger.info(
             "run_summary %s",
             json.dumps(
@@ -738,6 +824,7 @@ def run_daily(cfg: Config) -> bool:
                     "source_digests": len(rows),
                     "delivered": ok,
                     "ok": result,
+                    "verified": verified,
                 },
                 sort_keys=True,
             ),
