@@ -455,6 +455,36 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
   // chrome feature" contract.
   const countdownNewest = isCurrentWeek ? (newestWindow?.created_at ?? null) : null;
 
+  // NOW section (§11.1 PR B, "homepage becomes NOW"): only queried on the
+  // page that will actually render it — the CURRENT-week ALL view, no w/
+  // segment (weekParam === null implies effective === current, see above,
+  // but the check is on weekParam itself, not isCurrentWeek: the section is
+  // gated on "no w/ segment" specifically, the exact URL grammar the §11.1
+  // spec calls out, not merely "happens to resolve to the current week").
+  // Every other view/week pays zero extra roundtrip for this section — see
+  // renderIndexPage's own no-op fallback when nowArcs stays [].
+  let nowArcs = [];
+  const nowMs = Date.now();
+  if (view === "all" && weekParam === null) {
+    // One query, JS-side aggregation (see computeNowArcs's comment for why
+    // GROUP BY + window functions are deliberately NOT used here): every
+    // topic appearance in the trailing 7 days, anchored at THIS request's
+    // own instant, not any digest's created_at — a live "now" section is
+    // expected to re-rank on every visit, unlike a digest's own reproducible
+    // arc line (contrast handleDigestPage's topicArcs windowStartIso, which
+    // anchors at the digest's own created_at instead).
+    const nowWindowStartIso = new Date(nowMs - 7 * 24 * 3600000).toISOString();
+    const { results: nowRows } = await env.DB.prepare(
+      `SELECT je.value->>'slug' AS slug, je.value->>'label' AS label, d.created_at, d.id
+         FROM digests d, json_each(d.topics) je
+        WHERE d.topics IS NOT NULL AND d.created_at >= ?1
+        ORDER BY d.created_at ASC`,
+    )
+      .bind(nowWindowStartIso)
+      .all();
+    nowArcs = computeNowArcs(nowRows ?? [], nowMs);
+  }
+
   return htmlResponse(
     renderIndexPage(
       results ?? [],
@@ -464,6 +494,8 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       view,
       countdownNewest,
       weekInfo,
+      nowArcs,
+      nowMs,
     ),
   );
 }
@@ -1424,6 +1456,11 @@ const STRINGS = {
     arcMomentumSame: "steady",
     arcMomentumDown: "less coverage",
     arcTimelineLabel: "Appearances",
+    // NOW section (§11.1 PR B, renderNowSection): the mono eyebrow above the
+    // situational-overview block at the top of the current-week all-view
+    // index — see computeNowArcs/renderNowSection. Reuses arcRepeat/
+    // arcMomentum{Up,Same,Down} above rather than minting near-duplicates.
+    nowLabel: "Now",
   },
   hu: {
     locale: "hu-HU",
@@ -1496,6 +1533,9 @@ const STRINGS = {
     arcMomentumSame: "változatlan",
     arcMomentumDown: "kevesebb lefedettség",
     arcTimelineLabel: "Előfordulások",
+    // Owner: please review — new HU string, NOW section (§11.1 PR B),
+    // mirrors the EN block's pattern.
+    nowLabel: "Most",
   },
 };
 
@@ -2417,6 +2457,45 @@ const CSS = `
     letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.6em;
   }
   .archiveresults { margin-top: 1.6em; }
+
+  /* NOW section (§11.1 PR B, renderNowSection): the situational-overview
+     block at the very top of the current-week all-view index, above the
+     rail/filter row/pulse strip/ledger — see renderIndexPage. .archivelabel
+     is reused for the eyebrow (already shared by the arc timeline and this
+     file's own archive-search label above) rather than a fourth near-
+     identical mono-eyebrow class. Typography-led per the design guidance:
+     each arc is one row, not a card — a bottom hairline on the whole block
+     is the only separator between it and the ledger, no box/border around
+     the block itself. */
+  .now { margin: 0 0 1.8em; padding-bottom: 1.3em; border-bottom: 1px solid var(--hairline); }
+  .nowlist { display: flex; flex-direction: column; }
+  .nowrow {
+    display: flex; align-items: baseline; gap: 0.7em;
+    text-decoration: none; color: inherit;
+    padding: 0.55em 0; border-bottom: 1px solid var(--hairline);
+  }
+  .nowlist .nowrow:last-child { border-bottom: none; }
+  .nowrow:hover .nowarclabel,
+  .nowrow:focus-visible .nowarclabel { color: var(--text); text-decoration: underline; }
+  .nowrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+  /* Momentum arrow: mono, muted — a data-derived signal (design guidance:
+     "evidence over certainty"), not a colored/severity cue, so it carries no
+     color of its own beyond the row's normal muted register. Fixed width so
+     the label column stays aligned across rows regardless of which arrow (or
+     none, on the defense-in-depth null case) a given row has. */
+  .nowarrow {
+    font-family: var(--font-data); font-size: 0.85em; color: var(--muted);
+    flex: none; width: 1em; text-align: center;
+  }
+  .nowarclabel {
+    font-family: var(--font-prose); font-size: 0.97em; color: var(--muted);
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .nowmeta {
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    flex: none; white-space: nowrap;
+  }
 
   /* Search page (roadmap 4 step 7): the form itself reuses .filter's input
      styling (see above) — it's the SAME kind of control, just server-
@@ -3988,7 +4067,108 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
   return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span></nav>`;
 }
 
-function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null) {
+// NOW section ranking (§11.1 PR B, "decide + implement the NOW ranking
+// rule"): pure aggregation over handleIndexPage's now-arcs query rows —
+// (slug, label, created_at, id) for every topic appearance in the trailing
+// 7 days, one row per digest×topic. The query deliberately leaves
+// aggregation to JS instead of GROUP BY + window functions (see its own
+// comment in handleIndexPage) specifically so "label of the latest
+// appearance" is a plain forward scan, not a second query or a window-
+// function fight — bounded input (<=12 topics x ~80 digests/week is a few
+// hundred rows) makes that scan cheap on every current-week-all-view
+// render.
+//
+// Eligibility mirrors renderArcs' own "recurring" threshold (count >= 2) —
+// a single appearance in the window is a mention, not an arc. Ranking is
+// appearances in the trailing 72h (desc), then most recent appearance
+// (desc), then slug (asc) as the deterministic tiebreak two arcs can
+// otherwise share on both count and recency.
+//
+// Momentum reuses computeArcMomentum VERBATIM (§11.1 PR A) on each arc's
+// own appearances-in-window — same 48h/96h-vs-`nowMs` computation an arc
+// page itself uses, just fed a different (still ASC-ordered-by-construction)
+// appearances array. Its null/dormant case is expected to be rare here (an
+// arc scoring >0 in the trailing 72h always has recent activity) but NOT
+// impossible: an eligible arc can still rank into the top 5 by recency
+// alone with zero 72h appearances and both its 48h/96h windows empty (e.g.
+// its two appearances both fall between 4 and 7 days ago) — renderNowSection
+// handles that by simply omitting the arrow, the same fail-safe contract
+// renderArcPage's own momentumSegment already uses.
+function computeNowArcs(rows, nowMs) {
+  const trailing72hStart = nowMs - 72 * 3600000;
+  const bySlug = new Map();
+  for (const row of rows) {
+    if (!row.slug) continue;
+    let arc = bySlug.get(row.slug);
+    if (!arc) {
+      arc = { slug: row.slug, label: row.label, appearances: [], recent72h: 0 };
+      bySlug.set(row.slug, arc);
+    }
+    // rows arrive created_at ASC (see the query's ORDER BY in
+    // handleIndexPage) — each successive row's label overwrites the last,
+    // so by the time the scan finishes `label` holds the MOST RECENT
+    // appearance's label, matching renderArcPage's own "latest label wins"
+    // choice (see the comment on its `title` there).
+    arc.label = row.label;
+    arc.appearances.push({ created_at: row.created_at });
+    if (new Date(row.created_at).getTime() >= trailing72hStart) arc.recent72h += 1;
+  }
+
+  const eligible = Array.from(bySlug.values()).filter((arc) => arc.appearances.length >= 2);
+
+  eligible.sort((a, b) => {
+    if (b.recent72h !== a.recent72h) return b.recent72h - a.recent72h;
+    const aLast = a.appearances[a.appearances.length - 1].created_at;
+    const bLast = b.appearances[b.appearances.length - 1].created_at;
+    if (aLast !== bLast) return aLast > bLast ? -1 : 1;
+    return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+  });
+
+  return eligible.slice(0, 5).map((arc) => ({
+    slug: arc.slug,
+    label: arc.label,
+    count: arc.appearances.length,
+    lastSeen: arc.appearances[arc.appearances.length - 1].created_at,
+    momentum: computeArcMomentum(arc.appearances, nowMs),
+  }));
+}
+
+// NOW section (§11.1 PR B): the situational-overview block rendered at the
+// top of renderIndexPage, above the ledger — see handleIndexPage for the
+// current-week-all-view-only gate that decides whether `nowArcs` is ever
+// non-empty. Absent entirely when nowArcs is empty (0 eligible arcs -> no
+// section markup at all, not an empty-state message — the ledger below
+// already covers "nothing to show").
+//
+// Each arc renders as ONE row, not a card (design guidance: no card soup) —
+// a single link carrying the momentum arrow, the arc's own label
+// (arcHref, §11.1 PR A), and a mono metadata tail. The metadata tail reuses
+// arcRepeat ("×{n} this week") rather than minting a near-duplicate
+// template — this section's 7-day window is exactly what "this week"
+// already means for that string, so no separate strings.now* count
+// template exists. Reuses .archivelabel for the eyebrow, same mono-eyebrow
+// recipe already shared by the arc timeline and archive-search labels (see
+// there) rather than a fourth near-identical class.
+function renderNowSection(nowArcs, strings, token, lang, nowMs) {
+  if (!nowArcs || nowArcs.length === 0) return "";
+  const rowsHtml = nowArcs
+    .map((arc) => {
+      // Defense in depth (see computeNowArcs's comment on momentum): omit
+      // the arrow entirely on the null/dormant case rather than guessing —
+      // same fail-safe contract as renderArcPage's own momentumSegment.
+      const arrow =
+        arc.momentum === "up" ? "↑" : arc.momentum === "down" ? "↓" : arc.momentum === "same" ? "→" : "";
+      const meta = [
+        strings.arcRepeat.replace("{n}", String(arc.count)),
+        formatRelativeTime(new Date(arc.lastSeen), strings.locale, nowMs),
+      ].join(" · ");
+      return `<a class="nowrow" href="${arcHref(token, lang, arc.slug)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
+    })
+    .join("\n");
+  return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
+}
+
+function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null, nowArcs = [], nowMs = null) {
   const strings = STRINGS[lang];
   const emptyMessage =
     view === "daily" ? strings.noDailyBriefs : view === "weekly" ? strings.noWeeklyBriefs : strings.noDigests;
@@ -4107,13 +4287,21 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // an archive week never has a leadRow to prefetch in the first place.
   const prefetchHref = leadRow ? digestHref(token, lang, view, leadRow.id) : null;
 
+  // NOW section (§11.1 PR B): the very top of the page, above the rail/
+  // filter row/pulse strip/ledger — a situational overview, not part of the
+  // chronological archive chrome below it. `nowArcs` is only ever non-empty
+  // when handleIndexPage ran the query (current-week all view — see there);
+  // renderNowSection itself also fails safe to "" on an empty array, so this
+  // stays a no-op on every other view/week without a second gate here.
+  const nowHtml = renderNowSection(nowArcs, strings, token, lang, nowMs);
+
   return pageChrome(
     host,
     token,
     lang,
     view,
     renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
-    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
+    `${nowHtml}${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     countdownNewest,
     prefetchHref,
