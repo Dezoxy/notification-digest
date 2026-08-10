@@ -133,6 +133,25 @@ const MAX_SOURCE_ENTRIES = 16;
 const TOPIC_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_TOPICS = 12;
 
+// Deltas (§11.3 delta persistence, ingest v4): optional, backward-compatible
+// field on PUT /ingest/:id (see validateDigestPayload/validateDeltas), same
+// shape-discipline pattern as topics just above. MAX_DELTAS reuses
+// MAX_TOPICS' own value rather than a second hardcoded 12: a digest can have
+// at most MAX_TOPICS topics in the first place, so it can never legitimately
+// carry more deltas than that either — mirrors digest/summarize.py's own
+// _MAX_DELTAS=12 parity constant on the app side, which reasons the same
+// way. DELTA_TEXT_MAX_LEN bounds `previously`/`now`: each is ONE
+// LLM-generated sentence by prompt contract (prompts/digest.md, "one
+// sentence: what changed"), and English news prose runs roughly 100-200
+// characters per sentence, so 400 gives a genuinely long sentence several
+// times its usual headroom without accepting a whole paragraph. Picked as a
+// generous multiple of the 80-char topic LABEL cap above (a label is a
+// truncated heading fragment; a delta sentence is a full clause, so it
+// earns a bigger cap) rather than reusing MAX_TLDR_BYTES's 32KB, which is
+// sized for a multi-sentence paragraph, not one sentence.
+const MAX_DELTAS = MAX_TOPICS;
+const DELTA_TEXT_MAX_LEN = 400;
+
 // Arc pages (§11.1 PR A, handleArcPage): how many of an arc's NEWEST
 // appearances get their digest's body_html fetched for #sN deep-link
 // resolution. 24 ≈ three days of 3-hourly windows — the span a reader
@@ -291,8 +310,8 @@ async function handleIngest(request, env, idParam) {
   try {
     await env.DB.prepare(
       `INSERT INTO digests
-         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          created_at     = excluded.created_at,
          tldr           = excluded.tldr,
@@ -307,7 +326,8 @@ async function handleIngest(request, env, idParam) {
          kind           = excluded.kind,
          source_counts  = excluded.source_counts,
          failed_sources = excluded.failed_sources,
-         topics         = excluded.topics`,
+         topics         = excluded.topics,
+         deltas         = excluded.deltas`,
     )
       .bind(
         id,
@@ -335,6 +355,10 @@ async function handleIngest(request, env, idParam) {
         // v3, roadmap 4 step 8) — already JSON-stringified (or null) by
         // validateDigestPayload.
         d.topics,
+        // Same NULL-on-absence, NULL-back-out-on-re-ingest contract (§11.3
+        // delta persistence, ingest v4) — already JSON-stringified (or null)
+        // by validateDigestPayload.
+        d.deltas,
       )
       .run();
   } catch {
@@ -511,6 +535,36 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
   );
 }
 
+// Deltas (§11.3 delta persistence, ingest v4): fail-safe parse of the
+// `deltas` JSON column — same "unparseable or wrong-shaped -> treated as
+// absent" contract as renderSpectrum/the topics parse just below (never
+// throws, drops individually malformed entries rather than the whole
+// array). A shared function, not inlined per call site like the topics
+// parse below, because TWO read paths need it: handleDigestPage (this
+// digest's own "What changed" block) and handleArcPage (each appearance's
+// own delta entry, matched by slug) — one fail-safe rule for both, rather
+// than two copies that could drift.
+function parseDeltas(deltasJson) {
+  if (!deltasJson) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(deltasJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const wellFormed = parsed.filter(
+    (d) =>
+      d !== null &&
+      typeof d === "object" &&
+      !Array.isArray(d) &&
+      typeof d.slug === "string" &&
+      typeof d.previously === "string" &&
+      typeof d.now === "string",
+  );
+  return wellFormed.length > 0 ? wellFormed : null;
+}
+
 async function handleDigestPage(env, token, idParam, url, lang, view) {
   if (!(await tokenMatches(env, token))) return notFound();
 
@@ -518,7 +572,7 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   if (!Number.isInteger(id) || id <= 0) return notFound();
 
   const digest = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources, topics FROM digests WHERE id = ?",
+    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources, topics, deltas FROM digests WHERE id = ?",
   )
     .bind(id)
     .first();
@@ -615,8 +669,13 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
       .first(),
   ]);
 
+  // Deltas (§11.3 delta persistence, ingest v4): renders "" on a digest with
+  // no deltas — see parseDeltas and renderDeltas's own "absent-data"
+  // contract, matching topics/source_counts elsewhere on this page.
+  const deltas = parseDeltas(digest.deltas);
+
   return htmlResponse(
-    renderDigestPage(digest, older, newer, token, url.hostname, lang, view, topicArcs),
+    renderDigestPage(digest, older, newer, token, url.hostname, lang, view, topicArcs, deltas),
   );
 }
 
@@ -718,8 +777,14 @@ async function handleArcPage(env, token, slug, url, lang) {
   // unbounded-memory shape no matter how normal each row is. Anchor
   // resolution (the only body_html consumer) is capped to the newest
   // ARC_ANCHOR_BODIES appearances via the second, id-bounded query below.
+  // d.deltas rides along here (unlike body_html below): it's a small JSON
+  // array capped at MAX_DELTAS entries, nothing like body_html's unbounded-
+  // per-row cost, so there's no reason to defer it to a second, bounded
+  // query the way anchor resolution is deferred — see parseDeltas/the
+  // appearances mapping below for how each appearance picks out its own
+  // slug's entry (§11.3 delta persistence, ingest v4).
   const { results: chainRows } = await env.DB.prepare(
-    `SELECT d.id, d.created_at, d.kind, je.value->>'label' AS label
+    `SELECT d.id, d.created_at, d.kind, je.value->>'label' AS label, d.deltas
        FROM digests d, json_each(d.topics) je
       WHERE d.topics IS NOT NULL AND je.value->>'slug' = ?1
       ORDER BY d.created_at DESC, d.id DESC
@@ -749,13 +814,26 @@ async function handleArcPage(env, token, slug, url, lang) {
   // Reversed to ASC (oldest first): renderArcPage's first/latest handling
   // and its own display-only re-reversal both rely on ASC input — see there.
   const rows = chainRows.slice().reverse();
-  const appearances = rows.map((row) => ({
-    id: row.id,
-    created_at: row.created_at,
-    kind: row.kind,
-    label: row.label,
-    anchor: bodyById.has(row.id) ? findArcSectionAnchor(bodyById.get(row.id), row.label) : null,
-  }));
+  const appearances = rows.map((row) => {
+    // Each appearance's own delta, if it has one, for THIS arc's slug only
+    // (§11.3 delta persistence, ingest v4) — a digest's `deltas` column can
+    // carry entries for several arcs at once, so parseDeltas' fail-safe
+    // array is filtered down to at most the one entry matching `slug`
+    // (route-validated already, see the function comment above). No match
+    // (the common case: most appearances predate the feature, or simply
+    // weren't a delta-only update) leaves `delta` null — renderArcAppearance
+    // renders exactly as it did before this feature in that case.
+    const deltas = parseDeltas(row.deltas);
+    const delta = deltas ? (deltas.find((d) => d.slug === slug) ?? null) : null;
+    return {
+      id: row.id,
+      created_at: row.created_at,
+      kind: row.kind,
+      label: row.label,
+      anchor: bodyById.has(row.id) ? findArcSectionAnchor(bodyById.get(row.id), row.label) : null,
+      delta,
+    };
+  });
 
   return htmlResponse(renderArcPage(slug, appearances, token, url.hostname, lang, Date.now()));
 }
@@ -837,6 +915,7 @@ function validateDigestPayload(payload) {
     source_counts,
     failed_sources,
     topics,
+    deltas,
   } = payload;
 
   if (
@@ -954,6 +1033,15 @@ function validateDigestPayload(payload) {
     return { ok: false, error: topicsResult.error };
   }
 
+  // deltas (§11.3 delta persistence, ingest v4): optional, independent of
+  // every field above — see validateDeltas for the per-entry shape rules.
+  // Same JSON-stringified-TEXT-or-null storage as source_counts/
+  // failed_sources/topics.
+  const deltasResult = validateDeltas(deltas);
+  if (!deltasResult.ok) {
+    return { ok: false, error: deltasResult.error };
+  }
+
   return {
     ok: true,
     value: {
@@ -971,6 +1059,7 @@ function validateDigestPayload(payload) {
       source_counts: sourceCountsResult.value ? JSON.stringify(sourceCountsResult.value) : null,
       failed_sources: failedSourcesResult.value ? JSON.stringify(failedSourcesResult.value) : null,
       topics: topicsResult.value ? JSON.stringify(topicsResult.value) : null,
+      deltas: deltasResult.value ? JSON.stringify(deltasResult.value) : null,
     },
   };
 }
@@ -1066,6 +1155,72 @@ function validateTopics(value) {
     }
     seenSlugs.add(slug);
     normalized.push({ slug, label: label.trim() });
+  }
+  return { ok: true, value: normalized.length === 0 ? null : normalized };
+}
+
+// deltas (§11.3 delta persistence, ingest v4): absent/null is valid (no
+// repeat-story deltas this window — the common case even on a current app
+// version). Present, it must be a JSON array (Array.isArray, not typeof —
+// same reasoning as topics/source_counts above), at most MAX_DELTAS
+// entries, each entry a plain object (not an array, not null) with EXACTLY
+// three keys: slug (matching TOPIC_SLUG_RE — the SAME slug vocabulary
+// topics already establishes; the app's own digest/publish.py
+// map_deltas_to_slugs is what guarantees that on the sending side, but this
+// validator enforces the shape independently, the same way it never trusts
+// the app to have gotten topics right either), previously, and now (each a
+// non-empty string, trimmed length 1..DELTA_TEXT_MAX_LEN). Unknown
+// per-entry keys are rejected via the `...rest` check, mirroring
+// validateTopics' own discipline just above. Same empty-array-normalizes-
+// to-null reasoning as topics/failed_sources — "no deltas reported" and "an
+// app version that doesn't send this field" would otherwise render
+// identically, so storing "[]" is a distinction without a difference.
+//
+// Unlike topics, a duplicate slug across two entries is NOT rejected here:
+// the app side never produces one (map_deltas_to_slugs runs after
+// derive_topics' own dedupe-by-slug), but two entries citing the same slug
+// is not a SHAPE violation this validator exists to police — the render
+// side (parseDeltas + renderDeltas/renderArcAppearance, both matching by
+// slug) simply uses whichever entry it finds, the same fail-safe posture as
+// every other read-time consumer in this file.
+function validateDeltas(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "deltas must be a JSON array" };
+  }
+  if (value.length > MAX_DELTAS) {
+    return { ok: false, error: `deltas must have at most ${MAX_DELTAS} entries` };
+  }
+  const normalized = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, error: "each deltas entry must be an object" };
+    }
+    const { slug, previously, now, ...rest } = entry;
+    if (Object.keys(rest).length > 0) {
+      return { ok: false, error: "each deltas entry must have exactly slug, previously, and now" };
+    }
+    if (typeof slug !== "string" || !TOPIC_SLUG_RE.test(slug)) {
+      return { ok: false, error: `deltas has an invalid slug: "${slug}"` };
+    }
+    if (
+      typeof previously !== "string" ||
+      previously.trim().length < 1 ||
+      previously.trim().length > DELTA_TEXT_MAX_LEN
+    ) {
+      return {
+        ok: false,
+        error: `deltas["${slug}"].previously must be 1-${DELTA_TEXT_MAX_LEN} characters`,
+      };
+    }
+    if (
+      typeof now !== "string" ||
+      now.trim().length < 1 ||
+      now.trim().length > DELTA_TEXT_MAX_LEN
+    ) {
+      return { ok: false, error: `deltas["${slug}"].now must be 1-${DELTA_TEXT_MAX_LEN} characters` };
+    }
+    normalized.push({ slug, previously: previously.trim(), now: now.trim() });
   }
   return { ok: true, value: normalized.length === 0 ? null : normalized };
 }
@@ -1519,6 +1674,12 @@ const STRINGS = {
     // states, same star-glyph convention brief specified.
     followAdd: "☆ Follow",
     followRemove: "★ Following",
+    // "What changed" block (§11.3 delta persistence, ingest v4): the mono
+    // eyebrow above the digest page's per-arc previously/now lines — see
+    // renderDeltas. Reuses the SAME .archivelabel eyebrow recipe as
+    // arcTimelineLabel/archiveResults/nowLabel above, so this is a plain
+    // one-off string, not a template.
+    whatChangedLabel: "What changed",
   },
   hu: {
     locale: "hu-HU",
@@ -1615,6 +1776,9 @@ const STRINGS = {
     catchupDismissLabel: "Elrejtés",
     followAdd: "☆ Követés",
     followRemove: "★ Követve",
+    // Owner: please review — new HU string, "What changed" block (§11.3
+    // delta persistence, ingest v4), mirrors the EN block's pattern.
+    whatChangedLabel: "Mi változott",
   },
 };
 
@@ -2405,6 +2569,36 @@ const CSS = `
   .arcs .arc:hover .arclabel { text-decoration: underline; }
   .arcs .arc:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
+  /* "What changed" block (§11.3 delta persistence, ingest v4, renderDeltas):
+     typography-led per the design guidance — no cards, a hairline between
+     rows (same recipe as .now/.nowlist just below in the file), not a
+     colored box. Each row is a link (like .now's .nowrow) to that delta's
+     arc page. .deltatext/.deltaprev/.deltaarrow/.deltanow are shared with
+     the arc page's own per-appearance line (renderArcAppearance) — same
+     quiet register in both places, one set of rules for both. */
+  .deltas { display: flex; flex-direction: column; margin: 0 0 1.6em; }
+  .deltas .delta {
+    display: flex; flex-direction: column; gap: 0.3em;
+    text-decoration: none; color: inherit;
+    padding: 0.6em 0; border-bottom: 1px solid var(--hairline);
+  }
+  .deltas .delta:last-child { border-bottom: none; }
+  .deltalabel {
+    font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--accent);
+  }
+  .deltas .delta:hover .deltalabel,
+  .deltas .delta:focus-visible .deltalabel { text-decoration: underline; }
+  .deltas .delta:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .deltatext {
+    margin: 0; font-family: var(--font-prose); font-size: 0.95em; line-height: 1.55;
+  }
+  .deltaprev { color: var(--muted); }
+  .deltaarrow {
+    font-family: var(--font-data); color: var(--muted); margin: 0 0.5em;
+  }
+  .deltanow { color: var(--text); }
+
   .attention {
     background: var(--attention-bg); color: var(--attention-text);
     padding: 0.8em 1em; border-radius: 8px; margin: 0 0 1.4em;
@@ -2844,6 +3038,20 @@ const CSS = `
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note, .arctitle {
+      color: #000;
+    }
+    /* "What changed" block (§11.3 delta persistence, ingest v4): CONTENT,
+       not chrome — it's the same "communicate what changed" information the
+       reader would otherwise have to reconstruct from the article prose, so
+       it stays visible and gets the same forced-ink treatment as .stamp/
+       .digest p above, not the .arcs/.toc/.catchup treatment (a navigation
+       aid, safe to omit; a story-thread chip, whose chip-bg/chip-text colors
+       are deliberately left un-forced elsewhere in this block since a chip
+       is decoration a reader can live without on paper). Every child span
+       (.deltaprev/.deltaarrow/.deltanow) gets its own explicit rule because
+       each already carries its own on-screen color (var(--muted)/
+       var(--text)) that would otherwise beat the ancestor's forced color. */
+    .deltalabel, .deltatext, .deltaprev, .deltaarrow, .deltanow {
       color: #000;
     }
     /* Numbers are provenance and stay visible in print; the swatches print
@@ -5213,7 +5421,41 @@ function renderArcs(topicArcs, strings, token, lang) {
   return `<nav class="arcs" aria-label="${esc(strings.arcsLabel)}">${chips}</nav>\n`;
 }
 
-function renderDigestPage(digest, older, newer, token, host, lang, view, topicArcs) {
+// "What changed" block (§11.3 delta persistence, ingest v4): the digest
+// page's per-arc previously/now lines, rendered directly below the
+// story-arc chip line (renderArcs, just above) and above the TOC — see the
+// design guidance's scanning principle ("communicate what changed since the
+// reader last looked, don't re-summarize the world every time"). `deltas`
+// is handleDigestPage's parseDeltas output (null, or a non-empty array —
+// never []); `topicArcs` is the SAME array renderArcs already received,
+// which carries {slug, label, count} for EVERY topic on this digest, not
+// just the recurring ones renderArcs itself filters down to — reused here
+// purely for slug -> label lookup, no extra query.
+//
+// A delta whose slug has no matching topicArcs entry renders with the raw
+// slug as fail-safe last-resort text rather than being dropped or throwing.
+// This is a real possibility, not just defensive paranoia: topics and
+// deltas are validated as two INDEPENDENT optional fields at ingest time
+// (see validateDigestPayload), so a payload could legitimately send deltas
+// without topics (or a differently-shaped topics list), and an older stored
+// row can predate one field while already carrying the other. Same
+// "something imperfect beats nothing/an error" posture as
+// findArcSectionAnchor's null-anchor fallback elsewhere in this file.
+function renderDeltas(deltas, topicArcs, strings, token, lang) {
+  if (!deltas || deltas.length === 0) return "";
+  const labelBySlug = new Map((topicArcs ?? []).map((t) => [t.slug, t.label]));
+  const rows = deltas
+    .map(
+      (d) => `<a class="delta" href="${arcHref(token, lang, d.slug)}">
+    <span class="deltalabel">${esc(labelBySlug.get(d.slug) ?? d.slug)}</span>
+    <p class="deltatext"><span class="deltaprev">${esc(d.previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(d.now)}</span></p>
+  </a>`,
+    )
+    .join("");
+  return `<div class="archivelabel">${esc(strings.whatChangedLabel)}</div><nav class="deltas" aria-label="${esc(strings.whatChangedLabel)}">${rows}</nav>\n`;
+}
+
+function renderDigestPage(digest, older, newer, token, host, lang, view, topicArcs, deltas) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
   // "digest" itself stays an untranslated literal (see the STRINGS comment
@@ -5306,13 +5548,17 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   // recurring chip links to that slug's arc page (§11.1 PR A).
   const arcsHtml = renderArcs(topicArcs, strings, token, lang);
 
-  // Order: stamp -> arc line -> en-only note -> TOC -> article. The TOC
-  // can't sit inside the TL;DR-bearing article start as first imagined — the
-  // TL;DR callout is itself inside body_html — so it renders above <article>
-  // instead.
+  // "What changed" block (§11.3 delta persistence, ingest v4): renders "" on
+  // a digest with no deltas — see renderDeltas.
+  const deltasHtml = renderDeltas(deltas, topicArcs, strings, token, lang);
+
+  // Order: stamp -> arc line -> what-changed block -> en-only note -> TOC ->
+  // article. The TOC can't sit inside the TL;DR-bearing article start as
+  // first imagined — the TL;DR callout is itself inside body_html — so it
+  // renders above <article> instead.
   const body = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <p class="stamp">${esc(stamp)}</p>
-${arcsHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
+${arcsHtml}${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
 ${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
@@ -5405,9 +5651,21 @@ function renderArcAppearance(row, token, lang) {
   // badge, never suppress it the way a same-kind VIEW page would.
   const badgeHtml = kindBadge(row, "all", strings);
   const href = digestHref(token, lang, "all", row.id) + (row.anchor ? `#${row.anchor}` : "");
+  // Delta line (§11.3 delta persistence, ingest v4): `row.delta` is
+  // handleArcPage's per-appearance match, already narrowed to this arc's own
+  // slug — null on the common case (no delta for this appearance), which
+  // renders "", i.e. this appearance looks exactly as it did before this
+  // feature. Shares the .deltatext/.deltaprev/.deltaarrow/.deltanow classes
+  // with the digest page's own "What changed" block (renderDeltas) — same
+  // quiet typographic treatment, no separate label span here since the
+  // appearance's own `.excerpt` line right above already names the story.
+  const deltaHtml = row.delta
+    ? `<p class="deltatext"><span class="deltaprev">${esc(row.delta.previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(row.delta.now)}</span></p>`
+    : "";
   return `<a class="entry" href="${href}" data-created="${esc(row.created_at)}">
     <span class="meta"><span class="time">${esc(time)}</span>${badgeHtml}</span>
     <p class="excerpt">${esc(row.label)}</p>
+    ${deltaHtml}
   </a>`;
 }
 

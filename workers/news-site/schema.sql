@@ -36,7 +36,17 @@ CREATE TABLE IF NOT EXISTS digests (
   -- genuinely no topics to report). JSON array of {slug,label} objects — see
   -- validateTopics in worker.js for the shape rules, and renderArcs for how
   -- it turns into the digest page's story-arc line.
-  topics TEXT
+  topics TEXT,
+  -- Optional ingest v4 field (PLAN.md §11.3 delta persistence), app-produced.
+  -- NULL when the digest app didn't send deltas for this digest (older app
+  -- version, or genuinely no repeat-story deltas this window — the common
+  -- case even on a current app version). JSON array of {slug,previously,now}
+  -- objects, keyed on the SAME topic-slug vocabulary `topics` above already
+  -- establishes — see validateDeltas in worker.js for the shape rules, and
+  -- renderDeltas/renderArcAppearance for how it turns into the digest page's
+  -- "What changed" block and the arc page's per-appearance previously/now
+  -- line.
+  deltas TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at DESC);
 
