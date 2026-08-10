@@ -475,6 +475,25 @@ Phases 1–4 below shipped long ago; everything past them (the site/Telegram del
 3. **OPEN — Telegram group allowlist:** which chat IDs go into `TG_CHAT_ALLOWLIST` — owner will supply before Phase 1 testing.
 4. **RESOLVED — X scope:** notifications timeline only, no home timeline. Affects `collectors/x.py` fetch surface and volume/cost assumptions in §8.
 5. **RESOLVED — site audience (§11.5 blocker a):** the owner answered "community product" on 2026-08-10. news.tomhorvath.me is the web companion for the closed Telegram community the digest already delivers into, not a personal instrument. Community-facing consequences ripple into future §11 work: shared-token access is the distribution model, client-side state (catch-up, follows) is per-reader by construction, HU strings carry real audience weight.
+6. **REJECTED — §11.5 community signals, as designed:** the owner ended the
+   design's premise on 2026-08-10 with one observation — members "don't do
+   anything with it, just open the website". The whole design read
+   engagement off reactions and replies to the digest's own Telegram posts;
+   if the community consumes by clicking through to the site and neither
+   reacts nor replies, that sampler faithfully collects ZEROS. A community
+   pulse built on zeros is worse than the feature's absence: it would
+   render "nobody is engaging" for stories people are demonstrably reading,
+   and any ranking term fed from it would actively mislead. Rejected rather
+   than parked, because no amount of implementation quality fixes a signal
+   that isn't there. NOT rejected: the underlying question of what the
+   community cares about. The real signal, if it is anywhere, is on the
+   SITE (which stories get opened, which arcs get followed) — but that is a
+   different feature with a different cost: the site is deliberately static
+   with no per-reader server state, and the follow list is localStorage-only
+   by design, so counting reads means introducing exactly the tracking this
+   product has so far avoided. That trade is an owner decision nobody has
+   asked for yet; if it is ever wanted it starts as a fresh entry, not a
+   revival of this one.
 
 ## 10. Improvement plan (2026-08)
 
@@ -825,9 +844,18 @@ of the 3-hourly one).
 - [ ] (toom-edge, later) Render per-story status chips from the
       verification output — only after this entry ships.
 
-### 11.5 Community signals — engagement on the digest's own Telegram posts (audience question RESOLVED, attribution design PROPOSED)
+### 11.5 Community signals — engagement on the digest's own Telegram posts (REJECTED)
 
-**Status:** audience question RESOLVED (community product, §9); attribution
+**Status:** REJECTED 2026-08-10 — see §9 decision 6. The audience question
+resolved (community product), but the owner then observed that members
+don't react or reply in Telegram at all; they just open the site. The
+design below sampled exactly the signal that doesn't exist, so it would
+have collected zeros and rendered them as apathy. Kept in full below as
+the record of what was designed and why it was dropped — do not revive it
+without new evidence that Telegram engagement actually happens. Nothing
+here was built: no sampler, no table, no ingest field.
+
+Superseded design detail follows. Original framing: attribution
 design PROPOSED below, awaiting owner approval before any implementation.
 Origin: Codex redesign brief for news.tomhorvath.me, triaged 2026-08-10;
 parked 2026-08-10 pending §9; re-opened 2026-08-10 with a pivoted design
@@ -880,8 +908,8 @@ it. Zero model calls anywhere in this pipeline — pure counts.
    proven irrelevant (§11.3 correction), but validation still lands
    site-side before rendering claims anything.
 
-**Steps (unticked):**
-- [ ] (digest) Engagement sampler in the Telegram collector boundary,
+**Steps — ALL DROPPED, none started (see Status):**
+- [~] (dropped) Engagement sampler in the Telegram collector boundary,
       reading reactions/replies on the bot's own delivery-thread messages
       for digests in the trailing window, behind
       `TELEGRAM_ENGAGEMENT_ENABLED`. Prerequisite gap to close first:
@@ -890,13 +918,13 @@ it. Zero model calls anywhere in this pipeline — pure counts.
       sampler needs that message_id to know which message to read
       reactions/replies on, so capturing and persisting it becomes part of
       this step, not an assumed given.
-- [ ] (digest) `engagement` table via the next `PRAGMA user_version`
+- [~] (dropped) `engagement` table via the next `PRAGMA user_version`
       migration, upsert keyed digest_id.
-- [ ] (digest) Publish payload optional `engagement` field.
-- [ ] (toom-edge) Ingest v5 validation + storage.
-- [ ] (toom-edge) Render: community pulse on brief entries and arc pages;
+- [~] (dropped) Publish payload optional `engagement` field.
+- [~] (dropped) Ingest validation + storage.
+- [~] (dropped) Render: community pulse on brief entries and arc pages;
       optional engagement term in NOW ranking as a follow-up decision.
-- [ ] Validate on real data with the flag on before any ranking use.
+- [~] (dropped) Validate on real data before any ranking use.
 
 **Cost:** moderate; no model calls; the main risk is Telegram API surface
 for reading reactions via Telethon — unverified in this pass. Telethon
