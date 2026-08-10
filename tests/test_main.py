@@ -8,6 +8,7 @@ import pytest
 
 import digest.deliver as deliver_mod
 import digest.main as main_mod
+import digest.summarize as summarize_mod
 from digest.collectors.base import CollectResult
 from digest.collectors.polymarket import PolymarketCollectResult
 from digest.config import Config
@@ -221,7 +222,7 @@ def test_deliver_zero_unsummarized_items_sends_nothing(conn, monkeypatch):
 def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
@@ -253,7 +254,7 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
         # between Config.claude_effort and the eventual `--effort` argv flag
         # in digest/summarize.py's run_claude.
         summarize_calls.append(effort)
-        return "## Needs attention\n..."
+        return "## Needs attention\n...", []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
 
@@ -301,6 +302,133 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     assert archived["id"] == 1
 
 
+def test_deliver_end_to_end_strips_deltas_fence_before_storage_and_persists_them(
+    conn, monkeypatch
+):
+    # PLAN.md §11.3 integration: runs the REAL summarize() (only run_claude
+    # is mocked, unlike every other test in this file which mocks
+    # main_mod.summarize directly) so extract_deltas, map_deltas_to_slugs,
+    # and write_deltas all execute for real. Proves the single-choke-point
+    # claim: the raw model output's ```deltas fence must never reach
+    # digests.body_md -- the only thing run_daily/run_weekly's prompt
+    # builders ever read -- while the parsed entry still lands in the
+    # `deltas` table, mapped to this digest's own real topic slug.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    raw_model_output = (
+        "**TL;DR:** The Fed held rates steady.\n\n"
+        "## Fed rate decision\n\n"
+        "The Fed held rates steady this week.\n\n"
+        "```deltas\n"
+        '[{"heading": "Fed rate decision", "previously": "Markets expected a cut.", '
+        '"now": "The Fed held instead."}]\n'
+        "```\n"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: raw_model_output)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), [])
+
+    assert ok is True
+    digest_id, body_md = conn.execute("SELECT id, body_md FROM digests").fetchone()
+    # Stripped-body invariant: the machine-facing block never reaches the
+    # stored body_md -- the single source every downstream consumer
+    # (translation input, email/site rendering, and critically
+    # get_window_digests_since's own output, which run_daily/run_weekly feed
+    # straight into their prompt builders) reads from.
+    assert "```deltas" not in body_md
+    assert "Markets expected a cut" not in body_md
+    assert "## Fed rate decision" in body_md  # the real prose section survives untouched
+
+    deltas_rows = conn.execute(
+        "SELECT slug, previously, now FROM deltas WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    assert deltas_rows == [
+        ("fed-rate-decision", "Markets expected a cut.", "The Fed held instead.")
+    ]
+
+
+def test_deliver_deltas_dropped_when_heading_matches_no_real_section(conn, monkeypatch):
+    # A delta citing a heading that isn't one of this digest's own `## `
+    # sections (model drift, or a stale/hallucinated citation) must be
+    # dropped -- never stored as if it were a real topic.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    raw_model_output = (
+        "**TL;DR:** Quiet window.\n\n"
+        "## Real section\n\nSomething happened.\n\n"
+        "```deltas\n"
+        '[{"heading": "A heading that does not exist", "previously": "old", "now": "new"}]\n'
+        "```\n"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: raw_model_output)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), [])
+
+    assert ok is True
+    digest_id = conn.execute("SELECT id FROM digests").fetchone()[0]
+    assert conn.execute("SELECT COUNT(*) FROM deltas WHERE digest_id = ?", (digest_id,)).fetchone()[
+        0
+    ] == 0
+
+
+def test_run_daily_prompt_never_ingests_deltas_content(conn, monkeypatch, tmp_path):
+    # PLAN.md §11.3 fencing guardrail: a WINDOW digest's stored body_md (the
+    # only thing run_daily's build_daily_prompt embeds) must carry no delta
+    # content by the time run_daily reads it back -- proven end-to-end here
+    # by running the real summarize() pipeline for the window digest (so
+    # extract_deltas' stripping is exercised for real, not assumed), then
+    # capturing exactly what build_daily_prompt renders for the daily brief.
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    commit_new_items(real_conn, [_item("1")], {("telegram", "123"): "1"})
+
+    raw_model_output = (
+        "**TL;DR:** The Fed held rates steady.\n\n"
+        "## Fed rate decision\n\nThe Fed held rates steady this week.\n\n"
+        "```deltas\n"
+        '[{"heading": "Fed rate decision", "previously": "Markets expected a cut.", '
+        '"now": "The Fed held instead."}]\n'
+        "```\n"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: raw_model_output)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    ok = _deliver(real_conn, _cfg(), [])
+    assert ok is True
+    real_conn.close()
+
+    captured_prompts = []
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        captured_prompts.append(prompt)
+        return "**TL;DR:** the day\n\n## An arc\n\nstuff"
+
+    # Deliberately do NOT monkeypatch main_mod.summarize_daily here (unlike
+    # every other run_daily test in this file) -- the real summarize_daily
+    # must run so build_daily_prompt actually executes and this test can
+    # capture its real output via daily_mod.run_claude below.
+    from digest import daily as daily_mod
+
+    monkeypatch.setattr(daily_mod, "run_claude", fake_run_claude)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(captured_prompts) == 1
+    assert "```deltas" not in captured_prompts[0]
+    assert "Markets expected a cut" not in captured_prompts[0]
+
+
 def test_deliver_logs_digest_delivery_line_matching_success_path(conn, monkeypatch, caplog):
     # All three channels enabled and succeeding for a freshly summarized
     # digest: the digest_delivery Loki line (digest/deliver.py's
@@ -310,7 +438,7 @@ def test_deliver_logs_digest_delivery_line_matching_success_path(conn, monkeypat
     # _multichannel_cfg so all three statuses are exercised at once.
     commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -335,7 +463,7 @@ def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypa
     # translate_digest -- and by extension the run_claude call inside it --
     # is never even invoked.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
@@ -355,7 +483,7 @@ def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypa
 
 def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "**TL;DR:** hi\n\n## S\n\nx")
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", []))
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
@@ -391,7 +519,7 @@ def test_deliver_translate_hu_failure_leaves_body_md_hu_null_english_still_ships
     # Soft-fail contract: translate_digest returning None must not affect
     # the English digest's own success at all.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "## Needs attention\n...")
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
     sent = {}
     monkeypatch.setattr(
         deliver_mod, "send_digest", lambda *a, **k: sent.update(called=True) or None
@@ -435,6 +563,7 @@ def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
         source_counts=None,
         failed_sources=None,
         topics=None,
+        deltas=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -475,7 +604,7 @@ def test_deliver_threads_real_recent_coverage_from_prior_digests(conn, monkeypat
 
     def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         captured["recent_coverage"] = recent_coverage
-        return "## Needs attention\n..."
+        return "## Needs attention\n...", []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -505,7 +634,7 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
 
     def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append((items, failed_sources))
-        return "## Needs attention\n...new..."
+        return "## Needs attention\n...new...", []
 
     sends = []
 
@@ -560,7 +689,7 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
 
     def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append(failed_sources)
-        return "## Needs attention\n...new..."
+        return "## Needs attention\n...new...", []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -596,7 +725,7 @@ def test_deliver_pending_digest_send_fails_new_items_still_summarized_and_delive
 
     def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append(items)
-        return "## Needs attention\n...new..."
+        return "## Needs attention\n...new...", []
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
@@ -643,7 +772,7 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
 
     def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_calls.append(items)
-        return "## Needs attention\n...batch..."
+        return "## Needs attention\n...batch...", []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -686,7 +815,7 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
 
     def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
         summarize_received["items"] = items
-        return "## Needs attention\n...selected..."
+        return "## Needs attention\n...selected...", []
 
     monkeypatch.setattr(main_mod, "select_items_for_prompt", fake_select_items_for_prompt)
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
@@ -885,6 +1014,7 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
         source_counts=None,
         failed_sources=None,
         topics=None,
+        deltas=None,
     ):
         captured.update(
             digest_id=digest_id_,
@@ -952,6 +1082,7 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
         source_counts=None,
         failed_sources=None,
         topics=None,
+        deltas=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -1000,6 +1131,7 @@ def test_deliver_site_forwards_derive_topics_output_to_publish_to_site(conn, mon
         source_counts=None,
         failed_sources=None,
         topics=None,
+        deltas=None,
     ):
         captured.update(topics=topics)
 
@@ -1280,7 +1412,7 @@ def test_deliver_run_failure_propagates_from_a_single_failed_channel(conn, monke
     # systemd OnFailure alert still fires.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: "**TL;DR:** hi\n\n## Section")
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## Section", []))
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(
         deliver_mod, "publish_to_site", lambda *a, **k: (_ for _ in ()).throw(OSError("down"))

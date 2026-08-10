@@ -13,6 +13,7 @@ from digest.state import (
     get_cursors,
     get_daily_allowed_urls,
     get_daily_digests_since,
+    get_deltas,
     get_digest_source_counts,
     get_pending_digests,
     get_polymarket_probs,
@@ -25,6 +26,7 @@ from digest.state import (
     mark_digest_site_published,
     mark_digest_telegram_sent,
     prune_delivered_items,
+    write_deltas,
 )
 
 
@@ -1061,11 +1063,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1145,7 +1147,47 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     ).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 2
+
+    deltas_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
+    ).fetchone()
+    assert deltas_ddl is not None  # the v0->v2 jump also creates `deltas`
+
+    old_conn.close()
+
+
+def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Path):
+    # A database already fully migrated under the ORIGINAL versioning scheme
+    # (stamped user_version=1, no `deltas` table -- PLAN.md §11.3 didn't
+    # exist yet) must gain the `deltas` table on the next init_db call,
+    # without re-running any of the legacy version-0 bootstrap chain (see
+    # init_db's own docstring for why that chain is now gated on
+    # `version == 0`, not just `not fresh`).
+    db_path = str(tmp_path / "v1.db")
+    old_conn = connect(db_path)
+    init_db(old_conn)
+    # Force the DB back down to a "just migrated under the old scheme"
+    # shape: drop `deltas` (which a fresh init_db already created) and
+    # re-stamp the version to 1, the way every v1 database that predates
+    # this PR actually looks on disk.
+    old_conn.execute("DROP TABLE deltas")
+    old_conn.execute("PRAGMA user_version = 1")
+    old_conn.commit()
+    assert (
+        old_conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
+        ).fetchone()
+        is None
+    )
+
+    init_db(old_conn)
+
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    deltas_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
+    ).fetchone()
+    assert deltas_ddl is not None
 
     old_conn.close()
 
@@ -1968,3 +2010,71 @@ def test_get_digest_source_counts_empty_for_daily_digest_with_no_items(conn):
     digest_id = create_digest(conn, "daily body", [], kind="daily")
 
     assert get_digest_source_counts(conn, digest_id) == {}
+
+
+# --- write_deltas / get_deltas (PLAN.md §11.3) ---
+
+
+def test_get_deltas_empty_for_digest_with_no_deltas(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    assert get_deltas(conn, digest_id) == []
+
+
+def test_write_deltas_then_get_deltas_round_trips(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_deltas(
+        conn,
+        digest_id,
+        [
+            {"slug": "story-one", "previously": "old one", "now": "new one"},
+            {"slug": "story-two", "previously": "old two", "now": "new two"},
+        ],
+    )
+
+    assert get_deltas(conn, digest_id) == [
+        {"slug": "story-one", "previously": "old one", "now": "new one"},
+        {"slug": "story-two", "previously": "old two", "now": "new two"},
+    ]
+
+
+def test_write_deltas_empty_list_is_a_no_op(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_deltas(conn, digest_id, [])
+
+    assert get_deltas(conn, digest_id) == []
+    assert conn.execute("SELECT COUNT(*) FROM deltas").fetchone()[0] == 0
+
+
+def test_write_deltas_same_digest_and_slug_twice_upserts_last_write_wins(conn):
+    # The §11.3 idempotency guardrail: a re-run over the same window must
+    # not duplicate rows -- PRIMARY KEY (digest_id, slug) plus INSERT OR
+    # REPLACE means calling this twice for the same (digest_id, slug) leaves
+    # exactly one row, with the second call's values winning.
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_deltas(conn, digest_id, [{"slug": "story-one", "previously": "a", "now": "b"}])
+    write_deltas(conn, digest_id, [{"slug": "story-one", "previously": "c", "now": "d"}])
+
+    rows = conn.execute(
+        "SELECT slug, previously, now FROM deltas WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    assert rows == [("story-one", "c", "d")]
+
+
+def test_write_deltas_scoped_per_digest_id(conn):
+    digest_id_1 = create_digest(conn, "body one", get_unsummarized_items(conn))
+    write_deltas(conn, digest_id_1, [{"slug": "story-one", "previously": "a", "now": "b"}])
+
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    digest_id_2 = create_digest(conn, "body two", get_unsummarized_items(conn))
+    write_deltas(conn, digest_id_2, [{"slug": "story-one", "previously": "x", "now": "y"}])
+
+    assert get_deltas(conn, digest_id_1) == [
+        {"slug": "story-one", "previously": "a", "now": "b"}
+    ]
+    assert get_deltas(conn, digest_id_2) == [
+        {"slug": "story-one", "previously": "x", "now": "y"}
+    ]

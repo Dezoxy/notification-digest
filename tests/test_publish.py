@@ -12,6 +12,7 @@ from digest.publish import (
     derive_topics,
     extract_tldr,
     has_needs_attention,
+    map_deltas_to_slugs,
     parse_failed_sources,
     publish_to_site,
     section_link_targets,
@@ -821,6 +822,123 @@ def test_publish_to_site_omits_topics_when_empty(monkeypatch):
     )
 
     assert "topics" not in captured["body"]
+
+
+def test_publish_to_site_includes_deltas_when_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        deltas=[{"slug": "story-one", "previously": "old", "now": "new"}],
+    )
+
+    assert captured["body"]["deltas"] == [
+        {"slug": "story-one", "previously": "old", "now": "new"}
+    ]
+
+
+def test_publish_to_site_omits_deltas_when_none(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+    )
+
+    assert "deltas" not in captured["body"]
+
+
+def test_publish_to_site_omits_deltas_when_empty(monkeypatch):
+    # Truthy-only inclusion, matching topics/source_counts/failed_sources
+    # above: an explicit empty list must be omitted exactly like None.
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        deltas=[],
+    )
+
+    assert "deltas" not in captured["body"]
+
+
+# --- map_deltas_to_slugs ---
+
+
+def test_map_deltas_to_slugs_matching_heading_mapped_to_derive_topics_slug():
+    body_md = "**TL;DR:** hi\n\n## Fed rate decision\n\ntext\n"
+    deltas = [{"heading": "Fed rate decision", "previously": "old", "now": "new"}]
+
+    assert map_deltas_to_slugs(body_md, deltas) == [
+        {"slug": "fed-rate-decision", "previously": "old", "now": "new"}
+    ]
+
+
+def test_map_deltas_to_slugs_no_matching_section_is_dropped(caplog):
+    import logging
+
+    body_md = "**TL;DR:** hi\n\n## Real section\n\ntext\n"
+    deltas = [{"heading": "A heading that does not exist", "previously": "old", "now": "new"}]
+
+    with caplog.at_level(logging.WARNING):
+        result = map_deltas_to_slugs(body_md, deltas)
+
+    assert result == []
+    assert any("dropped 1 delta" in r.message for r in caplog.records)
+
+
+def test_map_deltas_to_slugs_structural_rubric_heading_is_dropped():
+    # "Also this window" is a structural rubric derive_topics always excludes
+    # (see _STRUCTURAL_RUBRIC_HEADINGS) -- a delta citing it must be dropped
+    # too, automatically, with no separate exclusion list to maintain.
+    body_md = "**TL;DR:** hi\n\n## Also this window\n\ntext\n"
+    deltas = [{"heading": "Also this window", "previously": "old", "now": "new"}]
+
+    assert map_deltas_to_slugs(body_md, deltas) == []
+
+
+def test_map_deltas_to_slugs_needs_attention_heading_is_dropped():
+    body_md = "**TL;DR:** hi\n\n## Needs attention\n\ntext\n"
+    deltas = [{"heading": "Needs attention", "previously": "old", "now": "new"}]
+
+    assert map_deltas_to_slugs(body_md, deltas) == []
+
+
+def test_map_deltas_to_slugs_preserves_order_and_keeps_only_matches():
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext\n\n## Story two\n\ntext\n"
+    deltas = [
+        {"heading": "Story one", "previously": "a", "now": "b"},
+        {"heading": "No match", "previously": "c", "now": "d"},
+        {"heading": "Story two", "previously": "e", "now": "f"},
+    ]
+
+    assert map_deltas_to_slugs(body_md, deltas) == [
+        {"slug": "story-one", "previously": "a", "now": "b"},
+        {"slug": "story-two", "previously": "e", "now": "f"},
+    ]
+
+
+def test_map_deltas_to_slugs_empty_deltas_returns_empty_list():
+    assert map_deltas_to_slugs("**TL;DR:** hi\n\n## Section\n\ntext\n", []) == []
 
 
 # --- send_telegram_tldr ---
