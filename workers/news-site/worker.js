@@ -2842,13 +2842,17 @@ const CSS = `
      is a second, unrelated disclosure that must not collide with either
      lookup. */
   details.searchpop { position: relative; }
+  /* Icon-only (owner-requested): sized off the icon itself, so the pill
+     collapses to a round tap target instead of keeping the old text
+     control's horizontal padding. line-height 0 keeps the SVG from
+     inheriting a text box taller than itself. */
   summary.searchtoggle {
-    list-style: none;
+    list-style: none; display: inline-flex; align-items: center; justify-content: center;
     background: none; border: 1px solid var(--hairline); border-radius: 999px;
-    color: var(--accent); font-family: var(--font-data); font-size: 0.78em;
-    letter-spacing: 0.06em; text-transform: uppercase;
-    padding: 0.18em 0.7em; cursor: pointer;
+    color: var(--muted); line-height: 0;
+    padding: 0.4em; cursor: pointer;
   }
+  summary.searchtoggle:hover, details.searchpop[open] > summary.searchtoggle { color: var(--accent); }
   summary.searchtoggle::-webkit-details-marker { display: none; }
   summary.searchtoggle:hover { border-color: var(--accent); }
   summary.searchtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
@@ -2958,6 +2962,13 @@ const CSS = `
      is the only separator between it and the ledger, no box/border around
      the block itself. */
   .now { margin: 0 0 1.8em; padding-bottom: 1.3em; border-bottom: 1px solid var(--hairline); }
+  /* Head row: the NOW eyebrow left, the search control right (owner-
+     requested placement) — the icon lands on the same right edge the arc
+     rows' relative-time meta below it aligns to. The eyebrow (.archivelabel)
+     carries its own bottom margin, so the row's own baseline stays where a
+     bare eyebrow used to sit; align-items center keeps the icon optically
+     on the eyebrow's line rather than riding its cap height. */
+  .nowhead { display: flex; align-items: center; justify-content: space-between; gap: 1em; }
   .nowlist { display: flex; flex-direction: column; }
   .nowrow {
     display: flex; align-items: baseline; gap: 0.7em;
@@ -4979,7 +4990,15 @@ function renderLeadCard(row, token, lang, view) {
 // week-rail row itself) and directly from renderIndexPage on the daily/
 // weekly views, which have no week rail to live in — see that call site.
 function renderSearchBubble(token, lang, strings) {
-  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}">${esc(strings.searchToggleLabel)}</summary><div class="searchpanel"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
+  // Icon, not the word (owner-requested): an inline SVG magnifier rather
+  // than a glyph character — U+2315/U+26B2 render inconsistently across
+  // platforms and the emoji magnifier drags its own colour into a
+  // deliberately muted palette. currentColor + the 1.6 stroke keeps it in
+  // the same weight register as the ⚙ gear beside it. The label survives
+  // as the accessible name (aria-label), so nothing is lost to a screen
+  // reader or the ⌘K palette's own DOM scrape.
+  const icon = `<svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}" title="${esc(strings.searchToggleLabel)}">${icon}</summary><div class="searchpanel"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
 }
 
 // Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
@@ -5001,7 +5020,11 @@ function renderSearchBubble(token, lang, strings) {
 // an archive week (see the call site in renderIndexPage, which passes null
 // on the current week so its rail stays byte-identical to before this
 // step).
-function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
+// `includeSearch` false when the NOW section above carries the search
+// control instead (owner-requested placement — see renderNowSection); the
+// rail keeps it on every page where NOW is absent, so the control is never
+// lost with the section.
+function renderWeekRail(token, lang, weekInfo, strings, rows = null, includeSearch = true) {
   const olderLink = weekInfo.older
     ? `<a href="${weekHref(token, lang, "all", weekInfo.older.year, weekInfo.older.week)}">← W${esc(String(weekInfo.older.week).padStart(2, "0"))}</a>`
     : "";
@@ -5083,7 +5106,7 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
     }
   }
 
-  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span><span class="rail-search">${renderSearchBubble(token, lang, strings)}</span></nav>`;
+  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span>${includeSearch ? `<span class="rail-search">${renderSearchBubble(token, lang, strings)}</span>` : ""}</nav>`;
 }
 
 // NOW section ranking (§11.1 PR B, "decide + implement the NOW ranking
@@ -5169,7 +5192,14 @@ function computeNowArcs(rows, nowMs) {
 // getting quieter. Reuses .archivelabel for the eyebrow, same mono-eyebrow
 // recipe already shared by the arc timeline and archive-search labels (see
 // there) rather than a fourth near-identical class.
-function renderNowSection(nowArcs, strings, token, lang, nowMs) {
+// `searchHtml` (owner-requested placement): the search control rides in
+// THIS section's head row, right-aligned — the same right edge the arc
+// rows' own relative-time meta aligns to, so the icon reads as belonging
+// to the top of the page rather than to the week rail below it. Empty
+// string on any page where the caller placed the control elsewhere (see
+// renderIndexPage: the week rail keeps it whenever this section is
+// absent, so the control never disappears with the section).
+function renderNowSection(nowArcs, strings, token, lang, nowMs, searchHtml = "") {
   if (!nowArcs || nowArcs.length === 0) return "";
   const rowsHtml = nowArcs
     .map((arc) => {
@@ -5190,7 +5220,7 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs) {
       return `<a class="nowrow" href="${arcHref(token, lang, arc.slug)}" data-arc-slug="${esc(arc.slug)}" data-last-seen="${esc(arc.lastSeen)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
     })
     .join("\n");
-  return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
+  return `<div class="now"><div class="nowhead"><div class="archivelabel">${esc(strings.nowLabel)}</div>${searchHtml}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
 }
 
 function renderIndexPage(
@@ -5285,8 +5315,14 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // removed in the owner-requested index cleanup; the current-week rail was
   // deliberately left as-is rather than backfilling a sparkline onto it —
   // out of scope for that pass).
+  // Owner-requested placement: whenever the NOW section renders, IT carries
+  // the search control (in its own head row, right-aligned) and the rail
+  // below goes without — exactly one search control per page, always.
+  const nowCarriesSearch = nowArcs.length > 0;
   const railHtml =
-    view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows) : "";
+    view === "all" && weekInfo
+      ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows, !nowCarriesSearch)
+      : "";
 
   // Search row (owner-requested index cleanup): the daily/weekly views have
   // no week rail to carry the search bubble (see railHtml just above), so
@@ -5298,7 +5334,8 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // (which reads `.searchlink` off the DOM, see collectPaletteItems)
   // available on every view, not just ALL — losing it silently on daily/
   // weekly would have been a real regression, not just a cosmetic one.
-  const searchRowHtml = railHtml ? "" : `<div class="searchrow">${renderSearchBubble(token, lang, strings)}</div>`;
+  const searchRowHtml =
+    railHtml || nowCarriesSearch ? "" : `<div class="searchrow">${renderSearchBubble(token, lang, strings)}</div>`;
 
   // data-week-archive (roadmap 3 step 3): marks the <section> on any
   // non-current week so the bottom script's unread-fence IIFE can bail out
@@ -5327,7 +5364,14 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // when handleIndexPage ran the query (current-week all view — see there);
   // renderNowSection itself also fails safe to "" on an empty array, so this
   // stays a no-op on every other view/week without a second gate here.
-  const nowHtml = renderNowSection(nowArcs, strings, token, lang, nowMs);
+  const nowHtml = renderNowSection(
+    nowArcs,
+    strings,
+    token,
+    lang,
+    nowMs,
+    nowCarriesSearch ? renderSearchBubble(token, lang, strings) : "",
+  );
 
   // Catch-up banner (§11.2): a hidden shell, same "data-* carrier" contract
   // as countdownHtml/paletteConfigHtml/the filter input above — no content
