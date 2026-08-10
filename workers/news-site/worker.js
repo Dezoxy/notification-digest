@@ -21,11 +21,13 @@
  *   with `wrangler secret put`.
  *
  * Routes: URL grammar is /t/:token/(hu/)?(daily/|weekly/)?( | d/:id) plus
- * the standalone /t/:token/(hu/)?search endpoint — the language segment
- * always comes first, then either an optional literal "daily/" or "weekly/"
- * view segment or the literal "search" endpoint (search has no daily/
- * weekly/week variant of its own — it spans the whole archive, not one
- * view). No view segment is the ALL view (every digest, mixed).
+ * the standalone /t/:token/(hu/)?search and /t/:token/(hu/)?a/:slug
+ * endpoints — the language segment always comes first, then either an
+ * optional literal "daily/" or "weekly/" view segment, the literal "search"
+ * endpoint, or the literal "a/:slug" arc-page endpoint (search and arc pages
+ * have no daily/weekly/week variant of their own — both span the whole
+ * archive, not one view). No view segment is the ALL view (every digest,
+ * mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
  *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
  *   GET  /t/:token/               -> index (EN, all view), newest-first, grouped by day
@@ -42,7 +44,24 @@
  *   GET  /t/:token/hu/weekly/d/:id -> same digest page, Hungarian chrome, weekly view
  *   GET  /t/:token/search         -> full-text search (EN), query text in ?q=, whole archive
  *   GET  /t/:token/hu/search      -> same search, Hungarian chrome
+ *   GET  /t/:token/a/:slug        -> arc page (EN): every digest carrying that topic slug
+ *   GET  /t/:token/hu/a/:slug     -> same arc page, Hungarian chrome
  *   anything else                 -> plain 404, wrong token included
+ *
+ * Story-arc pages (PLAN.md §11.1 PR A, this feature): a slug is the digest
+ * app's own `derive_topics` fold of a section heading (notification-digest
+ * repo, digest/publish.py) — the SAME slug already used for the "×N this
+ * week" arc line on digest pages (ingest v3, roadmap 4 step 8). An arc page
+ * is DERIVED, never stored: handleArcPage scans `digests.topics` (SQLite
+ * JSON1 via json_each) for every digest carrying the slug and reconstructs
+ * the chain at request time — briefs stay the single source of truth, arcs
+ * are just a read-time view over them (§11.1 guardrail: no storyline-first
+ * storage inversion). The slug-stability contract this depends on
+ * (`_slugify`, notification-digest repo) and the digest-HTML-to-#sN-anchor
+ * coupling (buildSectionToc below) are now PUBLIC URL/link contracts, not
+ * just internal join keys — see findArcSectionAnchor's comment for how a
+ * deep link degrades safely (never wrongly) when that coupling can't be
+ * resolved unambiguously.
  *
  * Hungarian support (EN | HU switcher in the masthead): this Worker only
  * STORES and SERVES translations — it never translates anything itself.
@@ -114,6 +133,15 @@ const MAX_SOURCE_ENTRIES = 16;
 const TOPIC_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_TOPICS = 12;
 
+// Arc pages (§11.1 PR A, handleArcPage): how many of an arc's NEWEST
+// appearances get their digest's body_html fetched for #sN deep-link
+// resolution. 24 ≈ three days of 3-hourly windows — the span a reader
+// plausibly navigates into from a live arc page; every older appearance
+// links to its digest fragment-free (the feature's documented degraded
+// mode). Bounds the per-request body_html haul regardless of how many
+// hundreds of appearances an arc accumulates over months.
+const ARC_ANCHOR_BODIES = 24;
+
 // ── entry point ─────────────────────────────────────────────────────────
 
 export default {
@@ -169,6 +197,20 @@ export default {
     if (searchMatch && request.method === "GET") {
       const lang = searchMatch[2] ? "hu" : "en";
       return handleSearchPage(env, searchMatch[1], url, lang);
+    }
+
+    // Arc page (§11.1 PR A): also standalone, no daily/weekly/w/ variant,
+    // same reasoning as search — a story arc spans the whole archive, not
+    // one view. The slug shape (`[a-z0-9-]{1,64}`) is enforced RIGHT HERE,
+    // in the route regex, the same way the digest-id route above enforces
+    // `\d+` — anything a shorter/looser check would catch never even
+    // reaches handleArcPage, so a malformed slug 404s before touching the
+    // DB by construction, not by a separate guard the handler has to
+    // remember to run first.
+    const arcMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?a\/([a-z0-9-]{1,64})$/);
+    if (arcMatch && request.method === "GET") {
+      const lang = arcMatch[2] ? "hu" : "en";
+      return handleArcPage(env, arcMatch[1], arcMatch[3], url, lang);
     }
 
     // Roadmap 3 (weekly pagination): one optional, always-LAST segment,
@@ -499,6 +541,7 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
     // digest itself — a topic seen only here renders as count 1 (bare label,
     // see renderArcs).
     topicArcs = topics.map((t) => ({
+      slug: t.slug,
       label: t.label,
       count: priorSlugSets.filter((set) => set.has(t.slug)).length + 1,
     }));
@@ -600,6 +643,110 @@ async function handleSearchPage(env, token, url, lang) {
   if (isFragment) return htmlResponse(renderSearchFragment(results, token, lang));
 
   return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang));
+}
+
+// Arc page (§11.1 PR A): reconstructs the full appearance chain for one
+// topic slug at request time — see the file-header comment for why this is
+// DERIVED, not stored. slug shape is already guaranteed by the route regex
+// in fetch() (`[a-z0-9-]{1,64}`) before this ever runs.
+async function handleArcPage(env, token, slug, url, lang) {
+  if (!(await tokenMatches(env, token))) return notFound();
+
+  // json_each cross-joins each digest's `topics` JSON array; the WHERE
+  // clause (topics IS NOT NULL, then the ->> shorthand matching slug) is
+  // what actually narrows the cross join down to at most one row per
+  // digest — SQLite JSON1, available in D1 (verified against the stubbed-D1
+  // smoke test; ->> is standard SQLite 3.38+, and D1's SQLite is far newer;
+  // json_extract(je.value, '$.slug') is the fallback shape if a future D1
+  // runtime ever regresses that operator).
+  //
+  // DESC + LIMIT, then reversed in JS: if a slug ever exceeds the ceiling,
+  // the rows that must survive are the NEWEST — the H1 (latest label),
+  // "updated ...", and momentum are all computed off the latest end, so an
+  // ASC LIMIT would silently freeze this page in the arc's distant past the
+  // day it overflowed. LIMIT 500 is a sane ceiling in the spirit of
+  // MAX_TOPICS/MAX_SOURCE_ENTRIES elsewhere in this file — not real
+  // pagination, just a backstop against a pathological slug that recurs in
+  // every digest ever ingested.
+  //
+  // body_html deliberately does NOT ride along here: a weekly's body_html
+  // runs large, and an arc can legitimately accumulate hundreds of
+  // appearances over months — hauling every body through one query is an
+  // unbounded-memory shape no matter how normal each row is. Anchor
+  // resolution (the only body_html consumer) is capped to the newest
+  // ARC_ANCHOR_BODIES appearances via the second, id-bounded query below.
+  const { results: chainRows } = await env.DB.prepare(
+    `SELECT d.id, d.created_at, d.kind, je.value->>'label' AS label
+       FROM digests d, json_each(d.topics) je
+      WHERE d.topics IS NOT NULL AND je.value->>'slug' = ?1
+      ORDER BY d.created_at DESC, d.id DESC
+      LIMIT 500`,
+  )
+    .bind(slug)
+    .all();
+
+  // No digest currently carries this slug: unknown slug, same indistinguishable
+  // 404 as a bad token or a nonexistent digest id (see the file-header trust
+  // model — a well-shaped-but-unknown slug must reveal nothing either).
+  if (!chainRows || chainRows.length === 0) return notFound();
+
+  // Deep-link anchors only for the newest ARC_ANCHOR_BODIES appearances —
+  // the ones a reader actually navigates into from a live arc page. Older
+  // appearances render with a fragment-less digest link, which is already
+  // this feature's documented degraded mode (findArcSectionAnchor returning
+  // null), not a new behavior — the fail-safe contract stays one contract.
+  const anchorIds = chainRows.slice(0, ARC_ANCHOR_BODIES).map((r) => r.id);
+  const { results: bodyRows } = await env.DB.prepare(
+    `SELECT id, body_html FROM digests WHERE id IN (${anchorIds.map(() => "?").join(", ")})`,
+  )
+    .bind(...anchorIds)
+    .all();
+  const bodyById = new Map((bodyRows ?? []).map((r) => [r.id, r.body_html]));
+
+  // Reversed to ASC (oldest first): renderArcPage's first/latest handling
+  // and its own display-only re-reversal both rely on ASC input — see there.
+  const rows = chainRows.slice().reverse();
+  const appearances = rows.map((row) => ({
+    id: row.id,
+    created_at: row.created_at,
+    kind: row.kind,
+    label: row.label,
+    anchor: bodyById.has(row.id) ? findArcSectionAnchor(bodyById.get(row.id), row.label) : null,
+  }));
+
+  return htmlResponse(renderArcPage(slug, appearances, token, url.hostname, lang, Date.now()));
+}
+
+// Fail-safe slug->section mapping for arc-page deep links (§11.1 guardrail:
+// "a wrong deep link is worse than a missing one"). Runs the exact same
+// stripInlineStyles -> buildSectionToc pipeline renderDigestPage itself runs
+// on body_html (see there) so the #sN ids this produces line up byte-for-
+// byte with what that digest's OWN page actually renders — this is never
+// reimplemented or approximated, just re-run on the same input.
+//
+// Always the ENGLISH body_html, never body_html_hu, regardless of which
+// language this arc page is being read in: derive_topics (notification-
+// digest repo, digest/publish.py) derives every topic label from the
+// English body_md's own `## ` headings, so an English heading is the only
+// text a topic label can ever have come from — matching against the HU
+// translation's (differently worded) headings would just never match.
+//
+// Exact match preferred (labels under 80 chars are never truncated, so the
+// heading and the label are identical strings); falls back to startsWith
+// (the label IS the heading truncated to 80 chars — see derive_topics) only
+// when that resolves to exactly one candidate. Zero or multiple candidates
+// (ambiguous — two sections whose text happens to collide) both return
+// null, which renders as a fragment-less link to the digest page itself
+// (see renderArcAppearance) rather than a guess that might land on the
+// wrong section.
+function findArcSectionAnchor(bodyHtml, label) {
+  const { sections } = buildSectionToc(stripInlineStyles(bodyHtml));
+  const trimmed = label.trim();
+  const exact = sections.filter((s) => s.title === trimmed);
+  if (exact.length === 1) return exact[0].id;
+  if (exact.length > 1) return null;
+  const partial = sections.filter((s) => s.title.startsWith(trimmed));
+  return partial.length === 1 ? partial[0].id : null;
 }
 
 // Turns free-text user input into a SAFE fts5 MATCH string. Raw user input
@@ -1263,6 +1410,20 @@ const STRINGS = {
     // this week" string comes from the template, never hand-composed.
     arcsLabel: "Story threads",
     arcRepeat: "×{n} this week",
+    // Arc page (§11.1 PR A, renderArcPage). arcAppearances/arcFirstSeen/
+    // arcUpdated are placeholder templates ({n}/{date}/{t}), same convention
+    // as arcRepeat/weekLabel/searchResults above — each whole metadata
+    // fragment comes from its own template, never hand-composed pieces.
+    // arcMomentum{Up,Same,Down} are the frequency-only labels the §11.1
+    // guardrail requires (never severity words like "escalating") — see
+    // computeArcMomentum.
+    arcAppearances: "{n} appearances",
+    arcFirstSeen: "first seen {date}",
+    arcUpdated: "updated {t}",
+    arcMomentumUp: "more coverage",
+    arcMomentumSame: "steady",
+    arcMomentumDown: "less coverage",
+    arcTimelineLabel: "Appearances",
   },
   hu: {
     locale: "hu-HU",
@@ -1326,6 +1487,15 @@ const STRINGS = {
     // strings same as everywhere else in this file.
     arcsLabel: "Történetszálak",
     arcRepeat: "×{n} ezen a héten",
+    // Arc page (§11.1 PR A) — owner: please review these, flagged HU
+    // strings same as everywhere else in this file.
+    arcAppearances: "{n} előfordulás",
+    arcFirstSeen: "először: {date}",
+    arcUpdated: "frissítve: {t}",
+    arcMomentumUp: "több lefedettség",
+    arcMomentumSame: "változatlan",
+    arcMomentumDown: "kevesebb lefedettség",
+    arcTimelineLabel: "Előfordulások",
   },
 };
 
@@ -1364,6 +1534,17 @@ function searchHref(token, lang) {
   return `/t/${encodeURIComponent(token)}/${langSeg}search`;
 }
 
+// Like searchHref, to the arc detail page (§11.1 PR A) — no `view`
+// parameter either, same reasoning: a story arc spans every kind, not one
+// view (see the file-header comment). `slug` is always route-regex-shaped
+// (`[a-z0-9-]{1,64}`, see fetch()) by the time this is ever called, so esc()
+// here is the same "free safety, not redundant trust" posture as everywhere
+// else in this file rather than a defense against a real threat.
+function arcHref(token, lang, slug) {
+  const langSeg = lang === "hu" ? "hu/" : "";
+  return `/t/${encodeURIComponent(token)}/${langSeg}a/${esc(slug)}`;
+}
+
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
 // from a digest row's own `kind` column (window/daily) used elsewhere.
 // `archiveWeek` (roadmap 3 step 3): the CURRENT page's own {year, week} when
@@ -1379,8 +1560,18 @@ function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null)
     archiveWeek
       ? weekHref(token, otherLang, view, archiveWeek.year, archiveWeek.week)
       : indexHref(token, otherLang, view);
-  const enHref = pageKind === "index" ? otherLangIndexHref("en") : digestHref(token, "en", view, id);
-  const huHref = pageKind === "index" ? otherLangIndexHref("hu") : digestHref(token, "hu", view, id);
+  // Arc pages (§11.1 PR A, pageKind "arc"): the other-language link targets
+  // the SAME slug's arc page in that language space — `id` doubles as the
+  // slug here (arc pages have no numeric id), and arcHref takes no `view`
+  // (an arc spans every view, see arcHref's own comment), same reasoning as
+  // why the "digest" branch below uses digestHref instead of the index href.
+  const otherLangHref = (otherLang) => {
+    if (pageKind === "index") return otherLangIndexHref(otherLang);
+    if (pageKind === "arc") return arcHref(token, otherLang, id);
+    return digestHref(token, otherLang, view, id);
+  };
+  const enHref = otherLangHref("en");
+  const huHref = otherLangHref("hu");
   // Current language: plain bold text, not a link (nothing to switch to).
   // Other language: a link to the SAME page (same index row / same digest
   // id) in the other language space, same view.
@@ -1937,6 +2128,16 @@ const CSS = `
   /* HU digest page, no body_html_hu on file: shown above the article,
      falling back to the English body. */
   .en-only-note { color: var(--muted); font-size: 0.85em; font-style: italic; margin: 0 0 1em; }
+  /* Arc page title (§11.1 PR A, renderArcPage) — the site's first real <h1>;
+     every other page uses the masthead brand link instead. Editorial
+     register (design guidance: headlines are prose, not chrome), so serif
+     like the article body, not the sans/mono chrome voice — sized down from
+     a typical article h1 to stay in proportion with this site's otherwise
+     restrained type scale (the digest article's own h2s top out at 1.15em). */
+  .arctitle {
+    font-family: var(--font-prose); font-size: 1.5em; font-weight: 700;
+    line-height: 1.3; margin: 0 0 0.5em; text-wrap: balance;
+  }
   /* Section index (TOC, roadmap step 5): chip-link row built from the
      article's own <h2>s at render time (see buildSectionToc). Chips speak
      for themselves — no label string. */
@@ -1950,15 +2151,16 @@ const CSS = `
   .toc a:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   /* Story-arc line (roadmap 4 step 8, renderArcs): chips in the mono data
-     voice, same family as .sourcekey's .sk swatches below — these are
-     labels, not navigation, so unlike .toc's accent link chips they're not
-     links (the site has no topic pages, yet; the arc line is provenance,
-     stating which threads this briefing continues). */
+     voice, same family as .sourcekey's .sk swatches below. Each chip is a
+     LINK to that slug's arc page (§11.1 PR A) — text-decoration: none plus
+     the explicit hover/focus rules below are what keep it reading as a
+     provenance chip stating which thread this briefing continues, not as a
+     button; see renderArcs. */
   .arcs { display: flex; flex-wrap: wrap; gap: 0.45em; margin: 0 0 1.2em; }
   .arcs .arc {
     font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
     letter-spacing: 0.06em; padding: 0.22em 0.8em; border-radius: 999px;
-    background: var(--chip-bg); color: var(--chip-text);
+    background: var(--chip-bg); color: var(--chip-text); text-decoration: none;
     /* Topics derive from section headings, which run headline-length in
        production (owner-reported, 2026-08-09) — cap the chip at one line.
        Only the LABEL ellipsizes (its own span, min-width: 0 so flex lets
@@ -1971,6 +2173,11 @@ const CSS = `
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
   }
   .arcs .arc .arccount { font-weight: 700; margin-left: 0.45em; flex: none; }
+  /* Interactivity signal lives on the LABEL only (an underline on hover),
+     not on the chip's shape/color — the chip must not start looking like a
+     button just because it became clickable. */
+  .arcs .arc:hover .arclabel { text-decoration: underline; }
+  .arcs .arc:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   .attention {
     background: var(--attention-bg); color: var(--attention-text);
@@ -2338,7 +2545,7 @@ const CSS = `
     .archiveresults {
       display: none;
     }
-    .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
+    .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note, .arctitle {
       color: #000;
     }
     /* Numbers are provenance and stay visible in print; the swatches print
@@ -3216,7 +3423,23 @@ ${prefetchScriptHtml}
     // see there for why that distinction is load-bearing.
     var lastRendered = location.pathname + location.search;
 
-    function doSoftNav(href, isPopstate) {
+    // hash param (§11.1 PR A follow-on fix): a CROSS-page link that also
+    // carries a fragment — e.g. an arc page's deep link into a digest's own
+    // #sN section (renderArcAppearance) — used to lose the fragment on the
+    // soft-nav path: the click handler below only ever passed
+    // dest.pathname + dest.search into this function, so the swap landed on
+    // the right PAGE but never scrolled to the right SECTION, silently,
+    // with no error — only a plain full navigation (or JS disabled)
+    // happened to work by accident, via the browser's own native handling.
+    // This was already a latent bug for the TOC's own #sN chips (dead code
+    // path before this feature: no chip anywhere on the site pointed at a
+    // DIFFERENT page's fragment until arc pages existed to do it) — fixed
+    // here rather than shipping a feature whose flagship mechanic silently
+    // degrades for every JS-enabled reader. hash is either "" or something
+    // like "#sN" (URL.hash's own shape, including the "#"); scrolling only
+    // happens once the swap has actually landed, same ordering as
+    // wirePage() below.
+    function doSoftNav(href, isPopstate, hash) {
       if (activeNav) activeNav.abort();
       var controller = new AbortController();
       activeNav = controller;
@@ -3258,26 +3481,38 @@ ${prefetchScriptHtml}
             // to begin with. The LIVE page's script owns behavior; that's
             // the whole point of re-wiring instead of reloading.
             wirePage();
-            // Scroll restoration is deliberately simple: both a forward
-            // soft-nav and a popstate soft-load land at the top. Safari's
-            // BFCache already resolves many real "back" cases before
-            // popstate ever fires; this covers what's left without trying
-            // to remember and restore scroll positions.
-            window.scrollTo(0, 0);
+            // Scroll restoration: a plain forward soft-nav or popstate
+            // soft-load lands at the top, same as always. A hash-bearing
+            // cross-page link (see the function comment above) scrolls the
+            // target element into view instead, once it's actually in the
+            // freshly-swapped DOM — getElementById, not querySelector, since
+            // every id this ever targets (buildSectionToc's "sN") is a
+            // literal token, never CSS-special characters. An id that isn't
+            // in the fetched page (a stale/bad fragment) falls back to the
+            // top, same as no hash at all — never a jump to nowhere.
+            var target = hash ? document.getElementById(hash.slice(1)) : null;
+            if (target) target.scrollIntoView();
+            else window.scrollTo(0, 0);
           });
           // Committed: this address is now what's on screen. Set for BOTH
           // directions (forward soft-nav and popstate soft-load), and only
           // once the swap has actually happened — an aborted or superseded
-          // nav returns above and must never move this.
+          // nav returns above and must never move this. The hash rides
+          // along in the URL bar (history.pushState) but NOT in
+          // lastRendered/href themselves — every existing comparison
+          // against those two (the popstate fragment-only bail below,
+          // fetch(href) above) is deliberately path+search-only, and adding
+          // the hash to either would break that fragment-vs-real-move
+          // distinction this whole soft-nav module already depends on.
           lastRendered = href;
-          if (!isPopstate) history.pushState({ soft: true }, "", href);
+          if (!isPopstate) history.pushState({ soft: true }, "", href + (hash || ""));
         })
         .catch(function (err) {
           if (err && err.name === "AbortError") return; // superseded fetch, silent
           // Fetch failure, non-ok status, or any exception during the swap
           // itself: fall back to the ordinary navigation the reader always
           // had. Correctness never depends on the soft path working.
-          location.href = href;
+          location.href = href + (hash || "");
         });
     }
 
@@ -3318,7 +3553,7 @@ ${prefetchScriptHtml}
         var openSettings = document.querySelector("details.settings[open]");
         if (openSettings && !openSettings.contains(a)) return;
         e.preventDefault();
-        doSoftNav(dest.pathname + dest.search, false);
+        doSoftNav(dest.pathname + dest.search, false, dest.hash);
       },
       true,
     );
@@ -3344,7 +3579,12 @@ ${prefetchScriptHtml}
       // The browser's native anchor scroll is exactly right here and
       // needs no help from this script.
       if (here === lastRendered) return;
-      doSoftNav(here, true);
+      // location.hash already reflects wherever the browser just navigated
+      // the address bar to (a real history move, not a fragment-only one —
+      // ruled out just above) — threaded through so a cross-page hash link
+      // (see doSoftNav's own comment) still resolves correctly on a
+      // back/forward traversal, not just on the initial click.
+      doSoftNav(here, true, location.hash);
     });
   })();
 
@@ -3976,7 +4216,12 @@ function stripInlineStyles(html) {
 // appends the "×N this week" suffix via strings.arcRepeat's template
 // replace — see the STRINGS comment for why that's a whole-string template,
 // not hand-composed pieces.
-function renderArcs(topicArcs, strings) {
+//
+// Each recurring chip is now a LINK to that slug's arc page (§11.1 PR A) —
+// `token`/`lang` are needed for arcHref, alongside the strings this function
+// already took. Each topic entry carries its own `slug` since handleDigestPage
+// started threading it through (see there) specifically so this could link.
+function renderArcs(topicArcs, strings, token, lang) {
   if (!topicArcs || topicArcs.length === 0) return "";
   // RECURRING topics only (count >= 2) — this is what the roadmap 4 step 8
   // spec always said ("topics that ALSO appeared in the prior 7 days"), and
@@ -3989,8 +4234,8 @@ function renderArcs(topicArcs, strings) {
   if (recurring.length === 0) return "";
   const chips = recurring
     .map(
-      ({ label, count }) =>
-        `<span class="arc"><span class="arclabel">${esc(label)}</span><span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></span>`,
+      ({ slug, label, count }) =>
+        `<a class="arc" href="${arcHref(token, lang, slug)}"><span class="arclabel">${esc(label)}</span><span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
     )
     .join("");
   return `<nav class="arcs" aria-label="${esc(strings.arcsLabel)}">${chips}</nav>\n`;
@@ -4085,8 +4330,9 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   const sourceKeyHtml = renderSourceKey(digest.source_counts, digest.failed_sources, strings);
 
   // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics
-  // — see renderArcs and the topicArcs computation in handleDigestPage.
-  const arcsHtml = renderArcs(topicArcs, strings);
+  // — see renderArcs and the topicArcs computation in handleDigestPage. Each
+  // recurring chip links to that slug's arc page (§11.1 PR A).
+  const arcsHtml = renderArcs(topicArcs, strings, token, lang);
 
   // Order: stamp -> arc line -> en-only note -> TOC -> article. The TOC
   // can't sit inside the TL;DR-bearing article start as first imagined — the
@@ -4108,6 +4354,165 @@ ${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</n
     renderSwitchers(token, lang, view, "digest", digest.id),
     body,
     pageTitle,
+  );
+}
+
+// Momentum indicator (§11.1 guardrail: frequency-derived only, NEVER
+// severity vocabulary — "↑ more coverage", never "↑ escalating") —
+// appearances in the trailing 48h vs. the 48h before that, anchored at the
+// CURRENT instant (`nowMs`), not at any one digest's own created_at. This is
+// deliberately different from handleDigestPage's per-digest 7-day arc-line
+// count just above, which anchors at that digest's own created_at so an old
+// digest's arc line stays reproducible history forever (see the comment
+// there) — an arc PAGE is a live view of "where does this story stand right
+// now", so "now" is the correct anchor here, and this page's momentum is
+// expected to change on every visit as time passes, unlike the arc line.
+//
+// Both windows empty -> null, and the indicator is OMITTED from the page
+// (see renderArcPage): a dormant arc has no frequency signal to report, and
+// "less coverage" against a prior window that was also silent would be a
+// claim the data doesn't make (design guidance: labels state only what's
+// provable). With any activity in either window, "recent === 0 -> down" is
+// checked BEFORE the recent-vs-prior comparison so a slug that just went
+// quiet always reads as declining coverage, never as "steady".
+function computeArcMomentum(appearances, nowMs) {
+  const windowStart = nowMs - 48 * 3600000;
+  const priorWindowStart = nowMs - 96 * 3600000;
+  let recent = 0;
+  let prior = 0;
+  for (const row of appearances) {
+    const t = new Date(row.created_at).getTime();
+    if (t >= windowStart && t < nowMs) recent += 1;
+    else if (t >= priorWindowStart && t < windowStart) prior += 1;
+  }
+  if (recent === 0 && prior === 0) return null;
+  if (recent === 0) return "down";
+  if (recent > prior) return "up";
+  if (recent === prior) return "same";
+  return "down";
+}
+
+// "Last updated" relative label (arc pages only). Intl.RelativeTimeFormat
+// formats ONE unit at a time — it doesn't pick the unit for you — so the
+// diff is bucketed by hand into minutes/hours/days, the smallest unit that
+// keeps the magnitude under 60/24 respectively; numeric:"auto" lets a locale
+// with an idiom for it (e.g. "yesterday") use it instead of a bare count.
+// `nowMs` is threaded in from the caller (handleArcPage's `Date.now()`)
+// rather than read here, same "inject the current instant" convention
+// isoWeekOf/handleIndexPage already use elsewhere in this file — keeps this
+// function a pure, stub-testable computation.
+function formatRelativeTime(date, locale, nowMs) {
+  const diffMs = date.getTime() - nowMs; // negative here: always a past appearance
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const minutes = Math.round(diffMs / 60000);
+  if (Math.abs(minutes) < 60) return rtf.format(minutes, "minute");
+  const hours = Math.round(diffMs / 3600000);
+  if (Math.abs(hours) < 24) return rtf.format(hours, "hour");
+  const days = Math.round(diffMs / 86400000);
+  return rtf.format(days, "day");
+}
+
+// One appearance in the arc timeline — reuses the index ledger's own
+// `.entry`/`.meta`/`.time`/`.excerpt` vocabulary (same "a link to one
+// digest" shape as renderSearchResult) rather than inventing a parallel
+// style. `.excerpt` here holds this APPEARANCE's own label for the arc (that
+// digest's own heading text, at the time it was published), not a TL;DR —
+// deliberately no "TL;DR:" prefix, unlike renderIndexEntry's. Always the
+// all-view digest href: an arc spans every kind, so an appearance has no
+// daily/weekly-view address of its own, same reasoning as
+// renderSearchResult's. `row.anchor` (from findArcSectionAnchor, computed
+// once in handleArcPage) is appended as a #sN fragment only when it
+// resolved to exactly one section — see that function's comment for the
+// fail-safe contract; a null anchor here means a plain link to the digest
+// page, never a guessed fragment.
+function renderArcAppearance(row, token, lang) {
+  const strings = STRINGS[lang];
+  const time = formatTime(new Date(row.created_at), strings.locale);
+  // "all": appearances span every kind/view, same reasoning as
+  // renderSearchResult's kindBadge call — always show the daily/weekly
+  // badge, never suppress it the way a same-kind VIEW page would.
+  const badgeHtml = kindBadge(row, "all", strings);
+  const href = digestHref(token, lang, "all", row.id) + (row.anchor ? `#${row.anchor}` : "");
+  return `<a class="entry" href="${href}" data-created="${esc(row.created_at)}">
+    <span class="meta"><span class="time">${esc(time)}</span>${badgeHtml}</span>
+    <p class="excerpt">${esc(row.label)}</p>
+  </a>`;
+}
+
+// Arc page (§11.1 PR A): `appearances` is handleArcPage's array, ordered
+// created_at ASC (oldest first) — first/latest below rely on that order, so
+// it's reversed ONLY for the timeline's own display (see the comment at that
+// call site). `nowMs` is the request-time instant handleArcPage captured
+// once and threads through unchanged, so momentum/relative-time computed
+// here can never observe two different "now"s within one render.
+function renderArcPage(slug, appearances, token, host, lang, nowMs) {
+  const strings = STRINGS[lang];
+  const first = appearances[0];
+  const latest = appearances[appearances.length - 1];
+
+  // null on a dormant arc (both 48h windows empty) — the segment is left
+  // off the metadata line entirely rather than rendered as a guess; see
+  // computeArcMomentum's comment.
+  const momentum = computeArcMomentum(appearances, nowMs);
+  const momentumSegment =
+    momentum === null
+      ? null
+      : momentum === "up"
+        ? `↑ ${strings.arcMomentumUp}`
+        : momentum === "down"
+          ? `↓ ${strings.arcMomentumDown}`
+          : `→ ${strings.arcMomentumSame}`;
+
+  // One mono metadata line, reusing the digest page's own `.stamp` styling
+  // (same "wire dateline" register — total appearances, first-seen date,
+  // last-updated relative time, momentum when present) rather than a new
+  // CSS class.
+  const metaLine = [
+    strings.arcAppearances.replace("{n}", String(appearances.length)),
+    strings.arcFirstSeen.replace("{date}", formatShortDate(new Date(first.created_at), strings.locale)),
+    strings.arcUpdated.replace("{t}", formatRelativeTime(new Date(latest.created_at), strings.locale, nowMs)),
+    momentumSegment,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  // Title (H1, the site's first — every other page uses the masthead brand
+  // link instead): the arc's MOST RECENT label, not the first — labels can
+  // drift across digests as headings get rephrased run to run, and the
+  // latest phrasing is the freshest editorial framing of the story.
+  const title = latest.label;
+
+  // Timeline, newest-day-first (matches the index ledger's own newest-first
+  // convention — groupByDay just buckets consecutive same-day rows in
+  // whatever order it's handed, so the DESC order has to come from the
+  // caller, same as handleIndexPage's own `created_at DESC` query does for
+  // the ledger). `appearances` itself stays ASC (oldest first) throughout
+  // this function — only this local copy is reversed, for display only.
+  const groups = groupByDay(appearances.slice().reverse(), strings.locale);
+  const timelineHtml = groups
+    .map(
+      (group) => `<div class="dayhead">${esc(group.label)}</div>
+${group.items.map((row) => renderArcAppearance(row, token, lang)).join("\n")}`,
+    )
+    .join("\n");
+
+  const body = `<nav class="digestnav"><a href="${indexHref(token, lang, "all")}">${esc(strings.allDigests)}</a></nav>
+<h1 class="arctitle">${esc(title)}</h1>
+<p class="stamp">${esc(metaLine)}</p>
+<div class="archivelabel">${esc(strings.arcTimelineLabel)}</div>
+${timelineHtml}`;
+
+  // view "all": an arc has no view of its own (see the file-header comment)
+  // — the view tabs/brand link just need SOME valid view to target, same
+  // reasoning as renderSearchPage's own "all" choice.
+  return pageChrome(
+    host,
+    token,
+    lang,
+    "all",
+    renderSwitchers(token, lang, "all", "arc", slug),
+    body,
+    title,
   );
 }
 
