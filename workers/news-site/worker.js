@@ -3209,6 +3209,13 @@ ${prefetchScriptHtml}
     // win the race and overwrite what the reader is now looking at.
     var activeNav = null;
 
+    // The path+search this script has actually rendered, kept in the same
+    // "pathname + search" shape doSoftNav takes (deliberately WITHOUT the
+    // fragment). The popstate handler at the bottom compares against this
+    // to tell a real history move from a same-document fragment move —
+    // see there for why that distinction is load-bearing.
+    var lastRendered = location.pathname + location.search;
+
     function doSoftNav(href, isPopstate) {
       if (activeNav) activeNav.abort();
       var controller = new AbortController();
@@ -3258,6 +3265,11 @@ ${prefetchScriptHtml}
             // to remember and restore scroll positions.
             window.scrollTo(0, 0);
           });
+          // Committed: this address is now what's on screen. Set for BOTH
+          // directions (forward soft-nav and popstate soft-load), and only
+          // once the swap has actually happened — an aborted or superseded
+          // nav returns above and must never move this.
+          lastRendered = href;
           if (!isPopstate) history.pushState({ soft: true }, "", href);
         })
         .catch(function (err) {
@@ -3312,7 +3324,27 @@ ${prefetchScriptHtml}
     );
 
     addEventListener("popstate", function () {
-      doSoftNav(location.pathname + location.search, true);
+      var here = location.pathname + location.search;
+      // Fragment-only move — bail (owner-reported 2026-08-10: every TOC
+      // chip scrolled down, then snapped back to the top).
+      //
+      // A fragment navigation ("#s4" from renderToc's chips, or any
+      // in-page anchor) is a SAME-DOCUMENT navigation, and browsers fire
+      // popstate for those as well as for real history traversals —
+      // popstate first, then hashchange. Unguarded, this handler treated
+      // that as a history move and soft-navved to the page the reader was
+      // already on: the swap replaced .wrap mid-scroll, destroying the
+      // element the browser's smooth scroll was animating toward, and the
+      // trailing scrollTo(0, 0) put them back at the top.
+      //
+      // The click interceptor above already declines hash-only links (see
+      // its own bail); this is the SAME condition arriving through the
+      // other entry point into doSoftNav. Comparing path+search — neither
+      // of which a fragment move changes — is what distinguishes them.
+      // The browser's native anchor scroll is exactly right here and
+      // needs no help from this script.
+      if (here === lastRendered) return;
+      doSoftNav(here, true);
     });
   })();
 
