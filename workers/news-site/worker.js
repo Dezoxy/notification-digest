@@ -2662,7 +2662,17 @@ const CSS = `
     border-radius: 14px;
     padding: 1em 1.1em;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-    display: flex; flex-direction: column; gap: 0.7em; min-width: 13em;
+    display: flex; flex-direction: column; gap: 0.7em;
+    /* Size to CONTENT, not to the anchor (owner-reported bug: the panel is
+       absolutely positioned off the tiny details.settings anchor, so
+       shrink-to-fit bottomed out at the old min-width — 13em — which the
+       body-font row outgrew: "BODY FONT" wrapped to two lines and the
+       CLASSIC segment clipped at the panel edge on desktop, where the em
+       base is larger. max-content lets the widest row set the panel;
+       min-width keeps short-rowed panels (HU has fewer long rows) from
+       looking skeletal; the viewport cap keeps phones safe, with the
+       label allowed to wrap again only in that capped case. */
+    width: max-content; min-width: 13em; max-width: calc(100vw - 2.5em);
   }
   .settingsrow { display: flex; justify-content: space-between; align-items: baseline; gap: 1.2em; }
   /* No-JS resilience: theme/text-size/density controls are server-rendered
