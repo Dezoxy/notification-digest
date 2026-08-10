@@ -422,15 +422,15 @@ so this pass contains no motion/lang work.
   pre-paint by the same head script pattern as the theme (`data-density`
   on `<html>`); compact tightens `.entry` padding and the excerpt clamp
   for readers who want the wire-ledger look.
-- [x] **Calendar heatmap** — the archive at a glance: a server-rendered
-  trailing-12-week day-grid (columns = ISO weeks, rows = Mon–Sun) at the
-  bottom of the CURRENT-week all-view index, cell intensity stepped by
-  that Budapest-local day's summed `item_count`, each cell titled (day +
-  count) and linking into its week's `w/` page (roadmap 3 built those
-  URLs as this feature's link targets; current week links to the root
-  index — one canonical URL). Pure HTML/CSS, no JS, no new data — one
-  bounded query over the trailing window, bucketed with the existing
-  Budapest date helpers.
+- [x] ~~**Calendar heatmap**~~ — **shipped, then removed 2026-08-10.** Was a
+  server-rendered trailing-12-week day-grid (columns = ISO weeks, rows =
+  Mon–Sun) at the bottom of the CURRENT-week all-view index, cell intensity
+  stepped by that Budapest-local day's summed `item_count`, each cell linking
+  into its week's `w/` page. Removed as unnecessary: at a personal digest's
+  volume the grid carried no signal the week rail and archive search don't
+  already give, and it cost one extra bounded D1 query on every current-week
+  page load. The `w/YYYY-Www/` URLs it linked into remain — roadmap 3 owns
+  those, and the week rail is the archive navigation.
 - [x] **Archive week sparkline** — archive `w/` pages lost the pulse strip
   by design (roadmap 3 gated it to the current week); the week rail's
   center gains seven per-day micro-bars for the rendered week, from rows

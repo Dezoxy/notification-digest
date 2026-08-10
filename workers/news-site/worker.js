@@ -328,7 +328,6 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
 
   let results;
   let weekInfo = null;
-  let heatmapRows = null;
   if (view === "daily") {
     // kind='daily' ONLY — a weekly brief never appears here, it lives in
     // the All view (see the file-header "Daily-brief view" comment). Also
@@ -393,31 +392,6 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       older: olderAllowed ? prevWeek : null,
       newer: newerAllowed ? adjacentWeek(effective.year, effective.week, 1) : null,
     };
-
-    // Calendar heatmap data (roadmap 4 step 5): one extra bounded query,
-    // CURRENT-WEEK ALL-VIEW ONLY — effective === current here (isCurrentWeek
-    // is true), so the endIso already computed above for the week query IS
-    // the current week's own end boundary; reused as-is rather than
-    // recomputed. The start boundary is the MONDAY of the week 11 ISO weeks
-    // before this one, via adjacentWeek + weekBoundsUtc — the same trailing-
-    // 12-week span renderHeatmap below builds its columns from. kind='window'
-    // only, same double-count reasoning as renderPulseStrip: a daily brief
-    // re-synthesizes the same day's items, so summing it in too would count
-    // the day twice. No LIMIT is strictly needed (a 12-week bounded window is
-    // ~500 rows at current volume), but LIMIT 4000 stays as a hard backstop.
-    if (isCurrentWeek) {
-      const oldestWeekForHeatmap = adjacentWeek(effective.year, effective.week, -11);
-      const { startIso: heatmapStartIso } = weekBoundsUtc(
-        oldestWeekForHeatmap.year,
-        oldestWeekForHeatmap.week,
-      );
-      const { results: heatmapResults } = await env.DB.prepare(
-        `SELECT created_at, item_count FROM digests WHERE kind = 'window' AND created_at >= ? AND created_at < ? LIMIT 4000`,
-      )
-        .bind(heatmapStartIso, endIso)
-        .all();
-      heatmapRows = heatmapResults;
-    }
   }
 
   // Next-briefing countdown (roadmap 2 step 3): the newest WINDOW digest's
@@ -448,7 +422,6 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       view,
       countdownNewest,
       weekInfo,
-      heatmapRows,
     ),
   );
 }
@@ -1270,8 +1243,6 @@ const STRINGS = {
     weekLabel: "Week {w} · {range}",
     // Digest-page source key label (rendered uppercase via .sklabel's CSS).
     sourcesLabel: "Sources",
-    // Calendar heatmap eyebrow label (roadmap 4 step 5, renderHeatmap).
-    heatmapLabel: "Archive · last 12 weeks",
     // Search (roadmap 4 step 7). searchResults is a placeholder template
     // ({n} = result count), same convention as weekLabel above.
     searchLabel: "Search the archive",
@@ -1282,9 +1253,9 @@ const STRINGS = {
     searchNone: "Nothing found.",
     // Unified search (owner UX pass): eyebrow label above the archive
     // results the index page's own filter box surfaces in-page — see
-    // renderSearchFragment/the .archivelabel CSS. Same mono-eyebrow voice
-    // as heatmapLabel above, not a template (no {n} — the count line stays
-    // on the standalone search page only).
+    // renderSearchFragment/the .archivelabel CSS. Mono-eyebrow voice, not a
+    // template (no {n} — the count line stays on the standalone search page
+    // only).
     archiveResults: "From the archive",
     // Story-arc line (roadmap 4 step 8, renderArcs). arcRepeat is a
     // placeholder template ({n} = total appearances including this digest),
@@ -1341,7 +1312,6 @@ const STRINGS = {
     weekRailLabel: "Heti navigáció",
     weekLabel: "{w}. hét · {range}",
     sourcesLabel: "Források",
-    heatmapLabel: "Archívum · elmúlt 12 hét",
     // Search (roadmap 4 step 7) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     searchLabel: "Keresés az archívumban",
@@ -2227,11 +2197,12 @@ const CSS = `
 
   /* Unified search results (owner UX pass): the index page's own box for
      archive hits fetched in the background by the bottom script — see
-     renderIndexPage's archiveResultsHtml. .archivelabel is the same mono
-     eyebrow recipe as .hmlabel below (same look, deliberately its own
-     class rather than sharing .hmlabel's — coupling two unrelated features
-     to one class just because they currently render alike is the kind of
-     thing that bites later). .archiveresults[hidden] needs no rule of its
+     renderIndexPage's archiveResultsHtml. .archivelabel is the file's mono
+     eyebrow recipe, kept as its own class rather than shared with any other
+     eyebrow — coupling unrelated features to one class just because they
+     currently render alike is the kind of thing that bites later, and this
+     class survived a neighbouring feature's removal untouched precisely
+     because it was never shared. .archiveresults[hidden] needs no rule of its
      own: the global [hidden] override near the top of this stylesheet
      already covers it, same as every other hide-by-attribute element here. */
   .archivelabel {
@@ -2268,30 +2239,6 @@ const CSS = `
   .pulsebar.now span { background: var(--accent); }
   .pulsebar:hover span { background: var(--accent); }
   .pulsebar:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-
-  /* Calendar heatmap (roadmap 4 step 5, renderHeatmap): same ambient-chrome
-     philosophy as .pulse above — a calendar you can feel, not a chart with
-     axes. No month labels or gridlines; each cell's title carries the
-     actual date + count, so the grid itself stays purely visual. */
-  .heatmapwrap { margin: 2.6em 0 0; }
-  .hmlabel {
-    font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.6em;
-  }
-  .heatmap {
-    display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px);
-    grid-auto-columns: 11px; gap: 3px;
-  }
-  .heatmap a { display: block; border-radius: 2.5px; background: var(--accent); }
-  /* Levels via opacity, not five new palette colors — one accent var already
-     works in both themes, so intensity steps from bare hairline (0) through
-     full accent (4) need no new CSS variables at all. */
-  .heatmap a.hm0 { background: var(--hairline); opacity: 1; }
-  .heatmap a.hm1 { opacity: 0.25; }
-  .heatmap a.hm2 { opacity: 0.45; }
-  .heatmap a.hm3 { opacity: 0.7; }
-  .heatmap a.hm4 { opacity: 1; }
-  .heatmap a:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
 
   /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
      inserts between digests that arrived since the reader's last visit and
@@ -2388,7 +2335,7 @@ const CSS = `
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
     .filterrow, .miniseg, .densitytoggle, .pulse, .resumechip,
-    .heatmapwrap, .archiveresults {
+    .archiveresults {
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note {
@@ -3670,80 +3617,6 @@ function renderPulseStrip(rows, token, lang, view) {
   return `<nav class="pulse" aria-label="${esc(strings.pulseLabel)}">${bars}</nav>\n`;
 }
 
-// Calendar heatmap (roadmap 4 step 5): the archive at a glance — a trailing
-// 12-ISO-week day grid, columns oldest (left) to current week (right), rows
-// Mon..Sun, cell intensity by that Budapest-local day's summed item_count.
-// CURRENT-WEEK ALL-VIEW ONLY — see the call site in renderIndexPage, and
-// handleIndexPage's own isCurrentWeek gate on the query that fills
-// heatmapRows in the first place (null on every other page, which is this
-// function's first fail-safe below). `currentWeek` is handleIndexPage's
-// weekInfo (or anything shaped like { year, week }) for THIS page's own
-// week — the anchor the 12 columns are built backward from.
-function renderHeatmap(heatmapRows, token, lang, currentWeek) {
-  if (heatmapRows === null) return "";
-
-  const strings = STRINGS[lang];
-
-  // Sum item_count per Budapest-local calendar day, keyed "y-m-d" via
-  // budapestDateParts — the same Intl round trip every other Budapest-local
-  // bucketing in this file uses (groupByDay's formatDayHeader included), so
-  // a digest lands on the same calendar day here as on the ledger above it.
-  const daySums = new Map();
-  for (const row of heatmapRows) {
-    const { y, m, d } = budapestDateParts(new Date(row.created_at));
-    const key = `${y}-${m}-${d}`;
-    daySums.set(key, (daySums.get(key) ?? 0) + row.item_count);
-  }
-
-  // 12 columns, oldest -> current week (delta 0 is currentWeek itself). Each
-  // column's Mon..Sun days are +0..6 UTC-noon-proxy day offsets off a FRESH
-  // copy of mondayOfIsoWeek's own proxy per day — never mutate that proxy in
-  // place across iterations, or every day in the column would collapse onto
-  // the same Monday.
-  const columns = [];
-  for (let delta = -11; delta <= 0; delta += 1) {
-    const week = adjacentWeek(currentWeek.year, currentWeek.week, delta);
-    const monday = mondayOfIsoWeek(week.year, week.week);
-    const days = [];
-    for (let offset = 0; offset < 7; offset += 1) {
-      const day = new Date(monday);
-      day.setUTCDate(day.getUTCDate() + offset);
-      days.push(day);
-    }
-    columns.push({ week, isCurrent: delta === 0, days });
-  }
-
-  // Intensity against the max day-sum across the WHOLE 12-week window (not
-  // per-column), so a cell's shade is comparable grid-wide, not just within
-  // its own week. A fresh install with no data anywhere in the window is a
-  // uniformly empty grid — noise, not a useful "archive at a glance", so it
-  // renders nothing rather than 84 identical hairline cells.
-  const max = Math.max(0, ...daySums.values());
-  if (max === 0) return "";
-
-  const cells = columns
-    .map((col) => {
-      // The CURRENT week's own column links to the root index, not its
-      // w/YYYY-Www/ address — one canonical URL for the current week, same
-      // decision renderWeekRail makes for its own "newer" link.
-      const href = col.isCurrent
-        ? indexHref(token, lang, "all")
-        : weekHref(token, lang, "all", col.week.year, col.week.week);
-      return col.days
-        .map((day) => {
-          const { y, m, d } = budapestDateParts(day);
-          const count = daySums.get(`${y}-${m}-${d}`) ?? 0;
-          const level = count === 0 ? 0 : Math.ceil((count / max) * 4);
-          const title = `${formatShortDate(day, strings.locale)} · ${count} ${strings.itemsWord}`;
-          return `<a class="hm${level}" href="${href}" title="${esc(title)}"></a>`;
-        })
-        .join("\n");
-    })
-    .join("\n");
-
-  return `<nav class="heatmapwrap" aria-label="${esc(strings.heatmapLabel)}"><div class="hmlabel">${esc(strings.heatmapLabel)}</div><div class="heatmap">${cells}</div></nav>`;
-}
-
 // Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
 // W33 →` nav, rendered on ALL-view index pages only — see the call site in
 // renderIndexPage, and the file-header roadmap notes on why the daily view
@@ -3787,13 +3660,12 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
   // Archive sparkline (roadmap 4 step 6): seven per-day micro-bars for THIS
   // week only, built when (and only when) the caller handed us rows — see
   // the function comment above. Same Budapest day-bucketing as
-  // renderHeatmap: window digests only (kind === "window" — a daily brief
+  // renderPulseStrip: window digests only (kind === "window" — a daily brief
   // re-synthesizes the same day's items, so counting it too would double the
   // day), summed by budapestDateParts key, then read back per day of the
-  // week's own Mon..Sun span off a FRESH per-day proxy copy each iteration
-  // (mondayOfIsoWeek's proxy must never be mutated in place across
-  // iterations, or every day would collapse onto the same Monday — see
-  // renderHeatmap's comment on the same hazard).
+  // week's own Mon..Sun span off a FRESH per-day proxy copy each iteration —
+  // mondayOfIsoWeek's proxy must never be mutated in place across
+  // iterations, or every day would collapse onto the same Monday.
   let sparkHtml = "";
   if (Array.isArray(rows)) {
     const daySums = new Map();
@@ -3816,12 +3688,10 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
       return daySums.get(`${y}-${m}-${d}`) ?? 0;
     });
 
-    // Normalized against the WEEK'S OWN max day-sum (unlike the heatmap,
-    // which normalizes grid-wide) — this bar cluster only ever shows one
-    // week at a time, so there's no wider window to be comparable against.
-    // An empty week (every day zero) renders no sparkline at all rather than
-    // seven identical hairline bars — noise, not signal, same call the
-    // heatmap makes for a uniformly empty grid.
+    // Normalized against the WEEK'S OWN max day-sum — this bar cluster only
+    // ever shows one week at a time, so there's no wider window to be
+    // comparable against. An empty week (every day zero) renders no sparkline
+    // at all rather than seven identical hairline bars — noise, not signal.
     const max = Math.max(0, ...counts);
     if (max > 0) {
       const bars = days
@@ -3846,7 +3716,7 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
   return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span></nav>`;
 }
 
-function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null, heatmapRows = null) {
+function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null) {
   const strings = STRINGS[lang];
   const emptyMessage =
     view === "daily" ? strings.noDailyBriefs : view === "weekly" ? strings.noWeeklyBriefs : strings.noDigests;
@@ -3965,25 +3835,13 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // an archive week never has a leadRow to prefetch in the first place.
   const prefetchHref = leadRow ? digestHref(token, lang, view, leadRow.id) : null;
 
-  // Calendar heatmap (roadmap 4 step 5): after the <section> below, above
-  // the footer (footer.site lives in pageChrome, outside this function's
-  // returned content string entirely, so appending here already lands
-  // above it). Gated exactly like the other current-week-only chrome above
-  // (isCurrent) plus view/weekInfo, since the heatmap is an ALL-view-index
-  // feature with no daily-view equivalent — renderHeatmap's own
-  // null/all-empty fail-safes still apply on top of this gate.
-  const heatmapHtml =
-    isCurrent && view === "all" && weekInfo
-      ? renderHeatmap(heatmapRows, token, lang, weekInfo)
-      : "";
-
   return pageChrome(
     host,
     token,
     lang,
     view,
     renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
-    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}${heatmapHtml}`,
+    `${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     countdownNewest,
     prefetchHref,
