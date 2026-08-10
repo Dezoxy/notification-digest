@@ -496,7 +496,12 @@ All ten steps above are merged; `v0.8.0` is being cut on `main` now. `.github/wo
 This section absorbs PLAN2.md (2026-08-10) — the former "proposals not yet
 accepted" file, whose entries came from a friend's verified-briefing
 suggestion (2026-08-09) and the triage of a Codex site-redesign brief
-(2026-08-10). Approval semantics carry over unchanged: NOTHING in §11 is
+(2026-08-10). A second Codex pass the same day, grounded in the shipped
+site, converged on the same phasing; its additions are folded into the
+entries below (momentum, the "you were here" marker, the four-part story
+structure) and its design-execution guidance is distilled in
+`docs/redesign-design-guidance.md` for the toom-edge implementation
+sessions. Approval semantics carry over unchanged: NOTHING in §11 is
 approved until its entry's status line says so; boxes are ticked only after
 the entry is approved; a rejected entry is removed, leaving a line in §9's
 decision log saying why. Entries appear in recommended execution order.
@@ -531,6 +536,11 @@ still reachable, no longer the front page.
 - Briefs stay the source of truth, arcs stay derived — no storyline-first
   storage inversion. That inversion was considered and rejected: it is a
   rewrite of the publish pipeline disguised as a front-end feature.
+- Momentum labels must be data-derived. Arc appearance frequency across
+  digests supports arrows and trends ("↑ more coverage" is provable from
+  slug chains); severity words ("escalating") are content claims nothing in
+  the pipeline backs — they don't ship without a model judgment behind
+  them. Same overclaiming class as confidence badges (§11.4).
 
 **Steps:**
 - [ ] (toom-edge) Arc-chain reconstruction: extend the existing
@@ -540,12 +550,15 @@ still reachable, no longer the front page.
 - [ ] (toom-edge) Decide + implement the NOW ranking rule (recency ×
       appearance volume) from data already published; no new digest fields
       expected.
+- [ ] (toom-edge) Data-derived momentum indicator per arc: appearance
+      frequency across recent digests → ↑/→/↓ arrows. Frequency only — no
+      severity vocabulary (see guardrail above).
 - [ ] (toom-edge) Arc detail page: current state, appearance timeline, deep
       links into each brief's section anchor.
 - [ ] (toom-edge) Homepage becomes NOW (top 3–5 arcs); chronological brief
       feed demotes to Archive navigation.
-- [ ] (toom-edge) ⌘K command palette (arcs, briefs, commands) — polish
-      inside this entry, client-side only.
+- [ ] (toom-edge) ⌘K command palette (arcs, briefs, commands) plus j/k
+      keyboard navigation — polish inside this entry, client-side only.
 - [ ] (digest) Only if a ranking signal turns out missing: expose it in the
       publish payload — expected outcome is "none needed".
 - [ ] Deploy and verify on real data: slugs resolve, deep links land on the
@@ -573,6 +586,13 @@ never leaves the reader's own browser.
       load against published brief/arc timestamps.
 - [ ] (toom-edge) "Since your last visit: N briefs, M arc updates" banner
       linking straight to what's new.
+- [ ] (toom-edge) "You were here" marker in the briefing timeline at the
+      last-seen position — a subtle rule line inside the flow, not a
+      second banner.
+- [ ] (toom-edge, optional) Follow list in localStorage: followed arcs
+      rank slightly higher in the catch-up view. The site must stay fully
+      functional with nothing followed — automatic-first, configuration
+      optional.
 - [ ] Verify: zero new publish fields, zero server state.
 
 ### 11.3 Delta persistence — "what changed" as data, not prose (proposed)
@@ -624,6 +644,12 @@ arc timelines can consume it as data instead of re-deriving it from prose.
       flag-on.
 - [ ] (toom-edge) "What changed" rendering + arc-timeline consumption of
       the same data.
+- [ ] (digest, optional rider) While the window contract is open anyway,
+      decide whether repeat-story sections adopt the four-part structure
+      (what happened / what changed / why it matters / what to watch) from
+      the Codex round-2 brief — "Watching next week" already exists as a
+      weekly structural rubric, so the pattern has precedent. Same
+      validate-on-real-digests gate; skipping it is a fine outcome.
 - [ ] (homelab) Release train: tag → image → Renovate bump → deploy.
 
 ### 11.4 Verified briefing — cross-reference the daily brief against the open web (proposed)
@@ -723,7 +749,10 @@ discussion behind a story. Parked behind two named blockers.
   of it built today. Surfacing per-member message/reaction counts also
   moves member activity across a boundary it doesn't cross today — right
   now the digest reports content, never who said what how often — a
-  boundary to cross by explicit decision, not scope creep.
+  boundary to cross by explicit decision, not scope creep. (The Codex
+  round-2 brief reframes this toward Reddit vote/comment signals instead
+  of Telegram — more tractable, since the Reddit collector exists, but
+  per-item metrics aren't stored today and blocker (a) applies unchanged.)
 
 **Steps:**
 - [ ] Answer the audience question (owner decision — recorded in §9).
