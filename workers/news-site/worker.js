@@ -1924,6 +1924,17 @@ const STRINGS = {
     // design guidance's "evidence over certainty" / "calm urgency" register
     // applies to interface labels too, not just status text.
     arcContextLabel: "Background",
+    // Big edition masthead issue line (Front Page redesign, index pages
+    // only — see pageChrome's bigMasthead param / renderIndexPage's
+    // buildIssueLine): "No. {n}" reuses the digest's own numeric `id` as
+    // the edition number (an existing column, not new plumbing) — a
+    // placeholder template, same {n} convention as arcRepeat/weekLabel
+    // above. issueEditionsToday(One) is the "{n} editions today" segment,
+    // ALL view only (see buildIssueLine) — plural/singular split for the
+    // same reason arcAppearances/catchupBriefings above split.
+    issueEdition: "No. {n}",
+    issueEditionsToday: "{n} editions today",
+    issueEditionsTodayOne: "{n} edition today",
   },
   hu: {
     locale: "hu-HU",
@@ -2030,6 +2041,14 @@ const STRINGS = {
     // (PLAN.md §11.6 context mode), mirrors the EN block's pattern. "Háttér"
     // ("Background/context") — a plain, calm noun, no verb/CTA framing.
     arcContextLabel: "Háttér",
+    // Owner: please review — new HU strings, big edition masthead issue
+    // line (Front Page redesign), mirror the EN block's pattern. Hungarian
+    // does not pluralize a noun after a numeral (same reasoning as
+    // searchResultsOne above), so issueEditionsTodayOne is deliberately
+    // identical to its plural twin.
+    issueEdition: "{n}. szám",
+    issueEditionsToday: "{n} kiadás ma",
+    issueEditionsTodayOne: "{n} kiadás ma",
   },
 };
 
@@ -2213,12 +2232,13 @@ function brandParts(host) {
 }
 
 const CSS = `
-  /* Three type roles, all zero-byte system stacks (roadmap step 3 — "the
-     private wire desk"): PROSE for the sit-back-and-read register (article
-     body, TL;DR, excerpts), DATA for anything keyed on time (times, counts,
-     datelines, citation chips), and chrome — the masthead/tabs/nav/footer —
-     which stays the existing body sans stack with no variable of its own.
-     Time is this site's primary key; the typography should say so. */
+  /* Two type roles, both zero-byte system stacks ("print poster" redesign):
+     PROSE for the sit-back-and-read register (article body, TL;DR/leader,
+     excerpts) — now the SAME sans stack as chrome, not a separate serif, so
+     the whole site reads as one heavy-display/tight-tracked voice instead of
+     newspaper-serif-vs-sans — and DATA for anything keyed on time (times,
+     counts, datelines, citation chips, mono eyebrows). Time is this site's
+     primary key; the typography should say so. */
   :root {
     /* Owner-reported white flash when stepping between pages: every page
        is a fresh no-store document, and in the network gap before its
@@ -2230,40 +2250,58 @@ const CSS = `
        data-theme override blocks below pin it to one scheme, keeping the
        between-pages canvas in lockstep with the manual theme choice. */
     color-scheme: light dark;
-    --font-prose: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    /* "Print poster" redesign: retired the serif stack — every prose rule
+       below (.digest p, .tldr/leader, .entry .excerpt, arc/delta text, …)
+       flips to the same heavy sans voice as chrome just by this
+       redefinition, no selector changes needed. */
+    --font-prose: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
     --font-data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
-    --bg: #fbfaf7; /* barely-warm paper — deliberately NOT cream */
-    --page-bg: #e9e9f2;
-    --text: #16181d; /* ink */
-    --muted: #6e7380; /* old #8a8f9e was ~3.4:1 on the new paper; this clears 4.5:1 */
-    --accent: #4f46e5;
-    --accent-strong: #4338ca;
-    --tldr-bg: #eef2ff;
-    --tldr-text: #262a49;
-    --chip-bg: #dde3ff;
-    --chip-text: #4338ca;
-    --hairline: #e7e5e0; /* warmed to match the new paper */
-    --h2-border: #4f46e5;
+    --bg: #ffffff; /* paper */
+    --page-bg: #ffffff; /* same as --bg: the purple desktop "bubble" background is retired — flat paper everywhere, see the >=52em block below */
+    --text: #101215; /* ink */
+    --muted: #5b6270;
+    --accent: #0e3fa9; /* press blue */
+    --accent-strong: #0a2f80; /* darker blue — hover/strong state */
+    --tldr-bg: #eaf0fc;
+    --tldr-text: #16234f;
+    --chip-bg: #eef1f7;
+    --chip-text: #0e3fa9; /* = --accent: cite chips read as press-blue text */
+    --hairline: #d8dbe2;
+    --h2-border: #0e3fa9; /* = --accent */
     --attention-bg: #fef3c7;
     --attention-text: #78350f;
+    /* New tokens (print poster): a heavier rule than --hairline for the
+       masthead/section rules, the highlighter mark used inside headlines,
+       and a faint mono tone one step quieter than --muted (folios,
+       eyebrows). --mark-ink is deliberately identical in every theme copy —
+       the mark itself is always a light chip, so its text always wants dark
+       ink, never the theme's own --text. */
+    --rule-heavy: #101215;
+    --mark: #ffe14d;
+    --mark-ink: #101215;
+    --faint: #8a90a0;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #17181c;
-      --page-bg: #0f0d17;
-      --text: #e6e6ea;
-      --muted: #8a8f9e;
-      --accent: #a5b4fc;
-      --accent-strong: #c7d2fe;
-      --tldr-bg: #262841;
-      --tldr-text: #dfe3ff;
-      --chip-bg: #33355c;
-      --chip-text: #c7d2fe;
-      --hairline: #2a2c33;
-      --h2-border: #6366f1;
+      --bg: #131418;
+      --page-bg: #131418;
+      --text: #ecedf0;
+      --muted: #9aa1af;
+      --accent: #7d9bff;
+      --accent-strong: #a8bdff;
+      --tldr-bg: #1c2740;
+      --tldr-text: #d7e2ff;
+      --chip-bg: #1f2127;
+      --chip-text: #7d9bff;
+      --hairline: #2b2e36;
+      --h2-border: #7d9bff;
       --attention-bg: #4d3800;
       --attention-text: #ffe69c;
+      --rule-heavy: #ecedf0;
+      --mark: #f5cf3a;
+      --mark-ink: #101215;
+      --faint: #767d8b;
     }
   }
 
@@ -2280,38 +2318,46 @@ const CSS = `
   :root[data-theme="dark"] {
     /* Pin the UA canvas too — see the color-scheme comment in :root. */
     color-scheme: dark;
-    --bg: #17181c;
-    --page-bg: #0f0d17;
-    --text: #e6e6ea;
-    --muted: #8a8f9e;
-    --accent: #a5b4fc;
-    --accent-strong: #c7d2fe;
-    --tldr-bg: #262841;
-    --tldr-text: #dfe3ff;
-    --chip-bg: #33355c;
-    --chip-text: #c7d2fe;
-    --hairline: #2a2c33;
-    --h2-border: #6366f1;
+    --bg: #131418;
+    --page-bg: #131418;
+    --text: #ecedf0;
+    --muted: #9aa1af;
+    --accent: #7d9bff;
+    --accent-strong: #a8bdff;
+    --tldr-bg: #1c2740;
+    --tldr-text: #d7e2ff;
+    --chip-bg: #1f2127;
+    --chip-text: #7d9bff;
+    --hairline: #2b2e36;
+    --h2-border: #7d9bff;
     --attention-bg: #4d3800;
     --attention-text: #ffe69c;
+    --rule-heavy: #ecedf0;
+    --mark: #f5cf3a;
+    --mark-ink: #101215;
+    --faint: #767d8b;
   }
   :root[data-theme="light"] {
     /* Pin the UA canvas too — see the color-scheme comment in :root. */
     color-scheme: light;
-    --bg: #fbfaf7;
-    --page-bg: #e9e9f2;
-    --text: #16181d;
-    --muted: #6e7380;
-    --accent: #4f46e5;
-    --accent-strong: #4338ca;
-    --tldr-bg: #eef2ff;
-    --tldr-text: #262a49;
-    --chip-bg: #dde3ff;
-    --chip-text: #4338ca;
-    --hairline: #e7e5e0;
-    --h2-border: #4f46e5;
+    --bg: #ffffff;
+    --page-bg: #ffffff;
+    --text: #101215;
+    --muted: #5b6270;
+    --accent: #0e3fa9;
+    --accent-strong: #0a2f80;
+    --tldr-bg: #eaf0fc;
+    --tldr-text: #16234f;
+    --chip-bg: #eef1f7;
+    --chip-text: #0e3fa9;
+    --hairline: #d8dbe2;
+    --h2-border: #0e3fa9;
     --attention-bg: #fef3c7;
     --attention-text: #78350f;
+    --rule-heavy: #101215;
+    --mark: #ffe14d;
+    --mark-ink: #101215;
+    --faint: #8a90a0;
   }
 
   * { box-sizing: border-box; }
@@ -2413,54 +2459,46 @@ const CSS = `
      unaffected (no containing-block change). */
   .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; overflow-x: clip; }
 
-  /* Masthead compaction (owner-requested), three-zone revision (owner
-     follow-up: "the switcher isn't at the middle"): brand zone left, the
-     view-tab capsule as the mast's own MIDDLE flex child, gear zone right
-     (see pageChrome). The two side zones carry flex: 1 1 0 so they grow
-     equally from nothing — that equal growth is what centers the capsule
-     on the row's true midpoint instead of on the leftover space after a
-     wider brand. center, not baseline: a wordmark next to a rounded pill
-     capsule reads better lined up on vertical centers than on a shared
-     text baseline. Desktop is one nowrap row; the ≤40em block below
-     rewraps the capsule onto its own centered second line. */
+  /* Masthead ("print poster" redesign): brand zone left, the view-tab
+     capsule as the mast's own MIDDLE flex child, gear zone right (see
+     pageChrome). The two side zones carry flex: 1 1 0 so they grow equally
+     from nothing — that equal growth is what centers the capsule on the
+     row's true midpoint instead of on the leftover space after a wider
+     brand. This is the COMPACT one-line masthead — digest/search/arc pages
+     (pageKind !== "index", see pageChrome's bigMasthead param) — small brand
+     left, view tabs + settings/search right, a single heavy 4px rule
+     underneath in place of the old 1px hairline (masthead rule weight now
+     matches .digest h2's own top rule and the colophon's, see below —
+     one consistent "heavy rule = structural divider" vocabulary across the
+     page). Desktop is one nowrap row; the ≤40em block below rewraps the
+     capsule onto its own centered second line. */
   header.mast {
     display: flex; align-items: center;
-    gap: 0.6em 1em; padding: 1.4em 0 1em;
-    border-bottom: 1px solid var(--hairline); margin-bottom: 1.6em;
+    gap: 0.6em 1em; padding: 1.1em 0 0.9em;
+    border-bottom: 4px solid var(--rule-heavy); margin-bottom: 1.6em;
   }
-  /* True centering (owner follow-up: "the switcher isn't at the middle"):
-     the tabs are now the mast's own MIDDLE flex child (see pageChrome —
-     they moved out of .mastleft), and the two side zones get equal
-     flex-grow from a zero basis, so the capsule centers on the ROW's
-     midpoint, not on whatever space the brand happens to leave over. The
-     brand zone and the gear zone are never the same natural width; without
-     the 1 1 0 pair the capsule visibly hangs left. Desktop keeps one
-     nowrap row; the phone block below rewraps the tabs onto their own
-     centered second line instead of squeezing three zones into 375px. */
+  /* True centering: the two side zones get equal flex-grow from a zero
+     basis, so the capsule centers on the ROW's midpoint, not on whatever
+     space the brand happens to leave over. Desktop keeps one nowrap row;
+     the phone block below rewraps the tabs onto their own centered second
+     line instead of squeezing three zones into 375px. */
   .mast .mastleft { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
-  /* 0.95em, down from the pre-compaction 1.05em: a ~10% trim, not a demotion
-     — still bolder (font-weight 700) and letter-spaced tighter than
-     everything else in the row, so the wordmark still reads first, it just
-     no longer visually outweighs the tab capsule sitting right beside it.
-     Landed on 0.95em specifically because it matches .viewtab's own
-     font-size (also 0.95em) — brand and tabs now share one type step, which
-     is what makes the merged row read as ONE compact band instead of a
-     big label with small chrome tacked on. */
-  .mast .brand { font-weight: 700; font-size: 0.95em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
-  .mast .brand .tld { color: var(--accent); }
+  /* 800-weight, tight-tracked display type (print-poster identity) in place
+     of the old 700/-0.01em body-adjacent wordmark — the brand is now styled
+     the same register as every other headline on the site, just at chrome
+     scale. Uppercase, matching the big masthead's brand below (.mast-big
+     .brand) at a fraction of the size, so the two masthead sizes read as
+     one family, not two different logotypes. */
+  .mast .brand { font-weight: 800; font-size: 0.95em; letter-spacing: -0.02em; text-transform: uppercase; text-decoration: none; color: var(--text); }
+  .brand .tld { color: var(--accent); }
   /* The settings gear (language/theme/size/density, collapsed into one
      details.settings disclosure — see renderSwitchers) sits top-right in
      the masthead via .mastright, right-aligned — same markup at both
-     breakpoints. */
-  /* flex: 1 1 0 pairs with .mastleft's — the two equal-growth side zones
-     are what make the middle tab capsule center on the row's true midpoint
-     (see the header.mast comment above). */
-  /* Row, not column: the search control now sits beside the gear
-     (owner-requested placement), and the column direction only ever
-     existed to stack the since-removed archive link above it. justify-end
-     keeps the pair pinned right; flex: 1 1 0 pairs with .mastleft's to
-     centre the view-tab capsule between them. */
-  .mast .mastright {
+     breakpoints, and in both the compact (inside header.mast) and big
+     (inside .mastnav, see pageChrome) masthead layouts — this selector is
+     deliberately NOT scoped under .mast alone, since the big masthead's
+     .mastnav row is a sibling of header.mast, not a descendant. */
+  .mastright {
     display: flex; align-items: center; justify-content: flex-end;
     gap: 0.55em; flex: 1 1 0;
   }
@@ -2486,13 +2524,42 @@ const CSS = `
        on the capsule itself would have stretched its border full-bleed.
        .mastright stays a real box (the settings bubble never depended on
        it — details.settings is its own anchor, see that comment below). */
-    header.mast { flex-wrap: wrap; }
-    header.mast::before { content: ""; flex-basis: 100%; order: 3; }
-    .mast .viewtabs { order: 4; margin-left: auto; margin-right: auto; }
+    header.mast, .mastnav { flex-wrap: wrap; }
+    header.mast::before, .mastnav::before { content: ""; flex-basis: 100%; order: 3; }
+    .mast .viewtabs, .mastnav .viewtabs { order: 4; margin-left: auto; margin-right: auto; }
   }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
+
+  /* Big edition masthead (index pages only — pageChrome's bigMasthead param):
+     a mono uppercase issue line (edition number · full date · editions-today
+     count, see renderIndexPage's buildIssueLine) stacked over a large
+     800-weight uppercase brand, then a SEPARATE second band (.mastnav) that
+     carries the same view-tab capsule + settings/search cluster the compact
+     masthead keeps inline — kept as its own row rather than crammed beside
+     the big brand, both because the brand needs the full width to read as a
+     poster headline and because it lets every page — big or compact
+     masthead — share the exact same .mastright/.viewtabs markup and CSS
+     (see renderSwitchers/pageChrome), nothing JS-facing changes shape
+     between the two layouts. */
+  .mast-big {
+    display: flex; flex-direction: column; gap: 0.5em;
+    padding: 1.3em 0 0.9em; border-bottom: 4px solid var(--rule-heavy); margin-bottom: 0;
+  }
+  .issueline {
+    font-family: var(--font-data); font-size: 0.66em;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--muted);
+  }
+  .mast-big .brand {
+    font-weight: 800; font-size: clamp(1.7em, 5.5vw, 2.5em);
+    letter-spacing: -0.03em; line-height: 0.98; text-transform: uppercase;
+    text-decoration: none; color: var(--text); text-wrap: balance;
+  }
+  .mastnav {
+    display: flex; align-items: center; gap: 0.6em 1em;
+    padding: 0.7em 0; border-bottom: 1px solid var(--hairline); margin-bottom: 1.6em;
+  }
 
   /* Settings bubble (owner redesign): the gear button collapses language,
      theme, and density into one disclosure. details.settings — NOT
@@ -2502,10 +2569,21 @@ const CSS = `
      absolute panel. The masthead compaction removed that collapse, but the
      anchor choice stays — it was never wrong, and moving it buys nothing.) */
   details.settings { position: relative; }
+  /* "Print poster" controls: 1px var(--rule-heavy) border, mono uppercase
+     label — the toolbtn recipe shared by summary.gear and
+     summary.searchtoggle below (kept as two rules, not merged, since the
+     search trigger is icon-only and carries no text baseline to match).
+     Pill-rounded (owner-requested exception to the redesign's otherwise
+     square-cornered rule): every INTERACTIVE control — buttons, segmented
+     capsules, the FAB — keeps the old 999px pill shape; panels, chips,
+     badges and rules stay square, so the poster identity lives in the
+     surfaces while the controls stay obviously pressable. */
   summary.gear {
     list-style: none;
-    background: none; border: 1px solid var(--hairline); border-radius: 999px;
-    color: var(--text); font-size: 0.9em; padding: 0.05em 0.5em; cursor: pointer;
+    background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
+    color: var(--text); font-family: var(--font-data); font-size: 0.62em;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.4em 0.75em; cursor: pointer;
   }
   /* iOS Safari draws its own disclosure triangle on <summary> even with
      list-style: none — this is the belt-and-suspenders rule that actually
@@ -2514,24 +2592,40 @@ const CSS = `
   /* Desktop shows the gear WITH its text label ("Settings"/"Beállítások" —
      owner-requested); the phone masthead is tight, so the label collapses
      there and the icon stands alone (see the mobile block below). */
-  .gearlabel { margin-left: 0.4em; font-size: 0.92em; }
-  summary.gear:hover { border-color: var(--accent); }
-  summary.gear:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-  details.settings[open] > summary.gear { border-color: var(--accent); }
+  .gearlabel { margin-left: 0.5em; }
+  summary.gear:hover, summary.gear:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none; }
+  details.settings[open] > summary.gear { background: var(--rule-heavy); border-color: var(--rule-heavy); color: var(--bg); }
   .settingspanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     /* Must clear the sticky day headers (.dayhead, z-index: 1) or the panel
        would open underneath the ledger once the reader has scrolled. */
     z-index: 20;
-    background: var(--bg); border: 1px solid var(--hairline); border-radius: 14px;
-    padding: 0.9em 1.1em;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28); /* same recipe as .backfab's */
+    background: var(--bg); border: 2px solid var(--rule-heavy);
+    /* Rounded like the controls (owner-requested — see summary.gear's
+       comment): panels join the rounded family at a card radius, not the
+       controls' full pill. */
+    border-radius: 14px;
+    padding: 1em 1.1em;
+    /* Hard offset shadow, no blur — the print-poster popover recipe (see
+       .searchpanel/.cmdpalette below, same box-shadow value): a flat ink
+       tint offset behind the panel, not a soft drop shadow. */
+    box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--rule-heavy) 14%, transparent);
     display: flex; flex-direction: column; gap: 0.7em; min-width: 13em;
   }
   .settingsrow { display: flex; justify-content: space-between; align-items: baseline; gap: 1.2em; }
+  /* No-JS resilience: theme/text-size/density controls are server-rendered
+     with the hidden attribute and revealed by the bottom script (the
+     progressive-enhancement contract, see renderSwitchers). Without JS the
+     row was a label next to an EMPTY pill border — a bright "dot" once the
+     border went --rule-heavy (owner-reported from a scripts-blocked
+     preview). Hide any settings row with no visible control at all: the
+     language row keeps its plain <a> links and stays; rows whose only
+     controls are still [hidden] disappear until the script reveals them.
+     Browsers without :has() just keep the old harmless empty-pill look. */
+  .settingsrow:not(:has(a, button:not([hidden]))) { display: none; }
   .settingslabel {
     font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--muted);
+    letter-spacing: 0.08em; color: var(--faint);
   }
 
   /* Settings bubble open/close animation (owner-requested). details/summary
@@ -2576,29 +2670,30 @@ const CSS = `
      control just below — density stays a pill since it's genuinely binary
      (compact/comfortable), not a 3-way choice. */
   .densitytoggle {
-    background: none; border: 1px solid var(--hairline); border-radius: 999px;
-    color: var(--text); font-size: 0.8em; padding: 0.05em 0.5em; cursor: pointer;
+    background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
+    color: var(--text); font-family: var(--font-data); font-size: 0.75em; padding: 0.15em 0.55em; cursor: pointer;
   }
-  .densitytoggle:hover { border-color: var(--accent); }
-  .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .densitytoggle:hover, .densitytoggle:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none; }
 
-  /* Mini segmented control (owner upgrade: three-state theme, S/M/L text
-     size) — the view tabs' segmented language (.viewtabs/.viewtab above)
-     miniaturized to panel scale, so the settings bubble reads as one family
-     with the site's primary navigation instead of inventing a new shape. */
+  /* Mini segmented control (three-state theme, S/M/L text size) — the view
+     tabs' segmented language (.viewtabs/.viewtab above) miniaturized to
+     panel scale, same pill-capsule/bordered recipe, so the settings bubble
+     reads as one family with the site's primary navigation instead of
+     inventing a new shape. */
   .miniseg {
-    display: inline-flex; border: 1px solid var(--hairline); border-radius: 999px;
-    overflow: hidden;
+    display: inline-flex; border: 1px solid var(--rule-heavy);
+    /* Pill capsule (owner-requested, see summary.gear's comment); overflow
+       hidden clips the active segment's fill to the rounded ends. */
+    border-radius: 999px; overflow: hidden;
   }
   .minisegbtn {
-    background: none; border: none; color: var(--accent);
-    font: inherit; font-size: 0.78em; padding: 0.18em 0.7em; cursor: pointer;
+    background: none; border: none; color: var(--muted);
+    font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.3em 0.65em; cursor: pointer;
   }
   .minisegbtn + .minisegbtn { border-left: 1px solid var(--hairline); }
   .minisegbtn.active { background: var(--accent); color: var(--bg); }
   .minisegbtn:not(.active):hover { background: var(--tldr-bg); }
-  /* Inset outline: an outset ring would get clipped by .miniseg's
-     overflow: hidden — same note as .viewtab:focus-visible above. */
   .minisegbtn:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
 
   /* ⌘K command palette (§11.1 PR C): markup is injected at runtime (see the
@@ -2618,8 +2713,10 @@ const CSS = `
   }
   .cmdpalette {
     width: min(34em, 100%); max-height: 70vh;
-    background: var(--bg); border: 1px solid var(--hairline); border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    background: var(--bg); border: 2px solid var(--rule-heavy);
+    /* Rounded to match .settingspanel/.searchpanel (owner-requested). */
+    border-radius: 14px;
+    box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--rule-heavy) 14%, transparent);
     display: flex; flex-direction: column; overflow: hidden;
   }
   @media (prefers-reduced-motion: no-preference) {
@@ -2648,48 +2745,101 @@ const CSS = `
   .cmdpalette-item.active { background: var(--tldr-bg); }
   .cmdpalette-empty { padding: 0.85em 1em; font-size: 0.9em; color: var(--muted); }
 
+  /* Ledger grid ("print poster" redesign, index pages): the <section> the
+     lead card + day-grouped entries render inside (see renderIndexPage)
+     becomes a two-column grid — single column at/under 640px. Day headers,
+     the lead card, and the two client-inserted elements that can land as
+     the ledger's own DOM siblings (.unreadfence, the lazily-created
+     .empty "nothing matches" message — see the filter IIFE) all carry
+     grid-column: 1 / -1 below so they span both columns as full-width
+     dividers/rows regardless of where CSS auto-placement would otherwise
+     put them; harmless (a no-op) on every OTHER page these same classes
+     render on, none of which puts them inside a grid parent. Nothing here
+     changes DOM structure or sibling order, so the unread-fence/filter
+     IIFEs' own sibling-walking logic (nextElementSibling chains) is
+     completely unaffected — see pageChrome's bottom script. */
+  section[data-unread-label] {
+    display: grid; grid-template-columns: 1fr 1fr; column-gap: 2.2em;
+  }
+  @media (max-width: 40em) {
+    section[data-unread-label] { grid-template-columns: 1fr; }
+  }
   .dayhead {
-    font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
-    color: var(--muted); margin: 2.2em 0 0.4em; font-weight: 600;
+    grid-column: 1 / -1;
+    font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.11em;
+    color: var(--faint); margin: 1.8em 0 0.3em; font-weight: 400;
     font-family: var(--font-data); /* mono uppercase eyebrow = the wire look */
     /* Sticky so mid-scroll position is always visible (roadmap step 4).
        var(--bg) background keeps entry text from showing through as it
-       scrolls underneath — correct on both mobile (full-bleed) and desktop
-       (the bubble card is the scroll context's background too). */
+       scrolls underneath. */
     position: sticky; top: 0; background: var(--bg); padding: 0.35em 0;
     z-index: 1;
   }
   .entry {
     display: block; text-decoration: none; color: inherit;
-    padding: 1.05em 0; border-bottom: 1px solid var(--hairline);
+    padding: 1.1em 0 1.3em; border-bottom: 1px solid var(--hairline);
   }
-  /* Lead card (roadmap step 4): the newest digest in the current view,
-     rendered above the ledger with visual weight but no new color — bigger
-     unclamped excerpt and a mono dateline eyebrow in place of the usual
-     time+count meta line. It's the first thing in the section, so no extra
-     top border beyond the shared .entry bottom hairline. */
-  .entry-lead { padding: 1.2em 0 1.4em; }
+  /* Headline ("print poster" redesign): every index card — lead and grid —
+     gets a derived display headline (see deriveHeadline), heavy/tight like
+     every other headline on the site. The hero's own h2.headline-lead runs
+     larger (set below, alongside .entry-lead); a bare h3.headline is the
+     grid-card size. mark (highlighter accent) is wired up here even though
+     the mechanical deriveHeadline() never emits one today — see the
+     function's own comment. */
+  .headline {
+    margin: 0 0 0.4em; font-weight: 800; letter-spacing: -0.02em;
+    line-height: 1.15; color: var(--text); text-wrap: balance;
+  }
+  .headline mark { background: var(--mark); color: var(--mark-ink); padding: 0 0.14em; }
+  .entry:hover .headline, .entry:focus-visible .headline,
+  .entry:hover .excerpt, .entry:focus-visible .excerpt { color: var(--accent); }
+  .entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  /* Lead card (the newest digest in the current view): a full-width hero
+     spanning both grid columns, mono eyebrow + big headline + deck excerpt
+     on the left, an items/sections facts column on the right (task spec:
+     "if cheap" — both counts are already selected columns, no extra
+     query). Single column under 640px, facts row moves below the deck. */
+  .entry-lead {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: 1fr auto; gap: 2em; align-items: start;
+    padding: 1.3em 0 1.6em; border-bottom: 1px solid var(--rule-heavy);
+  }
+  .entry-lead .headline-lead { font-size: clamp(1.5em, 4.2vw, 2.1em); line-height: 1.08; }
   .entry-lead .eyebrow-text {
-    font-family: var(--font-data); font-size: 0.75em; letter-spacing: 0.08em;
+    font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.1em;
     color: var(--accent); text-transform: uppercase;
   }
-  .entry:hover .excerpt, .entry:focus-visible .excerpt { color: var(--text); }
-  .entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+  .leadfacts { border-left: 1px solid var(--hairline); padding-left: 1.6em; align-self: start; }
+  .leadfacts dt {
+    font-family: var(--font-data); font-size: 0.6em; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--faint); margin-top: 0.9em;
+  }
+  .leadfacts dt:first-child { margin-top: 0; }
+  .leadfacts dd { margin: 0; font-size: 1.3em; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  @media (max-width: 640px) {
+    .entry-lead { grid-template-columns: 1fr; gap: 1.1em; }
+    .leadfacts {
+      border-left: 0; border-top: 1px solid var(--hairline); padding: 0.9em 0 0;
+      display: flex; gap: 1.6em;
+    }
+    .leadfacts dt { margin-top: 0; }
+  }
   .entry .meta {
-    display: flex; align-items: baseline; gap: 0.7em; margin-bottom: 0.25em;
+    display: flex; align-items: baseline; gap: 0.7em; margin-bottom: 0.4em;
     font-variant-numeric: tabular-nums;
   }
   /* 0.85em, not 0.95: mono runs wide, so the time nudges down to keep its
      old visual weight in the meta row now that it's set in --font-data. */
   .entry .time { font-weight: 700; font-size: 0.85em; font-family: var(--font-data); }
-  /* Daily-brief entries carry the indigo accent on their time instead of the
+  /* Daily-brief entries carry the accent on their time instead of the
      default text color — the "slightly heavier presence" this one entry
      type gets in an otherwise undifferentiated list. */
   .entry .time.time-accent { color: var(--accent); }
   /* 0.75em, not 0.8: same mono-runs-wide compensation as .entry .time. */
   .entry .count { color: var(--muted); font-size: 0.75em; font-family: var(--font-data); }
   .entry .flag {
-    font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
+    font-size: 0.68em; font-weight: 400; font-family: var(--font-data); letter-spacing: 0.04em;
+    padding: 0.15em 0.5em;
     background: var(--attention-bg); color: var(--attention-text);
     /* Two-word badges ("weekly report", "daily brief") were wrapping into
        two-line pills in the lead card's meta row (owner-reported from the
@@ -2706,14 +2856,14 @@ const CSS = `
      prefix (baked into the string, not CSS) is what tells the two apart.
      Reuses .flag's shape/sizing. */
   .entry .flag.flag-muted, .entry .flag.flag-degraded { background: var(--chip-bg); color: var(--chip-text); }
-  /* Daily-brief badge — same indigo chip-bg/chip-text tokens as .flag-muted,
-     but filled/inverted (solid indigo, not the soft pastel) so it reads as
-     its own distinct badge rather than the muted EN language note, and
-     stays clearly apart from the amber attention pill. */
+  /* Daily-brief badge — same chip-bg/chip-text tokens as .flag-muted, but
+     filled/inverted (solid, not the soft pastel) so it reads as its own
+     distinct badge rather than the muted EN language note, and stays
+     clearly apart from the amber attention pill. */
   .entry .flag.flag-daily { background: var(--chip-text); color: var(--chip-bg); }
   .entry .excerpt {
-    margin: 0; color: var(--muted); font-size: 0.93em;
-    font-family: var(--font-prose);
+    margin: 0; color: var(--muted); font-size: 0.88em;
+    font-family: var(--font-prose); line-height: 1.55;
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
   /* Daily-brief entries summarize a whole day, not a 3-hour window — one
@@ -2724,7 +2874,7 @@ const CSS = `
      so the lead card's excerpt actually loses its clamp instead of being
      silently overridden back to 3 lines. */
   .entry-lead .excerpt {
-    font-size: 1.02em; display: block; -webkit-line-clamp: unset; overflow: visible;
+    font-size: 0.98em; display: block; -webkit-line-clamp: unset; overflow: visible;
   }
 
   /* Ledger density toggle (roadmap 4 step 4): compact tightens the ledger's
@@ -2740,48 +2890,60 @@ const CSS = `
   :root[data-density="compact"] .entry:not(.entry-lead) .excerpt.excerpt-daily { -webkit-line-clamp: 3; }
 
   /* The whole nav is prev/next times plus the "all digests" link — one word
-     — so the entire block goes mono rather than singling out the times. */
+     — so the entire block goes mono rather than singling out the times.
+     "Crumbs" in the print-poster redesign (task spec's digest-page nav):
+     same markup/hrefs, just mono uppercase with a hairline bottom rule in
+     place of the old bare flex row. */
   nav.digestnav {
     display: flex; justify-content: space-between; gap: 1em;
-    font-size: 0.85em; margin-bottom: 1.8em;
+    font-size: 0.68em; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.6em 0; margin-bottom: 1.8em; border-bottom: 1px solid var(--hairline);
     font-family: var(--font-data);
   }
-  nav.digestnav a { text-decoration: none; }
+  nav.digestnav a { text-decoration: none; color: var(--muted); }
+  nav.digestnav a:hover, nav.digestnav a:focus-visible { color: var(--accent); outline: none; }
   nav.digestnav .spacer { flex: 1; }
   /* Bottom mirror of the same nav, after </article> (roadmap step 2) — reads
      as a continuation of the article's closing line, not a new nav block:
      same top-hairline + padding treatment as .closing, font-size/behavior
      otherwise identical to the top nav above. */
   nav.digestnav.digestnav-bottom {
-    margin-top: 2.5em; padding-top: 1em;
-    border-top: 1px solid var(--hairline);
+    margin-top: 2.5em; padding-top: 1em; border-top: 1px solid var(--hairline); border-bottom: 0;
   }
-  /* font-variant-numeric dropped here: --font-data is monospace, so digits
-     are already fixed-width — tabular-nums would be redundant. The dateline
-     IS the page's identity line, promoted from muted metadata to the wire
-     header (roadmap step 5). */
+  /* Edition eyebrow (digest page): kind · time · items · sections, mono
+     uppercase, --accent — sits directly above the derived h1 headline (see
+     renderDigestPage/deriveHeadline). font-variant-numeric dropped: --font-
+     data is monospace, so digits are already fixed-width. */
   .stamp {
-    color: var(--text); font-size: 0.78em; margin: 0 0 1.4em; font-family: var(--font-data);
-    text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;
-    padding-bottom: 0.9em; border-bottom: 1px solid var(--hairline);
+    color: var(--accent); font-size: 0.66em; margin: 0 0 0.6em; font-family: var(--font-data);
+    text-transform: uppercase; letter-spacing: 0.1em; font-weight: 400;
   }
-  /* Index empty-state message — its own class, NOT .stamp: the stamp became
-     the digest page's uppercase wire dateline above, and "No digests yet."
+  /* Derived h1 headline (digest page) — same heavy/tight display voice as
+     .headline (index cards), just bigger; kept as its own rule rather than
+     reusing .headline's class since h1 needs no hover-color coupling to a
+     parent .entry link the way index cards do. */
+  .edhead h1 {
+    margin: 0 0 0.8em; font-size: clamp(1.6em, 5vw, 2.3em); font-weight: 800;
+    letter-spacing: -0.03em; line-height: 1.08; text-wrap: balance; color: var(--text);
+  }
+  .edhead h1 mark { background: var(--mark); color: var(--mark-ink); padding: 0 0.14em; }
+  .edhead { margin-bottom: 1.2em; }
+  /* Index empty-state message — its own class, NOT .stamp: the stamp is now
+     the digest page's uppercase wire eyebrow above, and "No digests yet."
      must stay quiet muted prose, not a shouted header. */
-  .empty { color: var(--muted); font-size: 0.85em; margin: 2em 0; }
+  .empty { grid-column: 1 / -1; color: var(--muted); font-size: 0.85em; margin: 2em 0; }
   /* HU digest page, no body_html_hu on file: shown above the article,
      falling back to the English body. */
   .en-only-note { color: var(--muted); font-size: 0.85em; font-style: italic; margin: 0 0 1em; }
-  /* Arc page title (§11.1 PR A, renderArcPage) — the site's first real <h1>;
-     every other page uses the masthead brand link instead. Editorial
-     register (design guidance: headlines are prose, not chrome), so serif
-     like the article body, not the sans/mono chrome voice — sized down from
-     a typical article h1 to stay in proportion with this site's otherwise
-     restrained type scale (the digest article's own h2s top out at 1.15em). */
+  /* Arc page title (§11.1 PR A, renderArcPage) — like the digest page's own
+     derived h1 (.edhead h1 above), an editorial per-page headline rather
+     than the masthead brand link every OTHER page (index, search) still
+     uses in place of a real h1. Same heavy/tight display voice as the rest
+     of the "print poster" redesign, not a separate serif register. */
   .archead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.7em; }
   .arctitle {
-    font-family: var(--font-prose); font-size: 1.5em; font-weight: 700;
-    line-height: 1.3; margin: 0 0 0.5em; text-wrap: balance;
+    font-weight: 800; letter-spacing: -0.025em; font-size: 1.7em;
+    line-height: 1.15; margin: 0 0 0.5em; text-wrap: balance;
   }
   /* Follow toggle (§11.2, optional feature): client-injected into .archead,
      next to the arc title — see the follow-toggle IIFE in pageChrome. Text
@@ -2796,7 +2958,7 @@ const CSS = `
     cursor: pointer;
   }
   .followtoggle:hover, .followtoggle:focus-visible { color: var(--accent); }
-  .followtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .followtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* Background primer disclosure (§11.6 context mode, renderArcContext):
      native <details>/<summary>, collapsed by default, sitting directly under
      the title/metadata line and above the appearances timeline. No card
@@ -2821,17 +2983,31 @@ const CSS = `
     line-height: 1.65; color: var(--muted);
   }
   .arccontextbody p:last-child { margin-bottom: 0; }
-  /* Section index (TOC, roadmap step 5): chip-link row built from the
-     article's own <h2>s at render time (see buildSectionToc). Chips speak
-     for themselves — no label string. */
-  .toc { display: flex; flex-wrap: wrap; gap: 0.45em; margin: 0 0 1.6em; }
-  .toc a {
-    font-size: 0.78em; padding: 0.22em 0.8em; border-radius: 999px;
-    border: 1px solid var(--hairline); color: var(--accent);
-    text-decoration: none; background: transparent;
+  /* Section index ("in this edition", roadmap step 5 / print-poster
+     redesign): a numbered two-column grid built from the article's own
+     <h2>s at render time (see buildSectionToc/renderToc) — replaces the old
+     pill-chip row. Each entry is now "NN  Title", the number in
+     .toclabel, --accent, mono — same numbering voice as .digest h2's own
+     CSS-counter badges below, so the index and the article agree on how
+     each section is numbered without the two having to share markup. */
+  .toc {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em 2em;
+    padding: 1em 0; margin: 0 0 1.6em;
+    border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline);
   }
-  .toc a:hover { border-color: var(--accent); }
-  .toc a:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .toc a {
+    display: flex; gap: 0.7em; align-items: baseline;
+    font-size: 0.85em; font-weight: 650; letter-spacing: -0.01em;
+    color: var(--text); text-decoration: none; background: transparent;
+  }
+  .toc a .tocnum {
+    font-family: var(--font-data); font-size: 0.72em; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .toc a:hover, .toc a:focus-visible { color: var(--accent); outline: none; }
+  @media (max-width: 34em) {
+    .toc { grid-template-columns: 1fr; }
+  }
 
   /* Story-arc line (roadmap 4 step 8, renderArcs): chips in the mono data
      voice, same family as .sourcekey's .sk swatches below. Each chip is a
@@ -2842,7 +3018,7 @@ const CSS = `
   .arcs { display: flex; flex-wrap: wrap; gap: 0.45em; margin: 0 0 1.2em; }
   .arcs .arc {
     font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
-    letter-spacing: 0.06em; padding: 0.22em 0.8em; border-radius: 999px;
+    letter-spacing: 0.06em; padding: 0.22em 0.8em;
     background: var(--chip-bg); color: var(--chip-text); text-decoration: none;
     /* Topics derive from section headings, which run headline-length in
        production (owner-reported, 2026-08-09) — cap the chip at one line.
@@ -2894,14 +3070,21 @@ const CSS = `
 
   .attention {
     background: var(--attention-bg); color: var(--attention-text);
-    padding: 0.8em 1em; border-radius: 8px; margin: 0 0 1.4em;
+    padding: 0.8em 1em; margin: 0 0 1.4em;
   }
   .attention h2 { margin: 0 0 0.3em; border: 0; padding: 0; font-size: 0.95em; }
   .attention p { margin: 0; font-size: 0.95em; font-family: var(--font-prose); }
 
+  /* The TL;DR callout ("print poster" redesign): no longer a tinted box —
+     restyled as the digest page's LEADER paragraph, sitting directly under
+     the derived h1 headline (see renderDigestPage's edhead/deriveHeadline).
+     It's still the exact same server-rendered element (the emailer's own
+     tldr div from body_html, see the file-header comment on
+     stripInlineStyles) — only the presentation changed, so there is no
+     second, duplicate TL;DR anywhere on the page. */
   .tldr {
-    background: var(--tldr-bg); color: var(--tldr-text);
-    padding: 1em 1.2em; border-radius: 8px; margin: 0 0 2em; font-weight: 600;
+    background: none; color: var(--muted);
+    padding: 0; margin: 0 0 2em; font-weight: 400; font-size: 1.05em;
     font-family: var(--font-prose); line-height: 1.65;
   }
   /* The emailer's callout markup carries small eyebrow label spans
@@ -2911,27 +3094,43 @@ const CSS = `
      site-side, theme-aware replacements. Eyebrows in the mono data voice,
      matching the wire dateline. */
   .tldr .tldr-label, .attention .attention-label {
-    display: block; font-family: var(--font-data); font-size: 0.72em;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em;
-    margin-bottom: 0.4em;
+    display: block; font-family: var(--font-data); font-size: 0.68em;
+    font-weight: 400; text-transform: uppercase; letter-spacing: 0.13em;
+    margin-bottom: 0.5em;
   }
   .tldr .tldr-label { color: var(--accent); }
   .digest .banner {
     background: var(--attention-bg); color: var(--attention-text);
-    padding: 0.6em 1em; border-radius: 8px; margin: 0 0 1.2em;
+    padding: 0.6em 1em; margin: 0 0 1.2em;
     font-size: 0.92em;
   }
-  /* Article h2s deliberately stay sans while the body below them goes serif
-     (.digest p) — the newspaper pattern: sans heads announce, serif body
-     reads. Not an omission. */
-  .digest h2 {
-    font-size: 1.15em; border-left: 3px solid var(--h2-border);
-    padding-left: 0.6em; margin: 1.9em 0 0.6em; text-wrap: balance;
+  /* Article section headings ("print poster" redesign): heavy 800-weight,
+     tight-tracked display type with a NUMBERED badge — "01", "02", …, in
+     --accent mono — and a 2px top rule in place of the old left accent bar,
+     matching the numbered "in this edition" TOC above (.toc a .tocnum). The
+     number comes from a CSS counter, not markup, so buildSectionToc (which
+     only injects #sN ids for anchor targets) needs no change: counter-reset
+     lives on .digest itself, incremented once per DIRECT-CHILD h2 — scoped
+     to the .digest > h2 combinator specifically so the .attention callout's
+     own nested h2 (one level deeper, see .attention h2 above) is never
+     counted or numbered, same "never becomes a TOC entry" rule
+     buildSectionToc already enforces for the index. */
+  .digest { counter-reset: secnum; }
+  .digest > h2 {
+    counter-increment: secnum;
+    font-size: 1.3em; font-weight: 800; letter-spacing: -0.025em; line-height: 1.15;
+    border-top: 2px solid var(--rule-heavy); padding-top: 0.7em;
+    margin: 2.2em 0 0.7em; text-wrap: balance;
     /* So a TOC-jumped-to heading isn't flush against the viewport edge. */
     scroll-margin-top: 0.8em;
   }
+  .digest > h2::before {
+    content: counter(secnum, decimal-leading-zero) "  ";
+    font-family: var(--font-data); font-size: 0.62em; font-weight: 400;
+    letter-spacing: 0.08em; color: var(--accent); vertical-align: 0.15em;
+  }
   .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; }
-  /* Reading polish (roadmap 4 step 2): hyphenate the serif prose blocks.
+  /* Reading polish (roadmap 4 step 2): hyphenate the prose blocks.
      html lang is already correct per page (en/hu, set by pageChrome) —
      the browser picks the right hyphenation dictionary on its own, this is
      just opting the prose in. Hungarian's long compounds are the motivating
@@ -2948,17 +3147,22 @@ const CSS = `
      re-triggered the phone layout bug (see .wrap's comment). pre-wrap keeps
      code readable while letting long lines break at the container edge. */
   .digest pre { white-space: pre-wrap; overflow-wrap: break-word; }
+  /* Cite chips ("print poster" redesign): tiny mono domain tags — --accent
+     text on --chip-bg, 3px radius (chips/badges otherwise stay square;
+     interactive CONTROLS are the pill-rounded exception, see summary.gear's
+     comment), filling solid --accent with paper text on hover/focus. */
   .cite {
     font-size: 0.7em; vertical-align: super; text-decoration: none;
-    background: var(--chip-bg); color: var(--chip-text);
-    padding: 0 0.4em; border-radius: 99px; font-weight: 700; margin-left: 1px;
+    background: var(--chip-bg); color: var(--accent);
+    padding: 0 0.4em; border-radius: 3px; font-weight: 700; margin-left: 1px;
     font-family: var(--font-data);
   }
+  .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--bg); outline: none; }
   /* Search hit highlighting (roadmap 4 step 7, markSnippet): reuses the
      citation chip's own chip-bg/chip-text tokens rather than a new color —
      it's the same "this is metadata the site added, not article content"
      visual family as .cite. */
-  mark { background: var(--chip-bg); color: var(--chip-text); border-radius: 3px; padding: 0 0.15em; }
+  mark { background: var(--chip-bg); color: var(--chip-text); padding: 0 0.15em; }
   /* Touch provenance (roadmap 4 step 2): on the phone — where this site is
      mostly read — there's no hover, so the title attribute's domain never
      surfaces; put it on the pill itself instead. Reuses the exact title
@@ -3004,7 +3208,7 @@ const CSS = `
   }
   .sklabel { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
   .sk { display: inline-flex; align-items: center; }
-  .sk i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.45em; }
+  .sk i { display: inline-block; width: 9px; height: 9px; margin-right: 0.45em; }
   /* .sk-failed gets no color override — muted stays muted, the ⚠ prefix
      baked into the string (not CSS) is what marks it, same "color is not
      the warning signal" decision as .flag-degraded on the index. */
@@ -3049,17 +3253,19 @@ const CSS = `
      navigation. */
   .viewtabs {
     display: flex; width: fit-content;
-    border: 1px solid var(--hairline); border-radius: 999px; overflow: hidden;
+    border: 1px solid var(--rule-heavy);
+    /* Pill capsule (owner-requested, see summary.gear's comment); overflow
+       hidden clips the active segment's fill to the rounded ends. */
+    border-radius: 999px; overflow: hidden;
+    font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.08em; text-transform: uppercase;
   }
   .viewtab {
-    padding: 0.42em 1.6em;
-    font-size: 0.95em; font-weight: 600; text-decoration: none;
-    color: var(--accent);
+    padding: 0.5em 1.1em;
+    font-weight: 400; text-decoration: none;
+    color: var(--text);
   }
   .viewtab + .viewtab { border-left: 1px solid var(--hairline); }
   .viewtab.active {
-    /* .viewtabs' overflow: hidden clips this fill to the capsule's own
-       rounded corner whenever the active segment is first or last. */
     background: var(--accent); color: var(--bg);
   }
   /* Segments have no border of their own to shift on hover anymore, so hint
@@ -3100,7 +3306,7 @@ const CSS = `
      get, so the two never end up in a specificity fight over the same
      property. */
   .railspark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; margin-left: 0.7em; vertical-align: -2px; }
-  .railspark i { display: block; width: 4px; background: var(--chip-bg); border-radius: 1px 1px 0 0; }
+  .railspark i { display: block; width: 4px; background: var(--chip-bg); }
   .railspark i.sd0 { background: var(--hairline); height: 15%; }
 
   /* Search bubble (owner-requested index cleanup): the week-rail's compact
@@ -3121,21 +3327,26 @@ const CSS = `
      inheriting a text box taller than itself. */
   summary.searchtoggle {
     list-style: none; display: inline-flex; align-items: center; justify-content: center;
-    background: none; border: 1px solid var(--hairline); border-radius: 999px;
-    color: var(--muted); line-height: 0;
-    padding: 0.4em; cursor: pointer;
+    background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
+    color: var(--text); line-height: 0;
+    padding: 0.45em; cursor: pointer;
   }
-  summary.searchtoggle:hover, details.searchpop[open] > summary.searchtoggle { color: var(--accent); }
+  summary.searchtoggle:hover, details.searchpop[open] > summary.searchtoggle,
+  summary.searchtoggle:focus-visible {
+    background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none;
+  }
   summary.searchtoggle::-webkit-details-marker { display: none; }
-  summary.searchtoggle:hover { border-color: var(--accent); }
-  summary.searchtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-  details.searchpop[open] > summary.searchtoggle { border-color: var(--accent); }
   .searchpanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     z-index: 20;
-    background: var(--bg); border: 1px solid var(--hairline); border-radius: 14px;
-    padding: 0.9em 1.1em;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28); /* same recipe as .settingspanel's */
+    background: var(--bg); border: 2px solid var(--rule-heavy);
+    /* Rounded to match .settingspanel (owner-requested) — one popover
+       family, one radius. */
+    border-radius: 14px;
+    padding: 1em 1.1em;
+    /* Hard offset shadow, no blur — same print-poster popover recipe as
+       .settingspanel above. */
+    box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--rule-heavy) 14%, transparent);
     display: flex; flex-direction: column; gap: 0.7em; min-width: 16em;
   }
   @media (prefers-reduced-motion: no-preference) {
@@ -3156,8 +3367,8 @@ const CSS = `
      home inside the panel instead of a standalone row. */
   .searchpanel .filter {
     display: block; font: inherit; font-size: 0.9em;
-    padding: 0.5em 0.9em; border-radius: 10px;
-    border: 1px solid var(--hairline); background: var(--bg); color: var(--text);
+    padding: 0.5em 0.9em;
+    border: 1px solid var(--rule-heavy); background: var(--bg); color: var(--text);
   }
   .searchpanel .filter::placeholder { color: var(--muted); }
   .searchpanel .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -3216,7 +3427,7 @@ const CSS = `
   .catchupjump:hover, .catchupdismiss:hover,
   .catchupjump:focus-visible, .catchupdismiss:focus-visible { color: var(--text); }
   .catchupjump:focus-visible, .catchupdismiss:focus-visible {
-    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+    outline: 2px solid var(--accent); outline-offset: 2px;
   }
 
   /* NOW section (§11.1 PR B, renderNowSection): the situational-overview
@@ -3244,7 +3455,7 @@ const CSS = `
   .nowlist .nowrow:last-child { border-bottom: none; }
   .nowrow:hover .nowarclabel,
   .nowrow:focus-visible .nowarclabel { color: var(--text); text-decoration: underline; }
-  .nowrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+  .nowrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   /* Momentum arrow: mono, muted — a data-derived signal (design guidance:
      "evidence over certainty"), not a colored/severity cue, so it carries no
      color of its own beyond the row's normal muted register. Fixed width so
@@ -3269,23 +3480,28 @@ const CSS = `
      functional here instead of a client-side enhancement (see
      renderSearchPage). */
   .searchform { display: flex; gap: 0.5em; margin: 0 0 1.6em; }
-  .searchform .filter { flex: 1; }
+  .searchform .filter {
+    flex: 1; font: inherit; font-size: 0.9em; padding: 0.5em 0.7em;
+    border: 1px solid var(--rule-heavy); background: var(--bg); color: var(--text);
+  }
+  .searchform .filter::placeholder { color: var(--muted); }
+  .searchform .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* Styled like .viewtab's outlined pill (own rule above), not a filled
      button — a search submit is a secondary action next to the input, not
      the page's primary call to action. */
   .searchbtn {
-    border: 1px solid var(--hairline); border-radius: 999px; color: var(--accent);
-    padding: 0.42em 1.2em; background: none; cursor: pointer; font: inherit; font-size: 0.9em;
+    border: 1px solid var(--rule-heavy); border-radius: 999px; color: var(--text);
+    font-family: var(--font-data); font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.5em 1.2em; background: none; cursor: pointer;
   }
-  .searchbtn:hover { border-color: var(--accent); }
-  .searchbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .searchbtn:hover, .searchbtn:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--bg); outline: none; }
 
   /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
      inserts between digests that arrived since the reader's last visit and
      everything older — no-JS readers never see this class at all, so no
      hidden-by-default dance is needed here (unlike .filter/.minisegbtn
      above, which exist in the markup from the start). */
-  .unreadfence { display: flex; align-items: center; gap: 0.7em; margin: 1.4em 0; }
+  .unreadfence { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.7em; margin: 1.4em 0; }
   .unreadfence .line { flex: 1 1 auto; height: 0; border-top: 1px solid var(--accent); }
   .unreadfence .label {
     flex: 0 0 auto; font-family: var(--font-data); font-size: 0.7em;
@@ -3320,16 +3536,16 @@ const CSS = `
   .resumechip:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
 
-  /* Desktop: the content column becomes a rounded "bubble" card hugging the
-     42em text measure, floating on a darker, purple-tinted page background.
-     Mobile keeps the full-bleed layout above untouched — the card chrome
-     only exists from 52em up. * { box-sizing: border-box } is set globally,
-     so max-width 48em with 3em side padding keeps the text at the same
-     42em measure it has on mobile. */
+  /* Desktop ("print poster" redesign — the purple floating "bubble" card is
+     RETIRED): --page-bg now equals --bg (see the :root token block above),
+     so the page is flat paper at every width — this block only widens the
+     reading column's max-width a little past the 42em mobile measure and
+     keeps generous side whitespace; it no longer draws a separate card
+     (no border, no radius, no distinct background) on top of the page. */
   /* Wide-viewport type scale (owner: "the resolution is too low" on a big
      display). The honest lever for a prose-first site is SIZE, not width:
      every dimension here is em-based off body, so stepping the base up
-     scales the card, the padding, the chrome and the text together, uses
+     scales the column, the padding, the chrome and the text together, uses
      more of a large screen, and leaves the character measure exactly where
      it was (~82). Widening the column instead would have pushed the
      measure past 100 characters, which is where reading actually degrades.
@@ -3339,16 +3555,10 @@ const CSS = `
   @media (min-width: 100em) { body { font-size: 19px; } }
 
   @media (min-width: 52em) {
-    body { background: var(--page-bg); padding: 2.5em 1.5em; }
-    /* Keep the root canvas in step with the desktop page background — see
-       the html background rule above. */
-    html { background: var(--page-bg); }
+    body { padding: 2.5em 1.5em; }
     .wrap {
-      background: var(--bg);
       max-width: 48em;
       padding: 0.4em 3em 3.5em;
-      border-radius: 28px;
-      border: 1px solid var(--hairline);
     }
     /* NOTE — no prose max-width clamp here, deliberately. A pass on
        2026-08-10 tried widening this card to 56em while holding prose at
@@ -3363,17 +3573,16 @@ const CSS = `
        bought with TYPE SIZE instead — see the wide-viewport font-size
        steps above, which scale the whole em-based layout together and
        leave the character measure where it is. */
-    /* Anchor the floating back button to the BUBBLE, not the viewport:
-       the card is 48em centered, so its right edge sits at 50% + 24em —
-       park the button 1rem into the purple gutter beside its bottom
-       corner. min() clamps back to the viewport edge on narrow desktop
-       windows so the button can never be pushed off-screen. Mobile keeps
-       the base viewport-corner placement (no gutter exists there). */
+    /* Anchor the floating back button to the COLUMN, not the bare viewport
+       edge: the column is 48em centered, so its right edge sits at
+       50% + 24em — park the button 1rem past it. min() clamps back to the
+       viewport edge on narrow desktop windows so the button can never be
+       pushed off-screen. Mobile keeps the base viewport-corner placement. */
     .backfab {
       /* em would resolve against the fab's own 1.35em font — overshooting
-         by ~150px (live-measured). rem resolves against the root: the card
-         is 48em of the 17px body = 816px wide, half = 408px = 25.5rem at
-         the 16px root default. */
+         by ~150px (live-measured). rem resolves against the root: the
+         column is 48em of the 17px body = 816px wide, half = 408px =
+         25.5rem at the 16px root default. */
       left: min(calc(50% + 25.5rem + 1rem), calc(100vw - 48px - 1.1rem));
       right: auto;
     }
@@ -3387,14 +3596,14 @@ const CSS = `
      (--font-data is untouched here, only color is forced). */
   @media print {
     body { background: #fff; }
-    .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
-    .mast, .viewtabs, nav.digestnav, .backfab, .toc,
+    .wrap { max-width: none; padding: 0; border: 0; }
+    .mast, .mast-big, .mastnav, .issueline, .viewtabs, nav.digestnav, .backfab, .toc,
     .searchpop, .miniseg, .densitytoggle, .resumechip,
     .archiveresults, .catchup, .followtoggle {
       display: none;
     }
-    .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note, .arctitle,
-    .arccontext, .arccontextbody p {
+    .digest, .digest p, .digest h2, .stamp, .edhead h1, .headline, .dayhead, .empty,
+    .en-only-note, .arctitle, .arccontext, .arccontextbody p {
       color: #000;
     }
     /* "What changed" block (§11.3 delta persistence, ingest v4): CONTENT,
@@ -3415,10 +3624,13 @@ const CSS = `
        gray (acceptable) but the text itself forces to ink like every other
        digest-page text block above. */
     .sourcekey { color: #000; }
-    /* TL;DR/attention stay boxes, but thin bordered outlines instead of
-       tinted fills — a colored background wastes ink and won't reproduce
-       reliably across printers anyway. */
-    .tldr, .attention {
+    /* .tldr is a plain leader paragraph on screen now (no box, see the CSS
+       above) — print matches that, just forcing ink. .attention stays a
+       thin bordered outline in place of its tinted fill — a colored
+       background wastes ink and won't reproduce reliably across printers
+       anyway. */
+    .tldr { color: #000; }
+    .attention {
       background: none; border: 1px solid #999; color: #000;
     }
     .attention h2 { color: #000; }
@@ -3462,7 +3674,27 @@ const CSS = `
 // sitting in the lead card's own href on the same page (same-document
 // exposure), and the speculation rules processor doesn't send that URL
 // anywhere the visible link wouldn't already send it on a click.
-function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = null, prefetchHref = null) {
+// `bigMasthead` (Front Page redesign, index pages only): renders the large
+// edition masthead — mono issue line (edition number/date/editions-today,
+// see renderIndexPage's buildIssueLine) stacked over a big display brand,
+// with view tabs + settings/search in a SEPARATE band below (.mastnav) —
+// instead of the compact one-line masthead every other page keeps (brand +
+// view tabs + gear all in one row, see the CSS). `issueLineText` is the
+// RAW (unescaped) issue-line string; pageChrome esc()s it once here, same
+// convention as `title` just below. Both default to the compact/off state
+// so every other pageChrome call site is untouched.
+function pageChrome(
+  host,
+  token,
+  lang,
+  view,
+  switchersHtml,
+  bodyHtml,
+  title = null,
+  prefetchHref = null,
+  bigMasthead = false,
+  issueLineText = "",
+) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   const { first, rest } = brandParts(host);
   const strings = STRINGS[lang];
@@ -3501,15 +3733,16 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- theme-color must track the CSS palette blocks' --bg values above (light
-     #fbfaf7 / dark #17181c) so mobile browser chrome (URL bar/status bar
-     tint) melts into the page instead of showing a stock color. The
-     prefers-color-scheme media attrs cover the automatic (Auto) case; a
-     manual Light/Dark override from the theme miniseg (see the bottom
-     script) updates both metas' content directly, since a media-query meta
-     can't react to a data-theme attribute switch on its own — and clicking
-     back to Auto restores each meta to its own media-appropriate value. -->
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfaf7">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17181c">
+     #ffffff / dark #131418 — "print poster" redesign) so mobile browser
+     chrome (URL bar/status bar tint) melts into the page instead of showing
+     a stock color. The prefers-color-scheme media attrs cover the automatic
+     (Auto) case; a manual Light/Dark override from the theme miniseg (see
+     the bottom script) updates both metas' content directly, since a
+     media-query meta can't react to a data-theme attribute switch on its
+     own — and clicking back to Auto restores each meta to its own
+     media-appropriate value. -->
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131418">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
@@ -3519,7 +3752,19 @@ ${prefetchLinkHtml}
 <body>
 ${prefetchScriptHtml}
 <div class="wrap">
-  <header class="mast">
+  ${
+    bigMasthead
+      ? `<header class="mast mast-big">
+    ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
+    <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
+  </header>
+  <nav class="mastnav">
+    ${viewTabsHtml}
+    <div class="mastright">
+      ${switchersHtml}
+    </div>
+  </nav>`
+      : `<header class="mast">
     <div class="mastleft">
       <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
     </div>
@@ -3527,7 +3772,8 @@ ${prefetchScriptHtml}
     <div class="mastright">
       ${switchersHtml}
     </div>
-  </header>
+  </header>`
+  }
   ${paletteConfigHtml}
   ${bodyHtml}
 </div>
@@ -3664,7 +3910,7 @@ ${prefetchScriptHtml}
     // (the palette already lives 3x in CSS for the no-build-step manual
     // override), but it changes rarely and there's no build step here to
     // share one source between CSS and JS.
-    var THEME_COLORS = { light: "#fbfaf7", dark: "#17181c" };
+    var THEME_COLORS = { light: "#ffffff", dark: "#131418" };
     // Light/Dark collapse both metas to the SAME value — media queries stop
     // mattering once both metas say the same thing, same as the old
     // two-state toggle did. Auto is the fix that toggle never had: it
@@ -5041,18 +5287,55 @@ function groupByDay(rows, locale) {
 // app never sent one for this digest, fall back to the English tldr and mark
 // it with a muted "EN" chip rather than silently presenting English text as
 // if translated. Used by both the compact ledger entries (renderIndexEntry)
-// and the lead card (renderLeadCard) so the two never drift apart.
+// and the lead card (renderLeadCard) so the two never drift apart. `rawText`
+// is the SAME string `excerptHtml` was esc()'d from — surfaced unescaped so
+// callers can feed it to deriveHeadline (below) without re-decoding HTML
+// entities out of the already-escaped copy.
 function renderExcerpt(row, lang) {
+  let rawText = row.tldr;
   let excerptHtml = esc(row.tldr);
   let langChip = "";
   if (lang === "hu") {
     if (row.tldr_hu) {
+      rawText = row.tldr_hu;
       excerptHtml = esc(row.tldr_hu);
     } else {
       langChip = '<span class="flag flag-muted">EN</span>';
     }
   }
-  return { excerptHtml, langChip };
+  return { excerptHtml, langChip, rawText };
+}
+
+// Front Page redesign: no headline field exists in the stored data — a
+// digest carries only a TL;DR paragraph, never a distinct display title —
+// so every index card and the digest page's own <h1> (see renderIndexEntry/
+// renderLeadCard/renderDigestPage) derive one from it: the first sentence,
+// clipped at a WORD boundary to at most 110 characters with a trailing
+// ellipsis when clipping was needed. Pure/no I/O, so the smoke script
+// exercises it directly with unit-style assertions rather than only via a
+// rendered page. `tldr` is the raw (unescaped) TL;DR text — esc() happens at
+// the call site once the headline is inserted into HTML, same convention as
+// every other derived string in this file.
+function deriveHeadline(tldr) {
+  if (!tldr) return "";
+  const text = tldr.trim();
+  if (!text) return "";
+  // First sentence: up to and including the first ./!/? that actually ENDS
+  // a sentence — i.e. is followed by whitespace or the end of the string.
+  // The lookahead is what keeps decimal numbers intact: real TL;DRs lead
+  // with things like "A magnitude 7.4 earthquake struck Colombia…", and a
+  // bare [^.!?]*[.!?] match would cut the headline off at "A magnitude 7."
+  // (live data, digest #105). Lazy .*? finds the EARLIEST qualifying end.
+  const sentenceMatch = text.match(/^.*?[.!?](?=\s|$)/s);
+  const sentence = (sentenceMatch ? sentenceMatch[0] : text).trim();
+  if (sentence.length <= 110) return sentence;
+  let clipped = sentence.slice(0, 110);
+  const lastSpace = clipped.lastIndexOf(" ");
+  // Only back off to the word boundary when one actually exists inside the
+  // clip — a single 110+ character "word" (unusual, but not impossible)
+  // clips at the raw character limit rather than not clipping at all.
+  if (lastSpace > 0) clipped = clipped.slice(0, lastSpace);
+  return `${clipped.trim()}…`;
 }
 
 // Kind badge for daily/weekly rows — "" for a window row, and "" for a
@@ -5187,7 +5470,11 @@ function renderIndexEntry(row, token, lang, view) {
   const isSynthesis = row.kind !== "window";
   const badgeHtml = kindBadge(row, view, strings);
 
-  const { excerptHtml, langChip } = renderExcerpt(row, lang);
+  const { excerptHtml, langChip, rawText } = renderExcerpt(row, lang);
+  // Front Page redesign: a mechanically-derived display headline, see
+  // deriveHeadline — every grid card gets one, in place of the old bare
+  // time+count meta row being the card's only "title".
+  const headline = deriveHeadline(rawText);
 
   const counts = `${esc(row.item_count)} ${esc(strings.itemsWord)} · ${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
   const timeClass = isSynthesis ? "time time-accent" : "time";
@@ -5213,6 +5500,7 @@ function renderIndexEntry(row, token, lang, view) {
   // script tell "already in this ledger" from "genuinely archive-only".
   return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
     <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${degradedHtml}${badgeHtml}${langChip}</span>
+    <h3 class="headline">${esc(headline)}</h3>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
@@ -5231,7 +5519,9 @@ function renderLeadCard(row, token, lang, view) {
   // two never drift apart building it separately.
   const badgeHtml = kindBadge(row, view, strings);
 
-  const { excerptHtml, langChip } = renderExcerpt(row, lang);
+  const { excerptHtml, langChip, rawText } = renderExcerpt(row, lang);
+  // Front Page redesign: derived hero headline — see deriveHeadline.
+  const headline = deriveHeadline(rawText);
 
   const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
 
@@ -5239,11 +5529,24 @@ function renderLeadCard(row, token, lang, view) {
   // there (including why there's no source-spectrum bar alongside it here).
   const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
 
+  // Facts column (Front Page redesign, "if cheap" per spec): items/sections
+  // are already-selected row columns (see handleIndexPage's SELECT), so this
+  // is free — no extra query. Reuses itemsWord/sectionsWord (already
+  // localized) as the <dt> labels rather than minting new strings for them.
+  const factsHtml = `<dl class="leadfacts">
+    <dt>${esc(strings.itemsWord)}</dt><dd>${esc(row.item_count)}</dd>
+    <dt>${esc(strings.sectionsWord)}</dt><dd>${esc(row.section_count)}</dd>
+  </dl>`;
+
   // data-created / data-id: same contract as renderIndexEntry's — see
   // comments there.
   return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
-    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${degradedHtml}${badgeHtml}${langChip}</span>
-    <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
+    <div class="leadmain">
+      <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${degradedHtml}${badgeHtml}${langChip}</span>
+      <h2 class="headline headline-lead">${esc(headline)}</h2>
+      <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
+    </div>
+    ${factsHtml}
   </a>`;
 }
 
@@ -5507,6 +5810,43 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs) {
   return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
 }
 
+// Big masthead issue line (Front Page redesign, index pages only): "No.
+// {n} · {full date} · {n} editions today" — every piece is derived from
+// data the page already has, no new plumbing (per the task spec):
+//   - edition number: the lead digest's own `id` (an existing, already-
+//     unique, monotonically-issued column — not invented for this).
+//   - date: formatDayHeader on the lead's created_at, same formatter the
+//     digest page's own eyebrow used before this redesign.
+//   - editions today: how many of the ALREADY-FETCHED `rows` (the same
+//     array renderIndexPage received — the current week for the all view,
+//     up to 1000 rows for daily/weekly) share the lead's Budapest calendar
+//     day. ALL view only — a daily/weekly view's "editions" are, by
+//     definition, at most one a day, so the count would only ever read 1
+//     and add nothing.
+// Returns "" when there's no lead row at all (empty index, or an archive
+// week — see renderIndexPage's own isCurrent gate), same "absent data
+// renders as absence" contract as this file's other optional-fragment
+// helpers.
+function buildIssueLine(leadRow, rows, view, strings) {
+  if (!leadRow) return "";
+  const parts = [
+    strings.issueEdition.replace("{n}", String(leadRow.id)),
+    formatDayHeader(new Date(leadRow.created_at), strings.locale),
+  ];
+  if (view === "all") {
+    const leadDay = budapestDateParts(new Date(leadRow.created_at));
+    const editionsToday = rows.filter((row) => {
+      const day = budapestDateParts(new Date(row.created_at));
+      return day.y === leadDay.y && day.m === leadDay.m && day.d === leadDay.d;
+    }).length;
+    if (editionsToday > 0) {
+      const tmpl = editionsToday === 1 ? strings.issueEditionsTodayOne : strings.issueEditionsToday;
+      parts.push(tmpl.replace("{n}", String(editionsToday)));
+    }
+  }
+  return parts.join(" · ");
+}
+
 function renderIndexPage(
   rows,
   token,
@@ -5673,6 +6013,8 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     prefetchHref,
+    true,
+    buildIssueLine(leadRow, rows, view, strings),
   );
 }
 
@@ -5719,10 +6061,20 @@ function buildSectionToc(articleHtml) {
 // pointless chip. Title text is passed through esc() — it originated from
 // pre-sanitized HTML, but re-escaping text content read out of it is free
 // safety, not redundant trust.
+//
+// Numbering (Front Page redesign — "in this edition"): "01", "02", … from
+// the entry's own 1-based position in `sections`, which is itself already
+// in document order (buildSectionToc assigns ids sequentially as it walks
+// the article) — the SAME order .digest > h2's own CSS-counter badges will
+// number the actual sections in, so the two numberings always agree without
+// sharing any markup.
 function renderToc(sections) {
   if (sections.length < 2) return "";
   const chips = sections
-    .map((s) => `<a href="#${s.id}">${esc(s.title)}</a>`)
+    .map(
+      (s, i) =>
+        `<a href="#${s.id}"><span class="tocnum">${String(i + 1).padStart(2, "0")}</span>${esc(s.title)}</a>`,
+    )
     .join("\n");
   return `<nav class="toc">${chips}</nav>\n`;
 }
@@ -5904,7 +6256,18 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
       : digest.kind === "weekly"
         ? strings.weeklyBrief
         : "digest";
-  const stamp = `${formatDayHeader(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${kindLabel} #${digest.id}`;
+  // Edition eyebrow (Front Page redesign): kind · time · items · sections —
+  // the full weekday/date is already visible in the compact masthead's own
+  // issue line right above (see pageChrome), so it's dropped here rather
+  // than repeated twice on the same page.
+  const stamp = `${kindLabel} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${digest.item_count} ${strings.itemsWord} · ${digest.section_count} ${strings.sectionsWord}`;
+  // Derived h1 headline (Front Page redesign): digest.tldr is an already-
+  // selected column that renderDigestPage never rendered directly before
+  // this — the article's own embedded TL;DR paragraph (body_html's
+  // `.tldr` div, restyled as the leader right below this headline, see the
+  // CSS) already carries the full text, so deriving a short title from the
+  // SAME source here adds a headline without duplicating any content.
+  const headline = deriveHeadline(digest.tldr);
   // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
   // browser tab/history width is tight, and the token never appears here.
   // pageChrome esc()s the whole composed string before inserting it.
@@ -5989,12 +6352,20 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   // a digest with no deltas — see renderDeltas.
   const deltasHtml = renderDeltas(deltas, topicArcs, strings, token, lang);
 
-  // Order: stamp -> arc line -> what-changed block -> en-only note -> TOC ->
-  // article. The TOC can't sit inside the TL;DR-bearing article start as
-  // first imagined — the TL;DR callout is itself inside body_html — so it
-  // renders above <article> instead.
+  // Order: crumbs -> edition header (eyebrow + derived h1) -> arc line ->
+  // what-changed block -> en-only note -> TOC -> article. The numbered TOC
+  // can't sit inside the article, AFTER the TL;DR-bearing leader paragraph,
+  // as the detail prototype has it — the TL;DR callout is itself the FIRST
+  // element of body_html (see the .tldr CSS comment), and repositioning it
+  // relative to the rest of the article would mean parsing/rewriting
+  // arbitrary pre-sanitized HTML, real risk for a purely cosmetic ordering
+  // win — so the TOC keeps rendering above <article>, same position as
+  // before this redesign; deviation noted in the PR description.
   const body = `<nav class="digestnav">${digestNavLinksHtml}</nav>
-<p class="stamp">${esc(stamp)}</p>
+<header class="edhead">
+  <p class="stamp">${esc(stamp)}</p>
+  <h1>${esc(headline)}</h1>
+</header>
 ${arcsHtml}${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
