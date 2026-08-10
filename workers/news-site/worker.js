@@ -1794,6 +1794,11 @@ const STRINGS = {
     themeAuto: "Auto",
     themeDark: "Dark",
     settingsTextSize: "Text size",
+    // Body-font miniseg (owner-requested serif toggle — a friend argued
+    // for the retired serif body; now both camps get their way). The
+    // Sans/Serif button captions are literal in the markup, S/M/L-style —
+    // typographic loanwords both languages use as-is.
+    settingsFont: "Body font",
     settingsDensity: "Density",
     unreadFence: "new since your last visit",
     degraded: "partial",
@@ -1970,6 +1975,8 @@ const STRINGS = {
     themeAuto: "Auto",
     themeDark: "Sötét",
     settingsTextSize: "Betűméret",
+    // Owner: please review — new HU string, body-font toggle row label.
+    settingsFont: "Betűtípus",
     settingsDensity: "Sűrűség",
     unreadFence: "új a legutóbbi látogatásod óta",
     degraded: "hiányos",
@@ -2199,6 +2206,11 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
   // truth), so only s/l ever get set/stored. Letters are literal, not
   // STRINGS-keyed — "S"/"M"/"L" read the same in both languages.
   const sizeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTextSize)}</span><span class="miniseg miniseg-size" role="group" aria-label="${esc(strings.settingsTextSize)}"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div>`;
+  // Body-font toggle (owner-requested): Sans (default, = absence of
+  // data-font) | Serif (the retired wire-desk prose stack, resurrected
+  // behind :root[data-font="serif"] — see the CSS). Same hidden-until-JS
+  // contract as every miniseg above.
+  const fontRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsFont)}</span><span class="miniseg miniseg-font" role="group" aria-label="${esc(strings.settingsFont)}"><button class="minisegbtn" data-set="sans" hidden>Sans</button><button class="minisegbtn" data-set="serif" hidden>Serif</button></span></div>`;
   // Density toggle (roadmap 4 step 4): index pages only — it governs the
   // ledger's .entry padding/clamp, which a digest page has none of, so the
   // row would be a dead control there.
@@ -2212,7 +2224,7 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
   // each breakpoint hides one — .gearicon desktop-hidden, .gearlabel
   // phone-hidden (see the CSS) — and the aria-label covers it everywhere.
   const searchHtml = showSearch ? renderSearchBubble(token, lang, strings) : "";
-  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
+  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${fontRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -2450,6 +2462,15 @@ const CSS = `
      .entry-lead .excerpt variants exist because these :root-prefixed
      rules outrank the lead card's own base font-size — without them,
      compact S would shrink the lead below its deliberate extra weight. */
+  /* Body-font toggle (owner-requested; a friend lobbied for the serif):
+     Serif resurrects the retired "private wire desk" prose stack by
+     re-pointing the ONE variable every prose rule reads — headlines,
+     eyebrows, and mono data are untouched, so the print-poster identity
+     keeps its display voice either way. Sans is the default, expressed as
+     the ABSENCE of data-font, same convention as data-fontsize's M. */
+  :root[data-font="serif"] {
+    --font-prose: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
   :root[data-fontsize="s"] .digest { font-size: 0.94em; }
   :root[data-fontsize="l"] .digest { font-size: 1.12em; }
   :root[data-fontsize="s"] .entry .excerpt { font-size: 0.87em; }
@@ -3813,7 +3834,7 @@ function pageChrome(
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.font=localStorage.getItem("font")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
 <style>${CSS}</style>
 </head>
 <body>
@@ -4059,6 +4080,42 @@ ${prefetchScriptHtml}
           try {
             if (v === "m") localStorage.removeItem("fontsize");
             else localStorage.setItem("fontsize", v);
+          } catch (e) {}
+          reflect();
+        });
+      }, { signal: signal });
+    }
+  })();
+
+  // Body-font miniseg (owner-requested serif toggle): Sans/Serif, same
+  // shape as the size miniseg just above — Sans is the default expressed
+  // as the ABSENCE of data-font (see the CSS), so only serif ever touches
+  // storage. The head script already applied any stored choice before
+  // first paint, so no font flash.
+  (function () {
+    var group = document.querySelector(".miniseg-font");
+    if (!group) return;
+    var buttons = group.querySelectorAll(".minisegbtn");
+    for (var i = 0; i < buttons.length; i++) buttons[i].hidden = false;
+    var reflect = function () {
+      var active = document.documentElement.dataset.font === "serif" ? "serif" : "sans";
+      for (var i = 0; i < buttons.length; i++) {
+        var isActive = buttons[i].dataset.set === active;
+        buttons[i].classList.toggle("active", isActive);
+        buttons[i].setAttribute("aria-pressed", String(isActive));
+      }
+    };
+    reflect();
+    for (var j = 0; j < buttons.length; j++) {
+      buttons[j].addEventListener("click", function () {
+        var v = this.dataset.set;
+        // Crossfade the reflow, same as the size miniseg: a typeface swap
+        // reflows every prose block at once.
+        withPageTransition(function () {
+          document.documentElement.dataset.font = v === "sans" ? "" : v;
+          try {
+            if (v === "sans") localStorage.removeItem("font");
+            else localStorage.setItem("font", v);
           } catch (e) {}
           reflect();
         });
@@ -5182,7 +5239,7 @@ ${prefetchScriptHtml}
             // carry that onto the live <html> along with the content.
             document.documentElement.lang = doc.documentElement.lang;
             // Deliberately UNCHANGED: html's data-theme/data-density/
-            // data-fontsize. Those are live preference state, not page
+            // data-fontsize/data-font. Those are live preference state, not page
             // content — leaving them alone is what makes the swap flicker-
             // free (no re-applying a preference that was already in effect).
             // Same for the theme-color metas in <head> — theme state is
