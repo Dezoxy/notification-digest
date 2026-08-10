@@ -1796,9 +1796,13 @@ const STRINGS = {
     settingsTextSize: "Text size",
     // Body-font miniseg (owner-requested serif toggle — a friend argued
     // for the retired serif body; now both camps get their way). The
-    // Sans/Serif button captions are literal in the markup, S/M/L-style —
-    // typographic loanwords both languages use as-is.
+    // captions describe the reading register, not the letterform (owner:
+    // no font jargon in the UI) — the INTERNAL values stay sans/serif
+    // (data-set, data-font, the localStorage `font` key), so shipped
+    // preferences survive any future caption rewording.
     settingsFont: "Body font",
+    fontModern: "Modern",
+    fontClassic: "Classic",
     settingsDensity: "Density",
     unreadFence: "new since your last visit",
     degraded: "partial",
@@ -1975,8 +1979,12 @@ const STRINGS = {
     themeAuto: "Auto",
     themeDark: "Sötét",
     settingsTextSize: "Betűméret",
-    // Owner: please review — new HU string, body-font toggle row label.
+    // Owner: please review — new HU strings, body-font toggle row label +
+    // register captions ("Klasszikus" is the longest miniseg caption on
+    // the site; checked at phone width, the panel accommodates it).
     settingsFont: "Betűtípus",
+    fontModern: "Modern",
+    fontClassic: "Klasszikus",
     settingsDensity: "Sűrűség",
     unreadFence: "új a legutóbbi látogatásod óta",
     degraded: "hiányos",
@@ -2210,7 +2218,7 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
   // data-font) | Serif (the retired wire-desk prose stack, resurrected
   // behind :root[data-font="serif"] — see the CSS). Same hidden-until-JS
   // contract as every miniseg above.
-  const fontRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsFont)}</span><span class="miniseg miniseg-font" role="group" aria-label="${esc(strings.settingsFont)}"><button class="minisegbtn" data-set="sans" hidden>Sans</button><button class="minisegbtn" data-set="serif" hidden>Serif</button></span></div>`;
+  const fontRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsFont)}</span><span class="miniseg miniseg-font" role="group" aria-label="${esc(strings.settingsFont)}"><button class="minisegbtn" data-set="sans" hidden>${esc(strings.fontModern)}</button><button class="minisegbtn" data-set="serif" hidden>${esc(strings.fontClassic)}</button></span></div>`;
   // Density toggle (roadmap 4 step 4): index pages only — it governs the
   // ledger's .entry padding/clamp, which a digest page has none of, so the
   // row would be a dead control there.
