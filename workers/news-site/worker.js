@@ -537,8 +537,8 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
 
 // Deltas (§11.3 delta persistence, ingest v4): fail-safe parse of the
 // `deltas` JSON column — same "unparseable or wrong-shaped -> treated as
-// absent" contract as renderSpectrum/the topics parse just below (never
-// throws, drops individually malformed entries rather than the whole
+// absent" contract as renderDegradedBadge/the topics parse just below
+// (never throws, drops individually malformed entries rather than the whole
 // array). A shared function, not inlined per call site like the topics
 // parse below, because TWO read paths need it: handleDigestPage (this
 // digest's own "What changed" block) and handleArcPage (each appearance's
@@ -579,8 +579,8 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   if (!digest) return notFound();
 
   // Story-arc counts (ingest v3, roadmap 4 step 8): fail-safe parse, same
-  // contract as renderSpectrum — an unparseable or wrong-shaped topics value
-  // is treated as "no topics" rather than thrown.
+  // contract as renderDegradedBadge — an unparseable or wrong-shaped topics
+  // value is treated as "no topics" rather than thrown.
   let topics = null;
   if (digest.topics) {
     try {
@@ -588,8 +588,8 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
       if (Array.isArray(parsed)) {
         // Per-entry shape check too, not just "is an array" — same defense
         // against a stored value predating a validation change that every
-        // other renderer here applies (renderSpectrum, renderSourceKey); a
-        // wrong-shaped entry must drop out, not render "undefined".
+        // other renderer here applies (renderDegradedBadge, renderSourceKey);
+        // a wrong-shaped entry must drop out, not render "undefined".
         const wellFormed = parsed.filter(
           (t) => t !== null && typeof t === "object" && !Array.isArray(t) &&
             typeof t.slug === "string" && typeof t.label === "string",
@@ -1573,7 +1573,6 @@ const STRINGS = {
     settingsTextSize: "Text size",
     settingsDensity: "Density",
     unreadFence: "new since your last visit",
-    pulseLabel: "Recent volume",
     countdownNext: "next window closes in about {t}",
     countdownDue: "next window closing about now",
     countdownHourUnit: "h",
@@ -1596,6 +1595,14 @@ const STRINGS = {
     searchLink: "Search ↗",
     searchResults: "{n} results",
     searchNone: "Nothing found.",
+    // Search bubble trigger (owner-requested index cleanup, renderSearchBubble):
+    // the compact button that opens the filter/search popover — both its
+    // visible text and its aria-label, same "one string, two surfaces" reuse
+    // as archiveLabel above. Deliberately its own string, not a reuse of
+    // searchButton (the standalone search page's submit label) — a shared
+    // string would couple two independently-changeable controls just
+    // because their text happens to match today.
+    searchToggleLabel: "Search",
     // Unified search (owner UX pass): eyebrow label above the archive
     // results the index page's own filter box surfaces in-page — see
     // renderSearchFragment/the .archivelabel CSS. Mono-eyebrow voice, not a
@@ -1624,14 +1631,22 @@ const STRINGS = {
     arcTimelineLabel: "Appearances",
     // NOW section (§11.1 PR B, renderNowSection): the mono eyebrow above the
     // situational-overview block at the top of the current-week all-view
-    // index — see computeNowArcs/renderNowSection. Reuses arcRepeat/
-    // arcMomentum{Up,Same,Down} above rather than minting near-duplicates.
+    // index — see computeNowArcs/renderNowSection. Each row's momentum
+    // arrow reuses the same computeArcMomentum classification arcMomentum
+    // {Up,Same,Down} above label on the arc page, but renders it as a bare
+    // arrow glyph, not those text strings — no separate now* string needed.
+    // (The row's metadata used to also reuse arcRepeat's "×{n} this week"
+    // count; that was dropped in the owner-requested index cleanup — see
+    // renderNowSection's own comment.)
     nowLabel: "Now",
-    // Archive nav affordance (§11.1 PR C, archiveHref/renderSwitchers): a
-    // small masthead link (and the matching ⌘K palette command, same href)
-    // pointing at the previous ISO week's index — the newest fully-past
-    // week, i.e. genuine archive navigation now that NOW (§11.1 PR B) leads
-    // the page. One string, reused for both surfaces.
+    // Archive command label (§11.1 PR C): the ⌘K palette's "Archive" entry
+    // (data-cmd-archive, see pageChrome/collectPaletteItems) used to double
+    // as the masthead Archive link's own text too — that link was removed in
+    // the index-cleanup pass (archive weeks are reached via the week rail's
+    // ← link now, see renderWeekRail), so this string's only remaining
+    // consumer is the palette label, which quietly never renders its row
+    // anymore since collectPaletteItems' `.archivelink` lookup always comes
+    // up empty — see that function's own comment.
     archiveLabel: "Archive",
     // ⌘K command palette (§11.1 PR C): client-side only, progressive
     // enhancement — see the palette IIFE in pageChrome. paletteLabel is the
@@ -1720,7 +1735,6 @@ const STRINGS = {
     settingsTextSize: "Betűméret",
     settingsDensity: "Sűrűség",
     unreadFence: "új a legutóbbi látogatásod óta",
-    pulseLabel: "Friss mennyiség",
     countdownNext: "a következő ablak kb. {t} múlva zárul",
     countdownDue: "a következő ablak kb. most zárul",
     countdownHourUnit: "ó",
@@ -1737,6 +1751,9 @@ const STRINGS = {
     searchLink: "Keresés ↗",
     searchResults: "{n} találat",
     searchNone: "Nincs találat a keresésre.",
+    // Owner: please review — new HU string, search bubble trigger
+    // (owner-requested index cleanup), mirrors the EN block's pattern.
+    searchToggleLabel: "Keresés",
     // Owner: please review — new HU string, mirrors searchLabel's pattern.
     archiveResults: "Az archívumból",
     // Story arcs (roadmap 4 step 8) — owner: please review these, flagged HU
@@ -1828,22 +1845,6 @@ function arcHref(token, lang, slug) {
   return `/t/${encodeURIComponent(token)}/${langSeg}a/${esc(slug)}`;
 }
 
-// Archive nav affordance (§11.1 PR C, "chronological brief feed demotes to
-// Archive navigation"): the previous ISO week's index — the newest
-// fully-past week, i.e. genuine archive; the current week is already the
-// site's root, so there's nothing to archive-link to there. Computed off
-// the REAL current instant (isoWeekOf(new Date())) every time, never off
-// whatever week/view the calling page happens to be showing — see the
-// call sites (renderSwitchers' showArchive param) for which pages render
-// this at all. Always the "all" view: daily/weekly have no week address
-// (see the route match in fetch()), and "all" is where the week rail
-// itself already lives.
-function archiveHref(token, lang) {
-  const current = isoWeekOf(new Date());
-  const prev = adjacentWeek(current.year, current.week, -1);
-  return weekHref(token, lang, "all", prev.year, prev.week);
-}
-
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
 // from a digest row's own `kind` column (window/daily) used elsewhere.
 // `archiveWeek` (roadmap 3 step 3): the CURRENT page's own {year, week} when
@@ -1883,12 +1884,14 @@ function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null)
 // index and digest pages — see the file-header comment ("Daily-brief view")
 // for why a digest page can't link into another view's own digest.
 // The view selector is the site's PRIMARY navigation (owner decision) —
-// rendered as centered pill tabs on their own row below the masthead, not
-// as a corner micro-link like the language toggle. Active tab = filled
-// accent pill (plain text, not a link); inactive = outlined link. On a
-// digest page the inactive tab targets that view's INDEX (a window digest
-// has no address in the daily or weekly view — long-standing design
-// choice).
+// rendered as a pill capsule that rides in the masthead row itself, beside
+// the brand (owner-requested masthead compaction: this used to be its own
+// centered band below the masthead; see pageChrome's .mastleft, which now
+// groups the two together, and the .mast/.mastleft/.viewtabs CSS for the
+// layout). Active tab = filled accent pill (plain text, not a link);
+// inactive = outlined link. On a digest page the inactive tab targets that
+// view's INDEX (a window digest has no address in the daily or weekly view
+// — long-standing design choice).
 // Unlike the language switcher, this deliberately does NOT thread a week
 // through (roadmap 3 step 3): a week page's tabs still target the view's
 // root index with no week segment — a week page has no daily or weekly
@@ -1916,24 +1919,12 @@ function renderViewTabs(token, lang, view) {
 // and hidden-until-JS contract untouched. Theme and size are miniseg button
 // groups (owner upgrade: three-state theme, S/M/L text size) — same
 // hidden-until-JS contract, wired by their own IIFEs below in pageChrome.
-// `showArchive` (§11.1 PR C, default false): renders the small Archive link
-// in the masthead's switcher row (see archiveLinkHtml below). Deliberately a
-// separate explicit param, not derived from `pageKind === "index"` — the
-// search page ALSO passes pageKind "index" (see renderSearchPage, so its
-// density row keeps rendering there too) but must NOT get the Archive link
-// (§11.1 spec: "not digest/arc/search pages"), so pageKind alone can't
-// gate this. Only renderIndexPage ever passes true.
-function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, showArchive = false) {
+// The masthead Archive link this row used to also carry (§11.1 PR C,
+// `showArchive` param) was removed in the index-cleanup pass — archive weeks
+// are reachable via the week rail's own ← link now (see renderWeekRail), so
+// there's nothing left to gate a link on here.
+function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   const strings = STRINGS[lang];
-  // archivelink: a plain small link, not inside the settings disclosure —
-  // it's primary navigation (§11.1 "chronological brief feed demotes to
-  // Archive navigation"), not a preference, so it stays one tap away rather
-  // than one extra tap behind the gear. Same href the ⌘K palette's own
-  // "Archive" command reads (see collectPaletteItems in pageChrome) — one
-  // computation (archiveHref), two surfaces.
-  const archiveLinkHtml = showArchive
-    ? `<a class="archivelink" href="${archiveHref(token, lang)}">${esc(strings.archiveLabel)}</a>`
-    : "";
   const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
   // Theme is now a three-state Light/Auto/Dark miniseg (owner redesign),
   // not the old two-state ◐ toggle — see the theme IIFE in pageChrome for
@@ -1956,7 +1947,7 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
   // The gear carries a visible text label on desktop (owner-requested) and
   // collapses to the bare icon on the phone — the label span is hidden by
   // the mobile media block, the aria-label covers it everywhere.
-  return `${archiveLinkHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
+  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -2178,12 +2169,46 @@ const CSS = `
      unaffected (no containing-block change). */
   .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; overflow-x: clip; }
 
+  /* Masthead compaction (owner-requested): the view tabs used to be their
+     own centered band below this header — they now ride in the header row
+     itself, grouped with the brand in .mastleft (see pageChrome). center,
+     not baseline: a text wordmark sitting next to a rounded pill capsule
+     reads better lined up on their vertical centers than on a shared text
+     baseline, and .mastleft's own internal wrap (below) is what actually
+     keeps the row from overflowing on narrow viewports — the outer
+     flex-wrap here stays only as a last-resort safety net (mastright
+     dropping to its own line), same as before this change. */
   header.mast {
-    display: flex; align-items: baseline; justify-content: space-between;
-    flex-wrap: wrap; gap: 0.6em 1em; padding: 1.4em 0 1em;
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 0.6em 1em; padding: 1.4em 0 1em;
     border-bottom: 1px solid var(--hairline); margin-bottom: 1.6em;
   }
-  .mast .brand { font-weight: 700; font-size: 1.05em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
+  /* No flex-wrap on the mast itself (index-cleanup masthead compaction):
+     narrow viewports wrap INSIDE .mastleft (tabs drop under the brand, see
+     its own flex-wrap below) while .mastright stays pinned to the first
+     line's right edge — letting the mast wrap instead parked the gear on
+     its own left-aligned line under the tabs (observed live on the 375px
+     preset). align-items flex-start, not center, so the pinned gear tracks
+     the brand line, not the vertical middle of a two-line .mastleft. */
+  /* min-width: 0 is load-bearing: a flex item's default min-width is its
+     content's own min-content size, which — for a flex CONTAINER like this
+     one — would otherwise stop it shrinking below the tab capsule's natural
+     width and force the OUTER header row to wrap between .mastleft and
+     .mastright instead (dropping Settings off the top-right corner on
+     narrow viewports, which the brief explicitly says must not happen).
+     Overriding it to 0 lets .mastleft shrink first, so ITS OWN flex-wrap
+     below is what actually absorbs a narrow viewport — the tabs drop under
+     the brand, gear stays put. */
+  .mast .mastleft { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5em 1.1em; min-width: 0; }
+  /* 0.95em, down from the pre-compaction 1.05em: a ~10% trim, not a demotion
+     — still bolder (font-weight 700) and letter-spaced tighter than
+     everything else in the row, so the wordmark still reads first, it just
+     no longer visually outweighs the tab capsule sitting right beside it.
+     Landed on 0.95em specifically because it matches .viewtab's own
+     font-size (also 0.95em) — brand and tabs now share one type step, which
+     is what makes the merged row read as ONE compact band instead of a
+     big label with small chrome tacked on. */
+  .mast .brand { font-weight: 700; font-size: 0.95em; letter-spacing: -0.01em; text-decoration: none; color: var(--text); }
   .mast .brand .tld { color: var(--accent); }
   /* The settings gear (language/theme/size/density, collapsed into one
      details.settings disclosure — see renderSwitchers) sits top-right in
@@ -2199,33 +2224,31 @@ const CSS = `
     body { font-size: 15px; }
     /* Icon-only gear on the phone — see .gearlabel above. */
     .gearlabel { display: none; }
-    /* Brand left, EN|HU right on one line (owner: the selector belongs
-       on the right; the cadence line was removed entirely at the owner's
-       request — the footer already carries the private-link warning). */
-    header.mast {
-      display: flex; flex-wrap: wrap; justify-content: space-between;
-      align-items: baseline;
-    }
-    .mast .mastright { display: contents; }
+    /* Masthead compaction, phone posture: the OUTER row must never wrap —
+       .mastleft's own flex-wrap/min-width:0 handle narrow widths by
+       dropping the tabs under the brand, and the gear stays pinned to the
+       first line's right edge. The pre-compaction phone block set
+       flex-wrap: wrap + .mastright { display: contents } here, which
+       dissolved the gear into the wrapping row and parked it alone on its
+       own line under the tabs (observed live at 375px) — with brand+tabs
+       sharing .mastleft that posture no longer earns its keep, so the
+       phone mast now inherits the base rule's nowrap/flex-start and
+       .mastright stays a real box (which the settings bubble's positioning
+       never depended on anyway — details.settings is its own anchor, see
+       that comment below). */
+    header.mast { align-items: flex-start; }
   }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
 
-  /* Archive nav affordance (§11.1 PR C): a small link, not a pill/button —
-     it sits in the same .mastright column as the gear (see renderSwitchers),
-     one row above it, matching .langswitch's own understated weight rather
-     than competing with the primary view tabs. */
-  .mast .archivelink { font-size: 0.85em; color: var(--muted); text-decoration: none; }
-  .mast .archivelink:hover, .mast .archivelink:focus-visible { color: var(--accent); }
-
   /* Settings bubble (owner redesign): the gear button collapses language,
      theme, and density into one disclosure. details.settings — NOT
-     .mastright — is the positioning anchor for .settingspanel below:
-     .mastright goes display: contents in the ≤40em mobile block just
-     below, which erases it as a box entirely, so anything anchored to it
-     would have nowhere to be absolute relative to. The <details> element
-     itself survives that collapse and stays a real box, so it's the anchor. */
+     .mastright — is the positioning anchor for .settingspanel below.
+     (Historically load-bearing: the phone block used to erase .mastright
+     as a box via display: contents, so only the <details> could anchor the
+     absolute panel. The masthead compaction removed that collapse, but the
+     anchor choice stays — it was never wrong, and moving it buys nothing.) */
   details.settings { position: relative; }
   summary.gear {
     list-style: none;
@@ -2413,12 +2436,6 @@ const CSS = `
   .entry .time.time-accent { color: var(--accent); }
   /* 0.75em, not 0.8: same mono-runs-wide compensation as .entry .time. */
   .entry .count { color: var(--muted); font-size: 0.75em; font-family: var(--font-data); }
-  /* Source-spectrum micro-bar (roadmap 2 step 8, renderSpectrum): fixed
-     width so the meta row's layout doesn't jump depending on how many
-     sources reported this run; segments are sized purely by each <i>'s own
-     inline flex:N (N = that source's item count). */
-  .spectrum { display: inline-flex; width: 3.2em; height: 6px; border-radius: 3px; overflow: hidden; gap: 0; align-self: center; }
-  .spectrum i { display: block; height: 100%; }
   .entry .flag {
     font-size: 0.72em; font-weight: 600; padding: 0.1em 0.55em; border-radius: 99px;
     background: var(--attention-bg); color: var(--attention-text);
@@ -2696,12 +2713,14 @@ const CSS = `
   }
 
   /* Source key (roadmap 2 step 8 follow-up): the digest page's colophon —
-     the same source_counts/failed_sources data the index's .spectrum bar
-     summarizes, spelled out as concrete per-source numbers with color
-     swatches, sitting right after the article (renderSourceKey renders
-     nothing when both fields are absent — see the function for the
-     fail-safe JSON.parse contract shared with renderSpectrum/
-     renderDegradedBadge). */
+     source_counts/failed_sources spelled out as concrete per-source numbers
+     with color swatches, sitting right after the article (renderSourceKey
+     renders nothing when both fields are absent — see the function for the
+     fail-safe JSON.parse contract shared with renderDegradedBadge). The
+     index page's own micro-bar counterpart (.spectrum, one <i> per source
+     sized by inline flex:N) was removed in the owner-requested index-
+     cleanup pass; this colophon is unaffected and still carries the full
+     provenance on the digest page. */
   .sourcekey {
     font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
     display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; align-items: center;
@@ -2737,18 +2756,23 @@ const CSS = `
   .backfab:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; opacity: 1; pointer-events: auto; }
   @media (prefers-reduced-motion: reduce) { .backfab { transition: none; } }
 
-  /* View tabs: the primary content navigation, centered on its own row.
-     Bigger than the corner language toggle by design — switching between
-     the full stream and daily briefs is the main choice a reader makes.
-     Owner-requested 2026-08-09: one connected segmented capsule instead of
-     three detached pills. The capsule (.viewtabs) carries the border,
-     radius and overflow: hidden; segments (.viewtab) are borderless and
-     share a hairline divider. No wrapper element — width: fit-content plus
-     auto side margins centers the capsule on its own row the same way the
-     old flex+justify-content did. The view selector remains the primary
+  /* View tabs: the primary content navigation. Bigger than the corner
+     language toggle by design — switching between the full stream and
+     daily briefs is the main choice a reader makes. Owner-requested
+     2026-08-09: one connected segmented capsule instead of three detached
+     pills. The capsule (.viewtabs) carries the border, radius and
+     overflow: hidden; segments (.viewtab, unchanged below — same hrefs,
+     active-state fill, data-view attributes the ⌘K palette reads) are
+     borderless and share a hairline divider. Owner-requested masthead
+     compaction: this used to be centered on its own row below the masthead
+     (width: fit-content + auto side margins); it now rides inline in
+     .mastleft beside the brand (see pageChrome/the header.mast CSS above),
+     so there's no more row of its own to center on — width: fit-content
+     stays (the capsule still hugs its own content rather than stretching),
+     the centering margin is gone. The view selector remains the primary
      navigation. */
   .viewtabs {
-    display: flex; width: fit-content; margin: 0.2em auto 1.7em;
+    display: flex; width: fit-content;
     border: 1px solid var(--hairline); border-radius: 999px; overflow: hidden;
   }
   .viewtab {
@@ -2772,14 +2796,20 @@ const CSS = `
   .viewtab:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
 
   /* Week rail (roadmap 3 step 2): mono wire-style ← older · WEEK N · range ·
-     newer → nav, between the view tabs and the filter row, ALL-view index
-     pages only (see renderIndexPage/renderWeekRail). Classic 3-column
-     centering trick: the two OUTER spans share flex:1 (so they're always
-     equal width regardless of their own content length, even when one side
-     is an empty spacer), which keeps the center label visually centered
-     without needing to measure anything. */
+     newer → nav, between the view tabs and the ledger, ALL-view index pages
+     only (see renderIndexPage/renderWeekRail). Classic 3-column centering
+     trick for the first three spans: rail-older/rail-newer share flex:1 (so
+     they're always equal width regardless of their own content length, even
+     when one side is an empty spacer), which keeps the center label
+     visually centered without needing to measure anything. rail-search
+     (owner-requested index cleanup) is a fourth, non-growing flex child
+     appended after rail-newer — it doesn't participate in that centering
+     trick at all (flex: none, own rule below), it just claims its own
+     natural width at the row's right edge; the gap property below gives it
+     breathing room from rail-newer's "→" link on an archive week rather
+     than the two abutting directly. */
   .weekrail {
-    display: flex; align-items: baseline; margin: 0 0 1.2em;
+    display: flex; align-items: baseline; gap: 0.6em; margin: 0 0 1.2em;
     font-family: var(--font-data); font-size: 0.78em;
     letter-spacing: 0.06em; text-transform: uppercase;
   }
@@ -2787,6 +2817,7 @@ const CSS = `
   .weekrail .rail-older { text-align: left; }
   .weekrail .rail-newer { text-align: right; }
   .weekrail .rail-center { flex: 0 1 auto; color: var(--muted); }
+  .weekrail .rail-search { flex: none; }
   .weekrail a { color: var(--accent); text-decoration: none; }
 
   /* Archive sparkline (roadmap 4 step 6, renderWeekRail): the pulse strip's
@@ -2799,28 +2830,74 @@ const CSS = `
   .railspark i { display: block; width: 4px; background: var(--chip-bg); border-radius: 1px 1px 0 0; }
   .railspark i.sd0 { background: var(--hairline); height: 15%; }
 
-  /* Index filter (roadmap step 6): tucks under the view tabs — negative
-     top margin pulls it snug against .viewtabs' own bottom margin instead
-     of stacking two gaps. hidden by default (see renderIndexPage), so
-     this rule only ever paints once JS un-hides the input. */
-  .filterrow { display: flex; gap: 0.5em; margin: -0.6em 0 1.4em; }
-  .filterrow .filter {
-    display: block; flex: 1; min-width: 0; font: inherit; font-size: 0.9em;
+  /* Search bubble (owner-requested index cleanup): the week-rail's compact
+     trigger for what used to be the always-visible filterrow — same
+     details/summary disclosure pattern as the settings gear just above
+     (details.settings/summary.gear/.settingspanel), reusing its exact
+     border/elevation/open-animation recipe (the settingsopen keyframe,
+     defined above, is referenced again below rather than copied) under NEW
+     class names rather than the literal same ones: the settings-close IIFE
+     and the soft-nav click interceptor (see pageChrome's bottom script)
+     both assume exactly one details.settings element on the page, and this
+     is a second, unrelated disclosure that must not collide with either
+     lookup. */
+  details.searchpop { position: relative; }
+  summary.searchtoggle {
+    list-style: none;
+    background: none; border: 1px solid var(--hairline); border-radius: 999px;
+    color: var(--accent); font-family: var(--font-data); font-size: 0.78em;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.18em 0.7em; cursor: pointer;
+  }
+  summary.searchtoggle::-webkit-details-marker { display: none; }
+  summary.searchtoggle:hover { border-color: var(--accent); }
+  summary.searchtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  details.searchpop[open] > summary.searchtoggle { border-color: var(--accent); }
+  .searchpanel {
+    position: absolute; right: 0; top: calc(100% + 0.5em);
+    z-index: 20;
+    background: var(--bg); border: 1px solid var(--hairline); border-radius: 14px;
+    padding: 0.9em 1.1em;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28); /* same recipe as .settingspanel's */
+    display: flex; flex-direction: column; gap: 0.7em; min-width: 16em;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    /* Reuses .settingspanel's own open keyframe (see above) — same visual
+       language, no need for a second identical @keyframes block. Opening
+       needs no JS, same as the settings bubble: native <details> flips
+       [open] the instant the summary is clicked, and this rule keys off
+       that attribute directly. No matching close animation here (unlike
+       settings' settingsclose/"panelclosing" dance) — this bubble has no
+       language-switcher-style reason to stay open across a navigation, and
+       the owner brief's only explicit behavioral ask was opening it with
+       focus, not mirroring the settings bubble's close polish too. */
+    details.searchpop[open] .searchpanel { animation: settingsopen 160ms ease-out; }
+  }
+  /* The SAME .filter input class the client-side filter IIFE and the
+     archive-search integration already look for (document.querySelector of
+     ".filter" — see pageChrome's bottom script), just styled for its new
+     home inside the panel instead of a standalone row. */
+  .searchpanel .filter {
+    display: block; font: inherit; font-size: 0.9em;
     padding: 0.5em 0.9em; border-radius: 10px;
     border: 1px solid var(--hairline); background: var(--bg); color: var(--text);
   }
-  .filterrow .filter::placeholder { color: var(--muted); }
-  /* Plain border otherwise; only :focus-visible gets a visible outline. */
-  .filterrow .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  /* Entry point into search (roadmap 4 step 7, renderIndexPage's
-     filterRowHtml): a small uppercase mono link, NOT styled like the
-     filter input beside it — it's chrome/navigation, not a data field, so
-     it takes the mono chrome voice already used for eyebrows/dateline
-     labels elsewhere on this site. */
+  .searchpanel .filter::placeholder { color: var(--muted); }
+  .searchpanel .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Entry point into the standalone search page (roadmap 4 step 7) — the
+     no-JS fallback, still the row's only visible content when the filter
+     input above is hidden (see renderSearchBubble). Mono chrome voice, not
+     styled like the data field beside it, same as before this move. */
   .searchlink {
-    font-family: var(--font-data); font-size: 0.78em; align-self: center;
+    font-family: var(--font-data); font-size: 0.78em;
     text-decoration: none; letter-spacing: 0.06em; text-transform: uppercase;
   }
+  /* Daily/weekly views (owner-requested index cleanup): no week rail to
+     carry the search bubble (see renderIndexPage's searchRowHtml), so it
+     gets a minimal standalone row instead — same negative-top-margin tuck
+     under the view tabs the old filterrow used, just right-aligned since
+     there's no filter/searchlink pair to lay out side by side anymore. */
+  .searchrow { display: flex; justify-content: flex-end; margin: -0.6em 0 1.4em; }
 
   /* Unified search results (owner UX pass): the index page's own box for
      archive hits fetched in the background by the bottom script — see
@@ -2873,7 +2950,7 @@ const CSS = `
 
   /* NOW section (§11.1 PR B, renderNowSection): the situational-overview
      block at the very top of the current-week all-view index, above the
-     rail/filter row/pulse strip/ledger — see renderIndexPage. .archivelabel
+     rail/search row/ledger — see renderIndexPage. .archivelabel
      is reused for the eyebrow (already shared by the arc timeline and this
      file's own archive-search label above) rather than a fourth near-
      identical mono-eyebrow class. Typography-led per the design guidance:
@@ -2925,19 +3002,6 @@ const CSS = `
   }
   .searchbtn:hover { border-color: var(--accent); }
   .searchbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-
-  /* Day-pulse strip (roadmap 2 step 3, renderPulseStrip): ambient chrome, not
-     a chart with axes — no numbers, no gridlines, no day-boundary markers on
-     purpose, just relative bar heights with a title-attribute tooltip per
-     bar. Anchor (.pulsebar) is a fixed-height flex box so the span inside
-     can be anchored to its bottom via align-items: flex-end and sized purely
-     by its own height percentage. */
-  .pulse { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin: 0 0 1.6em; }
-  .pulsebar { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; }
-  .pulsebar span { display: block; width: 100%; background: var(--chip-bg); border-radius: 2px 2px 0 0; }
-  .pulsebar.now span { background: var(--accent); }
-  .pulsebar:hover span { background: var(--accent); }
-  .pulsebar:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
      inserts between digests that arrived since the reader's last visit and
@@ -3033,7 +3097,7 @@ const CSS = `
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
-    .filterrow, .miniseg, .densitytoggle, .pulse, .resumechip,
+    .searchpop, .miniseg, .densitytoggle, .resumechip,
     .archiveresults, .catchup, .followtoggle {
       display: none;
     }
@@ -3181,13 +3245,15 @@ ${prefetchLinkHtml}
 ${prefetchScriptHtml}
 <div class="wrap">
   <header class="mast">
-    <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
+    <div class="mastleft">
+      <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
+      ${viewTabsHtml}
+    </div>
     <div class="mastright">
       ${switchersHtml}
     </div>
   </header>
   ${paletteConfigHtml}
-  ${viewTabsHtml}
   ${bodyHtml}
   <footer class="site">
     <p>${esc(strings.footerPrivate)}</p>
@@ -3556,6 +3622,31 @@ ${prefetchScriptHtml}
         e.preventDefault();
         close();
       }
+    }, { signal: signal });
+  })();
+
+  // Search bubble open-focus (owner-requested index cleanup, index pages
+  // only — guarded on details.searchpop existing, since digest/arc pages
+  // never render it). Opening itself needs no JS at all — same native
+  // <details>/<summary> toggle the settings bubble above relies on — this
+  // IIFE only adds the one explicit behavioral ask the brief called out:
+  // move focus into the filter input the moment the popover opens, so a
+  // pointer click on the trigger lands the reader ready to type without a
+  // second, separate focus step. The native "toggle" event fires for BOTH
+  // opening and closing (unlike click, which only fires on the summary
+  // itself), so this checks details.open rather than assuming direction.
+  // No outside-click/Escape handling here (unlike the settings bubble's own
+  // close() dance above) — that polish was owner-requested specifically for
+  // settings; native <details> behavior (click the summary again, or
+  // anywhere outside via no special handling at all) is left as-is for this
+  // one, matching the brief's only explicit ask for this control.
+  (function () {
+    var pop = document.querySelector("details.searchpop");
+    if (!pop) return;
+    var input = pop.querySelector(".filter");
+    if (!input) return;
+    pop.addEventListener("toggle", function () {
+      if (pop.open) input.focus();
     }, { signal: signal });
   })();
 
@@ -4023,10 +4114,10 @@ ${prefetchScriptHtml}
       }, { signal: signal });
 
       // One box, not two: the standalone search link is the no-JS fallback
-      // (see renderIndexPage) — once the enhanced archive box is wired up,
-      // hide it. Lives in the same .filterrow, so a null guard costs
-      // nothing even though this code path only runs where it's known to
-      // exist.
+      // (see renderSearchBubble) — once the enhanced archive box is wired
+      // up, hide it. Lives in the same search-bubble panel as the filter
+      // input this IIFE already owns, so a null guard costs nothing even
+      // though this code path only runs where it's known to exist.
       var searchLink = document.querySelector(".searchlink");
       if (searchLink) searchLink.hidden = true;
     }
@@ -4135,6 +4226,16 @@ ${prefetchScriptHtml}
         var filter = document.querySelector(".filter");
         if (filter) {
           e.preventDefault();
+          // The filter input lives inside the closed-by-default search
+          // popover (index-cleanup pass) — an element inside a closed
+          // details is not rendered, so focus() on it silently no-ops
+          // (live-verified in Chromium; there is no auto-open-on-focus
+          // fixup to rely on). Open the popover first, then focus; a
+          // .filter that is NOT inside the popover (the standalone search
+          // page's own form input) has no .searchpop ancestor and skips
+          // straight to focus, unchanged.
+          var pop = filter.closest("details.searchpop");
+          if (pop) pop.open = true;
           filter.focus();
         }
       }
@@ -4222,6 +4323,14 @@ ${prefetchScriptHtml}
       });
       var searchLink = document.querySelector(".searchlink");
       if (searchLink) items.push({ label: config.getAttribute("data-cmd-search"), el: searchLink });
+      // The masthead Archive link this used to read (.archivelink) was
+      // removed in the index-cleanup pass — this lookup now always comes up
+      // empty, so the "Archive" command simply never gets pushed, the same
+      // graceful-disappearance behavior every other optional command here
+      // already relies on (compare searchLink/langLink/latest just above and
+      // below). Left in place rather than deleted: harmless dead code that
+      // documents its own absence, and a future masthead Archive link (if
+      // one ever comes back) would only need its class restored, not this.
       var archiveLink = document.querySelector(".archivelink");
       if (archiveLink) items.push({ label: config.getAttribute("data-cmd-archive"), el: archiveLink });
       var langLink = document.querySelector(".langswitch a");
@@ -4703,48 +4812,19 @@ const SOURCE_COLORS = {
 };
 const SOURCE_COLOR_FALLBACK = "#9aa0ab";
 
-// Source-spectrum micro-bar (roadmap 2 step 8): one <i> per source with
-// inline style="flex:N" (N = that source's item count) inside a fixed-width
-// flex container, so the segments lay out proportionally without any JS —
-// see the .spectrum/.spectrum i CSS. sourceCountsJson is the raw D1 TEXT
-// column (JSON string, or null); JSON.parse is wrapped in try/catch and an
-// unparseable or wrong-shaped value renders nothing rather than throwing —
-// this Worker already validated the shape at ingest time, but rendering
-// stays defensive against a stored value that predates a validation change
-// or was written some other way. Sources with a zero count are skipped
-// entirely (nothing to draw); the whole span is omitted if nothing is left.
-function renderSpectrum(sourceCountsJson) {
-  if (!sourceCountsJson) return "";
-  let counts;
-  try {
-    counts = JSON.parse(sourceCountsJson);
-  } catch {
-    return "";
-  }
-  if (typeof counts !== "object" || counts === null || Array.isArray(counts)) return "";
-  // Descending by count for both the visual stacking order and the title
-  // attribute's "telegram 40 · x 12 · …" listing.
-  const entries = Object.entries(counts)
-    .filter(([, n]) => typeof n === "number" && n > 0)
-    .sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return "";
-  const bars = entries
-    .map(([name, n]) => `<i style="flex:${n};background:${SOURCE_COLORS[name] ?? SOURCE_COLOR_FALLBACK}"></i>`)
-    .join("");
-  const title = entries.map(([name, n]) => `${name} ${n}`).join(" · ");
-  return `<span class="spectrum" title="${esc(title)}">${bars}</span>`;
-}
-
 // Degraded-run badge (roadmap 2 step 8): shown when failed_sources parses to
-// a non-empty array — same fail-safe JSON.parse contract as renderSpectrum
-// above, and for the same reason (defense against a stored value that
-// predates a validation change). Reuses the existing .flag pill shape, but
-// the muted .flag-muted colors rather than the amber attention ones — this
-// is a fact about a collection run, not something that needs the reader's
-// attention the way has_attention does — so the ⚠ prefix, not color, is what
-// marks it. `strings` is the caller's STRINGS[lang] (for the localized
+// a non-empty array — fail-safe JSON.parse contract (unparseable or
+// wrong-shaped -> treated as absent, never thrown), same posture
+// renderSourceKey below and this file's other D1-JSON-column readers all
+// share, defending against a stored value that predates a validation
+// change. Reuses the existing .flag pill shape, but the muted .flag-muted
+// colors rather than the amber attention ones — this is a fact about a
+// collection run, not something that needs the reader's attention the way
+// has_attention does — so the ⚠ prefix, not color, is what marks it.
+// `strings` is the caller's STRINGS[lang] (for the localized
 // "partial"/"hiányos" label); the failed source names themselves stay
-// untranslated in the title, same as source_counts' names in renderSpectrum.
+// untranslated in the title, same as source_counts' names in
+// renderSourceKey.
 function renderDegradedBadge(failedSourcesJson, strings) {
   if (!failedSourcesJson) return "";
   let names;
@@ -4758,13 +4838,14 @@ function renderDegradedBadge(failedSourcesJson, strings) {
   return `<span class="flag flag-degraded" title="${esc(title)}">⚠ ${esc(strings.degraded)}</span>`;
 }
 
-// Source key (digest-page colophon, roadmap 2 step 8 follow-up): the digest
-// page's spelled-out counterpart to the index's .spectrum micro-bar —
-// concrete per-source numbers with the same color swatches, plus any failed
-// sources from a partial run. Same fail-safe JSON.parse contract as
-// renderSpectrum/renderDegradedBadge above (unparseable or wrong-shaped ->
-// treated as absent, never thrown); renders nothing at all when both fields
-// are absent/empty, so an old digest predating this data shows no key.
+// Source key (digest-page colophon, roadmap 2 step 8 follow-up): concrete
+// per-source numbers with color swatches, plus any failed sources from a
+// partial run. Same fail-safe JSON.parse contract as renderDegradedBadge
+// above (unparseable or wrong-shaped -> treated as absent, never thrown);
+// renders nothing at all when both fields are absent/empty, so an old
+// digest predating this data shows no key. (The index page's own micro-bar
+// counterpart, .spectrum/renderSpectrum, was removed in the owner-requested
+// index-cleanup pass; this digest-page colophon is unaffected.)
 function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
   let counts = null;
   if (sourceCountsJson) {
@@ -4787,7 +4868,7 @@ function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
     }
   }
 
-  // Descending by count, same ordering as renderSpectrum's bar/title.
+  // Descending by count — reads as a ranked list, highest-volume source first.
   const countEntries = counts
     ? Object.entries(counts)
         .filter(([, n]) => typeof n === "number" && n > 0)
@@ -4827,10 +4908,14 @@ function renderIndexEntry(row, token, lang, view) {
   const timeClass = isSynthesis ? "time time-accent" : "time";
   const excerptClass = isSynthesis ? "excerpt excerpt-daily" : "excerpt";
 
-  // Source-spectrum micro-bar + degraded-run badge (roadmap 2 step 8): both
-  // render "" when the row has no data for them (older digests, or an app
-  // version that doesn't send it yet) — see renderSpectrum/renderDegradedBadge.
-  const spectrumHtml = renderSpectrum(row.source_counts);
+  // Degraded-run badge (roadmap 2 step 8): renders "" when the row has no
+  // failed_sources data (older digests, or an app version that doesn't send
+  // it yet) — see renderDegradedBadge. The source-spectrum micro-bar this
+  // used to render alongside (renderSpectrum) was removed from the index in
+  // the owner-requested index-cleanup pass — the ledger's own recency
+  // already communicates what the bar did; the digest page's own
+  // renderSourceKey colophon (unaffected by this pass) still carries that
+  // provenance in full.
   const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
 
   // data-created (roadmap 2 step 2, unread fence): the row's own created_at,
@@ -4842,7 +4927,7 @@ function renderIndexEntry(row, token, lang, view) {
   // renderSearchResult's — see comments there. Lets the archive-results
   // script tell "already in this ledger" from "genuinely archive-only".
   return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
-    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${spectrumHtml}${degradedHtml}${badgeHtml}${langChip}</span>
+    <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${degradedHtml}${badgeHtml}${langChip}</span>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
@@ -4865,59 +4950,36 @@ function renderLeadCard(row, token, lang, view) {
 
   const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
 
-  // Source-spectrum micro-bar + degraded-run badge: same contract as
-  // renderIndexEntry's — see comments there.
-  const spectrumHtml = renderSpectrum(row.source_counts);
+  // Degraded-run badge: same contract as renderIndexEntry's — see comments
+  // there (including why there's no source-spectrum bar alongside it here).
   const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
 
   // data-created / data-id: same contract as renderIndexEntry's — see
   // comments there.
   return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
-    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${spectrumHtml}${degradedHtml}${badgeHtml}${langChip}</span>
+    <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${degradedHtml}${badgeHtml}${langChip}</span>
     <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
 
-// Day-pulse strip (roadmap 2 step 3): a micro bar chart of recent news
-// volume, rendered server-side from data the index query already returns —
-// the day's pulse readable before a word is read. ALL view only: the daily
-// view's one-brief-per-day cadence has no intra-day pulse to show, so this
-// renders nothing there (the daily-brief digests themselves are also
-// excluded from the bars below, for the same reason — a weekly brief rides
-// the same kind !== "window" exclusion, it re-synthesizes the week's items
-// rather than reporting a fresh count of its own). No day-boundary markers
-// are drawn — deliberate, the strip is a pulse, not a calendar.
-function renderPulseStrip(rows, token, lang, view) {
-  if (view !== "all") return "";
-
-  const strings = STRINGS[lang];
-  // rows arrive created_at DESC (newest first, see handleIndexPage) — take
-  // the most recent 16 window digests, then reverse so time reads
-  // left-to-right: oldest of the 16 on the left, newest on the right.
-  const windowRows = rows
-    .filter((row) => row.kind === "window")
-    .slice(0, 16)
-    .reverse();
-  if (windowRows.length < 2) return ""; // a one-bar chart is noise
-
-  // Heights normalize against the max item_count in the shown set, with a
-  // floor so a low-volume window's bar stays visible/tappable rather than
-  // collapsing to nothing.
-  const max = Math.max(...windowRows.map((row) => row.item_count));
-
-  const bars = windowRows
-    .map((row, i) => {
-      const date = new Date(row.created_at);
-      const time = formatTime(date, strings.locale);
-      const pct = max > 0 ? Math.max(8, Math.round((row.item_count / max) * 100)) : 8;
-      // Rightmost bar (last after the reverse above) is the newest digest.
-      const nowClass = i === windowRows.length - 1 ? " now" : "";
-      const title = `${time} · ${row.item_count} ${strings.itemsWord}`;
-      return `<a class="pulsebar${nowClass}" href="${digestHref(token, lang, view, row.id)}" title="${esc(title)}"><span style="height:${pct}%"></span></a>`;
-    })
-    .join("\n");
-
-  return `<nav class="pulse" aria-label="${esc(strings.pulseLabel)}">${bars}</nav>\n`;
+// Search bubble (owner-requested index cleanup): replaces the old
+// always-visible filterrow (a standalone "Filter briefings…" input row plus
+// a "Search ↗" link) with ONE compact control, matching the masthead's own
+// settings-gear disclosure (see renderSwitchers/the .settings*/summary.gear
+// CSS pattern, extended by the .searchpop/.searchpanel/summary.searchtoggle
+// rules alongside it) — a native <details>/<summary> popover that opens
+// with no JS, so a no-JS reader still reaches the "Search ↗" fallback link
+// inside. Carries the exact SAME .filter input (same class, same
+// hidden-until-JS default, same placeholder) and the exact SAME .searchlink
+// no-JS fallback the old filterrow had — only their DOM position moved, so
+// the filter IIFE and the archive-search integration in pageChrome's bottom
+// script (both `document.querySelector(".filter")`/`.searchlink`, neither
+// scoped to a particular ancestor) keep working unchanged. Called from
+// renderWeekRail (the ALL view, where it rides as a fourth flex child in the
+// week-rail row itself) and directly from renderIndexPage on the daily/
+// weekly views, which have no week rail to live in — see that call site.
+function renderSearchBubble(token, lang, strings) {
+  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}">${esc(strings.searchToggleLabel)}</summary><div class="searchpanel"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
 }
 
 // Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
@@ -4928,12 +4990,17 @@ function renderPulseStrip(rows, token, lang, view) {
 // that function). Absent older/newer render as empty (but still flex:1)
 // spacer spans, via the shared .rail-older/.rail-newer classes, so the
 // center label stays visually centered either way (see the .weekrail CSS).
+// The search bubble (see renderSearchBubble just above) rides as a fourth,
+// non-growing flex child after rail-newer — the two flex:1 spacer spans
+// still grow to equal widths regardless, so the center label stays centered
+// between them; the search control just sits further right, clear of the
+// rail-newer "→" link on an archive week (§11 index-cleanup spec: "must not
+// collide with the rail-newer link").
 //
 // Archive sparkline (roadmap 4 step 6): `rows` is null on every page except
 // an archive week (see the call site in renderIndexPage, which passes null
 // on the current week so its rail stays byte-identical to before this
-// step) — the current week already has the pulse strip for this job, and
-// showing both would say the same thing twice.
+// step).
 function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
   const olderLink = weekInfo.older
     ? `<a href="${weekHref(token, lang, "all", weekInfo.older.year, weekInfo.older.week)}">← W${esc(String(weekInfo.older.week).padStart(2, "0"))}</a>`
@@ -4962,11 +5029,11 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
 
   // Archive sparkline (roadmap 4 step 6): seven per-day micro-bars for THIS
   // week only, built when (and only when) the caller handed us rows — see
-  // the function comment above. Same Budapest day-bucketing as
-  // renderPulseStrip: window digests only (kind === "window" — a daily brief
-  // re-synthesizes the same day's items, so counting it too would double the
-  // day), summed by budapestDateParts key, then read back per day of the
-  // week's own Mon..Sun span off a FRESH per-day proxy copy each iteration —
+  // the function comment above. Window digests only (kind === "window" — a
+  // daily brief re-synthesizes the same day's items, so counting it too
+  // would double the day), summed by budapestDateParts key, then read back
+  // per day of the week's own Mon..Sun span off a FRESH per-day proxy copy
+  // each iteration —
   // mondayOfIsoWeek's proxy must never be mutated in place across
   // iterations, or every day would collapse onto the same Monday.
   let sparkHtml = "";
@@ -5016,7 +5083,7 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
     }
   }
 
-  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span></nav>`;
+  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span><span class="rail-search">${renderSearchBubble(token, lang, strings)}</span></nav>`;
 }
 
 // NOW section ranking (§11.1 PR B, "decide + implement the NOW ranking
@@ -5094,11 +5161,12 @@ function computeNowArcs(rows, nowMs) {
 //
 // Each arc renders as ONE row, not a card (design guidance: no card soup) —
 // a single link carrying the momentum arrow, the arc's own label
-// (arcHref, §11.1 PR A), and a mono metadata tail. The metadata tail reuses
-// arcRepeat ("×{n} this week") rather than minting a near-duplicate
-// template — this section's 7-day window is exactly what "this week"
-// already means for that string, so no separate strings.now* count
-// template exists. Reuses .archivelabel for the eyebrow, same mono-eyebrow
+// (arcHref, §11.1 PR A), and a mono metadata tail. The metadata tail is the
+// relative last-updated time ONLY (owner-requested index cleanup, dropped
+// the "×{n} this week" appearance count this row used to lead with) —
+// arcRepeat itself is untouched and stays in active use on the digest
+// page's own arc chips (see renderArcs), this is just NOW's own metadata
+// getting quieter. Reuses .archivelabel for the eyebrow, same mono-eyebrow
 // recipe already shared by the arc timeline and archive-search labels (see
 // there) rather than a fourth near-identical class.
 function renderNowSection(nowArcs, strings, token, lang, nowMs) {
@@ -5110,10 +5178,7 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs) {
       // same fail-safe contract as renderArcPage's own momentumSegment.
       const arrow =
         arc.momentum === "up" ? "↑" : arc.momentum === "down" ? "↓" : arc.momentum === "same" ? "→" : "";
-      const meta = [
-        strings.arcRepeat.replace("{n}", String(arc.count)),
-        formatRelativeTime(new Date(arc.lastSeen), strings.locale, nowMs),
-      ].join(" · ");
+      const meta = formatRelativeTime(new Date(arc.lastSeen), strings.locale, nowMs);
       // data-arc-slug / data-last-seen (§11.2): rendering attributes, not
       // server state — the catch-up banner's client script (the unread-fence
       // IIFE extension in pageChrome) reads these to compute M (arcs updated
@@ -5190,19 +5255,6 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
       .join("\n");
   }
 
-  // Client-side filter (roadmap step 6, index pages only): sits between the
-  // view tabs (rendered by pageChrome, just above this) and the lead card
-  // (the first thing inside <section> below). `hidden` by default — no JS,
-  // no filter UI — un-hidden by the bottom script in pageChrome.
-  //
-  // Search link (roadmap 4 step 7): rides in the same row, right after the
-  // filter input, but is NOT hidden — it's a server-rendered affordance to
-  // the full-archive search page, not a client-side enhancement. With JS
-  // off the filter input stays hidden and this link is the row's only
-  // visible content, which is what finally gives a no-JS reader a working
-  // way to search at all.
-  const filterRowHtml = `<div class="filterrow"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div>`;
-
   // Unified search (owner UX pass): the container the bottom script's
   // archive-search IIFE fills with fragments fetched from the search route
   // (see handleSearchPage's fragment=1 branch and renderSearchFragment).
@@ -5214,28 +5266,39 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   const archiveResultsHtml = `<div class="archiveresults" data-search-href="${searchHref(token, lang)}" hidden></div>`;
 
   // Week rail (roadmap 3 step 2): between the view tabs (rendered by
-  // pageChrome, just above this) and the filter row — ALL-view index pages
-  // only (weekInfo is null for the daily view, see handleIndexPage). Sits
+  // pageChrome, just above this) and the ledger — ALL-view index pages only
+  // (weekInfo is null for the daily/weekly views, see handleIndexPage). Sits
   // above the empty-state message too, since both live inside the <section>
   // wrapper assembled below. Renders on the current week too (unlike the
-  // lead/pulse/prefetch below) — the rail IS the archive navigation, so it
-  // stays regardless of isCurrent.
+  // lead/prefetch below) — the rail IS the archive navigation, so it stays
+  // regardless of isCurrent. Also the ALL view's home for the search bubble
+  // (owner-requested index cleanup, renderSearchBubble) — it rides inside
+  // the rail markup itself now, so railHtml truthy always implies the search
+  // bubble already went out with it; see searchRowHtml just below for the
+  // other views, which have no rail to carry it.
   //
   // Archive sparkline (roadmap 4 step 6): `rows` is only handed to the rail
-  // on an archive week (isCurrent false) — the current week keeps the pulse
-  // strip below for this job, so passing rows there too would render the
-  // same volume shape twice. null keeps the current-week rail byte-identical
-  // to before this step.
+  // on an archive week (isCurrent false) — the current week's rail stays
+  // sparkline-less (null), the same "nothing to show yet, the ledger below
+  // is the current week's own record" posture the day-pulse strip this
+  // sparkline was originally paired against used to carry (that strip was
+  // removed in the owner-requested index cleanup; the current-week rail was
+  // deliberately left as-is rather than backfilling a sparkline onto it —
+  // out of scope for that pass).
   const railHtml =
     view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows) : "";
 
-  // Day-pulse strip (roadmap 2 step 3): between the filter row and the
-  // <section> below, i.e. right above the lead card — CURRENT-WEEK-ONLY as
-  // of roadmap 3 step 3 (a pulse of "recent volume" on an archive week
-  // would be showing volume from years ago, framed as if it were recent);
-  // renderPulseStrip's own all-view-only/too-few-bars checks still apply on
-  // top of this gate.
-  const pulseHtml = isCurrent ? renderPulseStrip(rows, token, lang, view) : "";
+  // Search row (owner-requested index cleanup): the daily/weekly views have
+  // no week rail to carry the search bubble (see railHtml just above), so
+  // they get a minimal standalone row instead — same renderSearchBubble
+  // markup, just without the week-nav spans around it, in the same
+  // between-tabs-and-ledger slot the old filterrow occupied. Skipped
+  // whenever railHtml is truthy (the ALL view) so the bubble never renders
+  // twice on the same page. This keeps the ⌘K palette's "Search" command
+  // (which reads `.searchlink` off the DOM, see collectPaletteItems)
+  // available on every view, not just ALL — losing it silently on daily/
+  // weekly would have been a real regression, not just a cosmetic one.
+  const searchRowHtml = railHtml ? "" : `<div class="searchrow">${renderSearchBubble(token, lang, strings)}</div>`;
 
   // data-week-archive (roadmap 3 step 3): marks the <section> on any
   // non-current week so the bottom script's unread-fence IIFE can bail out
@@ -5288,12 +5351,8 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     token,
     lang,
     view,
-    // showArchive: true — the only call site that renders the Archive link
-    // (§11.1 PR C spec: index pages only, current or archive week, not
-    // digest/arc/search — see renderSwitchers' own comment on why pageKind
-    // alone can't gate this).
-    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
-    `${catchupHtml}${nowHtml}${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
+    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
+    `${catchupHtml}${nowHtml}${railHtml}${searchRowHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     countdownNewest,
     prefetchHref,
@@ -5391,7 +5450,7 @@ function stripInlineStyles(html) {
 // Story-arc line (ingest v3, roadmap 4 step 8): the digest page's per-topic
 // thread summary, built from handleDigestPage's topicArcs — null (no topics
 // on this digest, query never ran) or an empty array both render "", same
-// absent-data contract as renderSpectrum/renderSourceKey. A topic with
+// absent-data contract as renderDegradedBadge/renderSourceKey. A topic with
 // count 1 (seen only in this digest) renders as the bare label; count >= 2
 // appends the "×N this week" suffix via strings.arcRepeat's template
 // replace — see the STRINGS comment for why that's a whole-string template,
@@ -5539,8 +5598,8 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   const digestNavLinksHtml = navLinks.join("\n");
 
   // Source key (roadmap 2 step 8 follow-up): the article's colophon, same
-  // fail-safe absent-data contract as renderSpectrum/renderDegradedBadge —
-  // renders "" on an older digest with no source_counts/failed_sources.
+  // fail-safe absent-data contract as renderDegradedBadge — renders "" on an
+  // older digest with no source_counts/failed_sources.
   const sourceKeyHtml = renderSourceKey(digest.source_counts, digest.failed_sources, strings);
 
   // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics
