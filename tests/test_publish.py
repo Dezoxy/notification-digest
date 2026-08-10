@@ -1,5 +1,7 @@
 import json
+import re
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -315,13 +317,19 @@ def test_derive_topics_excludes_needs_attention():
 
 
 def test_derive_topics_excludes_structural_rubric_headings():
-    # "Also today" (prompts/daily.md), "Hungary" (standing rule in
-    # prompts/daily.md and prompts/weekly.md), and "Watching next week"
-    # (prompts/weekly.md) are prompt-mandated, not model-chosen -- they must
-    # never become topics, mirroring the Needs attention exclusion above.
+    # Every fixed, prompt-mandated section across all three briefing
+    # prompts -- "Also this window" (prompts/digest.md), "Also today"
+    # (prompts/daily.md), "Also this week" and "Watching next week"
+    # (prompts/weekly.md), and the "Hungary" standing rule (all three) --
+    # is prompt-mandated, not model-chosen, so none may become a topic,
+    # mirroring the Needs attention exclusion above. A single body mixing
+    # all five is not a shape any one prompt produces; it is deliberately
+    # the union, so this test fails if any single entry is dropped.
     body_md = (
         "## Story one\n\ntext\n\n"
+        "## Also this window\n\nsecond tier\n\n"
         "## Also today\n\nminor items\n\n"
+        "## Also this week\n\nweekly second tier\n\n"
         "## Hungary\n\nquiet day in Hungarian threads\n\n"
         "## Story two\n\nmore text\n\n"
         "## Watching next week\n\nwatchlist\n"
@@ -331,6 +339,74 @@ def test_derive_topics_excludes_structural_rubric_headings():
         {"slug": "story-one", "label": "Story one"},
         {"slug": "story-two", "label": "Story two"},
     ]
+
+
+def test_derive_topics_excludes_also_this_window_the_window_prompt_rubric():
+    # Regression, owner-reported 2026-08-10: the site rendered a live
+    # "ALSO THIS WINDOW ×5 THIS WEEK" story-arc chip. Window digests run
+    # every 3 hours, so this rubric recurs faster than any real story and
+    # was the most visible false arc of the set. Called out on its own
+    # (rather than only inside the union above) because the window prompt
+    # is the highest-frequency producer in the system.
+    body_md = "## Also this window\n\nsecond-tier prose\n\n## Real story\n\ntext\n"
+
+    assert derive_topics(body_md) == [{"slug": "real-story", "label": "Real story"}]
+
+
+def test_structural_rubric_headings_cover_every_prompt_mandated_heading():
+    # The guard for publish.py's MAINTENANCE COUPLING note, which has now
+    # been missed twice by hand. Reads the prompt files themselves rather
+    # than restating their contents, so adding a fixed rubric section to a
+    # prompt without adding it to _STRUCTURAL_RUBRIC_HEADINGS fails here
+    # instead of surfacing as a live false arc on the site.
+    #
+    # Discriminator: the prompts state every MANDATED section inside a bold
+    # run (`- **`## Also today`** takes...`, `- **Standing rule --
+    # `## Hungary`:**`), while EXAMPLE story headings ("## Missile strike
+    # in Poland") only ever appear in plain prose. That is the whole
+    # difference between "the prompt requires this section" and "the prompt
+    # is illustrating what a story heading looks like" -- verified to yield
+    # exactly the five mandated headings and zero example headings across
+    # all four prompt files.
+    prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+    assert prompts_dir.is_dir(), f"prompts/ not found at {prompts_dir}"
+
+    bold_run = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+    heading_ref = re.compile(r"`##\s+([^`]+)`")
+
+    mandated: dict[str, str] = {}
+    for prompt_path in sorted(prompts_dir.glob("*.md")):
+        for run in bold_run.finditer(prompt_path.read_text(encoding="utf-8")):
+            for ref in heading_ref.finditer(run.group(1)):
+                # Prompt files wrap, so a heading reference can straddle a
+                # newline -- collapse whitespace before comparing.
+                mandated[" ".join(ref.group(1).split()).casefold()] = prompt_path.name
+
+    # Sanity: the scan must actually find something. A prompt-format change
+    # that silently matched nothing would make this test vacuously pass.
+    assert len(mandated) >= 5, f"heading scan found too little: {mandated}"
+
+    allowed = publish_mod._STRUCTURAL_RUBRIC_HEADINGS | {publish_mod._NEEDS_ATTENTION_HEADING}
+    missing = {h: src for h, src in mandated.items() if h not in allowed}
+    assert not missing, (
+        "prompt-mandated rubric headings missing from "
+        f"_STRUCTURAL_RUBRIC_HEADINGS: {missing}"
+    )
+
+
+def test_structural_rubric_headings_has_no_stale_entries():
+    # The other direction: every entry in the set must still be mandated by
+    # some prompt. Catches typos and entries left behind when a prompt drops
+    # a section -- a stale entry silently suppresses a real story heading
+    # that happens to match it.
+    prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+    corpus = "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(prompts_dir.glob("*.md"))
+    )
+    collapsed = " ".join(corpus.split()).casefold()
+
+    stale = [h for h in publish_mod._STRUCTURAL_RUBRIC_HEADINGS if f"## {h}" not in collapsed]
+    assert not stale, f"_STRUCTURAL_RUBRIC_HEADINGS entries no prompt mandates: {stale}"
 
 
 def test_derive_topics_structural_rubric_headings_case_insensitive():
