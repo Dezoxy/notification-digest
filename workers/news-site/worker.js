@@ -63,6 +63,23 @@
  * deep link degrades safely (never wrongly) when that coupling can't be
  * resolved unambiguously.
  *
+ * Stable arc keys (PLAN.md §11.1 site half, this feature's second cut): a
+ * heading gets reworded run to run, so plain slug identity fragments one
+ * continuing story into many never-recurring slugs. Topics gained an
+ * OPTIONAL per-entry `key` for this reason — a short, stable identifier the
+ * digest app derives once and carries across runs. "Arc identity" is now
+ * `key` when present, else `slug` (see arcIdentity/ARC_IDENTITY_SQL), applied
+ * everywhere a story is grouped, linked, or counted: handleArcPage's chain
+ * query, computeNowArcs' grouping, every arcHref call site, and
+ * handleDigestPage's topicArcs recurrence count. Every row stored before
+ * this change has topics WITHOUT `key`, so its identity is unchanged (its
+ * own slug) and `/a/<that-slug>` keeps resolving forever — this is additive
+ * identity plumbing, not a slug migration. Deltas are the deliberate
+ * exception: they stay keyed on each digest's own `slug` (see renderDeltas
+ * and the per-appearance delta match in handleArcPage), because
+ * map_deltas_to_slugs matches a delta to a heading WITHIN one digest, never
+ * across the arc.
+ *
  * Hungarian support (EN | HU switcher in the masthead): this Worker only
  * STORES and SERVES translations — it never translates anything itself.
  * The digest app optionally sends tldr_hu/body_html_hu/body_md_hu alongside
@@ -132,6 +149,44 @@ const MAX_SOURCE_ENTRIES = 16;
 // distinct threads one briefing legitimately touches.
 const TOPIC_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_TOPICS = 12;
+
+// Stable arc keys (PLAN.md §11.1 site half): topics gains an OPTIONAL
+// per-entry `key` alongside slug/label (validateTopics) — a short, stable
+// identifier for the ongoing story that the digest app (parallel change,
+// notification-digest repo) derives once and carries across runs, so a
+// story survives its section heading — and therefore its `_slugify`-folded
+// slug — being reworded run to run. No new top-level ingest field and no
+// schema change: `key` rides inside the existing `topics` JSON column, same
+// shape discipline as `slug` (TOPIC_SLUG_RE) plus a tighter length cap (a
+// key is a short hand-chosen identifier, never a folded full heading like a
+// slug can be). Every row ingested before this change has topics WITHOUT
+// `key` — those keep behaving exactly as before, which is what arcIdentity/
+// ARC_IDENTITY_SQL just below exist to guarantee.
+const ARC_KEY_MAX_LEN = 48;
+
+// Arc identity: the ONE notion of "which story is this" used everywhere an
+// arc is grouped, linked, or counted — handleArcPage's chain query,
+// computeNowArcs' grouping, arcHref call sites (renderArcs' chips,
+// renderNowSection's rows, renderArcPage's own language switcher), and
+// handleDigestPage's topicArcs recurrence count. `key` wins when the topic
+// entry carries one; else `slug` — so a pre-key row (every row stored before
+// this change) resolves to the same slug it always had, and `/a/<that-slug>`
+// keeps resolving unchanged forever. Deltas are the one deliberate exception
+// (see renderDeltas and handleArcPage's per-appearance delta match): they
+// stay keyed on each digest's OWN `slug`, because map_deltas_to_slugs
+// (notification-digest repo, digest/publish.py) matches a delta to a heading
+// WITHIN one digest, never across the arc — identity has nothing to do with
+// that match, and nothing here changes it.
+//
+// Two equivalent forms of the same fold: arcIdentity() for JS objects
+// already parsed out of a `topics` column, ARC_IDENTITY_SQL for the same
+// fold expressed as SQL over json_each(d.topics)'s `je.value` — one named
+// concept, not reimplemented ad hoc at each call site.
+const ARC_IDENTITY_SQL = "COALESCE(je.value->>'key', je.value->>'slug')";
+
+function arcIdentity(topicEntry) {
+  return topicEntry?.key ?? topicEntry?.slug ?? null;
+}
 
 // Deltas (§11.3 delta persistence, ingest v4): optional, backward-compatible
 // field on PUT /ingest/:id (see validateDigestPayload/validateDeltas), same
@@ -508,8 +563,13 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
     // arc line (contrast handleDigestPage's topicArcs windowStartIso, which
     // anchors at the digest's own created_at instead).
     const nowWindowStartIso = new Date(nowMs - 7 * 24 * 3600000).toISOString();
+    // `identity` (stable arc keys, ARC_IDENTITY_SQL) is what computeNowArcs
+    // actually groups by — the fix for the bug this section exists to solve:
+    // a story recurring under several differently-worded (and therefore
+    // differently-slugged) headings now clusters into ONE arc instead of
+    // several never-eligible 1-appearance ones.
     const { results: nowRows } = await env.DB.prepare(
-      `SELECT je.value->>'slug' AS slug, je.value->>'label' AS label, d.created_at, d.id
+      `SELECT je.value->>'label' AS label, ${ARC_IDENTITY_SQL} AS identity, d.created_at, d.id
          FROM digests d, json_each(d.topics) je
         WHERE d.topics IS NOT NULL AND d.created_at >= ?1
         ORDER BY d.created_at ASC`,
@@ -618,15 +678,19 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
       .all();
 
     // Per-digest, not per-occurrence: each prior row contributes at most one
-    // count per slug (a slug set, not a running tally), regardless of how
-    // many times that slug might otherwise appear.
-    const priorSlugSets = priorRows
+    // count per arc IDENTITY (an identity set, not a running tally),
+    // regardless of how many times that identity might otherwise appear.
+    // Counting by identity (key when present, else slug — see arcIdentity)
+    // rather than raw slug is the actual fix this recurrence count needed:
+    // a story whose heading gets reworded every run now still accumulates
+    // one shared count instead of fragmenting into several 1-count topics.
+    const priorIdentitySets = priorRows
       .map((row) => {
         try {
           const parsed = JSON.parse(row.topics);
           if (!Array.isArray(parsed)) return null;
           return new Set(
-            parsed.map((t) => t?.slug).filter((slug) => typeof slug === "string"),
+            parsed.map((t) => arcIdentity(t)).filter((identity) => typeof identity === "string"),
           );
         } catch {
           return null;
@@ -636,11 +700,16 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
 
     // count = prior occurrences + 1, i.e. total appearances including this
     // digest itself — a topic seen only here renders as count 1 (bare label,
-    // see renderArcs).
+    // see renderArcs). `identity` rides alongside `slug` on each entry:
+    // renderArcs uses `identity` for its arcHref link target, while `slug`
+    // stays available for renderDeltas' own slug-keyed label lookup (deltas
+    // are the deliberate exception to arc identity — see ARC_IDENTITY_SQL's
+    // comment) — neither renderer has to recompute what the other needs.
     topicArcs = topics.map((t) => ({
       slug: t.slug,
       label: t.label,
-      count: priorSlugSets.filter((set) => set.has(t.slug)).length + 1,
+      identity: arcIdentity(t),
+      count: priorIdentitySets.filter((set) => set.has(arcIdentity(t))).length + 1,
     }));
   }
 
@@ -747,28 +816,36 @@ async function handleSearchPage(env, token, url, lang) {
   return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang));
 }
 
-// Arc page (§11.1 PR A): reconstructs the full appearance chain for one
-// topic slug at request time — see the file-header comment for why this is
-// DERIVED, not stored. slug shape is already guaranteed by the route regex
-// in fetch() (`[a-z0-9-]{1,64}`) before this ever runs.
-async function handleArcPage(env, token, slug, url, lang) {
+// Arc page (§11.1 PR A): reconstructs the full appearance chain for one arc
+// IDENTITY at request time — see the file-header comment for why this is
+// DERIVED, not stored, and the "Stable arc keys" file-header section for what
+// `identity` means (key when present, else slug — arcIdentity/
+// ARC_IDENTITY_SQL). Identity shape is already guaranteed by the route regex
+// in fetch() (`[a-z0-9-]{1,64}`) before this ever runs — the same shape a
+// slug or a key is independently validated to at ingest time.
+async function handleArcPage(env, token, identity, url, lang) {
   if (!(await tokenMatches(env, token))) return notFound();
 
   // json_each cross-joins each digest's `topics` JSON array; the WHERE
-  // clause (topics IS NOT NULL, then the ->> shorthand matching slug) is
-  // what actually narrows the cross join down to at most one row per
-  // digest — SQLite JSON1, available in D1 (verified against the stubbed-D1
-  // smoke test; ->> is standard SQLite 3.38+, and D1's SQLite is far newer;
-  // json_extract(je.value, '$.slug') is the fallback shape if a future D1
-  // runtime ever regresses that operator).
+  // clause (topics IS NOT NULL, then ARC_IDENTITY_SQL matching the route's
+  // `identity` segment) is what actually narrows the cross join down to at
+  // most one row per digest — SQLite JSON1, available in D1 (verified
+  // against the stubbed-D1 smoke test; ->> is standard SQLite 3.38+, and
+  // D1's SQLite is far newer; json_extract(je.value, '$.slug'/'$.key') is
+  // the fallback shape if a future D1 runtime ever regresses that operator).
+  // `identity` is arc identity (stable arc keys, see ARC_IDENTITY_SQL's
+  // comment), not necessarily a slug: `/a/hormuz` matches every digest whose
+  // topic carries key "hormuz" regardless of that digest's own (differently
+  // worded) slug, and `/a/<old-slug>` still resolves unchanged for any row
+  // stored before `key` existed, since COALESCE falls back to slug there.
   //
-  // DESC + LIMIT, then reversed in JS: if a slug ever exceeds the ceiling,
+  // DESC + LIMIT, then reversed in JS: if an arc ever exceeds the ceiling,
   // the rows that must survive are the NEWEST — the H1 (latest label),
   // "updated ...", and momentum are all computed off the latest end, so an
   // ASC LIMIT would silently freeze this page in the arc's distant past the
   // day it overflowed. LIMIT 500 is a sane ceiling in the spirit of
   // MAX_TOPICS/MAX_SOURCE_ENTRIES elsewhere in this file — not real
-  // pagination, just a backstop against a pathological slug that recurs in
+  // pagination, just a backstop against a pathological arc that recurs in
   // every digest ever ingested.
   //
   // body_html deliberately does NOT ride along here: a weekly's body_html
@@ -783,19 +860,25 @@ async function handleArcPage(env, token, slug, url, lang) {
   // query the way anchor resolution is deferred — see parseDeltas/the
   // appearances mapping below for how each appearance picks out its own
   // slug's entry (§11.3 delta persistence, ingest v4).
+  //
+  // `topicSlug` (this appearance's OWN topic slug, not `identity`) rides
+  // along too, for the delta match just below — deltas stay keyed on each
+  // digest's own slug regardless of arc identity, see ARC_IDENTITY_SQL's
+  // comment on why that's a deliberate exception, not an oversight.
   const { results: chainRows } = await env.DB.prepare(
-    `SELECT d.id, d.created_at, d.kind, je.value->>'label' AS label, d.deltas
+    `SELECT d.id, d.created_at, d.kind, je.value->>'label' AS label, je.value->>'slug' AS topicSlug, d.deltas
        FROM digests d, json_each(d.topics) je
-      WHERE d.topics IS NOT NULL AND je.value->>'slug' = ?1
+      WHERE d.topics IS NOT NULL AND ${ARC_IDENTITY_SQL} = ?1
       ORDER BY d.created_at DESC, d.id DESC
       LIMIT 500`,
   )
-    .bind(slug)
+    .bind(identity)
     .all();
 
-  // No digest currently carries this slug: unknown slug, same indistinguishable
-  // 404 as a bad token or a nonexistent digest id (see the file-header trust
-  // model — a well-shaped-but-unknown slug must reveal nothing either).
+  // No digest currently carries this identity: unknown arc, same
+  // indistinguishable 404 as a bad token or a nonexistent digest id (see the
+  // file-header trust model — a well-shaped-but-unknown identity must reveal
+  // nothing either).
   if (!chainRows || chainRows.length === 0) return notFound();
 
   // Deep-link anchors only for the newest ARC_ANCHOR_BODIES appearances —
@@ -815,16 +898,18 @@ async function handleArcPage(env, token, slug, url, lang) {
   // and its own display-only re-reversal both rely on ASC input — see there.
   const rows = chainRows.slice().reverse();
   const appearances = rows.map((row) => {
-    // Each appearance's own delta, if it has one, for THIS arc's slug only
-    // (§11.3 delta persistence, ingest v4) — a digest's `deltas` column can
-    // carry entries for several arcs at once, so parseDeltas' fail-safe
-    // array is filtered down to at most the one entry matching `slug`
-    // (route-validated already, see the function comment above). No match
-    // (the common case: most appearances predate the feature, or simply
-    // weren't a delta-only update) leaves `delta` null — renderArcAppearance
-    // renders exactly as it did before this feature in that case.
+    // Each appearance's own delta, if it has one, matched against THIS
+    // ROW'S OWN topic slug (row.topicSlug), never against `identity`
+    // (§11.3 delta persistence, ingest v4 + ARC_IDENTITY_SQL's comment on
+    // why deltas are the deliberate exception to arc identity) — a digest's
+    // `deltas` column can carry entries for several arcs at once, so
+    // parseDeltas' fail-safe array is filtered down to at most the one entry
+    // matching this appearance's own slug. No match (the common case: most
+    // appearances predate the feature, or simply weren't a delta-only
+    // update) leaves `delta` null — renderArcAppearance renders exactly as
+    // it did before this feature in that case.
     const deltas = parseDeltas(row.deltas);
-    const delta = deltas ? (deltas.find((d) => d.slug === slug) ?? null) : null;
+    const delta = deltas ? (deltas.find((d) => d.slug === row.topicSlug) ?? null) : null;
     return {
       id: row.id,
       created_at: row.created_at,
@@ -835,7 +920,7 @@ async function handleArcPage(env, token, slug, url, lang) {
     };
   });
 
-  return htmlResponse(renderArcPage(slug, appearances, token, url.hostname, lang, Date.now()));
+  return htmlResponse(renderArcPage(identity, appearances, token, url.hostname, lang, Date.now()));
 }
 
 // Fail-safe slug->section mapping for arc-page deep links (§11.1 guardrail:
@@ -1113,19 +1198,25 @@ function validateFailedSources(value) {
   return { ok: true, value: value.length === 0 ? null : value };
 }
 
-// topics (ingest v3, roadmap 4 step 8): absent/null is valid (nothing
-// reported, stored NULL). Present, it must be a JSON array (not an object —
-// Array.isArray, not typeof, same reasoning as source_counts' inverse
-// check), at most MAX_TOPICS entries, each entry a plain object (not an
-// array, not null — typeof null === "object" too) with EXACTLY two keys:
-// slug (matching TOPIC_SLUG_RE) and label (a string whose trimmed length is
-// 1..80 — the trimmed form is what gets stored, same "store the normalized
-// value" contract as everywhere else in this validator). Duplicate slugs
-// within one payload are a caller bug, not something to silently dedupe.
-// Same empty-array-normalizes-to-null reasoning as failed_sources — "no
-// topics reported" and "an old app that doesn't send this field" would
-// otherwise render identically, so storing "[]" is a distinction without a
-// difference.
+// topics (ingest v3, roadmap 4 step 8; `key` added for stable arc keys, see
+// ARC_KEY_MAX_LEN's comment): absent/null is valid (nothing reported, stored
+// NULL). Present, it must be a JSON array (not an object — Array.isArray,
+// not typeof, same reasoning as source_counts' inverse check), at most
+// MAX_TOPICS entries, each entry a plain object (not an array, not null —
+// typeof null === "object" too) with EXACTLY slug (matching TOPIC_SLUG_RE),
+// label (a string whose trimmed length is 1..80 — the trimmed form is what
+// gets stored, same "store the normalized value" contract as everywhere else
+// in this validator), and the OPTIONAL key (same TOPIC_SLUG_RE shape, capped
+// at ARC_KEY_MAX_LEN — see arcIdentity for how it's consumed). Any other key
+// is still rejected via the `...rest` check below, same strict-shape
+// discipline as before this field existed. Duplicate slugs within one
+// payload are a caller bug, not something to silently dedupe; a duplicate
+// key is NOT checked here — two topics sharing a key within one digest is
+// unusual but not a shape violation, the same posture validateDeltas already
+// takes on duplicate delta slugs. Same empty-array-normalizes-to-null
+// reasoning as failed_sources — "no topics reported" and "an old app that
+// doesn't send this field" would otherwise render identically, so storing
+// "[]" is a distinction without a difference.
 function validateTopics(value) {
   if (value === undefined || value === null) return { ok: true, value: null };
   if (!Array.isArray(value)) {
@@ -1140,9 +1231,9 @@ function validateTopics(value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       return { ok: false, error: "each topics entry must be an object" };
     }
-    const { slug, label, ...rest } = entry;
+    const { slug, label, key, ...rest } = entry;
     if (Object.keys(rest).length > 0) {
-      return { ok: false, error: "each topics entry must have exactly slug and label" };
+      return { ok: false, error: "each topics entry must have exactly slug, label, and the optional key" };
     }
     if (typeof slug !== "string" || !TOPIC_SLUG_RE.test(slug)) {
       return { ok: false, error: `topics has an invalid slug: "${slug}"` };
@@ -1150,11 +1241,27 @@ function validateTopics(value) {
     if (typeof label !== "string" || label.trim().length < 1 || label.trim().length > 80) {
       return { ok: false, error: `topics["${slug}"].label must be 1-80 characters` };
     }
+    // key (stable arc keys): absent/null stays absent — a caller that never
+    // sends it (every pre-key payload, forever) is not an error, same
+    // optional-field convention as every other field in this validator.
+    // Present, it must be non-empty, TOPIC_SLUG_RE-shaped, and within the
+    // tighter ARC_KEY_MAX_LEN cap — an invalid key is a caller bug (400), not
+    // a value to silently drop, since silently dropping it would silently
+    // fall back this topic to slug-only identity without telling the caller.
+    if (key !== undefined && key !== null) {
+      if (typeof key !== "string" || !TOPIC_SLUG_RE.test(key) || key.length > ARC_KEY_MAX_LEN) {
+        return { ok: false, error: `topics["${slug}"].key is invalid: "${key}"` };
+      }
+    }
     if (seenSlugs.has(slug)) {
       return { ok: false, error: `topics has a duplicate slug: "${slug}"` };
     }
     seenSlugs.add(slug);
-    normalized.push({ slug, label: label.trim() });
+    // `key` rides along only when present (and non-null) — a stored entry
+    // never carries a `key: null`/`key: undefined` field, same "absence is
+    // absence, not a null placeholder" contract topics/deltas already keep
+    // for every other optional value in this file.
+    normalized.push(key ? { slug, label: label.trim(), key } : { slug, label: label.trim() });
   }
   return { ok: true, value: normalized.length === 0 ? null : normalized };
 }
@@ -1861,10 +1968,12 @@ function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null)
       ? weekHref(token, otherLang, view, archiveWeek.year, archiveWeek.week)
       : indexHref(token, otherLang, view);
   // Arc pages (§11.1 PR A, pageKind "arc"): the other-language link targets
-  // the SAME slug's arc page in that language space — `id` doubles as the
-  // slug here (arc pages have no numeric id), and arcHref takes no `view`
-  // (an arc spans every view, see arcHref's own comment), same reasoning as
-  // why the "digest" branch below uses digestHref instead of the index href.
+  // the SAME arc's page in that language space — `id` doubles as the arc's
+  // identity here (arc pages have no numeric id; stable arc keys made this a
+  // key-or-slug string, but this call site just echoes it back unchanged),
+  // and arcHref takes no `view` (an arc spans every view, see arcHref's own
+  // comment), same reasoning as why the "digest" branch below uses
+  // digestHref instead of the index href.
   const otherLangHref = (otherLang) => {
     if (pageKind === "index") return otherLangIndexHref(otherLang);
     if (pageKind === "arc") return arcHref(token, otherLang, id);
@@ -5138,8 +5247,8 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
 
 // NOW section ranking (§11.1 PR B, "decide + implement the NOW ranking
 // rule"): pure aggregation over handleIndexPage's now-arcs query rows —
-// (slug, label, created_at, id) for every topic appearance in the trailing
-// 7 days, one row per digest×topic. The query deliberately leaves
+// (identity, label, created_at, id) for every topic appearance in the
+// trailing 7 days, one row per digest×topic. The query deliberately leaves
 // aggregation to JS instead of GROUP BY + window functions (see its own
 // comment in handleIndexPage) specifically so "label of the latest
 // appearance" is a plain forward scan, not a second query or a window-
@@ -5147,10 +5256,19 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
 // hundred rows) makes that scan cheap on every current-week-all-view
 // render.
 //
+// Grouped by arc IDENTITY (stable arc keys, see arcIdentity/ARC_IDENTITY_SQL)
+// rather than raw slug — this is the actual bug fix: a story recurring
+// under several differently-worded headings used to fragment into several
+// 1-appearance, never-eligible "arcs", one per distinct slug; grouping by
+// identity clusters every keyed appearance into the SAME arc regardless of
+// how its heading was worded that run. A pre-key story (no digest carries a
+// `key` for it yet) groups exactly as before — its identity is still its
+// slug — so this is additive, not a behavior change for existing data.
+//
 // Eligibility mirrors renderArcs' own "recurring" threshold (count >= 2) —
 // a single appearance in the window is a mention, not an arc. Ranking is
 // appearances in the trailing 72h (desc), then most recent appearance
-// (desc), then slug (asc) as the deterministic tiebreak two arcs can
+// (desc), then identity (asc) as the deterministic tiebreak two arcs can
 // otherwise share on both count and recency.
 //
 // Momentum reuses computeArcMomentum VERBATIM (§11.1 PR A) on each arc's
@@ -5165,13 +5283,13 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
 // renderArcPage's own momentumSegment already uses.
 function computeNowArcs(rows, nowMs) {
   const trailing72hStart = nowMs - 72 * 3600000;
-  const bySlug = new Map();
+  const byIdentity = new Map();
   for (const row of rows) {
-    if (!row.slug) continue;
-    let arc = bySlug.get(row.slug);
+    if (!row.identity) continue;
+    let arc = byIdentity.get(row.identity);
     if (!arc) {
-      arc = { slug: row.slug, label: row.label, appearances: [], recent72h: 0 };
-      bySlug.set(row.slug, arc);
+      arc = { identity: row.identity, label: row.label, appearances: [], recent72h: 0 };
+      byIdentity.set(row.identity, arc);
     }
     // rows arrive created_at ASC (see the query's ORDER BY in
     // handleIndexPage) — each successive row's label overwrites the last,
@@ -5183,18 +5301,18 @@ function computeNowArcs(rows, nowMs) {
     if (new Date(row.created_at).getTime() >= trailing72hStart) arc.recent72h += 1;
   }
 
-  const eligible = Array.from(bySlug.values()).filter((arc) => arc.appearances.length >= 2);
+  const eligible = Array.from(byIdentity.values()).filter((arc) => arc.appearances.length >= 2);
 
   eligible.sort((a, b) => {
     if (b.recent72h !== a.recent72h) return b.recent72h - a.recent72h;
     const aLast = a.appearances[a.appearances.length - 1].created_at;
     const bLast = b.appearances[b.appearances.length - 1].created_at;
     if (aLast !== bLast) return aLast > bLast ? -1 : 1;
-    return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+    return a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0;
   });
 
   return eligible.slice(0, 5).map((arc) => ({
-    slug: arc.slug,
+    identity: arc.identity,
     label: arc.label,
     count: arc.appearances.length,
     lastSeen: arc.appearances[arc.appearances.length - 1].created_at,
@@ -5241,10 +5359,15 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs) {
       // IIFE extension in pageChrome) reads these to compute M (arcs updated
       // since last visit) and to cross-reference the follow list's localStorage
       // slugs, the exact same "data-* carrier" contract data-created already
-      // uses for .entry rows. arc.lastSeen is the same ISO UTC string used
-      // above for the relative-time meta, so the lexicographic compare against
-      // lastVisit is correct for the same reason data-created's is.
-      return `<a class="nowrow" href="${arcHref(token, lang, arc.slug)}" data-arc-slug="${esc(arc.slug)}" data-last-seen="${esc(arc.lastSeen)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
+      // uses for .entry rows. The attribute NAME stays data-arc-slug (client
+      // script/follow-list vocabulary, unchanged) but its VALUE is now arc
+      // IDENTITY (arc.identity — key when present, else slug), the same value
+      // arcHref links to and renderArcPage's own data-arc-slug carries — so a
+      // NOW row and its arc page always agree on the follow-list's matching
+      // key. arc.lastSeen is the same ISO UTC string used above for the
+      // relative-time meta, so the lexicographic compare against lastVisit is
+      // correct for the same reason data-created's is.
+      return `<a class="nowrow" href="${arcHref(token, lang, arc.identity)}" data-arc-slug="${esc(arc.identity)}" data-last-seen="${esc(arc.lastSeen)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
     })
     .join("\n");
   return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
@@ -5534,10 +5657,14 @@ function renderArcs(topicArcs, strings, token, lang) {
   // continuing, so there is no thread to point at.
   const recurring = topicArcs.filter(({ count }) => count >= 2);
   if (recurring.length === 0) return "";
+  // href targets arc IDENTITY (key when present, else slug — see
+  // arcIdentity), never the raw per-digest slug: the chip must link to the
+  // SAME arc page every appearance of this story links to, regardless of
+  // how this digest's own heading happened to be worded.
   const chips = recurring
     .map(
-      ({ slug, label, count }) =>
-        `<a class="arc" href="${arcHref(token, lang, slug)}"><span class="arclabel">${esc(label)}</span><span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
+      ({ identity, label, count }) =>
+        `<a class="arc" href="${arcHref(token, lang, identity)}"><span class="arclabel">${esc(label)}</span><span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
     )
     .join("");
   return `<nav class="arcs" aria-label="${esc(strings.arcsLabel)}">${chips}</nav>\n`;
@@ -5819,8 +5946,14 @@ function renderArcAppearance(row, token, lang) {
 // it's reversed ONLY for the timeline's own display (see the comment at that
 // call site). `nowMs` is the request-time instant handleArcPage captured
 // once and threads through unchanged, so momentum/relative-time computed
-// here can never observe two different "now"s within one render.
-function renderArcPage(slug, appearances, token, host, lang, nowMs) {
+// here can never observe two different "now"s within one render. `identity`
+// (stable arc keys) is whatever route segment resolved this page — a `key`
+// or, for a pre-key arc, a plain `slug` — carried through opaquely as the
+// arc's own address: the data-arc-slug attribute name and the follow-list's
+// "slug" vocabulary below are UNCHANGED (client-side string matching, see
+// the follow-toggle IIFE in pageChrome), only the value they now carry can
+// be a key instead of a slug.
+function renderArcPage(identity, appearances, token, host, lang, nowMs) {
   const strings = STRINGS[lang];
   const first = appearances[0];
   const latest = appearances[appearances.length - 1];
@@ -5881,7 +6014,7 @@ ${group.items.map((row) => renderArcAppearance(row, token, lang)).join("\n")}`,
   // localStorage array of followed slugs, never sent here), so this is the
   // only place slug/i18n strings meet the DOM for it to read.
   const body = `<nav class="digestnav"><a href="${indexHref(token, lang, "all")}">${esc(strings.allDigests)}</a></nav>
-<div class="archead"><h1 class="arctitle" data-arc-slug="${esc(slug)}" data-follow-add="${esc(strings.followAdd)}" data-follow-remove="${esc(strings.followRemove)}">${esc(title)}</h1></div>
+<div class="archead"><h1 class="arctitle" data-arc-slug="${esc(identity)}" data-follow-add="${esc(strings.followAdd)}" data-follow-remove="${esc(strings.followRemove)}">${esc(title)}</h1></div>
 <p class="stamp">${esc(metaLine)}</p>
 <div class="archivelabel">${esc(strings.arcTimelineLabel)}</div>
 ${timelineHtml}`;
@@ -5894,7 +6027,7 @@ ${timelineHtml}`;
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "arc", slug),
+    renderSwitchers(token, lang, "all", "arc", identity),
     body,
     title,
   );
