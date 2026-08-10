@@ -1923,7 +1923,14 @@ function renderViewTabs(token, lang, view) {
 // `showArchive` param) was removed in the index-cleanup pass — archive weeks
 // are reachable via the week rail's own ← link now (see renderWeekRail), so
 // there's nothing left to gate a link on here.
-function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
+// `showSearch` (owner-requested): renders the search control immediately
+// LEFT of the settings gear in the masthead. An explicit flag rather than
+// `pageKind === "index"` for the same reason the archive link needed one —
+// renderSearchPage also passes "index" (for its density row) and must not
+// get it. Index pages only, because the popover's `.filter` input drives
+// the LEDGER: on a digest or arc page it would be a dead control, and the
+// ⌘K palette already carries search everywhere.
+function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, showSearch = false) {
   const strings = STRINGS[lang];
   const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
   // Theme is now a three-state Light/Auto/Dark miniseg (owner redesign),
@@ -1947,7 +1954,8 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   // The gear carries a visible text label on desktop (owner-requested) and
   // collapses to the bare icon on the phone — the label span is hidden by
   // the mobile media block, the aria-label covers it everywhere.
-  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
+  const searchHtml = showSearch ? renderSearchBubble(token, lang, strings) : "";
+  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -2211,7 +2219,15 @@ const CSS = `
   /* flex: 1 1 0 pairs with .mastleft's — the two equal-growth side zones
      are what make the middle tab capsule center on the row's true midpoint
      (see the header.mast comment above). */
-  .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; flex: 1 1 0; }
+  /* Row, not column: the search control now sits beside the gear
+     (owner-requested placement), and the column direction only ever
+     existed to stack the since-removed archive link above it. justify-end
+     keeps the pair pinned right; flex: 1 1 0 pairs with .mastleft's to
+     centre the view-tab capsule between them. */
+  .mast .mastright {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 0.55em; flex: 1 1 0;
+  }
 
   /* Mobile masthead + phone font size (owner-tuned). */
   @media (max-width: 40em) {
@@ -2801,9 +2817,7 @@ const CSS = `
      trick for the first three spans: rail-older/rail-newer share flex:1 (so
      they're always equal width regardless of their own content length, even
      when one side is an empty spacer), which keeps the center label
-     visually centered without needing to measure anything. rail-search
-     (owner-requested index cleanup) is a fourth, non-growing flex child
-     appended after rail-newer — it doesn't participate in that centering
+     visually centered without needing to measure anything.
      trick at all (flex: none, own rule below), it just claims its own
      natural width at the row's right edge; the gap property below gives it
      breathing room from rail-newer's "→" link on an archive week rather
@@ -2817,7 +2831,6 @@ const CSS = `
   .weekrail .rail-older { text-align: left; }
   .weekrail .rail-newer { text-align: right; }
   .weekrail .rail-center { flex: 0 1 auto; color: var(--muted); }
-  .weekrail .rail-search { flex: none; }
   .weekrail a { color: var(--accent); text-decoration: none; }
 
   /* Archive sparkline (roadmap 4 step 6, renderWeekRail): the pulse strip's
@@ -2896,12 +2909,6 @@ const CSS = `
     font-family: var(--font-data); font-size: 0.78em;
     text-decoration: none; letter-spacing: 0.06em; text-transform: uppercase;
   }
-  /* Daily/weekly views (owner-requested index cleanup): no week rail to
-     carry the search bubble (see renderIndexPage's searchRowHtml), so it
-     gets a minimal standalone row instead — same negative-top-margin tuck
-     under the view tabs the old filterrow used, just right-aligned since
-     there's no filter/searchlink pair to lay out side by side anymore. */
-  .searchrow { display: flex; justify-content: flex-end; margin: -0.6em 0 1.4em; }
 
   /* Unified search results (owner UX pass): the index page's own box for
      archive hits fetched in the background by the bottom script — see
@@ -2968,7 +2975,6 @@ const CSS = `
      carries its own bottom margin, so the row's own baseline stays where a
      bare eyebrow used to sit; align-items center keeps the icon optically
      on the eyebrow's line rather than riding its cap height. */
-  .nowhead { display: flex; align-items: center; justify-content: space-between; gap: 1em; }
   .nowlist { display: flex; flex-direction: column; }
   .nowrow {
     display: flex; align-items: baseline; gap: 0.7em;
@@ -5045,11 +5051,7 @@ function renderSearchBubble(token, lang, strings) {
 // an archive week (see the call site in renderIndexPage, which passes null
 // on the current week so its rail stays byte-identical to before this
 // step).
-// `includeSearch` false when the NOW section above carries the search
-// control instead (owner-requested placement — see renderNowSection); the
-// rail keeps it on every page where NOW is absent, so the control is never
-// lost with the section.
-function renderWeekRail(token, lang, weekInfo, strings, rows = null, includeSearch = true) {
+function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
   const olderLink = weekInfo.older
     ? `<a href="${weekHref(token, lang, "all", weekInfo.older.year, weekInfo.older.week)}">← W${esc(String(weekInfo.older.week).padStart(2, "0"))}</a>`
     : "";
@@ -5131,7 +5133,7 @@ function renderWeekRail(token, lang, weekInfo, strings, rows = null, includeSear
     }
   }
 
-  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span>${includeSearch ? `<span class="rail-search">${renderSearchBubble(token, lang, strings)}</span>` : ""}</nav>`;
+  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span></nav>`;
 }
 
 // NOW section ranking (§11.1 PR B, "decide + implement the NOW ranking
@@ -5224,7 +5226,7 @@ function computeNowArcs(rows, nowMs) {
 // string on any page where the caller placed the control elsewhere (see
 // renderIndexPage: the week rail keeps it whenever this section is
 // absent, so the control never disappears with the section).
-function renderNowSection(nowArcs, strings, token, lang, nowMs, searchHtml = "") {
+function renderNowSection(nowArcs, strings, token, lang, nowMs) {
   if (!nowArcs || nowArcs.length === 0) return "";
   const rowsHtml = nowArcs
     .map((arc) => {
@@ -5245,7 +5247,7 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs, searchHtml = "")
       return `<a class="nowrow" href="${arcHref(token, lang, arc.slug)}" data-arc-slug="${esc(arc.slug)}" data-last-seen="${esc(arc.lastSeen)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
     })
     .join("\n");
-  return `<div class="now"><div class="nowhead"><div class="archivelabel">${esc(strings.nowLabel)}</div>${searchHtml}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
+  return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
 }
 
 function renderIndexPage(
@@ -5326,11 +5328,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // above the empty-state message too, since both live inside the <section>
   // wrapper assembled below. Renders on the current week too (unlike the
   // lead/prefetch below) — the rail IS the archive navigation, so it stays
-  // regardless of isCurrent. Also the ALL view's home for the search bubble
-  // (owner-requested index cleanup, renderSearchBubble) — it rides inside
-  // the rail markup itself now, so railHtml truthy always implies the search
-  // bubble already went out with it; see searchRowHtml just below for the
-  // other views, which have no rail to carry it.
+  // regardless of isCurrent.
   //
   // Archive sparkline (roadmap 4 step 6): `rows` is only handed to the rail
   // on an archive week (isCurrent false) — the current week's rail stays
@@ -5343,10 +5341,9 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // Owner-requested placement: whenever the NOW section renders, IT carries
   // the search control (in its own head row, right-aligned) and the rail
   // below goes without — exactly one search control per page, always.
-  const nowCarriesSearch = nowArcs.length > 0;
   const railHtml =
     view === "all" && weekInfo
-      ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows, !nowCarriesSearch)
+      ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows)
       : "";
 
   // Search row (owner-requested index cleanup): the daily/weekly views have
@@ -5359,8 +5356,6 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // (which reads `.searchlink` off the DOM, see collectPaletteItems)
   // available on every view, not just ALL — losing it silently on daily/
   // weekly would have been a real regression, not just a cosmetic one.
-  const searchRowHtml =
-    railHtml || nowCarriesSearch ? "" : `<div class="searchrow">${renderSearchBubble(token, lang, strings)}</div>`;
 
   // data-week-archive (roadmap 3 step 3): marks the <section> on any
   // non-current week so the bottom script's unread-fence IIFE can bail out
@@ -5395,7 +5390,6 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     token,
     lang,
     nowMs,
-    nowCarriesSearch ? renderSearchBubble(token, lang, strings) : "",
   );
 
   // Catch-up banner (§11.2): a hidden shell, same "data-* carrier" contract
@@ -5420,8 +5414,8 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     token,
     lang,
     view,
-    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
-    `${catchupHtml}${nowHtml}${railHtml}${searchRowHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
+    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
+    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     countdownNewest,
     prefetchHref,
