@@ -549,6 +549,42 @@ still reachable, no longer the front page.
   the pipeline backs — they don't ship without a model judgment behind
   them. Same overclaiming class as confidence badges (§11.4).
 
+**Amendment — stable arc keys (shipped 2026-08-10, unplanned).** The
+entry above assumed slug equality was a workable notion of "same story".
+Production disproved it: because `_slugify` folds the SECTION HEADING and
+headings are deliberately reworded every run, the Iran/Hormuz story
+appeared 11 times in 7 days under 11 distinct slugs, never reached the
+≥2-appearance threshold, and NOW rendered a single unrelated arc. Fix
+(digest #67 / v0.13.0, toom-edge #140): the window prompt emits a
+semantic `key` per story in an ```arcs fence — same machine-facing
+pattern as §11.3's deltas, stripped at the same choke point — and a new
+`{{RECENT_ARCS}}` prompt block replays the last 7 days' distinct keys so
+the model REUSES them rather than minting fresh ones every three hours.
+That feedback loop is the load-bearing half; without it keys re-fragment
+exactly as headings did.
+
+Contract consequences, all now binding:
+- **Arc identity is `COALESCE(key, slug)`** — site-side `arcIdentity()` /
+  `ARC_IDENTITY_SQL`. Every pre-key row keeps working because the
+  fallback IS the old behaviour; existing `/a/<slug>` URLs still resolve.
+- **`slug` is unchanged and still the anchor identity.** The §11.1
+  slug-stability contract stands untouched; keys are purely additive.
+  `derive_topics` output is byte-identical when no keys are passed.
+- **Deltas remain keyed on slug**, not identity — they are per-digest
+  -section. `handleArcPage` therefore selects the row's own `topicSlug`
+  alongside identity; matching deltas against identity would silently
+  stop resolving the moment the two diverge (caught in review, not in
+  testing).
+- **Per-entry payload additions must ship SITE-FIRST.** `validateTopics`
+  400s the whole PUT on an unknown PER-ENTRY field, unlike
+  `validateDigestPayload`, which ignores unknown TOP-LEVEL fields — which
+  is why `deltas` (top-level) could ship app-first in §11.3 and `key`
+  (per-entry) could not. `ARC_KEYS_SITE_ENABLED` survives as a
+  site-rollback kill switch, defaulting on now that toom-edge #140 is
+  deployed.
+- Forward-looking only: stored rows have no keys, so clustering begins
+  with the first v0.13.0 window run. No backfill exists or is planned.
+
 **Steps:**
 - [x] (toom-edge) Arc-chain reconstruction: extend the existing
       slug-matching recurrence logic (toom-edge PR #107, 7-day window) to
@@ -660,10 +696,30 @@ arc timelines can consume it as data instead of re-deriving it from prose.
       `user_version` step.
 - [x] (digest) Publish payload carries deltas; confirm daily/weekly prompt
       inputs remain byte-identical (fencing check).
-- [ ] (digest) Validate the new contract against real digests before
-      flag-on.
+- [x] (digest) Validate the new contract against real digests. Confirmed
+      2026-08-10 on production data: window digests 105 and 106 (both
+      post-v0.12.0) carry parsed, stored, published deltas; 104, which
+      predates the deploy, does not — and the "What changed" block renders
+      on the digest page. The model honours the fence contract unprompted.
 - [x] (toom-edge) "What changed" rendering + arc-timeline consumption of
       the same data.
+- [ ] (OPEN GAP, unapproved) Hungarian delta text (`deltas_hu`). The
+      `deltas` payload is English-only by construction: `extract_deltas`
+      strips the fence at the top of `summarize()`, so `translate_digest`
+      never sees it. The /hu/ digest and arc pages therefore showed a
+      Hungarian heading wrapped around English sentences; toom-edge #136
+      SUPPRESSES the block on Hungarian pages instead (one shared
+      `deltasRenderableIn(lang)` predicate — the single hook to widen).
+      Costs the HU reader little: those same delta-only stories are
+      already prose in the Hungarian body. Doing it properly means the app
+      pairing each delta with its Hungarian heading (safe positionally —
+      the translate prompt mandates heading-for-heading structure) and
+      publishing `deltas_hu` under ingest v5. Cost decision the owner has
+      NOT taken: an extra translate call per window run (8/day, and a
+      usage ceiling was hit on 2026-08-10), versus folding the delta text
+      into the existing translate call — cheaper, but it routes
+      machine-facing JSON through the translation prompt, the coupling the
+      early strip exists to avoid.
 - [ ] (digest, optional rider) While the window contract is open anyway,
       decide whether repeat-story sections adopt the four-part structure
       (what happened / what changed / why it matters / what to watch) from
