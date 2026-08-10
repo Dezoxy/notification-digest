@@ -509,10 +509,11 @@ Cross-repo steps are labeled (digest), (toom-edge = the news-site repo),
 (homelab = deploy repo); per §6/deploy note, digest code ships nothing until
 a tag is cut and homelab bumps it.
 
-### 11.1 Storyline-first site IA — NOW homepage and arc pages (proposed)
+### 11.1 Storyline-first site IA — NOW homepage and arc pages (approved)
 
-**Status:** proposed 2026-08-10, discussion pending. Origin: Codex redesign
-brief for news.tomhorvath.me, triaged 2026-08-10.
+**Status:** APPROVED 2026-08-10 (owner: "start the implementation");
+execution in toom-edge begins with the arc-chain/NOW work. Origin: Codex
+redesign brief for news.tomhorvath.me, triaged 2026-08-10.
 
 **What & why.** The site's primary browsing unit stops being the
 chronological brief and becomes the story arc — the same story-arc topics
