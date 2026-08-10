@@ -2169,37 +2169,31 @@ const CSS = `
      unaffected (no containing-block change). */
   .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; overflow-x: clip; }
 
-  /* Masthead compaction (owner-requested): the view tabs used to be their
-     own centered band below this header — they now ride in the header row
-     itself, grouped with the brand in .mastleft (see pageChrome). center,
-     not baseline: a text wordmark sitting next to a rounded pill capsule
-     reads better lined up on their vertical centers than on a shared text
-     baseline, and .mastleft's own internal wrap (below) is what actually
-     keeps the row from overflowing on narrow viewports — the outer
-     flex-wrap here stays only as a last-resort safety net (mastright
-     dropping to its own line), same as before this change. */
+  /* Masthead compaction (owner-requested), three-zone revision (owner
+     follow-up: "the switcher isn't at the middle"): brand zone left, the
+     view-tab capsule as the mast's own MIDDLE flex child, gear zone right
+     (see pageChrome). The two side zones carry flex: 1 1 0 so they grow
+     equally from nothing — that equal growth is what centers the capsule
+     on the row's true midpoint instead of on the leftover space after a
+     wider brand. center, not baseline: a wordmark next to a rounded pill
+     capsule reads better lined up on vertical centers than on a shared
+     text baseline. Desktop is one nowrap row; the ≤40em block below
+     rewraps the capsule onto its own centered second line. */
   header.mast {
-    display: flex; align-items: flex-start; justify-content: space-between;
+    display: flex; align-items: center;
     gap: 0.6em 1em; padding: 1.4em 0 1em;
     border-bottom: 1px solid var(--hairline); margin-bottom: 1.6em;
   }
-  /* No flex-wrap on the mast itself (index-cleanup masthead compaction):
-     narrow viewports wrap INSIDE .mastleft (tabs drop under the brand, see
-     its own flex-wrap below) while .mastright stays pinned to the first
-     line's right edge — letting the mast wrap instead parked the gear on
-     its own left-aligned line under the tabs (observed live on the 375px
-     preset). align-items flex-start, not center, so the pinned gear tracks
-     the brand line, not the vertical middle of a two-line .mastleft. */
-  /* min-width: 0 is load-bearing: a flex item's default min-width is its
-     content's own min-content size, which — for a flex CONTAINER like this
-     one — would otherwise stop it shrinking below the tab capsule's natural
-     width and force the OUTER header row to wrap between .mastleft and
-     .mastright instead (dropping Settings off the top-right corner on
-     narrow viewports, which the brief explicitly says must not happen).
-     Overriding it to 0 lets .mastleft shrink first, so ITS OWN flex-wrap
-     below is what actually absorbs a narrow viewport — the tabs drop under
-     the brand, gear stays put. */
-  .mast .mastleft { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5em 1.1em; min-width: 0; }
+  /* True centering (owner follow-up: "the switcher isn't at the middle"):
+     the tabs are now the mast's own MIDDLE flex child (see pageChrome —
+     they moved out of .mastleft), and the two side zones get equal
+     flex-grow from a zero basis, so the capsule centers on the ROW's
+     midpoint, not on whatever space the brand happens to leave over. The
+     brand zone and the gear zone are never the same natural width; without
+     the 1 1 0 pair the capsule visibly hangs left. Desktop keeps one
+     nowrap row; the phone block below rewraps the tabs onto their own
+     centered second line instead of squeezing three zones into 375px. */
+  .mast .mastleft { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
   /* 0.95em, down from the pre-compaction 1.05em: a ~10% trim, not a demotion
      — still bolder (font-weight 700) and letter-spaced tighter than
      everything else in the row, so the wordmark still reads first, it just
@@ -2214,7 +2208,10 @@ const CSS = `
      details.settings disclosure — see renderSwitchers) sits top-right in
      the masthead via .mastright, right-aligned — same markup at both
      breakpoints. */
-  .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; }
+  /* flex: 1 1 0 pairs with .mastleft's — the two equal-growth side zones
+     are what make the middle tab capsule center on the row's true midpoint
+     (see the header.mast comment above). */
+  .mast .mastright { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2em; flex: 1 1 0; }
 
   /* Mobile masthead + phone font size (owner-tuned). */
   @media (max-width: 40em) {
@@ -2224,19 +2221,22 @@ const CSS = `
     body { font-size: 15px; }
     /* Icon-only gear on the phone — see .gearlabel above. */
     .gearlabel { display: none; }
-    /* Masthead compaction, phone posture: the OUTER row must never wrap —
-       .mastleft's own flex-wrap/min-width:0 handle narrow widths by
-       dropping the tabs under the brand, and the gear stays pinned to the
-       first line's right edge. The pre-compaction phone block set
-       flex-wrap: wrap + .mastright { display: contents } here, which
-       dissolved the gear into the wrapping row and parked it alone on its
-       own line under the tabs (observed live at 375px) — with brand+tabs
-       sharing .mastleft that posture no longer earns its keep, so the
-       phone mast now inherits the base rule's nowrap/flex-start and
-       .mastright stays a real box (which the settings bubble's positioning
-       never depended on anyway — details.settings is its own anchor, see
-       that comment below). */
-    header.mast { align-items: flex-start; }
+    /* Masthead phone posture (true-centering revision): three zones don't
+       fit at 375px, so the capsule takes its own SECOND line, centered.
+       The line break must be FORCED, not hoped for: the side zones carry
+       min-width: 0 / flex-basis 0, so flex would happily crush them to
+       nothing and cram all three items onto one overlapping line
+       (observed live at 375px) — a zero-height, full-basis pseudo-item at
+       order 3 breaks the line deterministically instead. Line one is then
+       brand left + gear right (the gear can never end up alone under the
+       tabs); the order-4 capsule lands on line two, auto side margins
+       centering it while it keeps its fit-content width — flex-basis:100%
+       on the capsule itself would have stretched its border full-bleed.
+       .mastright stays a real box (the settings bubble never depended on
+       it — details.settings is its own anchor, see that comment below). */
+    header.mast { flex-wrap: wrap; }
+    header.mast::before { content: ""; flex-basis: 100%; order: 3; }
+    .mast .viewtabs { order: 4; margin-left: auto; margin-right: auto; }
   }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
@@ -3247,8 +3247,8 @@ ${prefetchScriptHtml}
   <header class="mast">
     <div class="mastleft">
       <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}<span class="tld">${esc(rest)}</span></a>
-      ${viewTabsHtml}
     </div>
+    ${viewTabsHtml}
     <div class="mastright">
       ${switchersHtml}
     </div>
