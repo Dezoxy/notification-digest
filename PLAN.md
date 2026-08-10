@@ -565,10 +565,11 @@ still reachable, no longer the front page.
 - [ ] Deploy and verify on real data: slugs resolve, deep links land on the
       right sections, Archive still reachable.
 
-### 11.2 Client-side catch-up — since your last visit (proposed)
+### 11.2 Client-side catch-up — since your last visit (approved)
 
-**Status:** proposed 2026-08-10, discussion pending. Origin: Codex redesign
-brief for news.tomhorvath.me, triaged 2026-08-10.
+**Status:** APPROVED 2026-08-10 (owner: "not just 11.1 but all the plan
+md" — execute the roadmap through). Origin: Codex redesign brief for
+news.tomhorvath.me, triaged 2026-08-10.
 
 **What & why.** Store a last-visit timestamp in `localStorage`; on load,
 diff it against published brief/arc timestamps and show "since your last
@@ -596,10 +597,13 @@ never leaves the reader's own browser.
       optional.
 - [ ] Verify: zero new publish fields, zero server state.
 
-### 11.3 Delta persistence — "what changed" as data, not prose (proposed)
+### 11.3 Delta persistence — "what changed" as data, not prose (approved)
 
-**Status:** proposed 2026-08-10, discussion pending. Origin: Codex redesign
-brief for news.tomhorvath.me, triaged 2026-08-10.
+**Status:** APPROVED 2026-08-10 (owner: "not just 11.1 but all the plan
+md"). Deploy ordering note: the site's ingest validator must accept the
+new optional `deltas` field BEFORE the app ships it — same two-repo
+ordering the weekly kind used. Origin: Codex redesign brief for
+news.tomhorvath.me, triaged 2026-08-10.
 
 **What & why.** The delta-only reasoning lives in the WINDOW digest, not
 the daily: `prompts/digest.md` instructs each 3-hourly run to write repeat
@@ -655,9 +659,13 @@ arc timelines can consume it as data instead of re-deriving it from prose.
 
 ### 11.4 Verified briefing — cross-reference the daily brief against the open web (proposed)
 
-**Status:** proposed 2026-08-09, discussion pending, with 2026-08-10 review
-adjustments folded in. Origin: the same friend whose "criteria, not names"
-advice produced the geopolitics prompt rule.
+**Status:** APPROVED 2026-08-10 (owner: "not just 11.1 but all the plan
+md") THROUGH the flag-off-default state: implementation ships complete
+with `VERIFY_DAILY_ENABLED` defaulting off; the flag-on live validation
+and the default-on decision stay owner-gated, as this entry always
+specified. 2026-08-10 review adjustments folded in. Origin: the same
+friend whose "criteria, not names" advice produced the geopolitics prompt
+rule.
 
 **What & why.** Today the daily brief is a synthesis of what the owner's
 own sources said — nothing verifies whether those sources were right,
