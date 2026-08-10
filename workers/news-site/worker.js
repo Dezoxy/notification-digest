@@ -2808,8 +2808,23 @@ const CSS = `
     line-height: 1.15; color: var(--text); text-wrap: balance;
   }
   .headline mark { background: var(--mark); color: var(--mark-ink); padding: 0 0.14em; }
-  .entry:hover .headline, .entry:focus-visible .headline,
-  .entry:hover .excerpt, .entry:focus-visible .excerpt { color: var(--accent); }
+  /* Quiet card hover (owner follow-up: recoloring the WHOLE card — headline
+     AND excerpt — on hover read as a giant highlight, and stuck after taps
+     on touch): body text never changes; only the headline picks up a thin
+     accent underline, and only where a real hover pointer exists — the
+     hover: hover gate keeps touch taps from painting a sticky hover state
+     at all. Keyboard focus gets the same underline OUTSIDE the gate (a
+     keyboard is not a hover pointer) on top of the outline below. */
+  @media (hover: hover) {
+    .entry:hover .headline {
+      text-decoration: underline; text-decoration-color: var(--accent);
+      text-decoration-thickness: 0.06em; text-underline-offset: 0.12em;
+    }
+  }
+  .entry:focus-visible .headline {
+    text-decoration: underline; text-decoration-color: var(--accent);
+    text-decoration-thickness: 0.06em; text-underline-offset: 0.12em;
+  }
   .entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   /* Lead card (the newest digest in the current view): a full-width hero
      spanning both grid columns, mono eyebrow + big headline + deck excerpt
