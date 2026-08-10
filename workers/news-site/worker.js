@@ -463,6 +463,16 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
   // spec calls out, not merely "happens to resolve to the current week").
   // Every other view/week pays zero extra roundtrip for this section — see
   // renderIndexPage's own no-op fallback when nowArcs stays [].
+  //
+  // showCatchup (§11.2): the catch-up banner's gate, written out as its own
+  // const — literally the same boolean expression as the NOW section's just
+  // above ("same gate as the NOW section" per the §11.2 spec, not merely
+  // "happens to agree with it today"). Passed through to renderIndexPage
+  // separately from nowArcs because the banner must still be ABLE to render
+  // (N briefings only, M omitted) in the 0-eligible-arcs case where nowArcs
+  // stays [] and the NOW section itself renders nothing — inferring the gate
+  // from nowArcs.length would wrongly suppress the banner shell then.
+  const showCatchup = view === "all" && weekParam === null;
   let nowArcs = [];
   const nowMs = Date.now();
   if (view === "all" && weekParam === null) {
@@ -496,6 +506,7 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       weekInfo,
       nowArcs,
       nowMs,
+      showCatchup,
     ),
   );
 }
@@ -1486,6 +1497,28 @@ const STRINGS = {
     paletteCmdWeekly: "Weekly view",
     paletteCmdSwitchLang: "Switch language",
     paletteCmdLatest: "Latest briefing",
+    // Catch-up banner (§11.2, current-week all-view index only — same gate
+    // as the NOW section, see handleIndexPage's showCatchup). Client-built
+    // from the SAME lastVisit stamp the unread-fence IIFE already reads —
+    // see that IIFE's extension for the reconciliation. catchupBriefings/
+    // catchupArcUpdates/catchupArcMore are placeholder templates ({n}/{m}),
+    // same convention as arcRepeat/weekLabel above; catchupJumpLabel/
+    // catchupDismissLabel are aria-labels for the two icon-only controls
+    // (jump to the "you were here" marker below, dismiss for this page-view
+    // only — see the CSS/script for both).
+    catchupPrefix: "Since your last visit:",
+    catchupBriefings: "{n} briefings",
+    catchupArcUpdates: "{m} arc updates",
+    catchupArcMore: "+{n} more",
+    catchupJumpLabel: "Jump to where you left off",
+    catchupDismissLabel: "Dismiss",
+    // Follow list (§11.2, optional feature, arc pages only): client-
+    // injected text control next to the arc title (renderArcPage's
+    // .archead) — no button chrome, matches the design guidance's "text
+    // control" instruction. followAdd/followRemove are the two toggle
+    // states, same star-glyph convention brief specified.
+    followAdd: "☆ Follow",
+    followRemove: "★ Following",
   },
   hu: {
     locale: "hu-HU",
@@ -1572,6 +1605,16 @@ const STRINGS = {
     paletteCmdWeekly: "Heti nézet",
     paletteCmdSwitchLang: "Nyelv váltása",
     paletteCmdLatest: "Legfrissebb hírlevél",
+    // Owner: please review — new HU strings, catch-up banner + follow list
+    // (§11.2), mirror the EN block's pattern.
+    catchupPrefix: "Legutóbbi látogatásod óta:",
+    catchupBriefings: "{n} hírlevél",
+    catchupArcUpdates: "{m} történetfrissítés",
+    catchupArcMore: "+{n} további",
+    catchupJumpLabel: "Ugrás oda, ahol abbahagytad",
+    catchupDismissLabel: "Elrejtés",
+    followAdd: "☆ Követés",
+    followRemove: "★ Követve",
   },
 };
 
@@ -2302,10 +2345,25 @@ const CSS = `
      like the article body, not the sans/mono chrome voice — sized down from
      a typical article h1 to stay in proportion with this site's otherwise
      restrained type scale (the digest article's own h2s top out at 1.15em). */
+  .archead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.7em; }
   .arctitle {
     font-family: var(--font-prose); font-size: 1.5em; font-weight: 700;
     line-height: 1.3; margin: 0 0 0.5em; text-wrap: balance;
   }
+  /* Follow toggle (§11.2, optional feature): client-injected into .archead,
+     next to the arc title — see the follow-toggle IIFE in pageChrome. Text
+     control per the design guidance, deliberately no button chrome (no
+     border/background/pill) — same restraint as the design guidance's
+     "calm urgency" principle applied to a control instead of a status. Mono
+     metadata register (matches .nowmeta/.catchup) rather than the h1's
+     editorial serif, so it visually reads as interface, not headline. */
+  .followtoggle {
+    background: none; border: 0; padding: 0; margin: 0 0 0.5em;
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    cursor: pointer;
+  }
+  .followtoggle:hover, .followtoggle:focus-visible { color: var(--accent); }
+  .followtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   /* Section index (TOC, roadmap step 5): chip-link row built from the
      article's own <h2>s at render time (see buildSectionToc). Chips speak
      for themselves — no label string. */
@@ -2586,6 +2644,39 @@ const CSS = `
   }
   .archiveresults { margin-top: 1.6em; }
 
+  /* Catch-up banner (§11.2): one row above the NOW section, built entirely
+     by the unread-fence IIFE extension in the bottom script — see
+     renderIndexPage's catchupHtml for the hidden shell and why it always
+     sits above nowHtml regardless of whether NOW itself has content that
+     day. No card (design guidance), mono metadata register matching
+     .nowmeta/.archivelabel, a bottom hairline as the only separator — same
+     "typography, not chrome" recipe as .now just below. .catchuptext holds
+     the composed sentence (may include real <a> links to followed arcs, see
+     the script — that's why it's a plain span, not the row's own click
+     target: a button/link cannot legally contain another link). The jump
+     and dismiss controls are small icon-only buttons, deliberately NOT
+     styled like .resumechip's pill — this row is metadata-weight chrome,
+     not a floating call to action. */
+  .catchup {
+    display: flex; align-items: baseline; gap: 0.7em;
+    margin: 0 0 1.4em; padding-bottom: 1.1em;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--font-data); font-size: 0.78em; color: var(--muted);
+  }
+  .catchuptext { flex: 1 1 auto; min-width: 0; }
+  .catchuptext a { color: var(--accent); text-decoration: none; }
+  .catchuptext a:hover, .catchuptext a:focus-visible { text-decoration: underline; }
+  .catchupjump, .catchupdismiss {
+    flex: none; background: none; border: 0; padding: 0.1em 0.3em;
+    color: var(--muted); font: inherit; font-size: 1em; line-height: 1;
+    cursor: pointer;
+  }
+  .catchupjump:hover, .catchupdismiss:hover,
+  .catchupjump:focus-visible, .catchupdismiss:focus-visible { color: var(--text); }
+  .catchupjump:focus-visible, .catchupdismiss:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+  }
+
   /* NOW section (§11.1 PR B, renderNowSection): the situational-overview
      block at the very top of the current-week all-view index, above the
      rail/filter row/pulse strip/ledger — see renderIndexPage. .archivelabel
@@ -2749,7 +2840,7 @@ const CSS = `
     .wrap { max-width: none; padding: 0; border: 0; border-radius: 0; }
     .mast, .viewtabs, nav.digestnav, .backfab, .toc, footer.site,
     .filterrow, .miniseg, .densitytoggle, .pulse, .resumechip,
-    .archiveresults {
+    .archiveresults, .catchup, .followtoggle {
       display: none;
     }
     .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note, .arctitle {
@@ -3360,6 +3451,129 @@ ${prefetchScriptHtml}
           chip.hidden = true;
         }, { signal: signal });
       }
+
+      // Catch-up banner (§11.2): extends this SAME IIFE rather than adding a
+      // second "where was I" store — see PLAN.md §11.2's reconciliation
+      // note. Built from the exact lastVisit/entries the fence above
+      // just used, still BEFORE the trailing localStorage.setItem further
+      // down advances the stamp — so this always reports what changed since
+      // the visit that's ENDING now, never the one this load is about to
+      // become (same "advance after computing, never before" ordering the
+      // fence itself already relies on). Gated on the hidden .catchup shell
+      // existing at all — renderIndexPage only emits it on the current-week
+      // all-view index (showCatchup, same gate as the NOW section), so this
+      // is a no-op everywhere else without a second gate here.
+      var catchup = document.querySelector(".catchup");
+      if (catchup) {
+        // N: every .entry newer than lastVisit. Deliberately NOT reusing
+        // lastNewIndex from the fence above — that one requires a genuine
+        // mix (at least one old entry too) before it's non- -1, but a
+        // fence-less "everything since lastVisit is new" page (e.g. a long
+        // gap between visits) is still a legitimate, non-filler catch-up to
+        // report, so N is computed independently here.
+        var newEntries = entries.filter(function (el) {
+          return el.getAttribute("data-created") > lastVisit;
+        });
+        var n = newEntries.length;
+
+        // M: NOW's .nowrow arcs whose last update is newer than lastVisit —
+        // see renderNowSection's data-last-seen (§11.2). Empty (0 rows,
+        // ->[]) on a 0-eligible-arcs day, same fail-safe contract every
+        // other NOW-derived feature in this file already uses.
+        var nowRows = Array.prototype.slice.call(document.querySelectorAll(".nowrow[data-last-seen]"));
+        var updatedArcs = nowRows.filter(function (row) {
+          return row.getAttribute("data-last-seen") > lastVisit;
+        });
+        var m = updatedArcs.length;
+
+        // "at least one last-visit value exists" is already guaranteed by
+        // this whole block living inside the enclosing if (lastVisit) above;
+        // the remaining "N+M > 0" half of the spec's show-condition is this
+        // check — together they're exactly "first-ever visit: no banner, no
+        // filler; nothing changed: no banner either".
+        if (n + m > 0) {
+          var textEl = catchup.querySelector(".catchuptext");
+          var parts = [];
+          if (n > 0) parts.push(catchup.getAttribute("data-tmpl-briefings").replace("{n}", String(n)));
+          if (m > 0) {
+            // Follow list (§11.2, optional feature): followed arcs among the
+            // updated ones get named (up to 3, linked) before the bare
+            // count — see the follow-toggle IIFE below for where slugs get
+            // written to localStorage. Nothing followed (the default —
+            // "automatic-first" guardrail) falls straight through to the
+            // bare "{m} arc updates" template below, exactly as if this
+            // optional feature didn't exist.
+            var followed = [];
+            try {
+              followed = JSON.parse(localStorage.getItem("followedArcs") || "[]");
+            } catch (e) {}
+            var followedUpdated = followed.length
+              ? updatedArcs.filter(function (row) {
+                  return followed.indexOf(row.getAttribute("data-arc-slug")) !== -1;
+                })
+              : [];
+            if (followedUpdated.length > 0) {
+              var named = followedUpdated.slice(0, 3);
+              var rest = m - named.length;
+              // Built via DOM nodes, not innerHTML — arc labels are
+              // LLM-derived text, never trusted as markup, same discipline
+              // the fence/resume chip above already follow.
+              var arcFrag = document.createDocumentFragment();
+              named.forEach(function (row, idx) {
+                if (idx > 0) arcFrag.appendChild(document.createTextNode(", "));
+                var a = document.createElement("a");
+                a.href = row.getAttribute("href");
+                a.textContent = row.querySelector(".nowarclabel").textContent;
+                arcFrag.appendChild(a);
+              });
+              if (rest > 0) {
+                arcFrag.appendChild(
+                  document.createTextNode(" " + catchup.getAttribute("data-tmpl-more").replace("{n}", String(rest))),
+                );
+              }
+              parts.push(arcFrag);
+            } else {
+              parts.push(catchup.getAttribute("data-tmpl-arcs").replace("{m}", String(m)));
+            }
+          }
+
+          // Compose: prefix, then each part (plain string or a link-bearing
+          // fragment) joined by ", " — same manual-join-over-locale-join
+          // pragmatism as renderNowSection's own join(" · ") meta line.
+          textEl.appendChild(document.createTextNode(catchup.getAttribute("data-prefix") + " "));
+          parts.forEach(function (part, idx) {
+            if (idx > 0) textEl.appendChild(document.createTextNode(", "));
+            if (typeof part === "string") textEl.appendChild(document.createTextNode(part));
+            else textEl.appendChild(part);
+          });
+
+          // Jump control: only meaningful when the fence above actually got
+          // built (the "genuine mix" case, fence assigned in the block
+          // above) — an "everything new" or "nothing old left" page has no
+          // boundary to jump to, so the control just stays hidden rather
+          // than jumping nowhere. fence is var-hoisted to this IIFE's
+          // top, so referencing it here is safe whether or not that block
+          // ran; unassigned reads back as undefined, which is falsy.
+          if (fence) {
+            var jumpBtn = catchup.querySelector(".catchupjump");
+            jumpBtn.hidden = false;
+            jumpBtn.addEventListener("click", function () {
+              fence.scrollIntoView({ block: "center" });
+            }, { signal: signal });
+          }
+
+          // Dismiss: removes the banner for THIS page-view only — no
+          // localStorage write, no second "seen" concept layered on top of
+          // lastVisit. The natural reset is simply the next visit, once the
+          // trailing advance below has moved lastVisit forward and N/M
+          // recompute from a later stamp.
+          catchup.querySelector(".catchupdismiss").addEventListener("click", function () {
+            catchup.hidden = true;
+          }, { signal: signal });
+
+          catchup.hidden = false;
+        }
+      }
     }
 
     // Update AFTER computing the fence above, and to the NEWEST entry's own
@@ -3375,6 +3589,48 @@ ${prefetchScriptHtml}
         localStorage.setItem("lastVisit", newest);
       }
     } catch (e) {}
+  })();
+
+  // Follow list (§11.2, optional feature, arc pages only — guarded on
+  // .archead's data-arc-slug existing, since index/digest pages have no
+  // .archead). A localStorage array of followed slugs; the catch-up
+  // banner's unread-fence IIFE above cross-references it when computing M's
+  // named-arcs list. Zero server involvement — the arc page itself doesn't
+  // know or care whether it's followed. No teardown needed: the button gets
+  // appended inside .archead, which lives in the swapped .wrap content, so
+  // a soft nav removes it along with everything else that pass built.
+  (function () {
+    var head = document.querySelector(".archead");
+    var h1 = head ? head.querySelector(".arctitle[data-arc-slug]") : null;
+    if (!head || !h1) return;
+    var slug = h1.getAttribute("data-arc-slug");
+
+    var followed = [];
+    try {
+      followed = JSON.parse(localStorage.getItem("followedArcs") || "[]");
+    } catch (e) {}
+
+    // Text control, no button chrome (design guidance) — a plain <button>
+    // element for semantics/keyboard support, styled bare by .followtoggle.
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "followtoggle";
+    var render = function () {
+      var isFollowed = followed.indexOf(slug) !== -1;
+      btn.textContent = isFollowed ? h1.getAttribute("data-follow-remove") : h1.getAttribute("data-follow-add");
+      btn.setAttribute("aria-pressed", String(isFollowed));
+    };
+    render();
+    btn.addEventListener("click", function () {
+      var idx = followed.indexOf(slug);
+      if (idx === -1) followed.push(slug);
+      else followed.splice(idx, 1);
+      try {
+        localStorage.setItem("followedArcs", JSON.stringify(followed));
+      } catch (e) {}
+      render();
+    }, { signal: signal });
+    head.appendChild(btn);
   })();
 
   // Index filter (roadmap step 6, index pages only — guarded on the input's
@@ -4650,13 +4906,32 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs) {
         strings.arcRepeat.replace("{n}", String(arc.count)),
         formatRelativeTime(new Date(arc.lastSeen), strings.locale, nowMs),
       ].join(" · ");
-      return `<a class="nowrow" href="${arcHref(token, lang, arc.slug)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
+      // data-arc-slug / data-last-seen (§11.2): rendering attributes, not
+      // server state — the catch-up banner's client script (the unread-fence
+      // IIFE extension in pageChrome) reads these to compute M (arcs updated
+      // since last visit) and to cross-reference the follow list's localStorage
+      // slugs, the exact same "data-* carrier" contract data-created already
+      // uses for .entry rows. arc.lastSeen is the same ISO UTC string used
+      // above for the relative-time meta, so the lexicographic compare against
+      // lastVisit is correct for the same reason data-created's is.
+      return `<a class="nowrow" href="${arcHref(token, lang, arc.slug)}" data-arc-slug="${esc(arc.slug)}" data-last-seen="${esc(arc.lastSeen)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
     })
     .join("\n");
   return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
 }
 
-function renderIndexPage(rows, token, host, lang, view, countdownNewest = null, weekInfo = null, nowArcs = [], nowMs = null) {
+function renderIndexPage(
+  rows,
+  token,
+  host,
+  lang,
+  view,
+  countdownNewest = null,
+  weekInfo = null,
+  nowArcs = [],
+  nowMs = null,
+  showCatchup = false,
+) {
   const strings = STRINGS[lang];
   const emptyMessage =
     view === "daily" ? strings.noDailyBriefs : view === "weekly" ? strings.noWeeklyBriefs : strings.noDigests;
@@ -4783,6 +5058,23 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // stays a no-op on every other view/week without a second gate here.
   const nowHtml = renderNowSection(nowArcs, strings, token, lang, nowMs);
 
+  // Catch-up banner (§11.2): a hidden shell, same "data-* carrier" contract
+  // as countdownHtml/paletteConfigHtml/the filter input above — no content
+  // rendered server-side (the reader's lastVisit timestamp never leaves
+  // their browser, so N/M can only ever be computed client-side), just the
+  // i18n templates the bottom script's unread-fence IIFE extension needs to
+  // stay language-agnostic. `hidden` by default: a no-JS reader, a first-
+  // ever visit (no lastVisit yet), and every non-eligible page (showCatchup
+  // false, so this whole const is "") all see nothing, same "inert until JS
+  // proves it's warranted" contract as every other progressive-enhancement
+  // shell in this file. Positioned as the very first element of the body
+  // markup — above nowHtml — so it always renders "one row above the NOW
+  // section" per the §11.2 spec, whether or not the NOW section itself has
+  // any content that day (0-eligible-arcs still leaves this shell in place).
+  const catchupHtml = showCatchup
+    ? `<div class="catchup" hidden data-prefix="${esc(strings.catchupPrefix)}" data-tmpl-briefings="${esc(strings.catchupBriefings)}" data-tmpl-arcs="${esc(strings.catchupArcUpdates)}" data-tmpl-more="${esc(strings.catchupArcMore)}"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="${esc(strings.catchupJumpLabel)}">↓</button><button type="button" class="catchupdismiss" aria-label="${esc(strings.catchupDismissLabel)}">×</button></div>`
+    : "";
+
   return pageChrome(
     host,
     token,
@@ -4793,7 +5085,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     // digest/arc/search — see renderSwitchers' own comment on why pageKind
     // alone can't gate this).
     renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
-    `${nowHtml}${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
+    `${catchupHtml}${nowHtml}${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     countdownNewest,
     prefetchHref,
@@ -5176,8 +5468,17 @@ ${group.items.map((row) => renderArcAppearance(row, token, lang)).join("\n")}`,
     )
     .join("\n");
 
+  // .archead (§11.2, optional "follow list" feature): a flex row wrapping
+  // the h1 so the bottom script can inject a text-control follow toggle
+  // "next to the arc title" per the spec, without a card/button — see the
+  // follow-toggle IIFE in pageChrome. data-arc-slug/data-follow-add/
+  // data-follow-remove are the same "data-* carrier" contract as every other
+  // client-read attribute in this file (data-created, data-unread-label,
+  // paletteconfig, …): the toggle itself is entirely client-side (a
+  // localStorage array of followed slugs, never sent here), so this is the
+  // only place slug/i18n strings meet the DOM for it to read.
   const body = `<nav class="digestnav"><a href="${indexHref(token, lang, "all")}">${esc(strings.allDigests)}</a></nav>
-<h1 class="arctitle">${esc(title)}</h1>
+<div class="archead"><h1 class="arctitle" data-arc-slug="${esc(slug)}" data-follow-add="${esc(strings.followAdd)}" data-follow-remove="${esc(strings.followRemove)}">${esc(title)}</h1></div>
 <p class="stamp">${esc(metaLine)}</p>
 <div class="archivelabel">${esc(strings.arcTimelineLabel)}</div>
 ${timelineHtml}`;
