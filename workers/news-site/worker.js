@@ -3070,6 +3070,18 @@ const CSS = `
      only exists from 52em up. * { box-sizing: border-box } is set globally,
      so max-width 48em with 3em side padding keeps the text at the same
      42em measure it has on mobile. */
+  /* Wide-viewport type scale (owner: "the resolution is too low" on a big
+     display). The honest lever for a prose-first site is SIZE, not width:
+     every dimension here is em-based off body, so stepping the base up
+     scales the card, the padding, the chrome and the text together, uses
+     more of a large screen, and leaves the character measure exactly where
+     it was (~82). Widening the column instead would have pushed the
+     measure past 100 characters, which is where reading actually degrades.
+     Breakpoint ems resolve against the 16px root, so these are 1200px and
+     1600px. The S/M/L preference in Settings still multiplies on top. */
+  @media (min-width: 75em) { body { font-size: 18px; } }
+  @media (min-width: 100em) { body { font-size: 19px; } }
+
   @media (min-width: 52em) {
     body { background: var(--page-bg); padding: 2.5em 1.5em; }
     /* Keep the root canvas in step with the desktop page background — see
@@ -3077,33 +3089,24 @@ const CSS = `
     html { background: var(--page-bg); }
     .wrap {
       background: var(--bg);
-      max-width: 56em;
+      max-width: 48em;
       padding: 0.4em 3em 3.5em;
       border-radius: 28px;
       border: 1px solid var(--hairline);
     }
-    /* Desktop optimisation (owner-requested): the card widens 48em -> 56em,
-       but the READING MEASURE does not move — every prose-bearing block
-       below is clamped to the same 42em it has always had (measured: ~83
-       characters per line at the 17px body size, already at the wide end of
-       the 45-75 convention, so widening the prose itself would cost
-       readability rather than buy anything). What the extra 8em actually
-       buys is the chrome: NOW rows stop ellipsising long arc labels, the
-       week rail's three zones separate properly, catch-up/source-key/TOC
-       chips wrap less. This is the "controlled variation" the design
-       guidance asks for — narrow prose, wider situational overview.
-       Clamped, deliberately NOT centred: prose and chrome keep one shared
-       left edge (chrome simply runs further right), because two different
-       left edges on the same page reads as misalignment, not hierarchy.
-
-       41em, not 42: the old 48em card minus its 3em padding left prose at
-       712px, and an em clamp resolves against each block's OWN font-size,
-       so a bare 42em measured 728px here — 2 characters WIDER than before.
-       41em lands at 711px, holding the shipped measure to the pixel. It
-       also normalises it: every prose block now has the same character
-       measure regardless of its font-size (the lead card's larger excerpt
-       used to run visibly shorter inside a fixed-px card). */
-    .digest, .excerpt, .deltatext, .en-only-note, .catchuptext, .empty { max-width: 41em; }
+    /* NOTE — no prose max-width clamp here, deliberately. A pass on
+       2026-08-10 tried widening this card to 56em while holding prose at
+       41em, on the theory that chrome should use width prose shouldn't.
+       Live, that read as a broken right edge rather than as hierarchy:
+       the TL;DR box and every ledger excerpt stopped dead mid-card with
+       nothing beside them (owner-reported, twice). Even at this 48em card
+       a clamp left the smaller-font ledger excerpts ~74px short of the
+       content box — same artifact, smaller. This site is mostly prose, so
+       the width it can honestly fill is the width its text wants: content
+       box and text edge are one and the same again. Screen real estate is
+       bought with TYPE SIZE instead — see the wide-viewport font-size
+       steps above, which scale the whole em-based layout together and
+       leave the character measure where it is. */
     /* Anchor the floating back button to the BUBBLE, not the viewport:
        the card is 48em centered, so its right edge sits at 50% + 24em —
        park the button 1rem into the purple gutter beside its bottom
