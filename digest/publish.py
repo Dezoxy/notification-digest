@@ -66,15 +66,26 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 # counter would manufacture a permanent false arc that never says anything
 # about what actually happened.
 #
+# One entry per FIXED second-tier/standing section across all three
+# briefing prompts. Kept grouped by prompt so an audit against the prompt
+# files is a straight read-down, not a hunt:
+#
+# - "Also this window" -- prompts/digest.md's fixed second-tier section.
+#   The highest-frequency one by far: window digests run every 3 hours, so
+#   a false arc here reaches "×5 this week" within a day (owner-reported,
+#   2026-08-10).
 # - "Also today" -- prompts/daily.md's fixed second-tier section, present
 #   in nearly every daily brief by construction.
-# - "Hungary" -- the standing rule in prompts/daily.md and
-#   prompts/weekly.md: whenever an r/hungary item appears upstream, this
-#   section is mandatory, not a developing story. It is a standing PER-DAY
-#   (or per-week) rubric, not an arc -- if the owner ever wants Hungary
-#   arcs back, deleting it from this set is the whole change.
+# - "Also this week" -- prompts/weekly.md's fixed second-tier section, the
+#   weekly counterpart of the two above.
 # - "Watching next week" -- prompts/weekly.md's fixed forward-looking
 #   watchlist section.
+# - "Hungary" -- the standing rule in prompts/digest.md, prompts/daily.md
+#   and prompts/weekly.md: whenever an r/hungary item appears upstream,
+#   this section is mandatory, not a developing story. It is a standing
+#   PER-WINDOW (or per-day, or per-week) rubric, not an arc -- if the owner
+#   ever wants Hungary arcs back, deleting it from this set is the whole
+#   change.
 #
 # Casefolded (matching the `.casefold()` comparison derive_topics already
 # does for _NEEDS_ATTENTION_HEADING) so "## ALSO TODAY" is caught too.
@@ -82,9 +93,20 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 # MAINTENANCE COUPLING: a prompt file that adds a new FIXED, mandated
 # rubric heading (as opposed to a model-chosen story heading) must add its
 # casefolded text here too, or the site will start growing a false arc for
-# it the same way it did for these three.
+# it. This has now been missed twice -- the first pass covered only the
+# daily/weekly headings the owner happened to have seen, leaving the
+# window prompt's own "Also this window" (and the weekly's "Also this
+# week") to surface later as live false arcs. `test_structural_rubric_
+# headings_cover_every_prompt_mandated_heading` in tests/test_publish.py
+# now reads the prompt files directly and fails on the next omission.
 _STRUCTURAL_RUBRIC_HEADINGS = frozenset(
-    {"also today", "hungary", "watching next week"}
+    {
+        "also this window",
+        "also today",
+        "also this week",
+        "watching next week",
+        "hungary",
+    }
 )
 
 # The banner line summarize.summarize() deterministically prepends ahead of
@@ -460,10 +482,11 @@ def derive_topics(body_md: str) -> list[dict[str, str]]:
     `section_link_targets` uses against this module's own
     `_NEEDS_ATTENTION_HEADING` constant -- it is the prompt's own routing
     label, not a story, so it must never become a topic either. Also
-    EXCLUDING every heading in `_STRUCTURAL_RUBRIC_HEADINGS` ("Also today",
-    "Hungary", "Watching next week") for the identical reason: see that
-    constant's own comment for which prompt mandates each and why their
-    recurrence is structural, not editorial.
+    EXCLUDING every heading in `_STRUCTURAL_RUBRIC_HEADINGS` ("Also this
+    window", "Also today", "Also this week", "Watching next week",
+    "Hungary") for the identical reason: see that constant's own comment
+    for which prompt mandates each and why their recurrence is structural,
+    not editorial.
 
     `label` is the heading's own text, stripped, truncated to 80 characters
     (the site's own label limit). `slug` is `_slugify(heading)` -- see that
