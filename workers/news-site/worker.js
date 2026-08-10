@@ -1461,6 +1461,31 @@ const STRINGS = {
     // index — see computeNowArcs/renderNowSection. Reuses arcRepeat/
     // arcMomentum{Up,Same,Down} above rather than minting near-duplicates.
     nowLabel: "Now",
+    // Archive nav affordance (§11.1 PR C, archiveHref/renderSwitchers): a
+    // small masthead link (and the matching ⌘K palette command, same href)
+    // pointing at the previous ISO week's index — the newest fully-past
+    // week, i.e. genuine archive navigation now that NOW (§11.1 PR B) leads
+    // the page. One string, reused for both surfaces.
+    archiveLabel: "Archive",
+    // ⌘K command palette (§11.1 PR C): client-side only, progressive
+    // enhancement — see the palette IIFE in pageChrome. paletteLabel is the
+    // palette's accessible name (the input's own aria-label — the dialog
+    // itself is labelled BY the input via aria-labelledby, per the §11.1
+    // spec, so this string only has to live in one place). paletteCmd* are
+    // the static commands assembled at open time alongside whatever the
+    // current page's own DOM contributes (arcs, briefings) — see
+    // collectPaletteItems. paletteEmpty reuses emptyFiltered rather than
+    // minting a near-duplicate "nothing matches" string; the "Search" and
+    // "Archive" commands reuse searchButton/archiveLabel above for the same
+    // reason.
+    paletteLabel: "Command palette",
+    palettePlaceholder: "Type a command or search…",
+    paletteCmdTop: "Go to top",
+    paletteCmdAll: "All view",
+    paletteCmdDaily: "Daily view",
+    paletteCmdWeekly: "Weekly view",
+    paletteCmdSwitchLang: "Switch language",
+    paletteCmdLatest: "Latest briefing",
   },
   hu: {
     locale: "hu-HU",
@@ -1536,6 +1561,17 @@ const STRINGS = {
     // Owner: please review — new HU string, NOW section (§11.1 PR B),
     // mirrors the EN block's pattern.
     nowLabel: "Most",
+    // Owner: please review — new HU strings, Archive nav affordance +
+    // ⌘K command palette (§11.1 PR C), mirror the EN block's pattern.
+    archiveLabel: "Archívum",
+    paletteLabel: "Parancspaletta",
+    palettePlaceholder: "Parancs vagy keresés…",
+    paletteCmdTop: "Fel",
+    paletteCmdAll: "Teljes nézet",
+    paletteCmdDaily: "Napi nézet",
+    paletteCmdWeekly: "Heti nézet",
+    paletteCmdSwitchLang: "Nyelv váltása",
+    paletteCmdLatest: "Legfrissebb hírlevél",
   },
 };
 
@@ -1583,6 +1619,22 @@ function searchHref(token, lang) {
 function arcHref(token, lang, slug) {
   const langSeg = lang === "hu" ? "hu/" : "";
   return `/t/${encodeURIComponent(token)}/${langSeg}a/${esc(slug)}`;
+}
+
+// Archive nav affordance (§11.1 PR C, "chronological brief feed demotes to
+// Archive navigation"): the previous ISO week's index — the newest
+// fully-past week, i.e. genuine archive; the current week is already the
+// site's root, so there's nothing to archive-link to there. Computed off
+// the REAL current instant (isoWeekOf(new Date())) every time, never off
+// whatever week/view the calling page happens to be showing — see the
+// call sites (renderSwitchers' showArchive param) for which pages render
+// this at all. Always the "all" view: daily/weekly have no week address
+// (see the route match in fetch()), and "all" is where the week rail
+// itself already lives.
+function archiveHref(token, lang) {
+  const current = isoWeekOf(new Date());
+  const prev = adjacentWeek(current.year, current.week, -1);
+  return weekHref(token, lang, "all", prev.year, prev.week);
 }
 
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
@@ -1636,10 +1688,16 @@ function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null)
 // twin to keep the week address for, so there's nothing to preserve here.
 function renderViewTabs(token, lang, view) {
   const strings = STRINGS[lang];
+  // data-view (§11.1 PR C, ⌘K palette): lets the palette script identify
+  // which view a tab targets without parsing translated label text — see
+  // collectPaletteItems in pageChrome. Purely a JS hook, no visual/no-JS
+  // effect; carried on both the active <span> and the linked <a> variants
+  // for consistency even though the palette only ever reads it off the
+  // linked ones (an active tab has no href to offer).
   const tab = (v, label) =>
     view === v
-      ? `<span class="viewtab active">${esc(label)}</span>`
-      : `<a class="viewtab" href="${indexHref(token, lang, v)}">${esc(label)}</a>`;
+      ? `<span class="viewtab active" data-view="${v}">${esc(label)}</span>`
+      : `<a class="viewtab" data-view="${v}" href="${indexHref(token, lang, v)}">${esc(label)}</a>`;
   return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}${tab("weekly", strings.viewWeekly)}</nav>`;
 }
 
@@ -1651,8 +1709,24 @@ function renderViewTabs(token, lang, view) {
 // and hidden-until-JS contract untouched. Theme and size are miniseg button
 // groups (owner upgrade: three-state theme, S/M/L text size) — same
 // hidden-until-JS contract, wired by their own IIFEs below in pageChrome.
-function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
+// `showArchive` (§11.1 PR C, default false): renders the small Archive link
+// in the masthead's switcher row (see archiveLinkHtml below). Deliberately a
+// separate explicit param, not derived from `pageKind === "index"` — the
+// search page ALSO passes pageKind "index" (see renderSearchPage, so its
+// density row keeps rendering there too) but must NOT get the Archive link
+// (§11.1 spec: "not digest/arc/search pages"), so pageKind alone can't
+// gate this. Only renderIndexPage ever passes true.
+function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, showArchive = false) {
   const strings = STRINGS[lang];
+  // archivelink: a plain small link, not inside the settings disclosure —
+  // it's primary navigation (§11.1 "chronological brief feed demotes to
+  // Archive navigation"), not a preference, so it stays one tap away rather
+  // than one extra tap behind the gear. Same href the ⌘K palette's own
+  // "Archive" command reads (see collectPaletteItems in pageChrome) — one
+  // computation (archiveHref), two surfaces.
+  const archiveLinkHtml = showArchive
+    ? `<a class="archivelink" href="${archiveHref(token, lang)}">${esc(strings.archiveLabel)}</a>`
+    : "";
   const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
   // Theme is now a three-state Light/Auto/Dark miniseg (owner redesign),
   // not the old two-state ◐ toggle — see the theme IIFE in pageChrome for
@@ -1675,7 +1749,7 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null) {
   // The gear carries a visible text label on desktop (owner-requested) and
   // collapses to the bare icon on the phone — the label span is hidden by
   // the mobile media block, the aria-label covers it everywhere.
-  return `<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
+  return `${archiveLinkHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}">⚙<span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${densityRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -1931,6 +2005,13 @@ const CSS = `
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
   .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
 
+  /* Archive nav affordance (§11.1 PR C): a small link, not a pill/button —
+     it sits in the same .mastright column as the gear (see renderSwitchers),
+     one row above it, matching .langswitch's own understated weight rather
+     than competing with the primary view tabs. */
+  .mast .archivelink { font-size: 0.85em; color: var(--muted); text-decoration: none; }
+  .mast .archivelink:hover, .mast .archivelink:focus-visible { color: var(--accent); }
+
   /* Settings bubble (owner redesign): the gear button collapses language,
      theme, and density into one disclosure. details.settings — NOT
      .mastright — is the positioning anchor for .settingspanel below:
@@ -2037,6 +2118,53 @@ const CSS = `
   /* Inset outline: an outset ring would get clipped by .miniseg's
      overflow: hidden — same note as .viewtab:focus-visible above. */
   .minisegbtn:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+
+  /* ⌘K command palette (§11.1 PR C): markup is injected at runtime (see the
+     palette IIFE in pageChrome, below) — no server-rendered dialog HTML, so
+     everything it needs lives here. Deliberately NOT a card — one dialog,
+     thin hairlines, mono input, no drop-shadow-heavy chrome (design
+     guidance: "no card soup"). Dark-first like the rest of the site: it
+     reads off the same --bg/--text/--muted/--hairline/--accent tokens as
+     everything else, so it never needs its own light/dark handling. Hidden
+     via the plain [hidden] attribute (see the global rule above), same
+     progressive-enhancement contract as the filter input/theme toggle. */
+  .cmdpalette-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 12vh 1em 0;
+  }
+  .cmdpalette {
+    width: min(34em, 100%); max-height: 70vh;
+    background: var(--bg); border: 1px solid var(--hairline); border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .cmdpalette { animation: cmdpaletteopen 120ms ease-out; }
+    @keyframes cmdpaletteopen {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+  .cmdpalette-input {
+    font-family: var(--font-data); font-size: 1em; color: var(--text);
+    background: none; border: none; border-bottom: 1px solid var(--hairline);
+    padding: 0.85em 1em; outline: none;
+  }
+  .cmdpalette-input::placeholder { color: var(--muted); }
+  .cmdpalette-list { overflow-y: auto; padding: 0.35em 0; }
+  .cmdpalette-item {
+    padding: 0.55em 1em; font-size: 0.93em; color: var(--text);
+    font-family: var(--font-prose); cursor: pointer;
+    display: flex; justify-content: space-between; gap: 1em;
+  }
+  .cmdpalette-item .cmdpalette-group {
+    font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted); align-self: center;
+  }
+  .cmdpalette-item.active { background: var(--tldr-bg); }
+  .cmdpalette-empty { padding: 0.85em 1em; font-size: 0.9em; color: var(--muted); }
 
   .dayhead {
     font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em;
@@ -2706,6 +2834,29 @@ function pageChrome(host, token, lang, view, switchersHtml, bodyHtml, title = nu
   const prefetchScriptHtml = prefetchHref
     ? `<script type="speculationrules">${JSON.stringify({ prefetch: [{ urls: [prefetchHref] }] })}</script>`
     : "";
+  // ⌘K command palette strings (§11.1 PR C): the same data-* carrier
+  // pattern countdownHtml/the unread fence/archiveResultsHtml already use
+  // above and elsewhere in this file — a hidden element whose attributes
+  // the client script reads, so the palette IIFE in the bottom <script>
+  // stays lang-agnostic. Lives INSIDE .wrap (unlike the palette's own
+  // dialog markup, created once by that IIFE and left outside .wrap — see
+  // its comment) specifically so a soft-nav LANGUAGE hop refreshes these
+  // strings along with everything else the swap replaces; the palette
+  // re-reads them from here on every open, never caching them at creation
+  // time, so a stale EN string can never survive into a HU page.
+  const paletteConfigHtml = `<span class="paletteconfig" hidden
+    data-label="${esc(strings.paletteLabel)}"
+    data-placeholder="${esc(strings.palettePlaceholder)}"
+    data-empty="${esc(strings.emptyFiltered)}"
+    data-cmd-top="${esc(strings.paletteCmdTop)}"
+    data-cmd-all="${esc(strings.paletteCmdAll)}"
+    data-cmd-daily="${esc(strings.paletteCmdDaily)}"
+    data-cmd-weekly="${esc(strings.paletteCmdWeekly)}"
+    data-cmd-search="${esc(strings.searchButton)}"
+    data-cmd-archive="${esc(strings.archiveLabel)}"
+    data-cmd-switchlang="${esc(strings.paletteCmdSwitchLang)}"
+    data-cmd-latest="${esc(strings.paletteCmdLatest)}"
+  ></span>`;
   return `<!doctype html>
 <html lang="${lang}">
 <head>
@@ -2736,6 +2887,7 @@ ${prefetchScriptHtml}
       ${switchersHtml}
     </div>
   </header>
+  ${paletteConfigHtml}
   ${viewTabsHtml}
   ${bodyHtml}
   <footer class="site">
@@ -2782,6 +2934,37 @@ ${prefetchScriptHtml}
       }
     }
     mutate();
+  }
+
+  // j/k list-selection navigation (§11.1 PR C): the primary-link-list half
+  // of the "Keyboard navigation" IIFE inside wirePage() below — pulled out
+  // as its own top-level function (rather than nested inside that IIFE)
+  // since it needs no closure state of its own and stays identical across
+  // every wirePage() pass; defining it once here, not per pass, costs
+  // nothing and avoids re-creating an identical closure on every soft-nav.
+  // Queries .wrap fresh on every call — never caches the list — so it
+  // always reflects whatever page (and whatever the client-side filter has
+  // hidden — see the !el.hidden check) is currently showing. Selection is
+  // real DOM focus, not a separate highlight: the existing :focus-visible
+  // rule already lights up whichever anchor gets focused, so this needs no
+  // CSS of its own. No wrap-around (§11.1 spec: "stop at ends") — stepping
+  // past either end of the list is simply a no-op.
+  function moveNavSelection(delta) {
+    var list = Array.prototype.slice
+      .call(document.querySelectorAll(".wrap .nowrow, .wrap .entry"))
+      .filter(function (el) {
+        return !el.hidden;
+      });
+    if (list.length === 0) return;
+    var idx = list.indexOf(document.activeElement);
+    var next;
+    if (idx === -1) {
+      next = delta > 0 ? 0 : list.length - 1;
+    } else {
+      next = idx + delta;
+      if (next < 0 || next >= list.length) return; // no wrap-around — stop at the end
+    }
+    list[next].focus();
   }
 
   // Soft-navigation re-wiring: every feature below used to be a standalone,
@@ -3424,17 +3607,41 @@ ${prefetchScriptHtml}
     });
   })();
 
-  // Keyboard navigation (roadmap 2 step 4): desktop convenience, no visible
-  // UI hint — the nav arrows already show the model. j/ArrowLeft hop to the
-  // OLDER digest, k/ArrowRight to the NEWER one, via the stable nav-older/
-  // nav-newer classes renderDigestPage puts on both the top and bottom
-  // digestnav (index pages have neither, so this silently no-ops there).
-  // "/" focuses the index filter, when one exists on the page. j = older =
-  // down-the-archive, matching the index's newest-first reading order
-  // (vim-scroll intuition); the arrow keys mirror the nav's own visual
-  // ← older / newer → arrows. Never intercepts typing: bails on any
-  // input/textarea/select/contentEditable target, and on any ctrl/meta/alt
-  // modifier so browser shortcuts stay untouched.
+  // Keyboard navigation (roadmap 2 step 4, extended §11.1 PR C): desktop
+  // convenience, no visible UI hint — the nav arrows already show the
+  // model. j/ArrowLeft hop to the OLDER digest, k/ArrowRight to the NEWER
+  // one, via the stable nav-older/nav-newer classes renderDigestPage puts
+  // on both the top and bottom digestnav (index/arc pages have neither, see
+  // below for what j/k do there instead). "/" focuses the index filter,
+  // when one exists on the page. j = older = down-the-archive, matching the
+  // index's newest-first reading order (vim-scroll intuition); the arrow
+  // keys mirror the nav's own visual ← older / newer → arrows. Never
+  // intercepts typing: bails on any input/textarea/select/contentEditable
+  // target, and on any ctrl/meta/alt modifier so browser shortcuts stay
+  // untouched.
+  //
+  // §11.1 PR C: on a page with no nav-older/nav-newer (index or arc pages —
+  // digest pages always have at least one, unless at the very end of the
+  // archive, see below), bare j/k (NOT the arrow keys — those stay
+  // digest-nav-only) instead move a focus-based selection through the
+  // page's primary link list: NOW's .nowrow rows then the ledger's .entry
+  // rows, in DOM order (renderNowSection always renders before the ledger —
+  // see renderIndexPage), or an arc page's timeline .entry rows (no .nowrow
+  // there). Selection IS real focus (moveNavSelection's list[next].focus()),
+  // so the site's existing :focus-visible ring is what shows it — no new
+  // highlight styling needed. No wrap-around: stepping past either end
+  // simply stops. "o" opens the currently focused row (Enter already does,
+  // for free — a focused <a> activates on Enter with no JS involved); "o"
+  // exists because letting Enter double as "open" conflicts with nothing
+  // here, but a dedicated key some readers may expect from other
+  // list-nav UIs costs one more branch.
+  //
+  // A one-digest archive floor (both nav-older and nav-newer absent on a
+  // digest page — the archive's very first or only entry) would otherwise
+  // silently fall through into the index/arc branch below; harmless in
+  // practice (a digest page has no .nowrow/.entry to move a selection
+  // through either, so moveNavSelection's empty-list guard just no-ops),
+  // so no extra guard is needed to keep that case distinct.
   (function () {
     addEventListener("keydown", function (e) {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -3450,9 +3657,16 @@ ${prefetchScriptHtml}
         // pointer navigation had gone soft (keyboard steppers flashed,
         // taps did not).
         if (older) older.click();
+        else if (e.key === "j") moveNavSelection(1);
       } else if (e.key === "k" || e.key === "ArrowRight") {
         var newer = document.querySelector(".nav-newer");
         if (newer) newer.click();
+        else if (e.key === "k") moveNavSelection(-1);
+      } else if (e.key === "o") {
+        var active = document.activeElement;
+        if (active && (active.classList.contains("nowrow") || active.classList.contains("entry"))) {
+          active.click();
+        }
       } else if (e.key === "/") {
         var filter = document.querySelector(".filter");
         if (filter) {
@@ -3461,6 +3675,270 @@ ${prefetchScriptHtml}
         }
       }
     }, { signal: signal });
+  })();
+
+  // ⌘K command palette (§11.1 PR C): markup is created ONCE, lazily, on
+  // first wirePage() pass, and left living in document.body OUTSIDE .wrap
+  // (like the resume chip elsewhere in this file) — a soft-nav swap only
+  // replaces .wrap's innerHTML, so re-creating this dialog on every pass
+  // would be wasted work and would drop any state (results scroll position,
+  // etc.) for no reason. Its CONTENT is never stale, though: every string
+  // and every command is read fresh off the current page's DOM (.paletteconfig,
+  // .viewtabs, .langswitch, .archivelink, .searchlink, .now, .entry — see
+  // collectPaletteItems) at OPEN time, not at creation time, so a soft-nav
+  // page change (including a language hop) is always reflected the next
+  // time the palette opens, even though the dialog element itself never
+  // gets rebuilt. Listeners on the dialog's own elements ARE rebound every
+  // wirePage() pass via signal — same convention as every other feature in
+  // this function — which is what "hook into it correctly rather than
+  // double-binding" means here: idempotent creation (the "if (!overlay)"
+  // guard below) plus per-pass listener rebinding (via signal), never both
+  // firing a duplicate DOM append.
+  (function () {
+    var config = document.querySelector(".paletteconfig");
+    if (!config) return; // pageChrome always renders this — defensive only
+
+    var overlay = document.querySelector(".cmdpalette-backdrop");
+    var dialog, input, list;
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.className = "cmdpalette-backdrop";
+      overlay.hidden = true;
+      dialog = document.createElement("div");
+      dialog.className = "cmdpalette";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      // "labelled by the input" (§11.1 PR C spec), not a separate heading —
+      // the input doubles as both the dialog's accessible name AND the
+      // control the reader actually types into.
+      dialog.setAttribute("aria-labelledby", "cmdpalette-input");
+      input = document.createElement("input");
+      input.type = "text";
+      input.id = "cmdpalette-input";
+      input.className = "cmdpalette-input";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      list = document.createElement("div");
+      list.className = "cmdpalette-list";
+      list.setAttribute("role", "listbox");
+      dialog.appendChild(input);
+      dialog.appendChild(list);
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+    } else {
+      dialog = overlay.querySelector(".cmdpalette");
+      input = overlay.querySelector(".cmdpalette-input");
+      list = overlay.querySelector(".cmdpalette-list");
+    }
+
+    var currentResults = [];
+    var activeIndex = -1;
+    var previouslyFocused = null;
+
+    // Assembled fresh on every open — see the IIFE's own comment above for
+    // why this must never be cached across soft-navs. Static commands
+    // first, then whatever the current page's own DOM contributes (arcs,
+    // then briefings) — same "commands, then arcs, then briefings" order
+    // the §11.1 spec lists them in.
+    function collectPaletteItems() {
+      var items = [];
+      items.push({
+        label: config.getAttribute("data-cmd-top"),
+        action: function () {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        },
+      });
+      // View tabs: only the non-active ones carry an href (see
+      // renderViewTabs) — reading data-view off each rather than parsing
+      // translated tab text is what lets this stay lang-agnostic.
+      Array.prototype.slice.call(document.querySelectorAll(".viewtabs .viewtab[href]")).forEach(function (tab) {
+        var v = tab.getAttribute("data-view");
+        var key = v === "daily" ? "data-cmd-daily" : v === "weekly" ? "data-cmd-weekly" : "data-cmd-all";
+        items.push({ label: config.getAttribute(key), el: tab });
+      });
+      var searchLink = document.querySelector(".searchlink");
+      if (searchLink) items.push({ label: config.getAttribute("data-cmd-search"), el: searchLink });
+      var archiveLink = document.querySelector(".archivelink");
+      if (archiveLink) items.push({ label: config.getAttribute("data-cmd-archive"), el: archiveLink });
+      var langLink = document.querySelector(".langswitch a");
+      if (langLink) items.push({ label: config.getAttribute("data-cmd-switchlang"), el: langLink });
+      var latest = document.querySelector(".wrap .entry");
+      if (latest) items.push({ label: config.getAttribute("data-cmd-latest"), el: latest });
+
+      // Arcs: NOW's .nowrow rows (label + href), when present (§11.1 PR C
+      // spec 2b) — index pages, current week only, see renderNowSection.
+      Array.prototype.slice.call(document.querySelectorAll(".now .nowrow")).forEach(function (row) {
+        var labelEl = row.querySelector(".nowarclabel");
+        items.push({ label: (labelEl ? labelEl.textContent : row.textContent).trim(), el: row, group: "arc" });
+      });
+
+      // Briefings: visible ledger .entry links, capped at 20 (§11.1 PR C
+      // spec 2c) — their time + excerpt text as the label, same "read text
+      // off the rendered DOM" approach as everywhere else in this function.
+      // Deliberately NOT deduped against the "Latest briefing" command
+      // above (that command is a convenience shortcut to the same target,
+      // not a separate source) — a small, harmless overlap, not worth the
+      // extra bookkeeping to avoid.
+      Array.prototype.slice
+        .call(document.querySelectorAll(".wrap .entry"))
+        .slice(0, 20)
+        .forEach(function (entry) {
+          var timeEl = entry.querySelector(".time, .eyebrow-text");
+          var excerptEl = entry.querySelector(".excerpt");
+          var label = (timeEl ? timeEl.textContent + " — " : "") + (excerptEl ? excerptEl.textContent : "");
+          items.push({ label: label.trim(), el: entry, group: "briefing" });
+        });
+
+      return items;
+    }
+
+    var allItems = [];
+
+    function renderResults(query) {
+      var q = query.trim().toLowerCase();
+      var filtered = allItems
+        .filter(function (item) {
+          return !q || item.label.toLowerCase().indexOf(q) !== -1;
+        })
+        .slice(0, 12);
+      currentResults = filtered;
+      activeIndex = filtered.length > 0 ? 0 : -1;
+      list.innerHTML = "";
+      if (filtered.length === 0) {
+        var empty = document.createElement("div");
+        empty.className = "cmdpalette-empty";
+        empty.textContent = config.getAttribute("data-empty");
+        list.appendChild(empty);
+        return;
+      }
+      filtered.forEach(function (item, i) {
+        var row = document.createElement("div");
+        row.className = "cmdpalette-item" + (i === 0 ? " active" : "");
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", String(i === 0));
+        row.dataset.index = String(i);
+        var labelSpan = document.createElement("span");
+        labelSpan.textContent = item.label;
+        row.appendChild(labelSpan);
+        if (item.group) {
+          var groupSpan = document.createElement("span");
+          groupSpan.className = "cmdpalette-group";
+          groupSpan.textContent = item.group;
+          row.appendChild(groupSpan);
+        }
+        list.appendChild(row);
+      });
+    }
+
+    function reflectActive() {
+      var rows = list.querySelectorAll(".cmdpalette-item");
+      for (var i = 0; i < rows.length; i++) {
+        var isActive = i === activeIndex;
+        rows[i].classList.toggle("active", isActive);
+        rows[i].setAttribute("aria-selected", String(isActive));
+        if (isActive) rows[i].scrollIntoView({ block: "nearest" });
+      }
+    }
+
+    function moveActive(delta) {
+      if (currentResults.length === 0) return;
+      activeIndex = (activeIndex + delta + currentResults.length) % currentResults.length;
+      reflectActive();
+    }
+
+    function activateSelection() {
+      var item = currentResults[activeIndex];
+      if (!item) return;
+      closePalette();
+      if (item.action) item.action();
+      // el.click() (not a direct navigation): the click event bubbles up
+      // to the document-level soft-nav interceptor exactly like a real
+      // pointer click on that same anchor would, so results navigate
+      // through the soft path — see the "Keyboard navigation" comment
+      // above for why click() is used instead of location assignment
+      // throughout this file.
+      else if (item.el) item.el.click();
+    }
+
+    function openPalette() {
+      previouslyFocused = document.activeElement;
+      // Re-read every string fresh — see the IIFE's own top comment on why
+      // this must never rely on values captured at creation time.
+      input.placeholder = config.getAttribute("data-placeholder");
+      input.setAttribute("aria-label", config.getAttribute("data-label"));
+      allItems = collectPaletteItems();
+      input.value = "";
+      renderResults("");
+      overlay.hidden = false;
+      input.focus();
+    }
+
+    function closePalette() {
+      if (overlay.hidden) return;
+      overlay.hidden = true;
+      if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+    }
+
+    overlay.addEventListener(
+      "click",
+      function (e) {
+        if (e.target === overlay) closePalette();
+      },
+      { signal: signal },
+    );
+    input.addEventListener("input", function () { renderResults(input.value); }, { signal: signal });
+    input.addEventListener(
+      "keydown",
+      function (e) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          moveActive(1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          moveActive(-1);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          activateSelection();
+        }
+      },
+      { signal: signal },
+    );
+    list.addEventListener(
+      "click",
+      function (e) {
+        var row = e.target.closest ? e.target.closest(".cmdpalette-item") : null;
+        if (!row) return;
+        activeIndex = Number(row.dataset.index);
+        activateSelection();
+      },
+      { signal: signal },
+    );
+    // Escape closes regardless of where focus happens to be — same
+    // unconditional-on-focus-target convention the settings-bubble's own
+    // Escape handler above already uses (unlike the OPEN trigger below,
+    // which — per the §11.1 spec's "no bindings while focus is in an
+    // input/textarea/select or contenteditable" guardrail — deliberately
+    // does NOT fire while the reader is typing somewhere else on the page).
+    document.addEventListener(
+      "keydown",
+      function (e) {
+        if (e.key === "Escape" && !overlay.hidden) closePalette();
+      },
+      { signal: signal },
+    );
+    document.addEventListener(
+      "keydown",
+      function (e) {
+        var t = e.target;
+        var tag = t && t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {
+          e.preventDefault();
+          openPalette();
+        }
+      },
+      { signal: signal },
+    );
   })();
   }
 
@@ -4300,7 +4778,11 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     token,
     lang,
     view,
-    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo),
+    // showArchive: true — the only call site that renders the Archive link
+    // (§11.1 PR C spec: index pages only, current or archive week, not
+    // digest/arc/search — see renderSwitchers' own comment on why pageKind
+    // alone can't gate this).
+    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
     `${nowHtml}${railHtml}${filterRowHtml}${pulseHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     countdownNewest,
