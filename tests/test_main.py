@@ -38,10 +38,13 @@ from digest.state import (
     connect,
     count_unsummarized_items,
     create_digest,
+    get_arc_keys,
     get_digest_item_urls,
     get_pending_digests,
+    get_recent_arc_keys,
     get_unsummarized_items,
     init_db,
+    write_arc_keys,
 )
 from digest.summarize import SummarizeError
 from digest.verify import VerificationUnavailable
@@ -223,7 +226,7 @@ def test_deliver_zero_unsummarized_items_sends_nothing(conn, monkeypatch):
 def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
@@ -250,12 +253,14 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         # cfg.claude_effort must reach summarize() unchanged -- the only hop
         # between Config.claude_effort and the eventual `--effort` argv flag
         # in digest/summarize.py's run_claude.
         summarize_calls.append(effort)
-        return "## Needs attention\n...", []
+        return "## Needs attention\n...", [], []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
 
@@ -350,6 +355,111 @@ def test_deliver_end_to_end_strips_deltas_fence_before_storage_and_persists_them
     ]
 
 
+def test_deliver_end_to_end_strips_arcs_fence_before_storage_and_persists_them(
+    conn, monkeypatch
+):
+    # Stable-arc-keys integration, mirrors the deltas end-to-end test
+    # immediately above: runs the REAL summarize() (only run_claude is
+    # mocked) so extract_arc_keys, derive_topics(body_md, arc_keys), and
+    # write_arc_keys all execute for real. Proves the single-choke-point
+    # claim: the raw model output's ```arcs fence must never reach
+    # digests.body_md, while the parsed entry still lands in the `arc_keys`
+    # table, mapped to this digest's own real topic slug.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    raw_model_output = (
+        "**TL;DR:** Tension over the Strait of Hormuz continued.\n\n"
+        "## Hormuz tension escalates\n\n"
+        "More vessels were diverted this week.\n\n"
+        '```arcs\n[{"heading": "Hormuz tension escalates", "key": "hormuz"}]\n```\n'
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: raw_model_output)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), [])
+
+    assert ok is True
+    digest_id, body_md = conn.execute("SELECT id, body_md FROM digests").fetchone()
+    # Stripped-body invariant, identical to the deltas contract above.
+    assert "```arcs" not in body_md
+    assert '"key"' not in body_md
+    assert "## Hormuz tension escalates" in body_md  # the real prose section survives untouched
+
+    arc_key_rows = conn.execute(
+        "SELECT slug, key FROM arc_keys WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    assert arc_key_rows == [("hormuz-tension-escalates", "hormuz")]
+
+
+def test_deliver_arc_keys_dropped_when_heading_matches_no_real_section(conn, monkeypatch):
+    # An arcs-fence entry citing a heading that isn't one of this digest's
+    # own `## ` sections (model drift, or a hallucinated citation) must be
+    # dropped -- never stored as if it were a real topic's key.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+
+    raw_model_output = (
+        "**TL;DR:** Quiet window.\n\n"
+        "## Real section\n\nSomething happened.\n\n"
+        '```arcs\n[{"heading": "A heading that does not exist", "key": "ghost-key"}]\n```\n'
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: raw_model_output)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, _cfg(), [])
+
+    assert ok is True
+    digest_id = conn.execute("SELECT id FROM digests").fetchone()[0]
+    count = conn.execute(
+        "SELECT COUNT(*) FROM arc_keys WHERE digest_id = ?", (digest_id,)
+    ).fetchone()[0]
+    assert count == 0
+
+
+def test_deliver_reuses_recent_arc_key_across_two_runs(conn, monkeypatch):
+    # End-to-end proof of the feature's whole point: a second window whose
+    # model output reuses a key from get_recent_arc_keys' {{RECENT_ARCS}}
+    # rendering (fed by the FIRST run's own write_arc_keys) lands in the
+    # `arc_keys` table under the SAME key, even though the heading text
+    # differs completely between the two runs.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    first_output = (
+        "**TL;DR:** Tension near the Strait of Hormuz.\n\n"
+        "## Hormuz tension escalates\n\nMore vessels diverted.\n\n"
+        '```arcs\n[{"heading": "Hormuz tension escalates", "key": "hormuz"}]\n```\n'
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: first_output)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    assert _deliver(conn, _cfg(), []) is True
+
+    # Second window, differently worded heading, reusing the SAME key --
+    # exactly the live incident this feature fixes (Iran/Hormuz recurring
+    # under many different slugs).
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    captured_prompts = []
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        captured_prompts.append(prompt)
+        return (
+            "**TL;DR:** Naval buildup continues near Hormuz.\n\n"
+            "## Naval buildup near the strait\n\nMore ships arrived.\n\n"
+            '```arcs\n[{"heading": "Naval buildup near the strait", "key": "hormuz"}]\n```\n'
+        )
+
+    monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
+    assert _deliver(conn, _cfg(), []) is True
+
+    # The second run's own prompt must have offered "hormuz" back for reuse.
+    assert "hormuz" in captured_prompts[0]
+
+    rows = conn.execute("SELECT digest_id, slug, key FROM arc_keys ORDER BY digest_id").fetchall()
+    assert [r[2] for r in rows] == ["hormuz", "hormuz"]
+    assert rows[0][1] == "hormuz-tension-escalates"
+    assert rows[1][1] == "naval-buildup-near-the-strait"
+
+
 def test_deliver_deltas_dropped_when_heading_matches_no_real_section(conn, monkeypatch):
     # A delta citing a heading that isn't one of this digest's own `## `
     # sections (model drift, or a stale/hallucinated citation) must be
@@ -439,7 +549,7 @@ def test_deliver_logs_digest_delivery_line_matching_success_path(conn, monkeypat
     # _multichannel_cfg so all three statuses are exercised at once.
     commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -464,7 +574,7 @@ def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypa
     # translate_digest -- and by extension the run_claude call inside it --
     # is never even invoked.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
@@ -484,7 +594,9 @@ def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypa
 
 def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", []))
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [])
+    )
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
@@ -520,7 +632,7 @@ def test_deliver_translate_hu_failure_leaves_body_md_hu_null_english_still_ships
     # Soft-fail contract: translate_digest returning None must not affect
     # the English digest's own success at all.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", []))
+    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
     sent = {}
     monkeypatch.setattr(
         deliver_mod, "send_digest", lambda *a, **k: sent.update(called=True) or None
@@ -603,9 +715,11 @@ def test_deliver_threads_real_recent_coverage_from_prior_digests(conn, monkeypat
 
     captured = {}
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         captured["recent_coverage"] = recent_coverage
-        return "## Needs attention\n...", []
+        return "## Needs attention\n...", [], []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -633,9 +747,11 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         summarize_calls.append((items, failed_sources))
-        return "## Needs attention\n...new...", []
+        return "## Needs attention\n...new...", [], []
 
     sends = []
 
@@ -688,9 +804,11 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         summarize_calls.append(failed_sources)
-        return "## Needs attention\n...new...", []
+        return "## Needs attention\n...new...", [], []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -724,9 +842,11 @@ def test_deliver_pending_digest_send_fails_new_items_still_summarized_and_delive
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         summarize_calls.append(items)
-        return "## Needs attention\n...new...", []
+        return "## Needs attention\n...new...", [], []
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
@@ -771,9 +891,11 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
 
     summarize_calls = []
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         summarize_calls.append(items)
-        return "## Needs attention\n...batch...", []
+        return "## Needs attention\n...batch...", [], []
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -809,14 +931,18 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
 
     selected_subset = [i for i in full_batch if i.source_id == "2"]
 
-    def fake_select_items_for_prompt(items, failed_sources, recent_coverage, max_prompt_bytes):
+    def fake_select_items_for_prompt(
+        items, failed_sources, recent_coverage, max_prompt_bytes, recent_arcs=""
+    ):
         return selected_subset
 
     summarize_received = {}
 
-    def fake_summarize(items, failed_sources, recent_coverage, model, timeout_seconds, effort):
+    def fake_summarize(
+        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+    ):
         summarize_received["items"] = items
-        return "## Needs attention\n...selected...", []
+        return "## Needs attention\n...selected...", [], []
 
     monkeypatch.setattr(main_mod, "select_items_for_prompt", fake_select_items_for_prompt)
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
@@ -1150,6 +1276,101 @@ def test_deliver_site_forwards_derive_topics_output_to_publish_to_site(conn, mon
     ]
 
 
+def test_deliver_site_omits_key_when_arc_keys_site_enabled_is_false(conn, monkeypatch):
+    # Kill-switch behaviour. The flag now DEFAULTS on (the site half shipped
+    # first and accepts the per-entry "key"), so this pins the off case
+    # explicitly rather than leaning on the default: with the flag off,
+    # "key" must not reach the payload even though the digest's OWN
+    # arc_keys table already has the mapping persisted (write_arc_keys runs
+    # unconditionally, mirroring write_deltas). That is what makes a site
+    # rollback survivable without an app rollback -- validateTopics 400s the
+    # WHOLE PUT on a per-entry field it doesn't recognise.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    write_arc_keys(conn, digest_id, [{"slug": "story-one", "label": "Story one", "key": "arc-1"}])
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+    monkeypatch.setattr(
+        deliver_mod,
+        "publish_to_site",
+        lambda *a, topics=None, **k: captured.update(topics=topics),
+    )
+
+    cfg = replace(_multichannel_cfg(), arc_keys_site_enabled=False)
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+    )
+
+    assert ok is True
+    assert captured["topics"] == [{"slug": "story-one", "label": "Story one"}]
+
+
+def test_deliver_site_includes_key_when_arc_keys_site_enabled_is_true(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext\n\n## Story two\n\ntext"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    write_arc_keys(conn, digest_id, [{"slug": "story-one", "label": "Story one", "key": "arc-1"}])
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+    monkeypatch.setattr(
+        deliver_mod,
+        "publish_to_site",
+        lambda *a, topics=None, **k: captured.update(topics=topics),
+    )
+
+    cfg = _multichannel_cfg(arc_keys_site_enabled=True)
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+    )
+
+    assert ok is True
+    # story-one carries the persisted key; story-two has none stored, so it
+    # is emitted exactly as before, with no "key" at all.
+    assert captured["topics"] == [
+        {"slug": "story-one", "label": "Story one", "key": "arc-1"},
+        {"slug": "story-two", "label": "Story two"},
+    ]
+
+
+def test_deliver_site_pending_resend_reads_arc_keys_back_from_storage(conn, monkeypatch):
+    # A pending resend never re-summarizes, so the raw ```arcs fence is long
+    # gone -- the "key" must come back from the arc_keys table, the same
+    # "read state back instead of re-deriving it" pattern deltas uses (see
+    # get_arc_keys' own docstring).
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    write_arc_keys(conn, digest_id, [{"slug": "story-one", "label": "Story one", "key": "arc-1"}])
+
+    assert get_arc_keys(conn, digest_id) == {"story-one": "arc-1"}
+
+    captured = {}
+    monkeypatch.setattr(
+        deliver_mod,
+        "publish_to_site",
+        lambda *a, topics=None, **k: captured.update(topics=topics),
+    )
+
+    cfg = _multichannel_cfg(arc_keys_site_enabled=True)
+    # Simulate a MUCH LATER pending-resend call -- digest_id and body_md are
+    # all that survive, exactly what deliver_pending passes in.
+    ok = _deliver_site(
+        conn,
+        cfg,
+        digest_id,
+        body_md,
+        1,
+        "2026-07-29T10:00:00+00:00",
+        get_digest_item_urls(conn, digest_id),
+    )
+
+    assert ok is True
+    assert captured["topics"] == [{"slug": "story-one", "label": "Story one", "key": "arc-1"}]
+
+
 def test_deliver_telegram_delegates_with_configured_params_and_marks_telegram_sent(
     conn, monkeypatch
 ):
@@ -1413,7 +1634,9 @@ def test_deliver_run_failure_propagates_from_a_single_failed_channel(conn, monke
     # systemd OnFailure alert still fires.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## Section", []))
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## Section", [], [])
+    )
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(
         deliver_mod, "publish_to_site", lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
@@ -2667,6 +2890,55 @@ def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatc
     verify_conn.close()
 
 
+def test_daily_and_weekly_modules_never_reference_arc_key_functions():
+    # Structural guardrail, belt-and-suspenders alongside the two behavioral
+    # tests below: digest/daily.py and digest/weekly.py must not so much as
+    # NAME write_arc_keys/get_arc_keys/get_recent_arc_keys/derive_topics'
+    # arc_keys parameter anywhere in their source -- there is nothing here
+    # for a future daily/weekly change to accidentally wire up, since the
+    # names themselves don't appear.
+    daily_source = (Path(__file__).resolve().parent.parent / "digest" / "daily.py").read_text()
+    weekly_source = (Path(__file__).resolve().parent.parent / "digest" / "weekly.py").read_text()
+
+    for name in ("write_arc_keys", "get_arc_keys", "get_recent_arc_keys", "arc_keys"):
+        assert name not in daily_source, f"digest/daily.py must never reference {name!r}"
+        assert name not in weekly_source, f"digest/weekly.py must never reference {name!r}"
+
+
+def test_run_daily_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
+    # Stable-arc-keys guardrail, mirrors the deltas fencing discipline
+    # (test_run_daily_prompt_never_ingests_deltas_content): arc keys are a
+    # window-level concept only (summarize_daily produces a bare body_md, no
+    # arc_keys value at all) -- run_daily must never write a row to
+    # `arc_keys`, even though its own daily digest gets a real `## ` section
+    # a naive implementation might be tempted to tag.
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    window_id = _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=6))
+    write_arc_keys(real_conn, window_id, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}])
+    before_count = real_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
+    assert before_count == 1
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## An arc\n\nstuff"
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    verify_conn = connect(db_path)
+    after_count = verify_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
+    assert after_count == before_count  # unchanged -- run_daily wrote nothing
+    assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == ["hormuz"]
+    verify_conn.close()
+
+
 def test_run_daily_delivery_uses_non_empty_allowed_urls_from_source_window_digest(
     conn, monkeypatch, tmp_path
 ):
@@ -3214,6 +3486,40 @@ def test_run_weekly_happy_path_creates_and_delivers_weekly_digest(conn, monkeypa
         "SELECT kind, item_count FROM digests WHERE id = ?", (archived["id"],)
     ).fetchone()
     assert row == ("weekly", 8)  # SUM of the two source DAILY digests' item_counts (3 + 5)
+    verify_conn.close()
+
+
+def test_run_weekly_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
+    # Stable-arc-keys guardrail, one editorial rung up from
+    # test_run_daily_never_writes_to_arc_keys_table: run_weekly must never
+    # write a row to `arc_keys` either -- summarize_weekly produces a bare
+    # body_md, no arc_keys value at all, and write_arc_keys is called from
+    # exactly one place in this codebase (digest/main.py's `_deliver`).
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _daily_digest(real_conn, "daily one", 3, _recent_created_at(hours_ago=48))
+    window_id = _window_digest(real_conn, "window one", 8, _recent_created_at(hours_ago=12))
+    write_arc_keys(real_conn, window_id, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}])
+    before_count = real_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
+    assert before_count == 1
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_weekly", lambda *a, **k: "**TL;DR:** the week\n\n## A thread\n\nstuff"
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _weekly_cfg(state_db_path=db_path)
+    ok = run_weekly(cfg)
+
+    assert ok is True
+    verify_conn = connect(db_path)
+    after_count = verify_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
+    assert after_count == before_count  # unchanged -- run_weekly wrote nothing
+    assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == ["hormuz"]
     verify_conn.close()
 
 

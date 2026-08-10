@@ -16,7 +16,9 @@ from digest.summarize import (
     _real_heading_lines,
     build_prompt,
     enforce_link_allowlist,
+    extract_arc_keys,
     extract_deltas,
+    format_recent_arcs,
     format_recent_coverage,
     renumber_citations,
     run_claude,
@@ -156,12 +158,13 @@ def test_build_prompt_escapes_backticks_so_item_text_cannot_fake_a_fence_close()
 
     prompt = build_prompt([item], failed_sources=[], recent_coverage="")
 
-    # The template has two fixed fenced blocks of its own -- the
-    # ```text {{RECENT_COVERAGE}} block and the ```json {{ITEMS_JSON}} block
-    # -- contributing 4 literal triple-backtick sequences (2 open/close pairs)
-    # regardless of item content; the item's own backticks must not add any
-    # more beyond that fixed baseline.
-    assert prompt.count("```") == 4
+    # The template has three fixed fenced blocks of its own -- the
+    # ```text {{RECENT_COVERAGE}} block, the ```text {{RECENT_ARCS}} block,
+    # and the ```json {{ITEMS_JSON}} block -- contributing 6 literal
+    # triple-backtick sequences (3 open/close pairs) regardless of item
+    # content; the item's own backticks must not add any more beyond that
+    # fixed baseline.
+    assert prompt.count("```") == 6
     # The item's backticks were escaped to the JSON unicode escape form.
     assert "\\u0060\\u0060\\u0060" in prompt
 
@@ -876,7 +879,7 @@ _MODEL_OUTPUT = "## Needs attention\n...\n## Worth knowing\n...\n## Noise skippe
 def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
     calls = {}
 
-    def fake_build_prompt(items, failed_sources, recent_coverage):
+    def fake_build_prompt(items, failed_sources, recent_coverage, recent_arcs=""):
         calls["build_prompt"] = (items, failed_sources, recent_coverage)
         return "built prompt"
 
@@ -888,7 +891,7 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
     items = [_item()]
-    result, deltas = summarize(items, ["telegram"], "", "claude-opus-5", 300, "high")
+    result, deltas, arc_keys = summarize(items, ["telegram"], "", "claude-opus-5", 300, "high")
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert deltas == []
@@ -907,7 +910,9 @@ def test_summarize_threads_effort_through_to_run_claude(monkeypatch):
         return _MODEL_OUTPUT
 
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
@@ -918,7 +923,9 @@ def test_summarize_threads_effort_through_to_run_claude(monkeypatch):
 
 def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(
         summarize_mod,
@@ -926,7 +933,7 @@ def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result, deltas = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
+    result, deltas, arc_keys = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert result.startswith("⚠ telegram collection failed this run\n\n")
@@ -935,7 +942,9 @@ def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
 
 def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch):
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(
         summarize_mod,
@@ -943,7 +952,7 @@ def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch)
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result, deltas = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    result, deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
 
     assert result == _MODEL_OUTPUT
     assert "⚠" not in result
@@ -952,7 +961,9 @@ def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch)
 
 def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypatch):
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(
         summarize_mod,
@@ -960,7 +971,9 @@ def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypat
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result, _deltas = summarize([_item()], ["telegram", "x"], "", "claude-opus-5", 300, "high")
+    result, _deltas, _arc_keys = summarize(
+        [_item()], ["telegram", "x"], "", "claude-opus-5", 300, "high"
+    )
 
     assert result == (
         "⚠ telegram collection failed this run\n"
@@ -969,7 +982,7 @@ def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypat
 
 
 def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
-    def fake_build_prompt(items, failed_sources, recent_coverage):
+    def fake_build_prompt(items, failed_sources, recent_coverage, recent_arcs=""):
         return "built prompt"
 
     def fake_run_claude(prompt, model, timeout_seconds, effort):
@@ -1131,6 +1144,181 @@ def test_extract_deltas_strips_whitespace_from_entry_fields():
     assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
 
 
+# --- extract_arc_keys (stable-arc-keys feature) ---
+
+
+def test_extract_arc_keys_no_fence_returns_body_unchanged_and_empty_list():
+    body = "**TL;DR:** hi\n\n## Section\n\ntext\n"
+
+    result, arc_keys = extract_arc_keys(body)
+
+    assert result == body
+    assert arc_keys == []
+
+
+def test_extract_arc_keys_happy_path_strips_fence_and_parses_entries():
+    body = (
+        "**TL;DR:** hi\n\n"
+        "## Hormuz tension escalates\n\nMore ships diverted.\n\n"
+        '```arcs\n[{"heading": "Hormuz tension escalates", "key": "hormuz"}]\n```\n'
+    )
+
+    result, arc_keys = extract_arc_keys(body)
+
+    assert "```arcs" not in result
+    assert '"key"' not in result
+    assert result.startswith("**TL;DR:** hi\n\n## Hormuz tension escalates")
+    assert arc_keys == [{"heading": "Hormuz tension escalates", "key": "hormuz"}]
+
+
+def test_extract_arc_keys_broken_json_strips_fence_but_discards_entries(caplog):
+    import logging
+
+    body = "## Section\n\ntext\n\n```arcs\nnot valid json at all\n```\n"
+
+    with caplog.at_level(logging.WARNING):
+        result, arc_keys = extract_arc_keys(body)
+
+    assert "```arcs" not in result
+    assert arc_keys == []
+    assert any("not valid JSON" in r.message for r in caplog.records)
+
+
+def test_extract_arc_keys_non_array_json_discards_entries_and_warns(caplog):
+    import logging
+
+    body = '## Section\n\ntext\n\n```arcs\n{"heading": "not an array"}\n```\n'
+
+    with caplog.at_level(logging.WARNING):
+        result, arc_keys = extract_arc_keys(body)
+
+    assert "```arcs" not in result
+    assert arc_keys == []
+    assert any("not a JSON array" in r.message for r in caplog.records)
+
+
+def test_extract_arc_keys_drops_malformed_entries_keeps_wellformed_ones(caplog):
+    import logging
+
+    body = (
+        "## Section\n\ntext\n\n"
+        "```arcs\n"
+        "["
+        '{"heading": "Section", "key": "valid-key"},'
+        '{"heading": "Section"},'  # missing key
+        '{"heading": "", "key": "valid-key"},'  # blank heading
+        '{"heading": "Section", "key": 5},'  # non-string key
+        '"not even an object"'
+        "]\n"
+        "```\n"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result, arc_keys = extract_arc_keys(body)
+
+    assert "```arcs" not in result
+    assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
+    assert any("dropped 4 malformed" in r.message for r in caplog.records)
+
+
+def test_extract_arc_keys_invalid_key_shape_dropped(caplog):
+    # Uppercase, over-length, and empty-payload keys must all fail
+    # _ARC_KEY_RE and be dropped as malformed -- an invalid key is not a
+    # separate error class from a missing/blank one.
+    import logging
+
+    body = (
+        "## Section\n\ntext\n\n"
+        "```arcs\n"
+        "["
+        '{"heading": "Section", "key": "Has-Uppercase"},'
+        '{"heading": "Section", "key": "' + ("a" * 49) + '"},'  # 49 chars, over the 48 cap
+        '{"heading": "Section", "key": "-leading-hyphen"},'
+        '{"heading": "Section", "key": "has space"},'
+        '{"heading": "Section", "key": "valid-key"}'
+        "]\n"
+        "```\n"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        _result, arc_keys = extract_arc_keys(body)
+
+    assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
+    assert any("dropped 4 malformed" in r.message for r in caplog.records)
+
+
+def test_extract_arc_keys_caps_at_max_entries():
+    entries = [{"heading": f"Section {i}", "key": f"key-{i}"} for i in range(15)]
+    body = "## Section\n\ntext\n\n```arcs\n" + json.dumps(entries) + "\n```\n"
+
+    _result, arc_keys = extract_arc_keys(body)
+
+    assert len(arc_keys) == 12
+    assert [a["heading"] for a in arc_keys] == [f"Section {i}" for i in range(12)]
+
+
+def test_extract_arc_keys_fence_not_at_end_still_stripped_and_parsed():
+    body = (
+        "**TL;DR:** hi\n\n"
+        '```arcs\n[{"heading": "Section", "key": "valid-key"}]\n```\n\n'
+        "## Section\n\ntext after the fence\n"
+    )
+
+    result, arc_keys = extract_arc_keys(body)
+
+    assert "```arcs" not in result
+    assert "## Section" in result
+    assert "text after the fence" in result
+    assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
+
+
+def test_extract_arc_keys_two_fences_are_malformed_strips_both_discards_all(caplog):
+    import logging
+
+    body = (
+        "## Section\n\ntext\n\n"
+        '```arcs\n[{"heading": "Section", "key": "key-one"}]\n```\n\n'
+        '```arcs\n[{"heading": "Section", "key": "key-two"}]\n```\n'
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result, arc_keys = extract_arc_keys(body)
+
+    assert "```arcs" not in result
+    assert arc_keys == []
+    assert any("found 2 ```arcs fences" in r.message for r in caplog.records)
+
+
+def test_extract_arc_keys_strips_whitespace_from_entry_fields():
+    body = (
+        "## Section\n\ntext\n\n"
+        '```arcs\n[{"heading": "  Section  ", "key": " valid-key "}]\n```\n'
+    )
+
+    _result, arc_keys = extract_arc_keys(body)
+
+    assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
+
+
+def test_extract_arc_keys_placed_before_deltas_fence_both_extracted_independently():
+    # The prompt contract places ```arcs immediately before ```deltas, both
+    # at the very end of the response -- prove the two fences don't interfere
+    # with each other's extraction regardless of which runs first.
+    body = (
+        "**TL;DR:** hi\n\n## Fed rate decision\n\ntext\n\n"
+        '```arcs\n[{"heading": "Fed rate decision", "key": "fed-rates"}]\n```\n'
+        '```deltas\n[{"heading": "Fed rate decision", "previously": "old", "now": "new"}]\n```\n'
+    )
+
+    stripped_of_arcs, arc_keys = extract_arc_keys(body)
+    stripped_of_both, deltas = extract_deltas(stripped_of_arcs)
+
+    assert "```arcs" not in stripped_of_both
+    assert "```deltas" not in stripped_of_both
+    assert arc_keys == [{"heading": "Fed rate decision", "key": "fed-rates"}]
+    assert deltas == [{"heading": "Fed rate decision", "previously": "old", "now": "new"}]
+
+
 # --- summarize(): deltas integration (PLAN.md §11.3) ---
 
 
@@ -1143,11 +1331,13 @@ def test_summarize_returns_parsed_deltas_and_strips_fence_from_body(monkeypatch)
         "```\n"
     )
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
 
-    body_md, deltas = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    body_md, deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
 
     assert "```deltas" not in body_md
     assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
@@ -1162,14 +1352,60 @@ def test_summarize_with_failed_sources_banner_still_strips_deltas_and_returns_th
         "```\n"
     )
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
 
-    body_md, deltas = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
+    body_md, deltas, arc_keys = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
 
     assert body_md.startswith("⚠ telegram collection failed this run\n\n")
     assert "```deltas" not in body_md
+    assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
+
+
+# --- summarize(): arc_keys integration (stable-arc-keys feature) ---
+
+
+def test_summarize_returns_parsed_arc_keys_and_strips_fence_from_body(monkeypatch):
+    model_output = (
+        "**TL;DR:** hi\n\n"
+        "## Section\n\ntext\n\n"
+        '```arcs\n[{"heading": "Section", "key": "valid-key"}]\n```\n'
+    )
+    monkeypatch.setattr(
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
+
+    body_md, _deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+
+    assert "```arcs" not in body_md
+    assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
+
+
+def test_summarize_strips_both_arcs_and_deltas_fences_arcs_extracted_first(monkeypatch):
+    model_output = (
+        "**TL;DR:** hi\n\n"
+        "## Section\n\ntext\n\n"
+        '```arcs\n[{"heading": "Section", "key": "valid-key"}]\n```\n'
+        '```deltas\n[{"heading": "Section", "previously": "old", "now": "new"}]\n```\n'
+    )
+    monkeypatch.setattr(
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
+
+    body_md, deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+
+    assert "```arcs" not in body_md
+    assert "```deltas" not in body_md
+    assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
     assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
 
 
@@ -1614,7 +1850,9 @@ def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatc
     )
 
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(
         summarize_mod,
@@ -1622,7 +1860,7 @@ def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatc
         lambda prompt, model, timeout_seconds, effort: model_output,
     )
 
-    result, _deltas = summarize([known_item], [], "", "claude-opus-5", 300, "high")
+    result, _deltas, _arc_keys = summarize([known_item], [], "", "claude-opus-5", 300, "high")
 
     assert f"[known]({known_item.url})" in result
     assert "https://attacker.example/phish" not in result
@@ -1645,7 +1883,7 @@ async def test_summarize_missing_tldr_logs_warning_but_still_ships(monkeypatch, 
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out, _deltas = summarize_mod.summarize(items, [], "", "m", 10, "high")
+        out, _deltas, _arc_keys = summarize_mod.summarize(items, [], "", "m", 10, "high")
     assert out == valid_no_tldr
     assert any("TL;DR opener" in r.message for r in caplog.records)
 
@@ -1690,7 +1928,7 @@ async def test_summarize_zero_links_logs_warning_but_still_ships(monkeypatch, ca
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out, _deltas = summarize_mod.summarize(items, [], "", "m", 10, "high")
+        out, _deltas, _arc_keys = summarize_mod.summarize(items, [], "", "m", 10, "high")
     assert out == no_links
     assert any("no citation links" in r.message for r in caplog.records)
 
@@ -1941,6 +2179,44 @@ def test_format_recent_coverage_ignores_headings_inside_fenced_blocks():
     assert result == "- 2h ago: Real Story"
 
 
+# --- format_recent_arcs (the {{RECENT_ARCS}} prompt block, stable-arc-keys feature) ---
+
+
+def test_format_recent_arcs_empty_list_returns_sentinel():
+    assert format_recent_arcs([]) == "(no arcs recorded yet)"
+
+
+def test_format_recent_arcs_renders_one_key_per_line():
+    result = format_recent_arcs(["hormuz", "openai"])
+
+    assert result == "- hormuz\n- openai"
+
+
+def test_format_recent_arcs_invalid_key_is_dropped_not_rendered_raw():
+    # Defense in depth: a key that somehow reached storage without passing
+    # _ARC_KEY_RE (a hand-edited row, a future storage bug) must never be
+    # replayed into a future prompt verbatim.
+    result = format_recent_arcs(["valid-key", "Has-Uppercase", "has space", ""])
+
+    assert result == "- valid-key"
+
+
+def test_format_recent_arcs_all_invalid_keys_returns_sentinel():
+    result = format_recent_arcs(["INVALID", "also bad", ""])
+
+    assert result == "(no arcs recorded yet)"
+
+
+def test_format_recent_arcs_caps_at_fifty_entries():
+    keys = [f"key-{i}" for i in range(80)]
+
+    result = format_recent_arcs(keys)
+
+    assert len(result.splitlines()) == 50
+    assert result.splitlines()[0] == "- key-0"
+    assert result.splitlines()[-1] == "- key-49"
+
+
 # --- build_prompt: {{RECENT_COVERAGE}} substitution ---
 
 
@@ -2002,13 +2278,59 @@ def test_select_items_for_prompt_large_recent_coverage_reduces_items_that_fit():
     )
 
 
-# --- summarize(): recent_coverage threading ---
+# --- build_prompt / select_items_for_prompt: {{RECENT_ARCS}} substitution ---
+
+
+def test_build_prompt_substitutes_recent_arcs():
+    prompt = build_prompt([_item()], failed_sources=[], recent_coverage="", recent_arcs="- hormuz")
+
+    assert "- hormuz" in prompt
+    assert "{{RECENT_ARCS}}" not in prompt
+
+
+def test_build_prompt_item_text_with_recent_arcs_placeholder_literal_is_not_rewritten():
+    # Same substitution-ordering hazard as RECENT_COVERAGE: {{ITEMS_JSON}}
+    # goes last, so an item whose text contains the literal "{{RECENT_ARCS}}"
+    # must survive untouched inside the JSON payload.
+    item = dataclasses.replace(_item(), text="{{RECENT_ARCS}}")
+
+    prompt = build_prompt([item], failed_sources=[], recent_coverage="", recent_arcs="- hormuz")
+
+    fence_start = prompt.index("```json\n") + len("```json\n")
+    fence_end = prompt.index("\n```", fence_start)
+    payload = json.loads(prompt[fence_start:fence_end])
+    assert payload[0]["text"] == "{{RECENT_ARCS}}"
+
+    # The real arcs block is still emitted in its own place.
+    assert "- hormuz" in prompt
+
+
+def test_select_items_for_prompt_large_recent_arcs_reduces_items_that_fit():
+    items = [dataclasses.replace(_item(str(i)), text="x" * 3000) for i in range(10)]
+    max_prompt_bytes = len(build_prompt(items, [], "").encode("utf-8")) + 200
+
+    selected_without_arcs = select_items_for_prompt(items, [], "", max_prompt_bytes)
+    assert selected_without_arcs == items  # everything fits with no arcs block
+
+    large_arcs = "\n".join(f"- arc-key-{i}" for i in range(50))
+    selected_with_arcs = select_items_for_prompt(
+        items, [], "", max_prompt_bytes, recent_arcs=large_arcs
+    )
+
+    assert len(selected_with_arcs) < len(items)
+    assert (
+        len(build_prompt(selected_with_arcs, [], "", large_arcs).encode("utf-8"))
+        <= max_prompt_bytes
+    )
+
+
+# --- summarize(): recent_coverage / recent_arcs threading ---
 
 
 def test_summarize_threads_recent_coverage_through_to_build_prompt(monkeypatch):
     calls = {}
 
-    def fake_build_prompt(items, failed_sources, recent_coverage):
+    def fake_build_prompt(items, failed_sources, recent_coverage, recent_arcs=""):
         calls["recent_coverage"] = recent_coverage
         return "built prompt"
 
@@ -2018,6 +2340,23 @@ def test_summarize_threads_recent_coverage_through_to_build_prompt(monkeypatch):
     summarize([_item()], [], "- 3h ago: Some story", "claude-opus-5", 300, "high")
 
     assert calls["recent_coverage"] == "- 3h ago: Some story"
+
+
+def test_summarize_threads_recent_arcs_through_to_build_prompt(monkeypatch):
+    calls = {}
+
+    def fake_build_prompt(items, failed_sources, recent_coverage, recent_arcs=""):
+        calls["recent_arcs"] = recent_arcs
+        return "built prompt"
+
+    monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: _MODEL_OUTPUT)
+
+    summarize(
+        [_item()], [], "", "claude-opus-5", 300, "high", recent_arcs="- hormuz"
+    )
+
+    assert calls["recent_arcs"] == "- hormuz"
 
 
 # --- strip_tldr_citations ---
@@ -2158,7 +2497,9 @@ def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
         "detail[⁴](https://known.example/b).\n"
     )
     monkeypatch.setattr(
-        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+        summarize_mod,
+        "build_prompt",
+        lambda items, failed_sources, recent_coverage, recent_arcs="": "p",
     )
     monkeypatch.setattr(
         summarize_mod,
@@ -2170,7 +2511,7 @@ def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
         dataclasses.replace(_item("a"), url="https://known.example/a"),
         dataclasses.replace(_item("b"), url="https://known.example/b"),
     ]
-    result, _deltas = summarize(items, [], "", "claude-opus-5", 300, "high")
+    result, _deltas, _arc_keys = summarize(items, [], "", "claude-opus-5", 300, "high")
 
     tldr_paragraph = result.split("\n\n", 1)[0]
     assert "[¹]" not in tldr_paragraph

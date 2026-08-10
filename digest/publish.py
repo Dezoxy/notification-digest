@@ -479,7 +479,9 @@ def _slugify(heading: str) -> str:
     return collapsed[:64].rstrip("-")
 
 
-def derive_topics(body_md: str) -> list[dict[str, str]]:
+def derive_topics(
+    body_md: str, arc_keys: list[dict[str, str]] | None = None
+) -> list[dict[str, str]]:
     """Derive the site's `topics` ingest field from a digest's own `## ` section headings.
 
     One `{"slug": ..., "label": ...}` entry per real heading (via
@@ -517,17 +519,59 @@ def derive_topics(body_md: str) -> list[dict[str, str]]:
     document order, after dedup -- the prompt contract orders sections
     most-important-first, so truncating here keeps the most relevant ones.
 
+    `arc_keys` (optional, default None; stable-arc-keys feature) is digest/
+    summarize.py's `extract_arc_keys` output for this SAME response's raw
+    model output -- a list of `{"heading": ..., "key": ...}` entries, one per
+    `## ` story section the model tagged with a stable arc key
+    (prompts/digest.md's "Story-arc keys" section). When given, each entry's
+    "heading" is folded through the IDENTICAL `_slugify` fold this function
+    already applies to every real `## ` heading -- reusing
+    `map_deltas_to_slugs`' own exact matching rule (fold to a slug, compare
+    against THIS function's own produced slug set) rather than a second,
+    potentially divergent heading-equality check. When an entry's folded
+    slug matches one of this digest's own topic slugs, that topic dict
+    additionally carries `"key": <that entry's key>`. A topic with no
+    matching `arc_keys` entry is emitted exactly as before, with no "key" at
+    all -- this parameter is PURELY ADDITIVE. Passing `None` (the default,
+    and every call site before this feature existed) reproduces today's
+    `{"slug", "label"}`-only output byte-for-byte -- the slug-stability
+    contract above requires the SLUG itself never change shape, and this
+    parameter never touches slug computation, only whether a topic dict
+    gains one extra key.
+
+    An `arc_keys` entry whose folded heading doesn't match any of this
+    digest's own topic slugs -- a heading the model hallucinated, one this
+    function already excluded as structural/Needs-attention, or one that
+    didn't survive the `_MAX_TOPICS` cap or the slug dedup above -- is
+    silently ignored, with no separate exclusion list to maintain, the
+    identical defensive posture `map_deltas_to_slugs` already follows for
+    the same reason.
+
     Never raises: like `count_sections`/`has_needs_attention`, this reads
     only off `_real_heading_lines`' already-defensive scan, so a malformed
     or empty `body_md` simply yields `[]`, not an exception -- there is
     nothing here that can throw the way `extract_tldr`'s markdown-shape
-    parsing can.
+    parsing can. Folding `arc_keys` entries through `_slugify` cannot throw
+    either, on the shapes `extract_arc_keys` guarantees (a list of dicts with
+    string "heading"/"key" fields).
 
     Returns `[]` for a `body_md` with no real, non-"Needs attention"
     heading at all (matching `parse_failed_sources`' own "no banner, empty
     list" contract for the identical reason: this is a normal, common
     case, not a parse failure).
     """
+    # First occurrence wins on a heading-slug collision, mirroring the
+    # topics-list dedup below -- if two arc_keys entries somehow fold to the
+    # same slug (a duplicate/near-duplicate heading in the model's own
+    # ```arcs output), the first one's key is kept rather than silently
+    # overwritten by the second.
+    key_by_slug: dict[str, str] = {}
+    if arc_keys:
+        for entry in arc_keys:
+            heading_slug = _slugify(entry["heading"])
+            if heading_slug and heading_slug not in key_by_slug:
+                key_by_slug[heading_slug] = entry["key"]
+
     topics: list[dict[str, str]] = []
     seen_slugs: set[str] = set()
     for heading in _real_heading_lines(body_md):
@@ -539,7 +583,11 @@ def derive_topics(body_md: str) -> list[dict[str, str]]:
         if not slug or slug in seen_slugs:
             continue
         seen_slugs.add(slug)
-        topics.append({"slug": slug, "label": title[:_MAX_TOPIC_LABEL_LEN]})
+        topic: dict[str, str] = {"slug": slug, "label": title[:_MAX_TOPIC_LABEL_LEN]}
+        key = key_by_slug.get(slug)
+        if key:
+            topic["key"] = key
+        topics.append(topic)
         if len(topics) >= _MAX_TOPICS:
             break
     return topics

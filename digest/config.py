@@ -263,6 +263,32 @@ class Config:
     # bounded to [1, 25] for the same "catch a typo/misconfiguration at
     # startup, not deep inside a scheduled run" reason as POLYMARKET_TOP_N.
     reddit_posts_per_sub: int = 10
+    # Stable-arc-keys feature (app side): whether the site's ingest validator
+    # has ALREADY been updated to accept an optional "key" field on each
+    # `topics` entry. Verified 2026-08-10 by reading cloudflare-terraform/
+    # workers/news-site/worker.js's validateTopics directly (read-only,
+    # sibling repo): unlike validateDigestPayload's top-level fields (which
+    # silently ignore an unrecognized key, no ...rest check at all),
+    # validateTopics destructures each entry with `const { slug, label,
+    # ...rest } = entry` and 400s the WHOLE PUT if `rest` is non-empty -- so
+    # sending an unrecognized per-entry "key" field would reject site
+    # publish OUTRIGHT, every run, not silently drop just that field. This
+    # is why arc keys can't follow `topics`/`deltas`/`source_counts`'s own
+    # "send unconditionally, older server versions ignore it" precedent.
+    # Defaults TRUE, but only because the site half shipped and deployed
+    # FIRST (toom-edge PR #140, version 69be9028): its validateTopics now
+    # accepts an optional per-entry `key`. That ordering was mandatory, not
+    # incidental -- validateTopics rejects UNKNOWN per-entry fields outright
+    # (a `...rest` check), so sending `key` to a site that predates #140
+    # would 400 the whole publish rather than degrade, unlike the top-level
+    # `deltas` field which older validators simply ignored (PR #63).
+    #
+    # Kept as a flag rather than hardcoded so a site rollback has a kill
+    # switch: set ARC_KEYS_SITE_ENABLED=false and publishes go back to
+    # key-less topics immediately, no app rollback needed. Arc keys are
+    # derived and persisted locally either way (digest/state.py's
+    # `arc_keys` table), so toggling it never needs a backfill.
+    arc_keys_site_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> Config:
@@ -338,6 +364,8 @@ class Config:
             reddit_session_cookie = _require_str("REDDIT_SESSION_COOKIE")
             reddit_subreddits = _require_subreddit_tuple("REDDIT_SUBREDDITS")
 
+        arc_keys_site_enabled = _parse_bool(os.environ.get("ARC_KEYS_SITE_ENABLED", "true"))
+
         email_enabled = _parse_bool(os.environ.get("EMAIL_ENABLED", "true"))
 
         site_publish_url = _optional_url_or_none("SITE_PUBLISH_URL")
@@ -411,6 +439,7 @@ class Config:
             reddit_session_cookie=reddit_session_cookie,
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
+            arc_keys_site_enabled=arc_keys_site_enabled,
             email_enabled=email_enabled,
             site_publish_url=site_publish_url,
             site_ingest_key=site_ingest_key,

@@ -96,12 +96,22 @@ def _truncate_item_text(text: str) -> str:
     return text[:_MAX_ITEM_TEXT_CHARS] + _TRUNCATION_MARKER
 
 
-def build_prompt(items: list[Item], failed_sources: list[str], recent_coverage: str) -> str:
-    """Load prompts/digest.md and substitute the coverage, status, and items-JSON placeholders.
+def build_prompt(
+    items: list[Item], failed_sources: list[str], recent_coverage: str, recent_arcs: str = ""
+) -> str:
+    """Load prompts/digest.md and substitute the coverage/arcs/status/items-JSON placeholders.
 
     `recent_coverage` is the pre-rendered {{RECENT_COVERAGE}} block (see
     format_recent_coverage) -- this function does no formatting or
     sanitization of it itself, it only substitutes the string it's given.
+
+    `recent_arcs` (default "") is the pre-rendered {{RECENT_ARCS}} block (see
+    format_recent_arcs) -- the stable-arc-keys feature's "story continuity"
+    list, the same shape of prompt input as `recent_coverage` and subject to
+    the identical substitution-ordering hazard (see below). Defaults to ""
+    only so callers that don't care about the feature (most of this module's
+    own byte-budget tests) don't have to pass it; digest/main.py's real
+    caller always threads through the actual rendered block.
     """
     template = _PROMPT_PATH.read_text()
 
@@ -182,15 +192,32 @@ def build_prompt(items: list[Item], failed_sources: list[str], recent_coverage: 
     # the ordering rule above is what protects the *item* text from being
     # rescanned, this sanitization is what stops `recent_coverage` itself
     # from ever containing a working placeholder in the first place.
+    #
+    # {{RECENT_ARCS}} goes here too, right after {{RECENT_COVERAGE}} and
+    # still strictly before {{ITEMS_JSON}}, for the identical ordering
+    # reason: `recent_arcs` (built by format_recent_arcs, digest/state.py's
+    # get_recent_arc_keys) is also MODEL-GENERATED text replayed from past
+    # runs, not static template text, so it must never sit in a position a
+    # later .replace() call could rescan. Its own defense-in-depth layer is
+    # actually stronger than RECENT_COVERAGE's: format_recent_arcs validates
+    # every key against the same strict `_ARC_KEY_RE` the model's ```arcs
+    # fence is parsed with (lowercase ASCII letters/digits/hyphens only), a
+    # charset that cannot contain "{" or a backtick at all -- so there is no
+    # "{{" to break in the first place, unlike a free-form past heading.
     return (
         template.replace("{{COLLECTOR_STATUS}}", collector_status)
         .replace("{{RECENT_COVERAGE}}", recent_coverage)
+        .replace("{{RECENT_ARCS}}", recent_arcs)
         .replace("{{ITEMS_JSON}}", items_json)
     )
 
 
 def select_items_for_prompt(
-    items: list[Item], failed_sources: list[str], recent_coverage: str, max_prompt_bytes: int
+    items: list[Item],
+    failed_sources: list[str],
+    recent_coverage: str,
+    max_prompt_bytes: int,
+    recent_arcs: str = "",
 ) -> list[Item]:
     """Return the longest OLDEST-first prefix of `items` whose built prompt fits.
 
@@ -202,6 +229,14 @@ def select_items_for_prompt(
     (e.g. a run with an unusually busy last 24 hours) can itself reduce how
     many items fit in this run's prompt, the same way a bigger
     failed_sources banner would.
+
+    `recent_arcs` (default "") is threaded through identically -- the
+    stable-arc-keys feature's {{RECENT_ARCS}} block is embedded in every
+    built prompt exactly like `recent_coverage` is, so it counts toward
+    `max_prompt_bytes` the same way. Defaults to "" purely so callers that
+    don't exercise this feature (most of this function's own tests) don't
+    have to pass it; digest/main.py's real caller always threads through the
+    actual rendered block.
 
     The bound is checked against the BUILT prompt's UTF-8 BYTE length (via
     `len(build_prompt(candidate, failed_sources, recent_coverage).encode(
@@ -267,7 +302,7 @@ def select_items_for_prompt(
 
     n = len(items)
     if (
-        len(build_prompt(items, failed_sources, recent_coverage).encode("utf-8"))
+        len(build_prompt(items, failed_sources, recent_coverage, recent_arcs).encode("utf-8"))
         <= max_prompt_bytes
     ):
         return items
@@ -280,7 +315,11 @@ def select_items_for_prompt(
         mid = (lo + hi + 1) // 2
         candidate = items[:mid]
         if (
-            len(build_prompt(candidate, failed_sources, recent_coverage).encode("utf-8"))
+            len(
+                build_prompt(candidate, failed_sources, recent_coverage, recent_arcs).encode(
+                    "utf-8"
+                )
+            )
             <= max_prompt_bytes
         ):
             lo = mid
@@ -834,6 +873,75 @@ def format_recent_coverage(digests: list[tuple[str, str]], now: datetime) -> str
     return "\n".join(lines)
 
 
+# --- Recently used story-arc keys (stable-arc-keys feature) ---
+
+# Matches a valid stable arc key: a lowercase ASCII letter or digit, then a
+# run of zero-to-47 more lowercase ASCII letters/digits/hyphens (48 chars
+# total, matching prompts/digest.md's own "Story-arc keys" contract). This is
+# the SAME pattern extract_arc_keys (below) validates every parsed key
+# against, and format_recent_arcs re-validates every STORED key against
+# before replaying it into a future prompt -- see that function's own
+# SECURITY note for why a single regex check is enough here, unlike
+# format_recent_coverage's free-form heading text.
+_ARC_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+
+_NO_RECENT_ARCS = "(no arcs recorded yet)"
+
+# Caps how many keys format_recent_arcs will ever render into one prompt.
+# digest/state.py's get_recent_arc_keys already caps its own query (see that
+# function's docstring) -- this is defense in depth, mirroring
+# _MAX_RECENT_COVERAGE_LINES' identical belt-and-suspenders posture for the
+# sibling RECENT_COVERAGE block, not the primary bound.
+_MAX_RECENT_ARCS = 50
+
+
+def format_recent_arcs(arc_keys: list[str]) -> str:
+    """Render the {{RECENT_ARCS}} prompt block from digest/state.py's get_recent_arc_keys output.
+
+    `arc_keys` is a list of distinct stable arc keys used across window
+    digests in roughly the last 7 days (see get_recent_arc_keys), already
+    deterministically ordered and capped by that query. This is the "story
+    continuity" list prompts/digest.md's "Story-arc keys" section tells the
+    model to check before minting a brand-new key: if a story in this window
+    continues one already on this list, reuse it verbatim.
+
+    SECURITY: every key here was MODEL-GENERATED, in a past run, from the
+    same untrusted scraped material this run's items come from -- the
+    identical threat model format_recent_coverage's own SECURITY note
+    describes for past `## ` headings. Unlike a heading, though, a key is
+    not free-form prose: it can only ever reach this list after already
+    surviving extract_arc_keys' `_ARC_KEY_RE` validation once, at parse
+    time, and being stored and read back unchanged. This function
+    re-validates every key against that SAME regex anyway, as defense in
+    depth -- and because `_ARC_KEY_RE`'s charset (lowercase ASCII letters,
+    digits, hyphens only) cannot contain a backtick or a "{" in the first
+    place, this single check is a STRICTER guarantee than
+    format_recent_coverage's own strip-backticks/break-braces sanitizing
+    pass: there is nothing of either shape left to strip or break. Any key
+    that somehow fails the check (a future storage-layer bug, a hand-edited
+    row) is silently skipped rather than rendered raw.
+
+    Capped at `_MAX_RECENT_ARCS` entries -- defense in depth, see that
+    constant's own comment.
+
+    Returns the literal sentinel "(no arcs recorded yet)" when there is
+    nothing to show (empty `arc_keys`, or every key failed validation) --
+    prompts/digest.md still substitutes {{RECENT_ARCS}} unconditionally, so
+    there must always be some non-empty string to put there.
+    """
+    lines: list[str] = []
+    for key in arc_keys:
+        if not _ARC_KEY_RE.match(key):
+            continue
+        lines.append(f"- {key}")
+        if len(lines) >= _MAX_RECENT_ARCS:
+            break
+
+    if not lines:
+        return _NO_RECENT_ARCS
+    return "\n".join(lines)
+
+
 # Markdown inline link: `[text](url)`, optionally with a title
 # (`[text](url "title")` or `[text](url 'title')`) and/or an
 # angle-bracketed URL (`[text](<url>)`). Good enough for our contract --
@@ -1371,6 +1479,131 @@ def renumber_citations(markdown_text: str) -> str:
     return _CITATION_LINK_RE.sub(_renumber, markdown_text)
 
 
+# Matches the machine-facing ```arcs fenced block (stable-arc-keys feature):
+# prompts/digest.md's "Story-arc keys" section instructs the model to append,
+# immediately before the ```deltas block described below (both at the very
+# end of the response), one fenced code block tagged `arcs` containing a
+# JSON array of {"heading", "key"} objects -- one entry per `## ` story
+# section. Same shape as _DELTAS_FENCE_RE just below, for the same reasons
+# (DOTALL so `.` spans embedded newlines, optional-newline-prefixed closer,
+# not anchored to the end of the string since extract_arc_keys tolerates the
+# fence appearing anywhere in the document even though the prompt instructs
+# the model to place it last).
+_ARCS_FENCE_RE = re.compile(r"```arcs\s*\n(.*?)\n?```", re.DOTALL)
+
+# Caps how many arc-key entries extract_arc_keys keeps from one ```arcs
+# block, mirroring _MAX_DELTAS/digest/publish.py's _MAX_TOPICS parity
+# constant for the identical reason: a digest has at most _MAX_TOPICS=12
+# topics in the first place, so no legitimate response can ever produce more
+# than 12 genuine arc-key entries either.
+_MAX_ARC_KEYS = 12
+
+
+def extract_arc_keys(body_md: str) -> tuple[str, list[dict[str, str]]]:
+    """Extract and strip the model's machine-facing ```arcs fence, returning (body, entries).
+
+    Mirrors `extract_deltas` (just below) EXACTLY -- same fence discovery
+    (anywhere in the document, not only at the end), same "more than one
+    fence is malformed" handling, same per-entry defensive validation, same
+    post-strip whitespace cleanup, same never-raises contract. See that
+    function's own docstring for the full defensive-parsing rationale; it
+    applies here verbatim, just for the ```arcs fence (prompts/digest.md's
+    "Story-arc keys" section) instead of ```deltas.
+
+    Called from `summarize()` at the SAME choke point as `extract_deltas`
+    (immediately after `run_claude` returns, before every other pass), so no
+    downstream consumer of `body_md` -- storage, translation, email/site/
+    Telegram rendering, or the daily/weekly prompt builders that embed a
+    stored window digest's body_md verbatim -- ever sees the raw fence.
+
+    Return value: `(body_md_with_fence_removed, parsed_entries)`, entries
+    shaped `{"heading": ..., "key": ...}`.
+
+    - No fence at all: `(body_md, [])` unchanged -- the normal case for a
+      window with no real `## ` story sections to tag.
+    - More than one fence: malformed (the model was only ever asked for
+      one) -- every fence is stripped, one warning logged, all entries
+      discarded.
+    - The fence's content fails `json.loads` or is not a JSON array: one
+      warning, fence stripped, `[]` entries.
+    - More than `_MAX_ARC_KEYS` (12) entries: only the first 12, in document
+      order, are considered.
+    - A malformed entry -- not an object; missing, non-string, or blank
+      "heading"; missing or non-string "key"; or a "key" that fails
+      `_ARC_KEY_RE` (not lowercase ASCII letters/digits/hyphens, over 48
+      characters, or not starting with a letter/digit) -- is dropped
+      individually; one batched warning names the count, every well-formed
+      entry among the rest still survives. An invalid key is treated as a
+      malformed entry, not as a separate error class: there is no principled
+      way to "repair" a key the model got wrong, and a dropped entry simply
+      means that story's `## ` section still ships (derive_topics never
+      depends on this data), it just isn't tagged with a stable key this
+      run.
+
+    Every surviving entry's "heading" and "key" are `.strip()`ped. Heading
+    matching against this digest's own topic slugs (dropping an entry whose
+    heading doesn't correspond to a real `## ` section) is NOT this
+    function's job -- see digest/publish.py's `derive_topics`, which
+    consumes this function's `entries` output together with the same
+    (already-stripped) `body_md` to do that matching, one layer up, mirroring
+    `map_deltas_to_slugs`' identical division of labor for deltas.
+    """
+    matches = list(_ARCS_FENCE_RE.finditer(body_md))
+    if not matches:
+        return body_md, []
+
+    stripped_body = _ARCS_FENCE_RE.sub("", body_md)
+    stripped_body = re.sub(r"\n{3,}", "\n\n", stripped_body).rstrip()
+
+    if len(matches) > 1:
+        logger.warning(
+            "extract_arc_keys: found %d ```arcs fences (expected at most 1) -- "
+            "treating as malformed, stripping all and discarding every parsed entry",
+            len(matches),
+        )
+        return stripped_body, []
+
+    try:
+        parsed = json.loads(matches[0].group(1))
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("extract_arc_keys: ```arcs fence content is not valid JSON -- discarding")
+        return stripped_body, []
+
+    if not isinstance(parsed, list):
+        logger.warning("extract_arc_keys: ```arcs fence content is not a JSON array -- discarding")
+        return stripped_body, []
+
+    candidates = parsed[:_MAX_ARC_KEYS]
+    entries: list[dict[str, str]] = []
+    dropped = 0
+    for candidate in candidates:
+        if (
+            isinstance(candidate, dict)
+            and isinstance(candidate.get("heading"), str)
+            and candidate["heading"].strip()
+            and isinstance(candidate.get("key"), str)
+            and _ARC_KEY_RE.match(candidate["key"].strip())
+        ):
+            entries.append(
+                {
+                    "heading": candidate["heading"].strip(),
+                    "key": candidate["key"].strip(),
+                }
+            )
+        else:
+            dropped += 1
+
+    if dropped:
+        logger.warning(
+            "extract_arc_keys: dropped %d malformed entr%s out of %d considered",
+            dropped,
+            "y" if dropped == 1 else "ies",
+            len(candidates),
+        )
+
+    return stripped_body, entries
+
+
 # Matches the machine-facing ```deltas fenced block (PLAN.md §11.3):
 # prompts/digest.md instructs the model to append, at the very end of its
 # response, one fenced code block tagged `deltas` containing a JSON array of
@@ -1533,34 +1766,45 @@ def summarize(
     model: str,
     timeout_seconds: int,
     effort: str,
-) -> tuple[str, list[dict[str, str]]]:
+    recent_arcs: str = "",
+) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     """Build the prompt, run it through Claude, validate and repair the
     contract, and deterministically prepend the collector-failure banner.
 
-    Returns `(body_md, deltas)`, NOT a bare string -- PLAN.md §11.3 added a
-    second return value, `deltas`, the `extract_deltas`-parsed list of
-    `{"heading", "previously", "now"}` entries pulled off the model's
-    machine-facing ```deltas fence (see that function's own docstring). The
-    parsing happens HERE, immediately after `run_claude` returns and before
+    Returns `(body_md, deltas, arc_keys)`, NOT a bare string -- PLAN.md §11.3
+    added a second return value, `deltas`, the `extract_deltas`-parsed list
+    of `{"heading", "previously", "now"}` entries pulled off the model's
+    machine-facing ```deltas fence (see that function's own docstring); the
+    stable-arc-keys feature adds a THIRD, `arc_keys`, the
+    `extract_arc_keys`-parsed list of `{"heading", "key"}` entries pulled off
+    the model's ```arcs fence (see that function's own docstring). Both
+    parses happen HERE, immediately after `run_claude` returns and before
     every other pass in this function, specifically so `body_md` -- the
     first tuple element, and the only thing every downstream consumer ever
     sees (digests.body_md storage, translate_digest's input, email/site/
     Telegram rendering, and the daily/weekly prompt builders, which embed a
-    stored WINDOW digest's body_md verbatim) -- NEVER carries the raw fence.
-    This is the single choke point PLAN.md §11.3's fencing guardrail relies
-    on: strip once, here, before anything downstream can see the fence,
-    rather than trusting every future consumer to re-implement the same
-    fence exclusion independently. `deltas` itself is returned separately so
-    the caller (digest/main.py's `_deliver`) can map each entry's heading to
-    this digest's own topic slug (digest/publish.py's `map_deltas_to_slugs`)
-    and persist it (digest/state.py's `write_deltas`) -- summarize() itself
-    does no slug mapping or persistence; it only parses and strips.
+    stored WINDOW digest's body_md verbatim) -- NEVER carries either raw
+    fence. This is the single choke point both the §11.3 deltas fencing
+    guardrail and the identical one for arc keys rely on: strip once, here,
+    before anything downstream can see either fence, rather than trusting
+    every future consumer to re-implement the same fence exclusion
+    independently. `deltas`/`arc_keys` are returned separately so the caller
+    (digest/main.py's `_deliver`) can map each entry's heading to this
+    digest's own topic slug (digest/publish.py's `map_deltas_to_slugs` for
+    deltas, `derive_topics(body_md, arc_keys)` for arc keys) and persist the
+    result (digest/state.py's `write_deltas`/`write_arc_keys`) --
+    summarize() itself does no slug mapping or persistence for either; it
+    only parses and strips.
 
     `recent_coverage` is passed straight through to build_prompt (see that
     function's docstring for the substitution-ordering hazard it addresses,
     and format_recent_coverage's own docstring, above, for how this string
     is produced and why it must already be sanitized by the time it reaches
-    here).
+    here). `recent_arcs` (default "") is threaded through identically, for
+    the {{RECENT_ARCS}} block (see format_recent_arcs and build_prompt's own
+    docstring) -- defaults to "" so a caller not exercising this feature
+    doesn't have to pass it; digest/main.py's real caller always threads
+    through the actual rendered block.
 
     `effort` is threaded straight through to run_claude's `--effort` flag
     (see that function's docstring for why it's set explicitly and why
@@ -1609,15 +1853,22 @@ def summarize(
     failed source, in the given order, followed by a blank line, then the
     (validated) model output unchanged.
     """
-    prompt = build_prompt(items, failed_sources, recent_coverage)
+    prompt = build_prompt(items, failed_sources, recent_coverage, recent_arcs)
     output = run_claude(prompt, model, timeout_seconds, effort)
-    # extract_deltas runs FIRST, before validate_output or any other pass:
-    # see this function's own docstring for why this exact position is the
-    # single choke point the §11.3 fencing guardrail depends on. Running it
-    # here also means validate_output, the TL;DR/citation soft checks, and
-    # enforce_link_allowlist below all operate on the fence-free `output`,
-    # so nothing in the (untrusted-derived) "previously"/"now" prose sentences
-    # can be misread as a citation link or a TL;DR paragraph by those passes.
+    # extract_arc_keys and extract_deltas both run FIRST, before
+    # validate_output or any other pass: see this function's own docstring
+    # for why this exact position is the single choke point both the
+    # arc-keys and the §11.3 deltas fencing guardrails depend on. arc_keys
+    # runs first, mirroring the ```arcs-then-```deltas order the prompt
+    # itself asks the model to emit -- order between the two extractions
+    # doesn't affect correctness (each matches its own fence tag), but
+    # keeping it makes the code read in the same order as the contract it
+    # implements. Running both here also means validate_output, the
+    # TL;DR/citation soft checks, and enforce_link_allowlist below all
+    # operate on the fence-free `output`, so nothing in the
+    # (untrusted-derived) fence content can be misread as a citation link or
+    # a TL;DR paragraph by those passes.
+    output, arc_keys = extract_arc_keys(output)
     output, deltas = extract_deltas(output)
     validate_output(output)
     # The TL;DR opener is checked SOFTLY, unlike the heading requirement: a
@@ -1650,5 +1901,5 @@ def summarize(
         banner = "".join(
             f"⚠ {source} collection failed this run\n" for source in failed_sources
         )
-        return banner + "\n" + output, deltas
-    return output, deltas
+        return banner + "\n" + output, deltas, arc_keys
+    return output, deltas, arc_keys

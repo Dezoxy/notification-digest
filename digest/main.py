@@ -28,7 +28,7 @@ from digest.config import Config, ConfigError
 from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
 from digest.emailer import archive
-from digest.publish import map_deltas_to_slugs
+from digest.publish import derive_topics, map_deltas_to_slugs
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
     DAILY_LOOKBACK_WINDOW,
@@ -41,16 +41,19 @@ from digest.state import (
     get_daily_digests_since,
     get_digest_item_urls,
     get_polymarket_probs,
+    get_recent_arc_keys,
     get_recent_digests,
     get_unsummarized_items,
     get_window_digests_since,
     init_db,
     prune_delivered_items,
+    write_arc_keys,
     write_deltas,
 )
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
     SummarizeError,
+    format_recent_arcs,
     format_recent_coverage,
     select_items_for_prompt,
     summarize,
@@ -69,6 +72,21 @@ from digest.weekly import summarize_weekly
 # second or third mention, short enough that genuinely stale coverage
 # eventually ages out and stops suppressing a fresh full write-up.
 _RECENT_COVERAGE_WINDOW = timedelta(hours=24)
+
+# How far back _deliver looks for prior digests' story-arc keys when
+# building the {{RECENT_ARCS}} prompt block (digest/summarize.py's
+# format_recent_arcs) -- the "story continuity" list that lets the
+# summarizer reuse a key for a story that's still developing instead of
+# minting a new one every run (see prompts/digest.md's "Story-arc keys"
+# section). 7 days, not 24 hours like _RECENT_COVERAGE_WINDOW just above:
+# RECENT_COVERAGE exists to avoid re-explaining a story from scratch within
+# roughly one day, but a story's KEY needs to stay recognizable across a much
+# longer arc -- the live incident this feature fixes (Iran/Hormuz recurring
+# 11 times under 11 different slugs over 7 days, PLAN.md) spans a week, not
+# a day, so the reuse window has to match that timescale or the feature
+# would only ever catch same-day repeats, missing the exact multi-day arcs
+# it exists to unify.
+_RECENT_ARCS_WINDOW = timedelta(days=7)
 
 # How far back run_daily looks for window digests to synthesize into one
 # daily brief (digest/state.py's get_window_digests_since). A full 24 hours
@@ -232,6 +250,18 @@ def _deliver(
     since = now - _RECENT_COVERAGE_WINDOW
     recent_coverage = format_recent_coverage(get_recent_digests(conn, since.isoformat()), now)
 
+    # Story-arc-key continuity context (digest/summarize.py's
+    # format_recent_arcs): the distinct arc keys used by window digests in
+    # the last _RECENT_ARCS_WINDOW (7 days), so the model can reuse a key for
+    # a story that's still developing instead of minting a new one every
+    # run. Unlike `recent_coverage` above, this is NOT gated on
+    # `email_sent`/pending status either -- `get_recent_arc_keys` reads off
+    # `arc_keys` rows written by ANY window digest in the lookback window,
+    # sent or not, matching `get_recent_digests`' own "email_sent is not a
+    # completion signal" reasoning.
+    arcs_since = now - _RECENT_ARCS_WINDOW
+    recent_arcs = format_recent_arcs(get_recent_arc_keys(conn, arcs_since.isoformat()))
+
     # Shrink to whatever actually fits in one prompt BEFORE both summarize()
     # and create_digest(): the item-count cap above (_MAX_ITEMS_PER_DIGEST)
     # bounds source characters, but json.dumps(ensure_ascii=False) still lets
@@ -244,20 +274,24 @@ def _deliver(
     # pre-shrink `items`, the untrimmed remainder would be marked summarized
     # without ever actually being sent to the model. Keeping the shrink in
     # _deliver and passing its result to both calls keeps the summarized set
-    # and the stamped set identical by construction. `recent_coverage` is
-    # passed through here too: it is embedded in every built prompt exactly
-    # like the items are, so its bytes count toward _MAX_PROMPT_BYTES
-    # automatically (see select_items_for_prompt's docstring).
-    items = select_items_for_prompt(items, failed_sources, recent_coverage, _MAX_PROMPT_BYTES)
+    # and the stamped set identical by construction. `recent_coverage` and
+    # `recent_arcs` are both passed through here too: each is embedded in
+    # every built prompt exactly like the items are, so their bytes count
+    # toward _MAX_PROMPT_BYTES automatically (see select_items_for_prompt's
+    # docstring).
+    items = select_items_for_prompt(
+        items, failed_sources, recent_coverage, _MAX_PROMPT_BYTES, recent_arcs=recent_arcs
+    )
 
     try:
-        body_md, deltas = summarize(
+        body_md, deltas, arc_keys = summarize(
             items,
             failed_sources,
             recent_coverage,
             cfg.anthropic_model,
             cfg.claude_timeout_seconds,
             cfg.claude_effort,
+            recent_arcs=recent_arcs,
         )
     except SummarizeError as exc:
         logger.error("summarization failed: %s", exc)
@@ -294,6 +328,18 @@ def _deliver(
     # -> slug matching contract, and write_deltas's own docstring for the
     # idempotency guarantee this write upholds.
     write_deltas(conn, digest_id, map_deltas_to_slugs(body_md, deltas))
+    # Stable-arc-keys feature: the SAME window-digest-only fencing discipline
+    # as write_deltas immediately above -- run_daily/run_weekly never call
+    # derive_topics with an `arc_keys` argument or write_arc_keys at all (see
+    # both functions' own GUARDRAIL docstrings). derive_topics(body_md,
+    # arc_keys) folds each ```arcs-fence entry's heading into this digest's
+    # own topic slugs (the real heading -> key mapping only exists here,
+    # this run, before the fence is stripped from storage); write_arc_keys
+    # then persists just the (slug, key) pairs that carried a "key" so
+    # digest/deliver.py's `_deliver_site` can read them back later, on both
+    # the fresh-digest and pending-resend paths (see that function's own
+    # docstring).
+    write_arc_keys(conn, digest_id, derive_topics(body_md, arc_keys))
     archive(body_md, cfg.archive_dir, digest_id)
 
     item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)

@@ -10,6 +10,7 @@ from digest.state import (
     connect,
     count_unsummarized_items,
     create_digest,
+    get_arc_keys,
     get_cursors,
     get_daily_allowed_urls,
     get_daily_digests_since,
@@ -17,6 +18,7 @@ from digest.state import (
     get_digest_source_counts,
     get_pending_digests,
     get_polymarket_probs,
+    get_recent_arc_keys,
     get_recent_digests,
     get_unsummarized_items,
     get_weekly_allowed_urls,
@@ -26,6 +28,7 @@ from digest.state import (
     mark_digest_site_published,
     mark_digest_telegram_sent,
     prune_delivered_items,
+    write_arc_keys,
     write_deltas,
 )
 
@@ -1063,11 +1066,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1147,12 +1150,17 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     ).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
-    assert deltas_ddl is not None  # the v0->v2 jump also creates `deltas`
+    assert deltas_ddl is not None  # the v0->v3 jump also creates `deltas`
+
+    arc_keys_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
+    ).fetchone()
+    assert arc_keys_ddl is not None  # the v0->v3 jump also creates `arc_keys`
 
     old_conn.close()
 
@@ -1183,11 +1191,45 @@ def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Pa
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 3
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
     assert deltas_ddl is not None
+
+    old_conn.close()
+
+
+def test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it(tmp_path: Path):
+    # Sibling of test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it
+    # immediately above, one version rung up: a database already fully
+    # migrated through version 2 (deltas exists, arc_keys does not -- the
+    # stable-arc-keys feature didn't exist yet) must gain the `arc_keys`
+    # table on the next init_db call, without re-running any earlier step.
+    db_path = str(tmp_path / "v2.db")
+    old_conn = connect(db_path)
+    init_db(old_conn)
+    # Force the DB back down to a "just migrated through version 2" shape:
+    # drop `arc_keys` (which a fresh init_db already created) and re-stamp
+    # the version to 2, the way every v2 database that predates this feature
+    # actually looks on disk.
+    old_conn.execute("DROP TABLE arc_keys")
+    old_conn.execute("PRAGMA user_version = 2")
+    old_conn.commit()
+    assert (
+        old_conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
+        ).fetchone()
+        is None
+    )
+
+    init_db(old_conn)
+
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    arc_keys_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
+    ).fetchone()
+    assert arc_keys_ddl is not None
 
     old_conn.close()
 
@@ -2078,3 +2120,166 @@ def test_write_deltas_scoped_per_digest_id(conn):
     assert get_deltas(conn, digest_id_2) == [
         {"slug": "story-one", "previously": "x", "now": "y"}
     ]
+
+
+# --- write_arc_keys / get_arc_keys (stable-arc-keys feature) ---
+
+
+def test_get_arc_keys_empty_for_digest_with_no_arc_keys(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    assert get_arc_keys(conn, digest_id) == {}
+
+
+def test_write_arc_keys_then_get_arc_keys_round_trips(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_arc_keys(
+        conn,
+        digest_id,
+        [
+            {"slug": "hormuz-tension", "label": "Hormuz tension", "key": "hormuz"},
+            {"slug": "story-two", "label": "Story two", "key": "story-two-key"},
+        ],
+    )
+
+    assert get_arc_keys(conn, digest_id) == {
+        "hormuz-tension": "hormuz",
+        "story-two": "story-two-key",
+    }
+
+
+def test_write_arc_keys_skips_topics_without_a_key(conn):
+    # A topic dict with no "key" (a brand-new story this run, or one the
+    # model didn't tag) has nothing to persist -- only entries carrying a
+    # truthy "key" are written.
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_arc_keys(
+        conn,
+        digest_id,
+        [
+            {"slug": "tagged", "label": "Tagged", "key": "tagged-key"},
+            {"slug": "untagged", "label": "Untagged"},
+        ],
+    )
+
+    assert get_arc_keys(conn, digest_id) == {"tagged": "tagged-key"}
+
+
+def test_write_arc_keys_empty_list_is_a_no_op(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_arc_keys(conn, digest_id, [])
+
+    assert get_arc_keys(conn, digest_id) == {}
+    assert conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0] == 0
+
+
+def test_write_arc_keys_no_keyed_topics_is_a_no_op(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_arc_keys(conn, digest_id, [{"slug": "untagged", "label": "Untagged"}])
+
+    assert get_arc_keys(conn, digest_id) == {}
+    assert conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0] == 0
+
+
+def test_write_arc_keys_same_digest_and_slug_twice_upserts_last_write_wins(conn):
+    # The idempotency guardrail (mirrors write_deltas' own): a re-run over
+    # the same window must not duplicate rows -- PRIMARY KEY (digest_id,
+    # slug) plus INSERT OR REPLACE means calling this twice for the same
+    # (digest_id, slug) leaves exactly one row, second call's value wins.
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+
+    write_arc_keys(conn, digest_id, [{"slug": "story-one", "label": "x", "key": "key-a"}])
+    write_arc_keys(conn, digest_id, [{"slug": "story-one", "label": "x", "key": "key-b"}])
+
+    rows = conn.execute(
+        "SELECT slug, key FROM arc_keys WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    assert rows == [("story-one", "key-b")]
+
+
+def test_write_arc_keys_scoped_per_digest_id(conn):
+    digest_id_1 = create_digest(conn, "body one", get_unsummarized_items(conn))
+    write_arc_keys(conn, digest_id_1, [{"slug": "story-one", "label": "x", "key": "key-a"}])
+
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    digest_id_2 = create_digest(conn, "body two", get_unsummarized_items(conn))
+    write_arc_keys(conn, digest_id_2, [{"slug": "story-one", "label": "x", "key": "key-b"}])
+
+    assert get_arc_keys(conn, digest_id_1) == {"story-one": "key-a"}
+    assert get_arc_keys(conn, digest_id_2) == {"story-one": "key-b"}
+
+
+# --- get_recent_arc_keys (stable-arc-keys feature: {{RECENT_ARCS}} source) ---
+
+
+def test_get_recent_arc_keys_empty_when_nothing_written(conn):
+    assert get_recent_arc_keys(conn, "2026-07-01T00:00:00+00:00") == []
+
+
+def test_get_recent_arc_keys_returns_distinct_keys_sorted(conn):
+    digest_id_1 = create_digest(conn, "body one", get_unsummarized_items(conn))
+    write_arc_keys(
+        conn,
+        digest_id_1,
+        [
+            {"slug": "story-a", "label": "a", "key": "hormuz"},
+            {"slug": "story-b", "label": "b", "key": "openai"},
+        ],
+    )
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    digest_id_2 = create_digest(conn, "body two", get_unsummarized_items(conn))
+    # Same key reused across two digests -- must appear only once (DISTINCT).
+    write_arc_keys(conn, digest_id_2, [{"slug": "story-c", "label": "c", "key": "hormuz"}])
+
+    assert get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00") == ["hormuz", "openai"]
+
+
+def test_get_recent_arc_keys_excludes_rows_older_than_since(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+    write_arc_keys(conn, digest_id, [{"slug": "story-a", "label": "a", "key": "hormuz"}])
+
+    created_at = conn.execute(
+        "SELECT created_at FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()[0]
+    created = datetime.fromisoformat(created_at)
+    since_after = (created + timedelta(seconds=1)).isoformat()
+
+    assert get_recent_arc_keys(conn, since_after) == []
+
+
+def test_get_recent_arc_keys_excludes_daily_kind_digests(conn):
+    # Belt-and-suspenders guardrail: arc keys are written only from the
+    # window path in practice, but this filter still excludes any daily-kind
+    # digest's arc_keys row defensively, mirroring get_recent_digests' own
+    # kind filter.
+    window_id = create_digest(conn, "window body", get_unsummarized_items(conn))
+    write_arc_keys(conn, window_id, [{"slug": "story-a", "label": "a", "key": "window-key"}])
+
+    daily_id = create_digest(conn, "daily body", [], kind="daily")
+    # Force a row into arc_keys directly (write_arc_keys is never called from
+    # the daily path in production -- this simulates a hypothetical stray
+    # row to prove the query-level filter, not just the write-side guardrail).
+    conn.execute(
+        "INSERT INTO arc_keys (digest_id, slug, key) VALUES (?, ?, ?)",
+        (daily_id, "story-b", "daily-key"),
+    )
+    conn.commit()
+
+    assert get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00") == ["window-key"]
+
+
+def test_get_recent_arc_keys_caps_at_fifty(conn):
+    digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
+    write_arc_keys(
+        conn,
+        digest_id,
+        [{"slug": f"story-{i}", "label": f"s{i}", "key": f"key-{i:03d}"} for i in range(60)],
+    )
+
+    result = get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00")
+
+    assert len(result) == 50

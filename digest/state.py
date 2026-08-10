@@ -104,6 +104,24 @@ CREATE TABLE IF NOT EXISTS deltas (
     PRIMARY KEY (digest_id, slug)
 );
 
+-- Stable arc-key storage (the "stable arc keys" feature): one row per
+-- (digest, topic slug) whose `## ` section the model tagged with a stable
+-- story-arc key via the ```arcs machine-facing block (digest/summarize.py's
+-- `extract_arc_keys`). `slug` is the SAME fold `derive_topics`/`_slugify`
+-- apply to the digest's own `## ` section headings (digest/publish.py's
+-- `derive_topics(body_md, arc_keys)` does the heading -> slug -> key mapping
+-- before a row ever reaches here) -- never a raw heading string, so this
+-- table shares story-arc identity with `topics` and `deltas` rather than
+-- inventing a third one. PRIMARY KEY (digest_id, slug) is what makes
+-- `write_arc_keys`' INSERT OR REPLACE idempotent, mirroring `deltas`' own
+-- contract exactly: a re-run over the same window must not duplicate rows.
+CREATE TABLE IF NOT EXISTS arc_keys (
+    digest_id INTEGER NOT NULL,
+    slug      TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    PRIMARY KEY (digest_id, slug)
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 """
 
@@ -213,7 +231,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 #
 # Version 2 (PLAN.md §11.3): adds the `deltas` table -- see
 # `_migrate_add_deltas_table` and init_db's `if version < 2:` step.
-_LATEST_SCHEMA_VERSION = 2
+#
+# Version 3 (stable-arc-keys feature): adds the `arc_keys` table -- see
+# `_migrate_add_arc_keys_table` and init_db's `if version < 3:` step.
+_LATEST_SCHEMA_VERSION = 3
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -305,6 +326,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         # schema changes to, rather than relying solely on _SCHEMA's
         # blanket idempotent execution to carry it silently.
         _migrate_add_deltas_table(conn)
+
+    if version < 3:
+        # Stable-arc-keys feature: the `arc_keys` table. Same "documented
+        # no-op in practice" reasoning as the version-2 step immediately
+        # above -- _SCHEMA already created it for every path reaching this
+        # point, this just makes the step explicit and versioned, and it
+        # must also run for a database already sitting at version 2 (fully
+        # migrated before this feature existed).
+        _migrate_add_arc_keys_table(conn)
 
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
@@ -445,6 +475,34 @@ def _migrate_add_deltas_table(conn: sqlite3.Connection) -> None:
             slug       TEXT NOT NULL,
             previously TEXT NOT NULL,
             now        TEXT NOT NULL,
+            PRIMARY KEY (digest_id, slug)
+        )
+        """
+    )
+    conn.commit()
+
+
+def _migrate_add_arc_keys_table(conn: sqlite3.Connection) -> None:
+    """Create `arc_keys` on databases predating the stable-arc-keys feature.
+
+    Mirrors `_migrate_add_deltas_table` immediately above exactly -- see its
+    docstring for the full rationale (a whole new table, no prior shape to
+    preserve, so no rebuild-in-place dance is needed the way the
+    ALTER-TABLE-ADD-COLUMN migrations further below require). `CREATE TABLE
+    IF NOT EXISTS` (identical DDL to _SCHEMA's own `arc_keys` declaration,
+    kept byte-identical so the two can never drift into two different shapes
+    for the same table) is idempotent on its own; this function's own guard
+    is redundant with that IF NOT EXISTS in practice, kept anyway to match
+    this module's established "check before touching" style.
+    """
+    if _table_ddl(conn, "arc_keys") is not None:
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS arc_keys (
+            digest_id INTEGER NOT NULL,
+            slug      TEXT NOT NULL,
+            key       TEXT NOT NULL,
             PRIMARY KEY (digest_id, slug)
         )
         """
@@ -1260,6 +1318,136 @@ def write_deltas(conn: sqlite3.Connection, digest_id: int, deltas: list[dict[str
     except Exception:
         conn.rollback()
         raise
+
+
+def write_arc_keys(conn: sqlite3.Connection, digest_id: int, topics: list[dict[str, str]]) -> None:
+    """Idempotently persist this digest's slug -> stable arc key mapping (stable-arc-keys feature).
+
+    `topics` is digest/publish.py's `derive_topics(body_md, arc_keys)`
+    output -- a list of `{"slug", "label"}` dicts, some of which additionally
+    carry `"key"` for a topic whose heading matched a ```arcs-fence entry
+    (see that function's own docstring). Only entries carrying a truthy
+    "key" are written; a topic with no arc key (a brand-new story this run,
+    or one the model simply didn't tag) has nothing to persist.
+
+    Written with `INSERT OR REPLACE`, keyed on the table's own PRIMARY KEY
+    `(digest_id, slug)` -- mirrors `write_deltas`' own idempotency contract
+    exactly (see its docstring): a re-run over the same window must not
+    duplicate rows, and the second call's key wins on a repeat. In practice
+    there is only ever one legitimate writer per digest_id: digest/main.py's
+    `_deliver` calls this exactly once per fresh digest, immediately after
+    `create_digest`.
+
+    GUARDRAIL: written ONLY from the WINDOW digest path, the identical
+    fencing discipline `write_deltas` already follows -- `run_daily`/
+    `run_weekly` never call this and never read the `arc_keys` table, since
+    arc keys (like deltas) are a window-level concept: the model only ever
+    emits a ```arcs block in response to prompts/digest.md's own per-window
+    prompt, never prompts/daily.md or prompts/weekly.md, and
+    `summarize_daily`/`summarize_weekly` never produce an `arc_keys` value
+    at all.
+
+    Silently returns without opening a transaction when there is nothing to
+    write (no entry in `topics` carries a truthy "key") -- the common case,
+    a window whose stories are all brand-new or untagged.
+
+    Rolls back the whole batch on any failure, matching every other
+    multi-row write in this module (`write_deltas`, `commit_new_items`,
+    `create_digest`).
+    """
+    entries = [(topic["slug"], topic["key"]) for topic in topics if topic.get("key")]
+    if not entries:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        for slug, key in entries:
+            cur.execute(
+                "INSERT OR REPLACE INTO arc_keys (digest_id, slug, key) VALUES (?, ?, ?)",
+                (digest_id, slug, key),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_arc_keys(conn: sqlite3.Connection, digest_id: int) -> dict[str, str]:
+    """Return this digest's stored {slug: key} arc-key mapping (stable-arc-keys feature).
+
+    Feeds digest/deliver.py's `_deliver_site`, which re-derives `topics`
+    fresh from `body_md` on EVERY call (both the fresh-digest and
+    pending-resend paths) via `derive_topics(body_md)` -- WITHOUT an
+    `arc_keys` argument, since the raw ```arcs fence this data originally
+    came from is stripped out of `body_md` before it is ever stored
+    (digest/summarize.py's `extract_arc_keys`, called inside `summarize()`).
+    This is the identical problem digest/state.py's `get_deltas` already
+    solves for deltas (see its own docstring): reading the persisted
+    `(digest_id, slug) -> key` mapping back by `digest_id`, written once by
+    `write_arc_keys` right after this digest's original creation, is the
+    only way a much-later pending resend can recover it -- there is nothing
+    left in `body_md` to re-derive it from.
+
+    Returns `{}` for a digest with no arc keys at all (the common case -- a
+    window with only brand-new stories, or one where no entry the model
+    wrote in its ```arcs block survived `extract_arc_keys`/`derive_topics`'
+    matching).
+    """
+    rows = conn.execute(
+        "SELECT slug, key FROM arc_keys WHERE digest_id = ?", (digest_id,)
+    ).fetchall()
+    return {slug: key for slug, key in rows}
+
+
+# Caps how many distinct arc keys get_recent_arc_keys will ever return,
+# mirroring digest/summarize.py's own _MAX_RECENT_COVERAGE_LINES bounding
+# rationale for the sibling RECENT_COVERAGE prompt block: bounds how much of
+# the prompt budget the {{RECENT_ARCS}} block can consume, so a long history
+# of many distinct keys can never make it grow unboundedly.
+_MAX_RECENT_ARC_KEYS = 50
+
+
+def get_recent_arc_keys(conn: sqlite3.Connection, since_iso: str) -> list[str]:
+    """Return the distinct stable arc keys used by window digests at/after `since_iso`.
+
+    Feeds digest/summarize.py's `format_recent_arcs`, which renders these
+    into the {{RECENT_ARCS}} prompt block -- the "story continuity" list
+    that lets the model reuse an existing key for a story that is still
+    developing instead of minting a new one every run (see
+    prompts/digest.md's "Story-arc keys" section). `since_iso` is typically
+    7 days before now (digest/main.py's `_deliver`) -- long enough that a
+    slow-developing story is still recognized across many window digests.
+
+    Joins against `digests` and filters `d.kind = 'window'`, mirroring
+    `get_recent_digests`' own kind filter for the identical reason: arc keys
+    are written ONLY from the window digest path (`write_arc_keys`' own
+    GUARDRAIL), so every row in `arc_keys` already corresponds to a window
+    digest in practice -- this filter is defense in depth, not a
+    correction, matching `get_recent_digests`' own belt-and-suspenders
+    posture.
+
+    DISTINCT and ordered deterministically (`ORDER BY ak.key ASC` -- there is
+    no natural "most recent" ordering across possibly-many digests that used
+    the same key, so alphabetical is the simplest reproducible choice),
+    capped at `_MAX_RECENT_ARC_KEYS` (50) via `LIMIT`.
+
+    `since_iso` is compared lexicographically against `created_at`, safe for
+    the identical reason `get_recent_digests` relies on: both are ISO8601
+    UTC strings from `datetime.isoformat()`, whose fixed-width,
+    most-significant-field-first layout makes lexicographic and
+    chronological order coincide.
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT ak.key FROM arc_keys ak
+        JOIN digests d ON ak.digest_id = d.id
+        WHERE d.created_at >= ? AND d.kind = 'window'
+        ORDER BY ak.key ASC
+        LIMIT ?
+        """,
+        (since_iso, _MAX_RECENT_ARC_KEYS),
+    ).fetchall()
+    return [row[0] for row in rows]
 
 
 def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
