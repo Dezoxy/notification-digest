@@ -1701,6 +1701,7 @@ const STRINGS = {
     searchButton: "Search",
     searchLink: "Search ↗",
     searchResults: "{n} results",
+    searchResultsOne: "{n} result",
     searchNone: "Nothing found.",
     // Search bubble trigger (owner-requested index cleanup, renderSearchBubble):
     // the compact button that opens the filter/search popover — both its
@@ -1730,6 +1731,7 @@ const STRINGS = {
     // guardrail requires (never severity words like "escalating") — see
     // computeArcMomentum.
     arcAppearances: "{n} appearances",
+    arcAppearancesOne: "{n} appearance",
     arcFirstSeen: "first seen {date}",
     arcUpdated: "updated {t}",
     arcMomentumUp: "more coverage",
@@ -1785,7 +1787,9 @@ const STRINGS = {
     // only — see the CSS/script for both).
     catchupPrefix: "Since your last visit:",
     catchupBriefings: "{n} briefings",
+    catchupBriefingsOne: "{n} briefing",
     catchupArcUpdates: "{m} arc updates",
+    catchupArcUpdatesOne: "{m} arc update",
     catchupArcMore: "+{n} more",
     catchupJumpLabel: "Jump to where you left off",
     catchupDismissLabel: "Dismiss",
@@ -1857,6 +1861,11 @@ const STRINGS = {
     searchButton: "Keresés",
     searchLink: "Keresés ↗",
     searchResults: "{n} találat",
+    // Hungarian does not pluralise a noun after a numeral — "1 találat" and
+    // "5 találat" are both correct — so every *One key below is deliberately
+    // identical to its plural twin. They exist so the EN side can differ;
+    // dropping them here would make the lookup lang-conditional for no gain.
+    searchResultsOne: "{n} találat",
     searchNone: "Nincs találat a keresésre.",
     // Owner: please review — new HU string, search bubble trigger
     // (owner-requested index cleanup), mirrors the EN block's pattern.
@@ -1870,6 +1879,7 @@ const STRINGS = {
     // Arc page (§11.1 PR A) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     arcAppearances: "{n} előfordulás",
+    arcAppearancesOne: "{n} előfordulás",
     arcFirstSeen: "először: {date}",
     arcUpdated: "frissítve: {t}",
     arcMomentumUp: "több lefedettség",
@@ -1894,7 +1904,9 @@ const STRINGS = {
     // (§11.2), mirror the EN block's pattern.
     catchupPrefix: "Legutóbbi látogatásod óta:",
     catchupBriefings: "{n} hírlevél",
+    catchupBriefingsOne: "{n} hírlevél",
     catchupArcUpdates: "{m} történetfrissítés",
+    catchupArcUpdatesOne: "{m} történetfrissítés",
     catchupArcMore: "+{n} további",
     catchupJumpLabel: "Ugrás oda, ahol abbahagytad",
     catchupDismissLabel: "Elrejtés",
@@ -3944,7 +3956,16 @@ ${prefetchScriptHtml}
         if (n + m > 0) {
           var textEl = catchup.querySelector(".catchuptext");
           var parts = [];
-          if (n > 0) parts.push(catchup.getAttribute("data-tmpl-briefings").replace("{n}", String(n)));
+          // Singular template on exactly one, plural otherwise — "1
+          // briefings" was the owner-reported bug. Both forms ride as data
+          // attributes so this stays language-agnostic (Hungarian supplies
+          // identical values, see the STRINGS comment there).
+          if (n > 0) {
+            var briefTmpl = catchup.getAttribute(
+              n === 1 ? "data-tmpl-briefings-one" : "data-tmpl-briefings",
+            );
+            parts.push(briefTmpl.replace("{n}", String(n)));
+          }
           if (m > 0) {
             // Follow list (§11.2, optional feature): followed arcs among the
             // updated ones get named (up to 3, linked) before the bare
@@ -3983,7 +4004,11 @@ ${prefetchScriptHtml}
               }
               parts.push(arcFrag);
             } else {
-              parts.push(catchup.getAttribute("data-tmpl-arcs").replace("{m}", String(m)));
+              parts.push(
+                catchup
+                  .getAttribute(m === 1 ? "data-tmpl-arcs-one" : "data-tmpl-arcs")
+                  .replace("{m}", String(m)),
+              );
             }
           }
 
@@ -5529,7 +5554,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // section" per the §11.2 spec, whether or not the NOW section itself has
   // any content that day (0-eligible-arcs still leaves this shell in place).
   const catchupHtml = showCatchup
-    ? `<div class="catchup" hidden data-prefix="${esc(strings.catchupPrefix)}" data-tmpl-briefings="${esc(strings.catchupBriefings)}" data-tmpl-arcs="${esc(strings.catchupArcUpdates)}" data-tmpl-more="${esc(strings.catchupArcMore)}"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="${esc(strings.catchupJumpLabel)}">↓</button><button type="button" class="catchupdismiss" aria-label="${esc(strings.catchupDismissLabel)}">×</button></div>`
+    ? `<div class="catchup" hidden data-prefix="${esc(strings.catchupPrefix)}" data-tmpl-briefings="${esc(strings.catchupBriefings)}" data-tmpl-briefings-one="${esc(strings.catchupBriefingsOne)}" data-tmpl-arcs="${esc(strings.catchupArcUpdates)}" data-tmpl-arcs-one="${esc(strings.catchupArcUpdatesOne)}" data-tmpl-more="${esc(strings.catchupArcMore)}"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="${esc(strings.catchupJumpLabel)}">↓</button><button type="button" class="catchupdismiss" aria-label="${esc(strings.catchupDismissLabel)}">×</button></div>`
     : "";
 
   return pageChrome(
@@ -5976,7 +6001,10 @@ function renderArcPage(identity, appearances, token, host, lang, nowMs) {
   // last-updated relative time, momentum when present) rather than a new
   // CSS class.
   const metaLine = [
-    strings.arcAppearances.replace("{n}", String(appearances.length)),
+    (appearances.length === 1 ? strings.arcAppearancesOne : strings.arcAppearances).replace(
+      "{n}",
+      String(appearances.length),
+    ),
     strings.arcFirstSeen.replace("{date}", formatShortDate(new Date(first.created_at), strings.locale)),
     strings.arcUpdated.replace("{t}", formatRelativeTime(new Date(latest.created_at), strings.locale, nowMs)),
     momentumSegment,
@@ -6138,7 +6166,10 @@ function renderSearchPage(results, q, token, host, lang) {
       // Count line reuses the existing `.empty` muted-metadata style — same
       // "borrow the closest existing thing" approach as the rest of this
       // feature, rather than adding a new CSS class for one line of text.
-      const countLabel = strings.searchResults.replace("{n}", String(results.length));
+      const countLabel = (results.length === 1 ? strings.searchResultsOne : strings.searchResults).replace(
+        "{n}",
+        String(results.length),
+      );
       const items = results.map((row) => renderSearchResult(row, token, lang)).join("\n");
       resultsHtml = `<p class="empty">${esc(countLabel)}</p>\n${items}`;
     }
