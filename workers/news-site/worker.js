@@ -4047,9 +4047,19 @@ ${prefetchScriptHtml}
             // literal token, never CSS-special characters. An id that isn't
             // in the fetched page (a stale/bad fragment) falls back to the
             // top, same as no hash at all — never a jump to nowhere.
+            // behavior "instant", explicitly: the stylesheet's
+            // scroll-behavior: smooth (reduced-motion-gated, see the CSS)
+            // turns a bare scrollIntoView()/scrollTo() into an ANIMATED
+            // scroll, and an animated scroll started inside this
+            // startViewTransition update callback is cancelled when the
+            // transition snapshots the new state — observed live on deploy
+            // day: the scrollIntoView call fired, the viewport never moved.
+            // An explicit behavior overrides the CSS per spec; the
+            // transition's own crossfade is this swap's motion story
+            // anyway, an animated scroll under it was never wanted.
             var target = hash ? document.getElementById(hash.slice(1)) : null;
-            if (target) target.scrollIntoView();
-            else window.scrollTo(0, 0);
+            if (target) target.scrollIntoView({ behavior: "instant", block: "start" });
+            else window.scrollTo({ top: 0, left: 0, behavior: "instant" });
           });
           // Committed: this address is now what's on screen. Set for BOTH
           // directions (forward soft-nav and popstate soft-load), and only
