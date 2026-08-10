@@ -289,6 +289,54 @@ class Config:
     # derived and persisted locally either way (digest/state.py's
     # `arc_keys` table), so toggling it never needs a backfill.
     arc_keys_site_enabled: bool = True
+    # PLAN.md §11.6 "context mode": one-shot, durable background primer per
+    # story arc (digest/context.py's `generate_arc_context`), generated only
+    # from the DAILY run (digest/main.py's `run_daily`), never from a window
+    # run -- see that function's own docstring for the cost-bounding
+    # rationale. Defaults FALSE: unlike arc_keys_site_enabled (a rollback
+    # switch for an already-approved feature), this is NEW GENERATION work
+    # -- another `claude -p` call per qualifying arc, on top of the daily
+    # brief's own -- so it stays owner-gated, opt-in, matching
+    # verify_daily_enabled's own "new work defaults off" precedent, not
+    # arc_keys_site_enabled's "already approved, flag exists only for
+    # rollback" one.
+    context_enabled: bool = False
+    # Bounds how many NEW primers one daily run will generate, regardless of
+    # how large the qualifying backlog is (digest/state.py's
+    # `get_arc_keys_needing_context` applies this as a SQL `LIMIT`, not a
+    # post-hoc Python slice) -- this is what keeps the feature's cost at
+    # "at most N claude -p calls per DAY", not per window run, however many
+    # arcs happen to cross the 2-appearance recurrence threshold on any
+    # given day. 3 is a conservative default: qualifying arcs (a story
+    # recurring >=2 times in a trailing 7-day window) are inherently rare, a
+    # backlog drains oldest-first-seen across successive days regardless of
+    # this cap, and a smaller default costs less to validate live before the
+    # owner raises it.
+    context_max_per_run: int = 3
+    # Same model-tier reasoning as translate_model's own comment: a
+    # background primer is 3-5 short paragraphs of durable, mostly-
+    # already-known factual prose about a single named place/actor/
+    # institution -- no editorial judgment (clustering, weighting, deciding
+    # what to cut across many competing stories) the way window/daily
+    # summarization needs a frontier model for. "sonnet" is the SAME model
+    # ALIAS translate_model defaults to (the `claude` CLI resolves it, see
+    # run_claude in digest/summarize.py) -- reusing that exact default
+    # string, not a dynamic fallback to `cfg.translate_model`, since the two
+    # features are independent config knobs that simply happen to agree on
+    # the right tier today; either can be pointed elsewhere later without
+    # touching the other.
+    context_model: str = "sonnet"
+    # Its own timeout, not a reuse of claude_timeout_seconds (contrast
+    # translate_digest, which reuses that value outright) -- kept as a
+    # SEPARATE knob because this call's shape is quite different: a single
+    # short label in, a few short paragraphs out, no large items/coverage
+    # payload the way a window/daily summarization call carries. 120s is
+    # generous headroom over what a toolless, single-topic completion this
+    # small should ever need, while still being far tighter than
+    # claude_timeout_seconds' 300s default (sized for up to 200 items) or
+    # verify_daily_timeout_seconds' 600s (an agentic, tool-calling loop) --
+    # neither of those call shapes applies here.
+    context_timeout_seconds: int = 120
 
     @classmethod
     def from_env(cls) -> Config:
@@ -366,6 +414,13 @@ class Config:
 
         arc_keys_site_enabled = _parse_bool(os.environ.get("ARC_KEYS_SITE_ENABLED", "true"))
 
+        context_enabled = _parse_bool(os.environ.get("CONTEXT_ENABLED", "false"))
+        context_max_per_run = _optional_int_in_range(
+            "CONTEXT_MAX_PER_RUN", default=3, minimum=1, maximum=20
+        )
+        context_model = os.environ.get("CONTEXT_MODEL", "sonnet")
+        context_timeout_seconds = _optional_positive_int("CONTEXT_TIMEOUT_SECONDS", default=120)
+
         email_enabled = _parse_bool(os.environ.get("EMAIL_ENABLED", "true"))
 
         site_publish_url = _optional_url_or_none("SITE_PUBLISH_URL")
@@ -440,6 +495,10 @@ class Config:
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
             arc_keys_site_enabled=arc_keys_site_enabled,
+            context_enabled=context_enabled,
+            context_max_per_run=context_max_per_run,
+            context_model=context_model,
+            context_timeout_seconds=context_timeout_seconds,
             email_enabled=email_enabled,
             site_publish_url=site_publish_url,
             site_ingest_key=site_ingest_key,

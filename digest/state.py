@@ -122,6 +122,34 @@ CREATE TABLE IF NOT EXISTS arc_keys (
     PRIMARY KEY (digest_id, slug)
 );
 
+-- Arc-context background primers (PLAN.md §11.6, "context mode"): one row
+-- per stable arc KEY (not per digest -- unlike every table above, this one
+-- is keyed on the arc's own identity, since a primer describes the ONGOING
+-- STORY, not any single digest's coverage of it). `context_md` is
+-- digest/context.py's `generate_arc_context` output, generated ONCE from
+-- the arc's most recent `## ` heading label and never regenerated -- v1's
+-- locked scoping treats this as DURABLE background (geography, actors, why
+-- it structurally matters), deliberately not a recap of recent events, so
+-- there is no "this arc changed, regenerate its primer" invalidation logic
+-- anywhere in this codebase, on purpose. A row only ever exists here for a
+-- key that produced a real, non-empty primer -- a failed or
+-- INSUFFICIENT_CONTEXT generation attempt writes NOTHING (see
+-- digest/main.py's `_generate_arc_context_primers` for the accepted,
+-- documented consequence: that key simply stays eligible for
+-- reconsideration on a later daily run, bounded by CONTEXT_MAX_PER_RUN and
+-- by the same trailing-7-day recurrence window that made it eligible in
+-- the first place). PRIMARY KEY (key) is what makes `write_arc_context`'s
+-- INSERT OR REPLACE idempotent, mirroring `arc_keys`'/`deltas`' own
+-- idempotency contract -- in practice this table has exactly one writer per
+-- key (a key excluded from `get_arc_keys_needing_context` once it has a
+-- row), so the "second call wins" semantics that contract implies never
+-- actually triggers here.
+CREATE TABLE IF NOT EXISTS arc_context (
+    key          TEXT PRIMARY KEY,
+    context_md   TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 """
 
@@ -234,7 +262,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 #
 # Version 3 (stable-arc-keys feature): adds the `arc_keys` table -- see
 # `_migrate_add_arc_keys_table` and init_db's `if version < 3:` step.
-_LATEST_SCHEMA_VERSION = 3
+#
+# Version 4 (PLAN.md §11.6, "context mode"): adds the `arc_context` table --
+# see `_migrate_add_arc_context_table` and init_db's `if version < 4:` step.
+_LATEST_SCHEMA_VERSION = 4
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -335,6 +366,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         # must also run for a database already sitting at version 2 (fully
         # migrated before this feature existed).
         _migrate_add_arc_keys_table(conn)
+
+    if version < 4:
+        # PLAN.md §11.6: the `arc_context` table. Same "documented no-op in
+        # practice" reasoning as the version-2/version-3 steps above --
+        # _SCHEMA already created it for every path reaching this point,
+        # this just makes the step explicit and versioned, and it must also
+        # run for a database already sitting at version 3 (fully migrated
+        # before this feature existed).
+        _migrate_add_arc_context_table(conn)
 
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
@@ -504,6 +544,32 @@ def _migrate_add_arc_keys_table(conn: sqlite3.Connection) -> None:
             slug      TEXT NOT NULL,
             key       TEXT NOT NULL,
             PRIMARY KEY (digest_id, slug)
+        )
+        """
+    )
+    conn.commit()
+
+
+def _migrate_add_arc_context_table(conn: sqlite3.Connection) -> None:
+    """Create `arc_context` on databases predating the §11.6 "context mode" feature.
+
+    Mirrors `_migrate_add_arc_keys_table` immediately above exactly -- see
+    its docstring for the full rationale (a whole new table, no prior shape
+    to preserve, so no rebuild-in-place dance is needed). `CREATE TABLE IF
+    NOT EXISTS` (identical DDL to _SCHEMA's own `arc_context` declaration,
+    kept byte-identical so the two can never drift into two different
+    shapes for the same table) is idempotent on its own; this function's
+    own guard is redundant with that IF NOT EXISTS in practice, kept anyway
+    to match this module's established "check before touching" style.
+    """
+    if _table_ddl(conn, "arc_context") is not None:
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS arc_context (
+            key          TEXT PRIMARY KEY,
+            context_md   TEXT NOT NULL,
+            generated_at TEXT NOT NULL
         )
         """
     )
@@ -1448,6 +1514,223 @@ def get_recent_arc_keys(conn: sqlite3.Connection, since_iso: str) -> list[str]:
         (since_iso, _MAX_RECENT_ARC_KEYS),
     ).fetchall()
     return [row[0] for row in rows]
+
+
+# --- Arc-context background primers (PLAN.md §11.6, "context mode") ---
+
+
+def write_arc_context(conn: sqlite3.Connection, key: str, context_md: str) -> None:
+    """Idempotently persist one arc's generated background primer.
+
+    `context_md` is digest/context.py's `generate_arc_context` output for
+    this key -- generated ONCE, from the arc's most recent `## ` heading
+    label, and never regenerated (see `_SCHEMA`'s own comment on
+    `arc_context` for the full "durable background, not a recap" rationale).
+    Written with `INSERT OR REPLACE`, keyed on the table's own PRIMARY KEY
+    `key` -- mirrors `write_arc_keys`'/`write_deltas`' own idempotency
+    contract (a re-run must not duplicate rows), even though in practice
+    this function has exactly one legitimate caller per key: digest/main.py's
+    `_generate_arc_context_primers` only ever calls this for a key
+    `get_arc_keys_needing_context` returned, and that query excludes any key
+    already holding a row here -- so a second call for the same key should
+    never actually happen. The `INSERT OR REPLACE` contract still holds
+    unconditionally, matching every other writer in this module, rather than
+    special-casing "this shouldn't happen" into a bug that silently corrupts
+    state if it ever does.
+
+    A single `conn.execute` + `conn.commit()`, not a `BEGIN`/rollback
+    transaction block: this is one INSERT touching one row in one table, the
+    same "no transaction needed for a single statement" shape
+    `mark_digest_sent`/`mark_digest_site_published`/`mark_digest_telegram_sent`
+    already use, unlike the multi-row batch writers (`write_deltas`,
+    `write_arc_keys`, `commit_new_items`) that need an explicit transaction
+    to keep several rows atomic together.
+    """
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO arc_context (key, context_md, generated_at) VALUES (?, ?, ?)",
+        (key, context_md, now),
+    )
+    conn.commit()
+
+
+def get_arc_context(conn: sqlite3.Connection, key: str) -> str | None:
+    """Return this arc key's stored background primer, or None if it has never been generated."""
+    row = conn.execute("SELECT context_md FROM arc_context WHERE key = ?", (key,)).fetchone()
+    return row[0] if row is not None else None
+
+
+def get_arc_keys_needing_context(
+    conn: sqlite3.Connection, since_iso: str, limit: int
+) -> list[str]:
+    """Return up to `limit` arc keys due a background primer, oldest-first-seen (PLAN.md §11.6).
+
+    A key QUALIFIES when both are true:
+    1. It has at least 2 DISTINCT window-digest appearances at/after
+       `since_iso` -- `COUNT(DISTINCT ak.digest_id) >= 2`, not a plain row
+       count: `arc_keys`' PRIMARY KEY is `(digest_id, slug)`, so in the
+       (unlikely but not impossible) case where two different `## ` sections
+       in the SAME digest were tagged with the same key, that digest must
+       still only count once toward "how many separate times has this arc
+       recurred" -- the site's own recurrence threshold this mirrors
+       (verified 2026-08-10 by reading cloudflare-terraform/workers/
+       news-site/worker.js directly: "topic appearance in the trailing 7
+       days ... count >= 2") counts distinct digest×topic rows the same way.
+       `since_iso` is typically 7 days before now (digest/main.py's
+       `run_daily`, reusing the SAME `_RECENT_ARCS_WINDOW` constant the
+       stable-arc-keys feature's own {{RECENT_ARCS}} prompt block uses) --
+       the exact trailing window the site's own recurrence count uses too,
+       so "qualifies for a primer" and "the site would call this a
+       recurring arc" agree by construction, not by coincidence.
+    2. It has NO row in `arc_context` yet (`NOT IN`, evaluated once per
+       query, not per candidate row) -- a primer is generated ONCE per arc
+       and never regenerated (see `_SCHEMA`'s own comment on `arc_context`),
+       so a key that already has one is permanently ineligible, not merely
+       deprioritized.
+
+    Joins against `digests` and filters `d.kind = 'window'`, mirroring
+    `get_recent_arc_keys`'s own kind filter for the identical reason: arc
+    keys are written ONLY from the window digest path (`write_arc_keys`'s
+    own GUARDRAIL), so every row in `arc_keys` already corresponds to a
+    window digest in practice -- this filter is defense in depth, matching
+    `get_recent_arc_keys`'s own belt-and-suspenders posture, not a
+    correction.
+
+    Ordered by `MIN(d.created_at)` ASCENDING -- each surviving key's OWN
+    first-seen instant within the queried window, not a global ordering --
+    so a backlog (more qualifying keys than one run's `limit` can process)
+    drains OLDEST-arc-first, predictably, across successive daily runs,
+    rather than an arbitrary or non-deterministic order that could starve
+    the same handful of keys forever. Bounded by `LIMIT ?` at the SQL level
+    (not a Python-side slice) -- the caller passes `cfg.context_max_per_run`
+    (PLAN.md §11.6's `CONTEXT_MAX_PER_RUN`, default 3), so at most that many
+    `claude -p` calls are ever made from one daily run regardless of how
+    large the qualifying backlog actually is.
+    """
+    rows = conn.execute(
+        """
+        SELECT ak.key
+        FROM arc_keys ak
+        JOIN digests d ON ak.digest_id = d.id
+        WHERE d.created_at >= ? AND d.kind = 'window'
+          AND ak.key NOT IN (SELECT key FROM arc_context)
+        GROUP BY ak.key
+        HAVING COUNT(DISTINCT ak.digest_id) >= 2
+        ORDER BY MIN(d.created_at) ASC
+        LIMIT ?
+        """,
+        (since_iso, limit),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def get_latest_arc_occurrence(conn: sqlite3.Connection, key: str) -> tuple[str, str] | None:
+    """Return (body_md, slug) of the MOST RECENT window digest that tagged this arc key.
+
+    `arc_keys` stores only the FOLDED `slug` for each (digest, key) pairing,
+    never the original heading text -- there is nowhere in this schema that
+    keeps a human-readable "label" on its own. This function is the first of
+    two steps digest/main.py's `_generate_arc_context_primers` uses to
+    recover PLAN.md §11.6's required input (the arc's most recent LABEL,
+    never brief text or coverage history -- see digest/context.py's module
+    docstring for why that fencing matters): given `(body_md, slug)`, the
+    caller re-derives that SAME digest's own topic labels via
+    digest/publish.py's `derive_topics(body_md)` (already the exact
+    slug->label fold every topic on the site goes through) and matches by
+    `slug` -- reusing that existing fold rather than a second,
+    potentially-divergent heading-parsing implementation is why this
+    function returns the raw ingredients (`body_md`, `slug`) instead of
+    trying to extract a label itself. This function stays in state.py
+    rather than doing that resolution itself for a structural reason, not
+    just a style one: state.py is imported by digest/summarize.py (for
+    `Item`), and digest/publish.py imports FROM digest/summarize.py -- so
+    state.py calling into digest/publish.py's `derive_topics` here would
+    create an import cycle (state -> publish -> summarize -> state).
+
+    "Most recent" is `ORDER BY d.created_at DESC LIMIT 1` -- a story's
+    HEADLINE wording legitimately drifts run to run even while its stable
+    key stays the same (the whole reason stable arc keys exist at all, see
+    PLAN.md's "Amendment -- stable arc keys"), so the freshest occurrence is
+    the most representative "what does this story's most recent framing
+    call itself" label to write background about, not the first one ever
+    seen (which `get_arc_keys_needing_context`'s own oldest-first-seen
+    ORDERING uses for a completely different purpose: deciding PROCESSING
+    order across the backlog, not which occurrence's text to read).
+
+    Filters `d.kind = 'window'`, matching every other arc-keys read in this
+    module -- arc keys are written only from the window digest path.
+
+    Returns `None` if the key has no matching row at all -- defensive; in
+    practice every key this is called with came straight out of
+    `get_arc_keys_needing_context`, which only returns keys that already
+    have at least 2 qualifying `arc_keys` rows, so this should always find
+    one. The caller (`_generate_arc_context_primers`) treats `None` as "skip
+    this key this run" rather than raising, the same soft-fail posture
+    every other step in this pipeline uses.
+    """
+    row = conn.execute(
+        """
+        SELECT d.body_md, ak.slug
+        FROM arc_keys ak
+        JOIN digests d ON ak.digest_id = d.id
+        WHERE ak.key = ? AND d.kind = 'window'
+        ORDER BY d.created_at DESC
+        LIMIT 1
+        """,
+        (key,),
+    ).fetchone()
+    return (row[0], row[1]) if row is not None else None
+
+
+# Caps how many stored primers `get_all_arc_contexts` will ever return in one
+# call -- defense in depth, mirroring `_MAX_RECENT_ARC_KEYS`'s identical
+# bounding rationale for the sibling {{RECENT_ARCS}} prompt block: the real
+# bound is `CONTEXT_MAX_PER_RUN` capping how many NEW rows this table can
+# ever gain per day (PLAN.md §11.6), so this table stays small by
+# construction -- this is a belt-and-suspenders ceiling on the site-publish
+# payload size, not the primary control.
+_MAX_ARC_CONTEXTS_PER_PUBLISH = 50
+
+
+def get_all_arc_contexts(
+    conn: sqlite3.Connection, limit: int = _MAX_ARC_CONTEXTS_PER_PUBLISH
+) -> list[dict[str, str]]:
+    """Return every stored arc-context primer as `{"key", "context_md"}` dicts, newest-first.
+
+    Feeds digest/deliver.py's `_deliver_site`, which attaches this
+    UNCONDITIONALLY to EVERY site-publish payload (any digest, any kind,
+    fresh or pending-resend -- see that function's own docstring for the
+    full rationale) as the optional top-level `arc_contexts` field (PLAN.md
+    §11.6 rule 5), rather than trying to track "which primers has the site
+    already confirmed receiving" -- a feature this exact 3-column schema
+    (`key`, `context_md`, `generated_at` -- no publish-confirmation column)
+    deliberately has no state for. Sending the full current snapshot on
+    every publish is what makes this self-healing without that state: a
+    primer generated today rides the very next successful site publish of
+    ANY digest, and if that attempt fails, the next one (window or daily)
+    tries again automatically -- there is nothing here that can permanently
+    strand a generated primer the way "attach only to the digest published
+    at generation time" could if that ONE attempt happened to fail.
+
+    Ordered `generated_at DESC` (newest-generated first) so a cap, if it
+    were ever actually reached, would keep the freshest primers -- the ones
+    most likely to correspond to a currently-active recurring arc -- over
+    the oldest ones. `limit` defaults to `_MAX_ARC_CONTEXTS_PER_PUBLISH`;
+    see that constant's own comment for why it is realistically never
+    reached.
+
+    Returns `[]` when nothing has been generated yet (`CONTEXT_ENABLED` off,
+    or on but no arc has qualified) -- `_deliver_site`'s own truthy-only
+    inclusion rule (matching `deltas`/`topics`/`source_counts`) then omits
+    the `arc_contexts` field entirely, so a deployment that has never
+    generated a primer sends byte-identical payloads to before this feature
+    existed.
+    """
+    rows = conn.execute(
+        "SELECT key, context_md FROM arc_context ORDER BY generated_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [{"key": key, "context_md": context_md} for key, context_md in rows]
 
 
 def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:

@@ -957,6 +957,68 @@ def test_publish_to_site_omits_deltas_when_empty(monkeypatch):
     assert "deltas" not in captured["body"]
 
 
+# --- publish_to_site: arc_contexts (PLAN.md §11.6, "context mode") ---
+
+
+def test_publish_to_site_includes_arc_contexts_when_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        arc_contexts=[{"key": "hormuz", "context_md": "Background about Hormuz."}],
+    )
+
+    assert captured["body"]["arc_contexts"] == [
+        {"key": "hormuz", "context_md": "Background about Hormuz."}
+    ]
+
+
+def test_publish_to_site_omits_arc_contexts_when_none(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+    )
+
+    assert "arc_contexts" not in captured["body"]
+
+
+def test_publish_to_site_omits_arc_contexts_when_empty(monkeypatch):
+    # Truthy-only inclusion, matching deltas/topics/source_counts/
+    # failed_sources above: an explicit empty list must be omitted exactly
+    # like None -- this is the shape get_all_arc_contexts returns when
+    # CONTEXT_ENABLED is off or nothing has qualified yet.
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
+        "https://news-site.example.workers.dev", "key",
+        arc_contexts=[],
+    )
+
+    assert "arc_contexts" not in captured["body"]
+
+
 # --- map_deltas_to_slugs ---
 
 

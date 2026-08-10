@@ -38,12 +38,15 @@ from digest.state import (
     connect,
     count_unsummarized_items,
     create_digest,
+    get_arc_context,
     get_arc_keys,
+    get_arc_keys_needing_context,
     get_digest_item_urls,
     get_pending_digests,
     get_recent_arc_keys,
     get_unsummarized_items,
     init_db,
+    write_arc_context,
     write_arc_keys,
 )
 from digest.summarize import SummarizeError
@@ -677,6 +680,7 @@ def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
         failed_sources=None,
         topics=None,
         deltas=None,
+        arc_contexts=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -1142,6 +1146,7 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
         failed_sources=None,
         topics=None,
         deltas=None,
+        arc_contexts=None,
     ):
         captured.update(
             digest_id=digest_id_,
@@ -1210,6 +1215,7 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
         failed_sources=None,
         topics=None,
         deltas=None,
+        arc_contexts=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -1259,6 +1265,7 @@ def test_deliver_site_forwards_derive_topics_output_to_publish_to_site(conn, mon
         failed_sources=None,
         topics=None,
         deltas=None,
+        arc_contexts=None,
     ):
         captured.update(topics=topics)
 
@@ -1274,6 +1281,74 @@ def test_deliver_site_forwards_derive_topics_output_to_publish_to_site(conn, mon
         {"slug": "story-one", "label": "Story one"},
         {"slug": "story-two", "label": "Story two"},
     ]
+
+
+def test_deliver_site_forwards_arc_contexts_from_storage(conn, monkeypatch):
+    # PLAN.md §11.6: unlike topics/deltas above, arc_contexts is NOT scoped
+    # to this digest_id at all -- _deliver_site attaches the FULL current
+    # arc_context table snapshot to every site publish, whichever digest it
+    # happens to be for (see get_all_arc_contexts' own docstring for why).
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    write_arc_context(conn, "hormuz", "Background about Hormuz.")
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+
+    def fake_publish(
+        digest_id_,
+        body_md_,
+        body_html,
+        created_at,
+        item_count,
+        publish_url,
+        key,
+        *,
+        body_md_hu=None,
+        body_html_hu=None,
+        kind="window",
+        source_counts=None,
+        failed_sources=None,
+        topics=None,
+        deltas=None,
+        arc_contexts=None,
+    ):
+        captured.update(arc_contexts=arc_contexts)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+    )
+
+    assert ok is True
+    assert captured["arc_contexts"] == [
+        {"key": "hormuz", "context_md": "Background about Hormuz."}
+    ]
+
+
+def test_deliver_site_omits_arc_contexts_when_none_generated(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    captured = {}
+    monkeypatch.setattr(
+        deliver_mod,
+        "publish_to_site",
+        lambda *a, arc_contexts=None, **k: captured.update(arc_contexts=arc_contexts),
+    )
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(
+        conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+    )
+
+    assert ok is True
+    assert captured["arc_contexts"] == []
 
 
 def test_deliver_site_omits_key_when_arc_keys_site_enabled_is_false(conn, monkeypatch):
@@ -2936,6 +3011,185 @@ def test_run_daily_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
     after_count = verify_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
     assert after_count == before_count  # unchanged -- run_daily wrote nothing
     assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == ["hormuz"]
+    verify_conn.close()
+
+
+# --- run_daily arc-context primer generation (PLAN.md §11.6, "context mode") ---
+
+
+def test_generate_arc_context_primers_disabled_returns_zero_without_querying(conn, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("must not query for qualifying arcs when context_enabled is False")
+
+    monkeypatch.setattr(main_mod, "get_arc_keys_needing_context", boom)
+
+    cfg = replace(_cfg(), context_enabled=False)
+    count = main_mod._generate_arc_context_primers(conn, cfg, datetime.now(UTC))
+
+    assert count == 0
+
+
+def test_generate_arc_context_primers_none_result_stores_nothing_and_key_stays_eligible(
+    conn, monkeypatch
+):
+    # PLAN.md §11.6's accepted behavior for a None generation result (no
+    # tombstone -- see _generate_arc_context_primers' own docstring): the
+    # key simply stays eligible for reconsideration on a later run.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id_1 = create_digest(
+        conn, "**TL;DR:** x\n\n## An arc\n\ntext 1", get_unsummarized_items(conn)
+    )
+    write_arc_keys(conn, digest_id_1, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}])
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    digest_id_2 = create_digest(
+        conn, "**TL;DR:** x\n\n## An arc\n\ntext 2", get_unsummarized_items(conn)
+    )
+    write_arc_keys(conn, digest_id_2, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}])
+
+    monkeypatch.setattr(main_mod, "generate_arc_context", lambda *a, **k: None)
+
+    cfg = replace(_cfg(), context_enabled=True, context_max_per_run=3)
+    count = main_mod._generate_arc_context_primers(conn, cfg, datetime.now(UTC))
+
+    assert count == 0
+    assert get_arc_context(conn, "hormuz") is None
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == ["hormuz"]
+
+
+def test_generate_arc_context_primers_success_writes_and_returns_count(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id_1 = create_digest(
+        conn, "**TL;DR:** x\n\n## An arc\n\ntext 1", get_unsummarized_items(conn)
+    )
+    write_arc_keys(conn, digest_id_1, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}])
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    digest_id_2 = create_digest(
+        conn, "**TL;DR:** x\n\n## An arc\n\ntext 2", get_unsummarized_items(conn)
+    )
+    write_arc_keys(conn, digest_id_2, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}])
+
+    captured = {}
+
+    def fake_generate(label, model, timeout_seconds):
+        captured.update(label=label, model=model, timeout_seconds=timeout_seconds)
+        return "Background about the strait."
+
+    monkeypatch.setattr(main_mod, "generate_arc_context", fake_generate)
+
+    cfg = replace(
+        _cfg(), context_enabled=True, context_max_per_run=3,
+        context_model="sonnet", context_timeout_seconds=45,
+    )
+    count = main_mod._generate_arc_context_primers(conn, cfg, datetime.now(UTC))
+
+    assert count == 1
+    # The arc's most recent LABEL -- from the digest whose created_at is
+    # latest -- not the first-seen occurrence's own text.
+    assert captured["label"] == "An arc"
+    assert captured["model"] == "sonnet"
+    assert captured["timeout_seconds"] == 45
+    assert get_arc_context(conn, "hormuz") == "Background about the strait."
+    # Generated -- no longer eligible for reconsideration.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == []
+
+
+def test_run_daily_context_disabled_never_calls_generate_arc_context(conn, monkeypatch, tmp_path):
+    # Prove the false branch really is why no generation happens -- not
+    # simply an absence of qualifying data -- by seeding a genuinely
+    # qualifying arc (>=2 window-digest appearances) before running with
+    # CONTEXT_ENABLED left at its default (False).
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    for i in range(2):
+        digest_id = _window_digest(
+            real_conn,
+            f"**TL;DR:** x\n\n## An arc\n\ntext {i}",
+            1,
+            _recent_created_at(hours_ago=10 + i),
+        )
+        write_arc_keys(
+            real_conn, digest_id, [{"slug": "an-arc", "label": "An arc", "key": "hormuz"}]
+        )
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## Today\n\nstuff"
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise AssertionError(
+            "generate_arc_context must not be called when CONTEXT_ENABLED is false"
+        )
+
+    monkeypatch.setattr(main_mod, "generate_arc_context", boom)
+
+    cfg = _daily_cfg(state_db_path=db_path)  # context_enabled defaults False
+    ok = run_daily(cfg)
+
+    assert ok is True
+    verify_conn = connect(db_path)
+    assert verify_conn.execute("SELECT COUNT(*) FROM arc_context").fetchone()[0] == 0
+    verify_conn.close()
+
+
+def test_run_daily_context_enabled_generates_bounded_to_max_per_run(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    # Three DIFFERENT qualifying arcs (each with >=2 appearances in the
+    # trailing 7 days), to prove CONTEXT_MAX_PER_RUN actually bounds the
+    # batch rather than processing every qualifying arc in one run.
+    for key in ("arc-a", "arc-b", "arc-c"):
+        for i in range(2):
+            digest_id = _window_digest(
+                real_conn,
+                f"**TL;DR:** x\n\n## An arc\n\ntext for {key} attempt {i}",
+                1,
+                _recent_created_at(hours_ago=10 + i),
+            )
+            write_arc_keys(
+                real_conn, digest_id, [{"slug": "an-arc", "label": "An arc", "key": key}]
+            )
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## Today\n\nstuff"
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    calls = []
+
+    def fake_generate(label, model, timeout_seconds):
+        calls.append((label, model, timeout_seconds))
+        return f"background for {label}"
+
+    monkeypatch.setattr(main_mod, "generate_arc_context", fake_generate)
+
+    cfg = _daily_cfg(
+        state_db_path=db_path,
+        context_enabled=True,
+        context_max_per_run=2,
+        context_model="sonnet",
+        context_timeout_seconds=45,
+    )
+    ok = run_daily(cfg)
+
+    assert ok is True
+    # Bounded by context_max_per_run, not all 3 qualifying arcs.
+    assert len(calls) == 2
+    for _label, model, timeout_seconds in calls:
+        assert model == "sonnet"
+        assert timeout_seconds == 45
+
+    verify_conn = connect(db_path)
+    stored_keys = {row[0] for row in verify_conn.execute("SELECT key FROM arc_context").fetchall()}
+    assert len(stored_keys) == 2
     verify_conn.close()
 
 

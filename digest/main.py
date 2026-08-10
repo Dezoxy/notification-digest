@@ -25,6 +25,7 @@ from digest.collectors import x as x_collector
 from digest.collectors.base import CollectResult
 from digest.collectors.polymarket import PolymarketCollectResult
 from digest.config import Config, ConfigError
+from digest.context import generate_arc_context
 from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
 from digest.emailer import archive
@@ -37,9 +38,11 @@ from digest.state import (
     connect,
     count_unsummarized_items,
     create_digest,
+    get_arc_keys_needing_context,
     get_cursors,
     get_daily_digests_since,
     get_digest_item_urls,
+    get_latest_arc_occurrence,
     get_polymarket_probs,
     get_recent_arc_keys,
     get_recent_digests,
@@ -47,6 +50,7 @@ from digest.state import (
     get_window_digests_since,
     init_db,
     prune_delivered_items,
+    write_arc_context,
     write_arc_keys,
     write_deltas,
 )
@@ -652,6 +656,106 @@ async def _run(cfg: Config) -> bool:
         conn.close()
 
 
+def _generate_arc_context_primers(conn: sqlite3.Connection, cfg: Config, now: datetime) -> int:
+    """Generate and persist background primers for qualifying arcs (PLAN.md §11.6).
+
+    Returns the count of NEW primers generated this call.
+
+    Called from `run_daily` ONLY, and only AFTER that run's own daily brief
+    has already been produced and delivered (see `run_daily`'s own call
+    site) -- generation here must never affect, delay, or degrade the daily
+    brief itself. A no-op returning 0 when `cfg.context_enabled` is False
+    (the default): this is new generation work the owner enables
+    deliberately, not an always-on step (see `Config.context_enabled`'s own
+    comment).
+
+    Reuses `_RECENT_ARCS_WINDOW` (7 days) as the qualification window --
+    the SAME trailing window the stable-arc-keys feature's own
+    {{RECENT_ARCS}} prompt block uses, and the SAME window the site's own
+    recurring-arc threshold uses (verified 2026-08-10 against
+    cloudflare-terraform/workers/news-site/worker.js, see digest/state.py's
+    `get_arc_keys_needing_context` docstring) -- so "qualifies for a
+    primer" agrees with "the site would call this a recurring arc" by
+    construction, not by a second, potentially-drifting constant.
+
+    For each key `get_arc_keys_needing_context` returns (already bounded to
+    `cfg.context_max_per_run`, oldest-first-seen):
+    1. `get_latest_arc_occurrence` resolves which digest's `body_md` most
+       recently tagged this key, plus that occurrence's own topic `slug`.
+    2. That `body_md` is run back through `derive_topics` (the SAME
+       heading->slug->label fold `_deliver_site` already applies to every
+       digest) to recover this arc's own most recent LABEL -- the ONLY
+       input `generate_arc_context` is ever given (PLAN.md §11.6 rule 3:
+       "no brief text, no RECENT_COVERAGE, no window items", so this can
+       never become a second, unfenced replay channel the way §11.3's
+       `deltas` guardrails exist to prevent for a different feature). A
+       missing occurrence or an unresolvable label is skipped defensively
+       (should not happen in practice -- every `arc_keys` row this queries
+       was itself written FROM a `derive_topics` call whose slug set is
+       exactly what this re-derives -- but a skip here costs nothing and a
+       raise would risk the whole daily run over one arc's data).
+    3. `generate_arc_context` (digest/context.py) does the actual toolless
+       `claude -p` call and never raises -- see its own docstring for the
+       three internally-collapsed reasons a call can return `None`.
+
+    ACCEPTED BEHAVIOR on a `None` result (PLAN.md §11.6 rule 4's explicit
+    call to make and document): NOTHING is written for that key. No
+    tombstone. The key simply stays eligible and is reconsidered on the
+    NEXT daily run that still sees it qualify. This was a deliberate choice
+    over a tombstone, for two reasons:
+    1. `generate_arc_context`'s return value collapses THREE distinct
+       causes (a CLI/timeout failure, the model's own INSUFFICIENT_CONTEXT
+       sentinel, and defensive empty-output handling) into one `None` --
+       there is no way for this caller to tell "genuinely, permanently too
+       vague to ever write about" apart from "hit a transient CLI hiccup
+       today" without either widening that function's return contract
+       (which PLAN.md §11.6 fixes as `str | None`) or storing a tombstone
+       on EVERY failure reason alike, which would also permanently and
+       silently give up on an otherwise-fine arc that simply had one bad
+       `claude -p` call.
+    2. This cannot loop forever in the unbounded sense the instruction
+       warns about: `get_arc_keys_needing_context`'s own qualification is
+       itself bounded by the SAME rolling 7-day recurrence window that made
+       the key eligible in the first place -- a key stops being
+       reconsidered the moment it stops recurring, not after some fixed
+       retry count. The realistic worst case is a story that keeps
+       genuinely recurring for weeks under a label the model consistently
+       finds too thin to write about: that wastes at most
+       `cfg.context_max_per_run` calls PER DAY (a small, fixed, owner-tuned
+       number, default 3) for as long as it keeps recurring, never an
+       unbounded or growing cost, and it self-corrects the instant the
+       story stops appearing.
+
+    Never raises: every step above already soft-fails on its own (a missing
+    occurrence/label is skipped; `generate_arc_context` never raises by its
+    own contract), so there is nothing left here that could propagate an
+    exception into `run_daily` and jeopardize a brief that has, by this
+    point, already shipped.
+    """
+    if not cfg.context_enabled:
+        return 0
+
+    since_iso = (now - _RECENT_ARCS_WINDOW).isoformat()
+    generated = 0
+    for key in get_arc_keys_needing_context(conn, since_iso, cfg.context_max_per_run):
+        occurrence = get_latest_arc_occurrence(conn, key)
+        if occurrence is None:
+            continue
+        body_md, slug = occurrence
+        label = next((t["label"] for t in derive_topics(body_md) if t["slug"] == slug), None)
+        if label is None:
+            continue
+
+        context_md = generate_arc_context(label, cfg.context_model, cfg.context_timeout_seconds)
+        if context_md is None:
+            continue
+
+        write_arc_context(conn, key, context_md)
+        generated += 1
+
+    return generated
+
+
 def run_daily(cfg: Config) -> bool:
     """Run the once-a-day brief synthesis + delivery cycle. Returns True if it completed OK.
 
@@ -752,6 +856,10 @@ def run_daily(cfg: Config) -> bool:
             # rather than a failed daily brief. Nothing was freshly
             # delivered this run -- both fields fall back to the pending
             # pass's own result, matching `delivered`/`ok`'s meaning below.
+            # `context_generated` is always 0 on this path (PLAN.md §11.6):
+            # no brief was produced this run at all, so there is nothing to
+            # generate primers "after" -- see `run_daily`'s own call site
+            # further down for the non-empty-day path.
             logger.info(
                 "run_summary %s",
                 json.dumps(
@@ -760,6 +868,7 @@ def run_daily(cfg: Config) -> bool:
                         "source_digests": 0,
                         "delivered": all_ok,
                         "ok": all_ok,
+                        "context_generated": 0,
                     },
                     sort_keys=True,
                 ),
@@ -854,6 +963,16 @@ def run_daily(cfg: Config) -> bool:
         )
         result = all_ok and ok
 
+        # PLAN.md §11.6 "context mode": AFTER this run's own daily brief has
+        # been produced and delivered above -- generating primers here must
+        # never affect, delay, or degrade that delivery, which by this point
+        # has already fully happened either way. A no-op (0) when
+        # `cfg.context_enabled` is False, the default -- see
+        # `_generate_arc_context_primers`'s own docstring for the full
+        # qualification/generation/persistence pipeline and its accepted
+        # "no tombstone" failure behavior.
+        context_generated = _generate_arc_context_primers(conn, cfg, now)
+
         # Exit code stays the sole alert trigger; this line is for Loki
         # queries to see WHICH leg failed -- the pending-retry pass vs this
         # run's own fresh brief -- without a log dive. `verified` (PLAN.md
@@ -862,6 +981,12 @@ def run_daily(cfg: Config) -> bool:
         # "verification ran and succeeded" apart from "shipped the draft
         # with the banner" without grepping the WARNING line above -- exactly
         # the visibility the flag-on live-validation step needs.
+        # `context_generated` (PLAN.md §11.6) is always 0 while
+        # CONTEXT_ENABLED defaults off; once flagged on, it's the Loki-visible
+        # count of NEW background primers this run generated (bounded by
+        # CONTEXT_MAX_PER_RUN), independent of `ok`/`result` above -- a
+        # primer-generation outcome never affects the daily brief's own
+        # success/failure.
         logger.info(
             "run_summary %s",
             json.dumps(
@@ -871,6 +996,7 @@ def run_daily(cfg: Config) -> bool:
                     "delivered": ok,
                     "ok": result,
                     "verified": verified,
+                    "context_generated": context_generated,
                 },
                 sort_keys=True,
             ),

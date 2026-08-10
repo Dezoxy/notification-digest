@@ -10,12 +10,16 @@ from digest.state import (
     connect,
     count_unsummarized_items,
     create_digest,
+    get_all_arc_contexts,
+    get_arc_context,
     get_arc_keys,
+    get_arc_keys_needing_context,
     get_cursors,
     get_daily_allowed_urls,
     get_daily_digests_since,
     get_deltas,
     get_digest_source_counts,
+    get_latest_arc_occurrence,
     get_pending_digests,
     get_polymarket_probs,
     get_recent_arc_keys,
@@ -28,6 +32,7 @@ from digest.state import (
     mark_digest_site_published,
     mark_digest_telegram_sent,
     prune_delivered_items,
+    write_arc_context,
     write_arc_keys,
     write_deltas,
 )
@@ -1066,11 +1071,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1150,17 +1155,22 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     ).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
-    assert deltas_ddl is not None  # the v0->v3 jump also creates `deltas`
+    assert deltas_ddl is not None  # the v0->v4 jump also creates `deltas`
 
     arc_keys_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
     ).fetchone()
-    assert arc_keys_ddl is not None  # the v0->v3 jump also creates `arc_keys`
+    assert arc_keys_ddl is not None  # the v0->v4 jump also creates `arc_keys`
+
+    arc_context_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
+    ).fetchone()
+    assert arc_context_ddl is not None  # the v0->v4 jump also creates `arc_context`
 
     old_conn.close()
 
@@ -1191,7 +1201,7 @@ def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Pa
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
@@ -1225,11 +1235,45 @@ def test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it(tmp_path: 
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
     arc_keys_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
     ).fetchone()
     assert arc_keys_ddl is not None
+
+    old_conn.close()
+
+
+def test_init_db_migrates_v3_db_predating_arc_context_table_by_adding_it(tmp_path: Path):
+    # Sibling of test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it
+    # immediately above, one version rung up: a database already fully
+    # migrated through version 3 (arc_keys exists, arc_context does not --
+    # PLAN.md §11.6 didn't exist yet) must gain the `arc_context` table on
+    # the next init_db call, without re-running any earlier step.
+    db_path = str(tmp_path / "v3.db")
+    old_conn = connect(db_path)
+    init_db(old_conn)
+    # Force the DB back down to a "just migrated through version 3" shape:
+    # drop `arc_context` (which a fresh init_db already created) and
+    # re-stamp the version to 3, the way every v3 database that predates
+    # this feature actually looks on disk.
+    old_conn.execute("DROP TABLE arc_context")
+    old_conn.execute("PRAGMA user_version = 3")
+    old_conn.commit()
+    assert (
+        old_conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
+        ).fetchone()
+        is None
+    )
+
+    init_db(old_conn)
+
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    arc_context_ddl = old_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
+    ).fetchone()
+    assert arc_context_ddl is not None
 
     old_conn.close()
 
@@ -2283,3 +2327,190 @@ def test_get_recent_arc_keys_caps_at_fifty(conn):
     result = get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00")
 
     assert len(result) == 50
+
+
+# --- write_arc_context / get_arc_context / get_arc_keys_needing_context /
+# get_latest_arc_occurrence / get_all_arc_contexts (PLAN.md §11.6, "context mode") ---
+
+
+def _tagged_window_digest(
+    conn: sqlite3.Connection, source_id: str, key: str, slug: str, label: str, created_at: str
+) -> int:
+    """A window digest whose single `## <label>` section is tagged with `key`/`slug`.
+
+    `created_at` is forced to an exact value (see below).
+
+    Mirrors this file's established pattern (e.g.
+    test_get_recent_arc_keys_returns_distinct_keys_sorted): commit a fresh
+    item, create_digest off it, then force created_at to an exact value so
+    tests can construct precise chronological orderings rather than relying
+    on real-clock timing. `label` is embedded as a real `## ` heading so
+    digest/publish.py's `derive_topics` (which `get_latest_arc_occurrence`'s
+    callers rely on) can actually recover it from `body_md`.
+    """
+    commit_new_items(conn, [_item(source_id, fetched_at=created_at)], {})
+    body_md = f"**TL;DR:** x\n\n## {label}\n\ntext"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    conn.execute("UPDATE digests SET created_at = ? WHERE id = ?", (created_at, digest_id))
+    conn.commit()
+    write_arc_keys(conn, digest_id, [{"slug": slug, "label": label, "key": key}])
+    return digest_id
+
+
+def test_get_arc_context_none_when_never_generated(conn):
+    assert get_arc_context(conn, "hormuz") is None
+
+
+def test_write_arc_context_then_get_arc_context_round_trips(conn):
+    write_arc_context(conn, "hormuz", "Background about Hormuz.")
+
+    assert get_arc_context(conn, "hormuz") == "Background about Hormuz."
+
+
+def test_write_arc_context_upserts_last_write_wins(conn):
+    # Idempotency guardrail, mirroring write_arc_keys'/write_deltas' own:
+    # PRIMARY KEY (key) plus INSERT OR REPLACE means calling this twice for
+    # the same key leaves exactly one row, second call's value wins.
+    write_arc_context(conn, "hormuz", "first version")
+    write_arc_context(conn, "hormuz", "second version")
+
+    assert get_arc_context(conn, "hormuz") == "second version"
+    assert conn.execute("SELECT COUNT(*) FROM arc_context").fetchone()[0] == 1
+
+
+def test_write_arc_context_scoped_per_key(conn):
+    write_arc_context(conn, "hormuz", "hormuz background")
+    write_arc_context(conn, "openai", "openai background")
+
+    assert get_arc_context(conn, "hormuz") == "hormuz background"
+    assert get_arc_context(conn, "openai") == "openai background"
+
+
+def test_get_arc_keys_needing_context_requires_at_least_two_appearances(conn):
+    _tagged_window_digest(conn, "1", "hormuz", "hormuz", "Hormuz", "2026-08-01T00:00:00+00:00")
+    # Only one appearance so far -- must not qualify yet.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == []
+
+    _tagged_window_digest(conn, "2", "hormuz", "hormuz", "Hormuz", "2026-08-02T00:00:00+00:00")
+    # A second appearance -- now qualifies.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == ["hormuz"]
+
+
+def test_get_arc_keys_needing_context_excludes_already_stored_keys(conn):
+    _tagged_window_digest(conn, "1", "hormuz", "hormuz", "Hormuz", "2026-08-01T00:00:00+00:00")
+    _tagged_window_digest(conn, "2", "hormuz", "hormuz", "Hormuz", "2026-08-02T00:00:00+00:00")
+    write_arc_context(conn, "hormuz", "already has a primer")
+
+    # Qualifies on recurrence alone, but a stored primer already exists --
+    # a primer is generated ONCE per arc, never regenerated.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == []
+
+
+def test_get_arc_keys_needing_context_respects_limit_and_oldest_first_ordering(conn):
+    _tagged_window_digest(conn, "1", "arc-a", "arc-a", "Arc A", "2026-08-01T00:00:00+00:00")
+    _tagged_window_digest(conn, "2", "arc-a", "arc-a", "Arc A", "2026-08-02T00:00:00+00:00")
+    _tagged_window_digest(conn, "3", "arc-b", "arc-b", "Arc B", "2026-08-03T00:00:00+00:00")
+    _tagged_window_digest(conn, "4", "arc-b", "arc-b", "Arc B", "2026-08-04T00:00:00+00:00")
+    _tagged_window_digest(conn, "5", "arc-c", "arc-c", "Arc C", "2026-08-05T00:00:00+00:00")
+    _tagged_window_digest(conn, "6", "arc-c", "arc-c", "Arc C", "2026-08-06T00:00:00+00:00")
+
+    # All three qualify; ordered by each key's OWN first-seen instant --
+    # arc-a (first seen 08-01), then arc-b (first seen 08-03), then arc-c
+    # (first seen 08-05) -- so a backlog drains oldest-arc-first.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == [
+        "arc-a",
+        "arc-b",
+        "arc-c",
+    ]
+    # `limit` is a hard SQL-level cap, not a post-hoc slice -- bounding to 2
+    # returns exactly the two oldest-first-seen qualifying keys.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 2) == [
+        "arc-a",
+        "arc-b",
+    ]
+
+
+def test_get_arc_keys_needing_context_excludes_rows_older_than_since(conn):
+    _tagged_window_digest(conn, "1", "hormuz", "hormuz", "Hormuz", "2026-08-01T00:00:00+00:00")
+    _tagged_window_digest(conn, "2", "hormuz", "hormuz", "Hormuz", "2026-08-02T00:00:00+00:00")
+
+    assert get_arc_keys_needing_context(conn, "2026-08-03T00:00:00+00:00", 10) == []
+
+
+def test_get_arc_keys_needing_context_excludes_daily_kind_digests(conn):
+    # Belt-and-suspenders guardrail mirroring get_recent_arc_keys' own kind
+    # filter: arc keys are written only from the window path in practice,
+    # but the query still excludes a daily-kind digest's row defensively.
+    _tagged_window_digest(conn, "1", "hormuz", "hormuz", "Hormuz", "2026-08-01T00:00:00+00:00")
+    daily_id = create_digest(conn, "daily body", [], kind="daily")
+    conn.execute(
+        "UPDATE digests SET created_at = ? WHERE id = ?", ("2026-08-02T00:00:00+00:00", daily_id)
+    )
+    conn.execute(
+        "INSERT INTO arc_keys (digest_id, slug, key) VALUES (?, ?, ?)",
+        (daily_id, "hormuz", "hormuz"),
+    )
+    conn.commit()
+
+    # Only ONE real (window) appearance -- the daily-kind row must not count
+    # toward the >=2 recurrence threshold.
+    assert get_arc_keys_needing_context(conn, "2000-01-01T00:00:00+00:00", 10) == []
+
+
+def test_get_latest_arc_occurrence_returns_most_recent_body_and_slug(conn):
+    _tagged_window_digest(
+        conn, "1", "hormuz", "hormuz", "Hormuz tension", "2026-08-01T00:00:00+00:00"
+    )
+    _tagged_window_digest(
+        conn, "2", "hormuz", "hormuz", "Hormuz escalation", "2026-08-05T00:00:00+00:00"
+    )
+
+    result = get_latest_arc_occurrence(conn, "hormuz")
+
+    assert result is not None
+    body_md, slug = result
+    assert slug == "hormuz"
+    # The MOST RECENT occurrence's own heading text, not the first one --
+    # a story's headline wording legitimately drifts while its key stays
+    # stable.
+    assert "Hormuz escalation" in body_md
+    assert "Hormuz tension" not in body_md
+
+
+def test_get_latest_arc_occurrence_none_when_key_unknown(conn):
+    assert get_latest_arc_occurrence(conn, "nonexistent") is None
+
+
+def test_get_all_arc_contexts_empty_when_nothing_generated(conn):
+    assert get_all_arc_contexts(conn) == []
+
+
+def test_get_all_arc_contexts_returns_newest_first(conn):
+    write_arc_context(conn, "older", "older background")
+    write_arc_context(conn, "newer", "newer background")
+    # Pin generated_at explicitly rather than relying on real-clock
+    # granularity between the two calls above (which could tie within the
+    # same second).
+    conn.execute(
+        "UPDATE arc_context SET generated_at = ? WHERE key = ?",
+        ("2026-08-01T00:00:00+00:00", "older"),
+    )
+    conn.execute(
+        "UPDATE arc_context SET generated_at = ? WHERE key = ?",
+        ("2026-08-05T00:00:00+00:00", "newer"),
+    )
+    conn.commit()
+
+    assert get_all_arc_contexts(conn) == [
+        {"key": "newer", "context_md": "newer background"},
+        {"key": "older", "context_md": "older background"},
+    ]
+
+
+def test_get_all_arc_contexts_respects_limit(conn):
+    for i in range(5):
+        write_arc_context(conn, f"key-{i}", f"background {i}")
+
+    result = get_all_arc_contexts(conn, limit=2)
+
+    assert len(result) == 2

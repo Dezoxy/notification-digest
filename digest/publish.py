@@ -678,6 +678,7 @@ def publish_to_site(
     failed_sources: list[str] | None = None,
     topics: list[dict[str, str]] | None = None,
     deltas: list[dict[str, str]] | None = None,
+    arc_contexts: list[dict[str, str]] | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -771,6 +772,34 @@ def publish_to_site(
     for an unconditionally-sent, server-ignored-until-supported optional
     field, and `deltas` follows the same shape.
 
+    `arc_contexts` (keyword-only, default None; PLAN.md §11.6 "context
+    mode") is digest/state.py's `get_all_arc_contexts` output -- the FULL
+    current set of generated background primers, `{"key", "context_md"}`
+    dicts, NOT scoped to this `digest_id` at all (unlike `topics`/`deltas`,
+    which describe THIS digest's own sections). Included under the IDENTICAL
+    truthy-only rule as `source_counts`/`failed_sources`/`topics`/`deltas`
+    above -- see digest/deliver.py's `_deliver_site` for why sending the
+    unscoped full snapshot on every publish, rather than trying to track
+    which primers the site has already confirmed, is the deliberate,
+    self-healing choice here.
+
+    Site-validator finding, RE-VERIFIED 2026-08-10 for this field
+    specifically (same method as the `deltas` finding immediately above --
+    reading cloudflare-terraform/workers/news-site/worker.js's
+    `validateDigestPayload` directly, read-only, in the sibling repo):
+    `arc_contexts` is destructured from the same fixed, `...rest`-free
+    field list `deltas` already rides on -- an unrecognized TOP-LEVEL field
+    is silently ignored, not rejected, so sending this before the site's own
+    §11.6 ingest support lands is harmless for the identical reason
+    `deltas` shipping early was harmless (PR #63). This is UNLIKE
+    `topics`' per-entry `"key"` field (`arc_keys_site_enabled`,
+    Config's own field): that one is gated behind a flag because
+    `validateTopics` DOES reject an unrecognized PER-ENTRY field via its own
+    `...rest` check -- `arc_contexts` is a top-level field like `deltas`,
+    not a per-entry addition to `topics`, so it inherits `deltas`'
+    unflagged-shipping precedent, not `topics["key"]`'s gated one. No config
+    flag gates this field's inclusion as a result.
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -816,6 +845,8 @@ def publish_to_site(
         payload["topics"] = topics
     if deltas:
         payload["deltas"] = deltas
+    if arc_contexts:
+        payload["arc_contexts"] = arc_contexts
     data = json.dumps(payload).encode("utf-8")
     url = f"{publish_url}/ingest/{digest_id}"
     headers = {
