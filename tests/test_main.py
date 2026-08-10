@@ -44,6 +44,7 @@ from digest.state import (
     init_db,
 )
 from digest.summarize import SummarizeError
+from digest.verify import VerificationUnavailable
 
 _NO_CHANNELS_DONE = {"email": False, "site": False, "telegram": False}
 
@@ -2827,6 +2828,251 @@ def test_run_daily_retry_path_picks_daily_thread_from_stored_kind(conn, monkeypa
     assert telegram_calls == [555]
     row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)
+
+
+# --- run_daily verification pass (PLAN.md §11.4, VERIFY_DAILY_ENABLED) ---
+
+
+def _verify_daily_setup(
+    conn, tmp_path, monkeypatch, *, draft_body_md="**TL;DR:** the day\n\n## An arc\n\nstuff"
+):
+    """Shared fixture setup for the run_daily verification-wiring tests below.
+
+    One window digest, summarize_daily faked to return `draft_body_md`
+    unconditionally, and the delivery/archive side effects faked out --
+    identical shape to `test_run_daily_happy_path_creates_and_delivers_daily_digest`,
+    factored out since every verification test below needs the same
+    scaffolding and only differs in how `main_mod.verify_daily` behaves.
+    """
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=6))
+    real_conn.close()
+
+    monkeypatch.setattr(main_mod, "summarize_daily", lambda *a, **k: draft_body_md)
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    return db_path
+
+
+def test_run_daily_flag_off_never_calls_verify_daily(conn, monkeypatch, tmp_path):
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("verify_daily must not be called when VERIFY_DAILY_ENABLED is off")
+
+    monkeypatch.setattr(main_mod, "verify_daily", boom)
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=False)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    verify_conn = connect(db_path)
+    body_md = verify_conn.execute(
+        "SELECT body_md FROM digests WHERE kind = 'daily'"
+    ).fetchone()[0]
+    verify_conn.close()
+    # Byte-identical to the pre-§11.4 draft: no banner, no verifier-added
+    # "Verification notes" section.
+    assert body_md == "**TL;DR:** the day\n\n## An arc\n\nstuff"
+    assert "verification unavailable" not in body_md
+
+
+def test_run_daily_flag_on_success_ships_verified_text_without_banner(conn, monkeypatch, tmp_path):
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch)
+
+    verified_text = "**TL;DR:** the day\n\n## An arc\n\nstuff\n\n## Verification notes\n\nchecked."
+    verify_calls = []
+
+    def fake_verify_daily(draft_body_md, allowed_urls, model, timeout_seconds, effort, max_web_ops):
+        verify_calls.append(
+            dict(
+                draft_body_md=draft_body_md,
+                allowed_urls=set(allowed_urls),
+                model=model,
+                timeout_seconds=timeout_seconds,
+                effort=effort,
+                max_web_ops=max_web_ops,
+            )
+        )
+        return verified_text, set(allowed_urls) | {"https://verifier-fetched.example/x"}
+
+    monkeypatch.setattr(main_mod, "verify_daily", fake_verify_daily)
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=True)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(verify_calls) == 1
+    call = verify_calls[0]
+    assert call["draft_body_md"] == "**TL;DR:** the day\n\n## An arc\n\nstuff"
+    assert call["model"] == cfg.verify_daily_model
+    assert call["timeout_seconds"] == cfg.verify_daily_timeout_seconds
+    assert call["effort"] == cfg.verify_daily_effort
+    assert call["max_web_ops"] == cfg.verify_daily_max_web_ops
+
+    verify_conn = connect(db_path)
+    row = verify_conn.execute(
+        "SELECT body_md FROM digests WHERE kind = 'daily'"
+    ).fetchone()
+    verify_conn.close()
+    assert row[0] == verified_text
+    assert "verification unavailable" not in row[0]
+
+
+def test_run_daily_flag_on_success_widens_allowlist_at_delivery_time(conn, monkeypatch, tmp_path):
+    # Regression guard for the same class of bug
+    # test_run_daily_delivery_uses_non_empty_allowed_urls_from_source_window_digest
+    # exists for: deliver_channels must receive the WIDENED allowlist for a
+    # verified daily brief, or a verifier-only citation would be stripped a
+    # second time at render time, in the very run that produced it.
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch)
+
+    verified_url = "https://verifier-fetched.example/report"
+    verified_text = f"**TL;DR:** the day\n\n## An arc\n\nNew fact[¹]({verified_url}).\n"
+
+    def fake_verify_daily(draft_body_md, allowed_urls, model, timeout_seconds, effort, max_web_ops):
+        return verified_text, set(allowed_urls) | {verified_url}
+
+    monkeypatch.setattr(main_mod, "verify_daily", fake_verify_daily)
+
+    render_calls = []
+    real_render_body_html = deliver_mod.render_body_html
+    monkeypatch.setattr(
+        deliver_mod,
+        "render_body_html",
+        lambda md, allowed_urls: (
+            render_calls.append(set(allowed_urls)) or real_render_body_html(md, allowed_urls)
+        ),
+    )
+    site_calls = []
+    monkeypatch.setattr(
+        deliver_mod, "publish_to_site", lambda *a, **k: site_calls.append((a, k))
+    )
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=True)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(render_calls) == 1
+    assert verified_url in render_calls[0]
+    assert len(site_calls) == 1
+    body_html = site_calls[0][0][2]
+    assert f'href="{verified_url}"' in body_html
+
+
+def test_run_daily_flag_on_verification_unavailable_ships_draft_with_banner(
+    conn, monkeypatch, tmp_path
+):
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise VerificationUnavailable("claude -p (verify) timed out after 600s")
+
+    monkeypatch.setattr(main_mod, "verify_daily", boom)
+
+    translate_calls = []
+    monkeypatch.setattr(
+        main_mod, "translate_digest", lambda *a, **k: translate_calls.append(a) or None
+    )
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=True, translate_hu_enabled=True)
+    ok = run_daily(cfg)
+
+    assert ok is True  # verification unavailability never fails the run
+    assert len(translate_calls) == 1  # translate/deliver still run
+
+    verify_conn = connect(db_path)
+    body_md = verify_conn.execute(
+        "SELECT body_md FROM digests WHERE kind = 'daily'"
+    ).fetchone()[0]
+    verify_conn.close()
+    assert body_md.startswith("⚠ verification unavailable this run\n\n")
+    assert body_md.endswith("**TL;DR:** the day\n\n## An arc\n\nstuff")
+
+
+def test_run_daily_flag_on_summarize_error_from_verify_ships_draft_with_banner(
+    conn, monkeypatch, tmp_path
+):
+    # The other of the two documented failure shapes: verify_daily's own
+    # validate_output call raised SummarizeError (output that fails the
+    # daily contract) rather than run_claude_verify raising
+    # VerificationUnavailable -- both must route to the identical soft-fail.
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise SummarizeError("verify output had no real heading")
+
+    monkeypatch.setattr(main_mod, "verify_daily", boom)
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=True)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    verify_conn = connect(db_path)
+    body_md = verify_conn.execute(
+        "SELECT body_md FROM digests WHERE kind = 'daily'"
+    ).fetchone()[0]
+    verify_conn.close()
+    assert body_md.startswith("⚠ verification unavailable this run\n\n")
+
+
+def test_run_daily_flag_on_banner_is_code_prepended_not_model_text(conn, monkeypatch, tmp_path):
+    # The banner must come from digest/main.py's own constant, never from
+    # anything the (faked) model returned -- the draft here contains no
+    # banner-shaped text of its own.
+    draft = "**TL;DR:** quiet day\n\n## Nothing much\n\nstuff"
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch, draft_body_md=draft)
+    monkeypatch.setattr(
+        main_mod, "verify_daily", lambda *a, **k: (_ for _ in ()).throw(
+            VerificationUnavailable("boom")
+        )
+    )
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=True)
+    run_daily(cfg)
+
+    verify_conn = connect(db_path)
+    body_md = verify_conn.execute(
+        "SELECT body_md FROM digests WHERE kind = 'daily'"
+    ).fetchone()[0]
+    verify_conn.close()
+    assert body_md == main_mod._VERIFY_UNAVAILABLE_BANNER + draft
+
+
+def test_run_daily_flag_on_translation_uses_widened_allowlist(conn, monkeypatch, tmp_path):
+    # A verified brief's Hungarian translation must be checked against the
+    # SAME widened allowlist the English verified body was -- not the
+    # draft's own narrower set -- or a verifier-only citation the English
+    # body kept would get stripped from the Hungarian one alone.
+    db_path = _verify_daily_setup(conn, tmp_path, monkeypatch)
+    widened_extra = {"https://verifier-fetched.example/x"}
+
+    monkeypatch.setattr(
+        main_mod,
+        "verify_daily",
+        lambda draft_body_md, allowed_urls, *a, **k: (
+            "**TL;DR:** the day\n\n## An arc\n\nstuff",
+            set(allowed_urls) | widened_extra,
+        ),
+    )
+
+    translate_calls = []
+
+    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+        translate_calls.append(set(allowed_urls))
+        return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    cfg = _daily_cfg(state_db_path=db_path, verify_daily_enabled=True, translate_hu_enabled=True)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(translate_calls) == 1
+    assert widened_extra <= translate_calls[0]
 
 
 # --- run_weekly / _deliver_pending (weekly-brief feature) ---

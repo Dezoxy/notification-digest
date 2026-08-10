@@ -894,3 +894,126 @@ def test_translate_model_fallback_empty_string_disables_it(monkeypatch):
     config = Config.from_env()
 
     assert config.translate_model_fallback == ""
+
+
+# --- VERIFY_DAILY_* (PLAN.md §11.4 verified briefing) ---
+
+
+def test_verify_daily_enabled_defaults_to_false(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("VERIFY_DAILY_ENABLED", raising=False)
+
+    config = Config.from_env()
+
+    assert config.verify_daily_enabled is False
+
+
+def test_verify_daily_enabled_true_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("VERIFY_DAILY_ENABLED", "true")
+
+    config = Config.from_env()
+
+    assert config.verify_daily_enabled is True
+
+
+def test_verify_daily_timeout_seconds_defaults_to_600(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("VERIFY_DAILY_TIMEOUT_SECONDS", raising=False)
+
+    config = Config.from_env()
+
+    assert config.verify_daily_timeout_seconds == 600
+
+
+def test_verify_daily_timeout_seconds_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("VERIFY_DAILY_TIMEOUT_SECONDS", "900")
+
+    config = Config.from_env()
+
+    assert config.verify_daily_timeout_seconds == 900
+
+
+def test_verify_daily_timeout_seconds_zero_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("VERIFY_DAILY_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(
+        ConfigError, match="VERIFY_DAILY_TIMEOUT_SECONDS must be a positive integer"
+    ):
+        Config.from_env()
+
+
+def test_verify_daily_max_web_ops_defaults_to_20(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("VERIFY_DAILY_MAX_WEB_OPS", raising=False)
+
+    config = Config.from_env()
+
+    assert config.verify_daily_max_web_ops == 20
+
+
+def test_verify_daily_max_web_ops_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("VERIFY_DAILY_MAX_WEB_OPS", "5")
+
+    config = Config.from_env()
+
+    assert config.verify_daily_max_web_ops == 5
+
+
+def test_verify_daily_max_web_ops_out_of_range_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("VERIFY_DAILY_MAX_WEB_OPS", "0")
+
+    with pytest.raises(ConfigError, match="VERIFY_DAILY_MAX_WEB_OPS must be an integer between"):
+        Config.from_env()
+
+
+def test_verify_daily_model_defaults_to_anthropic_model(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-custom-9")
+    monkeypatch.delenv("VERIFY_DAILY_MODEL", raising=False)
+
+    config = Config.from_env()
+
+    assert config.verify_daily_model == "claude-custom-9"
+
+
+def test_verify_daily_model_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-opus-5")
+    monkeypatch.setenv("VERIFY_DAILY_MODEL", "claude-sonnet-5")
+
+    config = Config.from_env()
+
+    assert config.verify_daily_model == "claude-sonnet-5"
+
+
+def test_verify_daily_effort_defaults_to_claude_effort(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "xhigh")
+    monkeypatch.delenv("VERIFY_DAILY_EFFORT", raising=False)
+
+    config = Config.from_env()
+
+    assert config.verify_daily_effort == "xhigh"
+
+
+def test_verify_daily_effort_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    monkeypatch.setenv("VERIFY_DAILY_EFFORT", "max")
+
+    config = Config.from_env()
+
+    assert config.verify_daily_effort == "max"
+
+
+def test_verify_daily_effort_invalid_choice_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("VERIFY_DAILY_EFFORT", "ultra")
+
+    with pytest.raises(ConfigError, match="VERIFY_DAILY_EFFORT must be one of"):
+        Config.from_env()

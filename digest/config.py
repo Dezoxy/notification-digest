@@ -93,6 +93,52 @@ class Config:
     # entirely (translate_digest treats a falsy fallback_model as "none
     # configured" and re-raises the refusal instead of retrying).
     translate_model_fallback: str = "claude-sonnet-4-6"
+    # PLAN.md §11.4 -- the optional verified-briefing pass (digest/verify.py)
+    # over the daily brief, run between summarize_daily and translate_digest
+    # (draft -> verify -> translate -> deliver). Defaults OFF: the entry is
+    # APPROVED only through the flag-off-default state -- flag-on live
+    # validation against real briefs, and the default-on decision, stay
+    # owner-gated (see PLAN.md §11.4's Status line). Parsed like x_enabled/
+    # polymarket_enabled (an explicit on/off flag), not news_feeds' empty-
+    # means-disabled shape -- there is no natural "unconfigured" sentinel for
+    # a pure feature toggle with no accompanying required value.
+    verify_daily_enabled: bool = False
+    # Generous relative to claude_timeout_seconds' own 300s default: this
+    # pass runs WebSearch/WebFetch tool calls in a loop (a full agentic
+    # session, not a single completion), which can take materially longer
+    # than a toolless summarization call -- PLAN.md §11.4 itself notes
+    # "wall-clock on the daily run roughly doubles", and the daily timer is
+    # independent of the 3-hourly one (nothing else is blocked on this run
+    # finishing), so there is no reason to pick a tight bound here the way
+    # CLAUDE_TIMEOUT_SECONDS' 300s suits the 8x/day toolless window calls.
+    verify_daily_timeout_seconds: int = 600
+    # A cap passed into the verify prompt's own text as GUIDANCE ONLY
+    # ({{MAX_WEB_OPS}} in prompts/verify-daily.md) -- the `claude -p` CLI has
+    # no flag to enforce a hard tool-call budget itself (confirmed against
+    # `claude -p --help`, 2026-08-10: no such flag exists), so this is the
+    # model policing its own spend, not something digest/verify.py's code
+    # can cut off mid-session. 20 is "a bounded handful" (PLAN.md §11.4's own
+    # phrase) with headroom for a handful of arc sections each getting a
+    # search plus one or two fetches.
+    verify_daily_max_web_ops: int = 20
+    # Both default to the SAME model/effort the daily brief's own
+    # summarize_daily call already uses (`anthropic_model`/`claude_effort`)
+    # -- PLAN.md §11.4: "model/effort... defaulting to the existing daily
+    # model/effort values". The dataclass-level defaults below just mirror
+    # anthropic_model's/claude_effort's own literal defaults for a
+    # directly-constructed Config (tests); from_env resolves the REAL
+    # dynamic fallback -- VERIFY_DAILY_MODEL/VERIFY_DAILY_EFFORT unset falls
+    # back to whatever ANTHROPIC_MODEL/CLAUDE_EFFORT this run actually
+    # resolved to, not to a second hardcoded literal -- so the verify pass
+    # silently follows the owner's primary model/effort choice unless
+    # explicitly pointed elsewhere. Kept as their OWN env vars (rather than
+    # reusing anthropic_model/claude_effort outright) so the verify pass CAN
+    # be pointed at a different model/effort later without touching the
+    # primary daily/window summarization tier -- e.g. if a cheaper or more
+    # search-capable model turns out to suit tool-heavy verification better
+    # than the primary editorial model does.
+    verify_daily_model: str = "claude-opus-5"
+    verify_daily_effort: str = "high"
     # The news collector has no separate NEWS_ENABLED flag -- it is enabled
     # iff this tuple is non-empty (see digest/main.py's _run_news_collector).
     # An empty tuple is the natural "not configured" default, so a second
@@ -255,6 +301,21 @@ class Config:
             "TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6"
         )
 
+        verify_daily_enabled = _parse_bool(os.environ.get("VERIFY_DAILY_ENABLED", "false"))
+        verify_daily_timeout_seconds = _optional_positive_int(
+            "VERIFY_DAILY_TIMEOUT_SECONDS", default=600
+        )
+        verify_daily_max_web_ops = _optional_int_in_range(
+            "VERIFY_DAILY_MAX_WEB_OPS", default=20, minimum=1, maximum=100
+        )
+        # Unset/blank falls back to THIS run's own already-resolved
+        # anthropic_model/claude_effort (see the field's own comment for
+        # why that's a dynamic fallback, not a second hardcoded literal).
+        verify_daily_model = os.environ.get("VERIFY_DAILY_MODEL", "").strip() or anthropic_model
+        verify_daily_effort = _optional_choice(
+            "VERIFY_DAILY_EFFORT", default=claude_effort, choices=_CLAUDE_EFFORT_CHOICES
+        )
+
         polymarket_enabled = _parse_bool(os.environ.get("POLYMARKET_ENABLED", "false"))
         polymarket_api_base = _optional_url(
             "POLYMARKET_API_BASE", default="https://gamma-api.polymarket.com"
@@ -335,6 +396,11 @@ class Config:
             translate_hu_enabled=translate_hu_enabled,
             translate_model=translate_model,
             translate_model_fallback=translate_model_fallback,
+            verify_daily_enabled=verify_daily_enabled,
+            verify_daily_timeout_seconds=verify_daily_timeout_seconds,
+            verify_daily_max_web_ops=verify_daily_max_web_ops,
+            verify_daily_model=verify_daily_model,
+            verify_daily_effort=verify_daily_effort,
             news_feeds=news_feeds,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,
