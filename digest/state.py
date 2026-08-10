@@ -79,6 +79,31 @@ CREATE TABLE IF NOT EXISTS polymarket_probs (
     updated_at  TEXT NOT NULL
 );
 
+-- Delta-only "what changed" storage (PLAN.md §11.3): one row per
+-- (digest, arc slug) whose window-digest story was a DELTA-ONLY update to a
+-- RECENT_COVERAGE entry this run, as the model itself reported via the
+-- ```deltas machine-facing block (digest/summarize.py's `extract_deltas`).
+-- `slug` is the SAME fold `derive_topics`/`_slugify` apply to the digest's
+-- own `## ` section headings (digest/publish.py's `map_deltas_to_slugs`
+-- does the heading->slug mapping before a row ever reaches here) -- never a
+-- raw heading string, so this table shares story-arc identity with `topics`
+-- rather than inventing a second one. PRIMARY KEY (digest_id, slug) is what
+-- makes `write_deltas`' INSERT OR REPLACE idempotent: a re-run over the
+-- same window (crash-and-retry, or a caller invoking this twice for the
+-- same digest) upserts in place instead of duplicating rows -- the
+-- idempotency contract CLAUDE.md's hard rules require of all state here.
+-- No FK to `digests(id)` -- deliberately matching this table's spec exactly
+-- (PLAN.md §11.3); every row is written in the same call that already holds
+-- a just-created, valid `digest_id` (see write_deltas), so the omission
+-- costs nothing in practice.
+CREATE TABLE IF NOT EXISTS deltas (
+    digest_id  INTEGER NOT NULL,
+    slug       TEXT NOT NULL,
+    previously TEXT NOT NULL,
+    now        TEXT NOT NULL,
+    PRIMARY KEY (digest_id, slug)
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 """
 
@@ -185,7 +210,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 # database file itself -- no extra table needed). Bump this and add an
 # `if version < N: ...` migration step in init_db when the schema next
 # changes; see init_db's own docstring for the full versioning scheme.
-_LATEST_SCHEMA_VERSION = 1
+#
+# Version 2 (PLAN.md §11.3): adds the `deltas` table -- see
+# `_migrate_add_deltas_table` and init_db's `if version < 2:` step.
+_LATEST_SCHEMA_VERSION = 2
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -211,7 +239,16 @@ def init_db(conn: sqlite3.Connection) -> None:
     A FUTURE schema change bumps `_LATEST_SCHEMA_VERSION` and adds one more
     `if version < N: ...` step below the legacy-bootstrap block -- no more
     probe-style "does this column/CHECK already exist" detection needed,
-    since from here on every database's version is known exactly.
+    since from here on every database's version is known exactly. Version 2
+    (PLAN.md §11.3, `deltas` table) is the first such step: guarded by
+    `if version < 2:`, not folded into the `version == 0` legacy-bootstrap
+    block above it, precisely because it must also run for a database
+    already sitting at version 1 (fully migrated under the ORIGINAL
+    versioning scheme, before this second step existed) -- a case the
+    legacy-bootstrap block's own `version == 0` guard deliberately excludes,
+    since re-running nine already-satisfied idempotent probes on every
+    version-1 database forever would be pure waste once every database's
+    version is precisely known.
 
     The version is stamped via `PRAGMA user_version` only AFTER the
     migrations above it have committed -- so a crash mid-migration leaves
@@ -238,10 +275,15 @@ def init_db(conn: sqlite3.Connection) -> None:
     fresh = _table_ddl(conn, "items") is None
     conn.executescript(_SCHEMA)
     conn.commit()
-    if not fresh:
+    if version == 0 and not fresh:
         # Pre-versioning database (version 0, `items` already existed): run
         # the old probe-style bootstrap chain in its historical order, all
-        # of it still idempotent, ending with the CHECK removal.
+        # of it still idempotent, ending with the CHECK removal. Gated on
+        # `version == 0` (not just `not fresh`, which is all this check used
+        # to be before version 2 existed): a version-1 database is already
+        # fully migrated, and now that FUTURE steps genuinely know the exact
+        # version, there is no reason to re-run nine already-satisfied probes
+        # against it just because `items` happens to already exist.
         _migrate_add_body_md_column(conn)
         _migrate_add_chat_title_column(conn)
         _migrate_expand_source_check_for_news(conn)
@@ -252,6 +294,17 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_add_body_md_hu_column(conn)
         _migrate_add_kind_column(conn)
         _migrate_drop_source_checks(conn)
+
+    if version < 2:
+        # PLAN.md §11.3: the `deltas` table. _SCHEMA above already created it
+        # (CREATE TABLE IF NOT EXISTS) for every path that reaches this
+        # point -- fresh, legacy version-0, and existing version-1 alike --
+        # so this call is a documented no-op in practice; it exists so the
+        # step is explicit and versioned here, matching the "one more
+        # `if version < N: ...` step" pattern this docstring commits future
+        # schema changes to, rather than relying solely on _SCHEMA's
+        # blanket idempotent execution to carry it silently.
+        _migrate_add_deltas_table(conn)
 
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
@@ -364,6 +417,39 @@ def _migrate_add_kind_column(conn: sqlite3.Connection) -> None:
     if "kind" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN kind TEXT NOT NULL DEFAULT 'window'")
         conn.commit()
+
+
+def _migrate_add_deltas_table(conn: sqlite3.Connection) -> None:
+    """Create `deltas` on databases predating the delta-persistence feature (PLAN.md §11.3).
+
+    Unlike every migration above (all `ALTER TABLE ADD COLUMN` on an
+    existing table, since SQLite has no `ALTER TABLE ... ALTER CONSTRAINT`
+    but does support adding a column in place), this one adds a whole NEW
+    table with no prior shape to preserve -- so there is no rebuild-in-place
+    dance, no column list, no data to copy across. `CREATE TABLE IF NOT
+    EXISTS` (identical DDL to _SCHEMA's own `deltas` declaration, kept
+    byte-identical so the two can never drift into two different shapes for
+    the same table) is idempotent on its own: this function's own `if
+    _table_ddl(...) is not None: return` guard is redundant with that IF NOT
+    EXISTS in practice, but kept anyway to match this module's established
+    "check before touching, not just rely on the DDL's own guard" style
+    (every ALTER-COLUMN migration above checks `PRAGMA table_info` first
+    rather than relying solely on try/except).
+    """
+    if _table_ddl(conn, "deltas") is not None:
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deltas (
+            digest_id  INTEGER NOT NULL,
+            slug       TEXT NOT NULL,
+            previously TEXT NOT NULL,
+            now        TEXT NOT NULL,
+            PRIMARY KEY (digest_id, slug)
+        )
+        """
+    )
+    conn.commit()
 
 
 def _table_ddl(conn: sqlite3.Connection, table_name: str) -> str | None:
@@ -1108,6 +1194,74 @@ def create_digest(
         raise
 
 
+def write_deltas(conn: sqlite3.Connection, digest_id: int, deltas: list[dict[str, str]]) -> None:
+    """Idempotently persist this digest's delta-only "what changed" entries (PLAN.md §11.3).
+
+    `deltas` is digest/publish.py's `map_deltas_to_slugs` output --
+    `{"slug": ..., "previously": ..., "now": ...}` dicts, already mapped from
+    the model's raw headings to this digest's own real topic slugs (a delta
+    whose heading didn't match a real section was already dropped one layer
+    up, with its own warning -- this function trusts every entry it's given).
+
+    Written with `INSERT OR REPLACE`, keyed on the table's own PRIMARY KEY
+    `(digest_id, slug)` -- the §11.3 guardrail this directly upholds: a
+    re-run over the same window must not duplicate rows (CLAUDE.md's
+    idempotent-state hard rule, the same contract `commit_new_items`'s
+    `ON CONFLICT ... DO NOTHING` dedup and `create_digest`'s
+    snapshot-scoped item stamping already uphold elsewhere in this module).
+    Calling this twice for the same `(digest_id, slug)` pair leaves exactly
+    one row, with the SECOND call's `previously`/`now` values winning --
+    "last write wins" is the correct behavior here since there is only ever
+    one legitimate writer per digest_id (this function is called exactly
+    once per fresh digest, from digest/main.py's `_deliver`, immediately
+    after `create_digest` -- never on the pending-resend path, which retries
+    CHANNEL delivery only and never re-summarizes).
+
+    GUARDRAIL (PLAN.md §11.3): this table is written ONLY from the WINDOW
+    digest path. The daily and weekly synthesis paths (digest/daily.py's
+    `summarize_daily`, digest/weekly.py's `summarize_weekly`, and their
+    respective callers `run_daily`/`run_weekly` in digest/main.py) never call
+    this function and never read this table -- deltas are a window-level
+    concept only (RECENT_COVERAGE, the continuity list this feature reasons
+    about, is itself window-only; see digest/summarize.py's
+    format_recent_coverage). Keeping the write scoped to one call site, here,
+    is what keeps a daily/weekly prompt build from ever being able to
+    accidentally join against this table and leak delta content into a
+    second, unfenced channel (the exact two-hop trap PLAN.md §11.3 names by
+    reference to the weekly-synthesis-allowlist incident) -- there is
+    structurally nothing here for a daily/weekly build to read even if it
+    tried, since nothing in digest/daily.py or digest/weekly.py imports this
+    function or queries this table.
+
+    Silently returns without opening a transaction when `deltas` is empty --
+    the common case (most digests have zero delta-only stories in a given
+    window), and an empty list has nothing to write.
+
+    Rolls back the whole batch on any failure, matching every other
+    multi-row write in this module (`commit_new_items`, `create_digest`):
+    a partially-written batch of deltas for one digest is worse than none at
+    all, since a caller re-deriving `deltas` from the same `body_md` on a
+    hypothetical retry would expect either all of them present or none.
+    """
+    if not deltas:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        for entry in deltas:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO deltas (digest_id, slug, previously, now)
+                VALUES (?, ?, ?, ?)
+                """,
+                (digest_id, entry["slug"], entry["previously"], entry["now"]),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
     """Return the set of item URLs stamped to the given digest.
 
@@ -1301,6 +1455,46 @@ def get_digest_source_counts(conn: sqlite3.Connection, digest_id: int) -> dict[s
         (digest_id,),
     ).fetchall()
     return {source: count for source, count in rows}
+
+
+def get_deltas(conn: sqlite3.Connection, digest_id: int) -> list[dict[str, str]]:
+    """Return this digest's stored delta entries as `{"slug", "previously", "now"}` dicts.
+
+    Feeds the site channel's optional `deltas` ingest field (PLAN.md §11.3),
+    the same "read durable per-digest state back by id" pattern
+    `get_digest_source_counts` (above) and `get_digest_item_urls` (below)
+    already use -- and for the SAME reason `get_digest_item_urls` exists in
+    the first place: the raw model output this data originally came from
+    (the ```deltas fence digest/summarize.py's `extract_deltas` parses) is
+    NEVER stored anywhere -- it is stripped out of `body_md` before
+    `create_digest` ever persists it (see `extract_deltas`'s own docstring)
+    -- so a PENDING RESEND (digest/deliver.py's `_deliver_site`, called with
+    only a `digest_id` and the already-stored, already-fence-free `body_md`)
+    has no way to re-derive this digest's deltas from `body_md` the way
+    `derive_topics` re-derives `topics` from it. This table, written once by
+    `write_deltas` right after the digest's original creation, is the only
+    place this information survives -- so both the fresh-digest delivery
+    path and a much-later pending resend read it back identically, from
+    here, rather than the fresh path threading an in-memory list through
+    that the resend path could never reconstruct.
+
+    Ordered by `slug` for a deterministic, stable result (there is no
+    natural insertion-order column on this table's own primary key
+    `(digest_id, slug)` to sort by instead) -- order has no semantic meaning
+    to the site's ingest payload (an array of independent per-arc entries),
+    this is purely for reproducible output.
+
+    Returns `[]` for a digest with no delta entries at all (the common case
+    -- most windows have zero delta-only repeat stories), which
+    digest/publish.py's `publish_to_site` then omits from the payload
+    entirely rather than sending an empty array (its truthy-only inclusion
+    contract, matching `source_counts`/`failed_sources`/`topics`).
+    """
+    rows = conn.execute(
+        "SELECT slug, previously, now FROM deltas WHERE digest_id = ? ORDER BY slug",
+        (digest_id,),
+    ).fetchall()
+    return [{"slug": slug, "previously": previously, "now": now} for slug, previously, now in rows]
 
 
 def get_pending_digests(

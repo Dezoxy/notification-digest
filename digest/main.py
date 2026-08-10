@@ -28,6 +28,7 @@ from digest.config import Config, ConfigError
 from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
 from digest.emailer import archive
+from digest.publish import map_deltas_to_slugs
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
     DAILY_LOOKBACK_WINDOW,
@@ -45,6 +46,7 @@ from digest.state import (
     get_window_digests_since,
     init_db,
     prune_delivered_items,
+    write_deltas,
 )
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
@@ -228,7 +230,7 @@ def _deliver(
     items = select_items_for_prompt(items, failed_sources, recent_coverage, _MAX_PROMPT_BYTES)
 
     try:
-        body_md = summarize(
+        body_md, deltas = summarize(
             items,
             failed_sources,
             recent_coverage,
@@ -260,6 +262,17 @@ def _deliver(
         )
 
     digest_id = create_digest(conn, body_md, items, body_md_hu=body_md_hu)
+    # PLAN.md §11.3 fencing guardrail: this is the ONLY call to write_deltas
+    # in this codebase -- deltas are a WINDOW-digest-only concept (they
+    # reason about {{RECENT_COVERAGE}}, which is itself window-only, see
+    # digest/summarize.py's format_recent_coverage), so run_daily/run_weekly
+    # (below) never call it and never read the `deltas` table. Mapped
+    # against the ENGLISH `body_md`'s own topic slugs (never body_md_hu),
+    # matching digest/deliver.py's `_deliver_site`'s identical rule for
+    # `topics` -- see map_deltas_to_slugs's docstring for the full heading
+    # -> slug matching contract, and write_deltas's own docstring for the
+    # idempotency guarantee this write upholds.
+    write_deltas(conn, digest_id, map_deltas_to_slugs(body_md, deltas))
     archive(body_md, cfg.archive_dir, digest_id)
 
     item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)

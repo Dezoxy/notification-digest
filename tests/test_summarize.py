@@ -16,6 +16,7 @@ from digest.summarize import (
     _real_heading_lines,
     build_prompt,
     enforce_link_allowlist,
+    extract_deltas,
     format_recent_coverage,
     renumber_citations,
     run_claude,
@@ -887,9 +888,10 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
     items = [_item()]
-    result = summarize(items, ["telegram"], "", "claude-opus-5", 300, "high")
+    result, deltas = summarize(items, ["telegram"], "", "claude-opus-5", 300, "high")
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
+    assert deltas == []
     assert calls["build_prompt"] == (items, ["telegram"], "")
     assert calls["run_claude"] == ("built prompt", "claude-opus-5", 300, "high")
 
@@ -924,10 +926,11 @@ def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
+    result, deltas = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert result.startswith("⚠ telegram collection failed this run\n\n")
+    assert deltas == []
 
 
 def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch):
@@ -940,10 +943,11 @@ def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch)
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    result, deltas = summarize([_item()], [], "", "claude-opus-5", 300, "high")
 
     assert result == _MODEL_OUTPUT
     assert "⚠" not in result
+    assert deltas == []
 
 
 def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypatch):
@@ -956,7 +960,7 @@ def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypat
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result = summarize([_item()], ["telegram", "x"], "", "claude-opus-5", 300, "high")
+    result, _deltas = summarize([_item()], ["telegram", "x"], "", "claude-opus-5", 300, "high")
 
     assert result == (
         "⚠ telegram collection failed this run\n"
@@ -976,6 +980,197 @@ def test_summarize_raises_when_run_claude_returns_a_refusal(monkeypatch):
 
     with pytest.raises(SummarizeError, match="no real '## ' heading"):
         summarize([_item()], [], "", "claude-opus-5", 300, "high")
+
+
+# --- extract_deltas (PLAN.md §11.3) ---
+
+
+def test_extract_deltas_no_fence_returns_body_unchanged_and_empty_list():
+    body = "**TL;DR:** hi\n\n## Section\n\ntext\n"
+
+    result, deltas = extract_deltas(body)
+
+    assert result == body
+    assert deltas == []
+
+
+def test_extract_deltas_happy_path_strips_fence_and_parses_entries():
+    body = (
+        "**TL;DR:** hi\n\n"
+        "## Fed rate decision\n\nThe Fed held steady.\n\n"
+        "```deltas\n"
+        '[{"heading": "Fed rate decision", "previously": "A cut was expected.", '
+        '"now": "The Fed held instead."}]\n'
+        "```\n"
+    )
+
+    result, deltas = extract_deltas(body)
+
+    assert "```deltas" not in result
+    assert "previously" not in result
+    assert result.startswith("**TL;DR:** hi\n\n## Fed rate decision")
+    assert deltas == [
+        {
+            "heading": "Fed rate decision",
+            "previously": "A cut was expected.",
+            "now": "The Fed held instead.",
+        }
+    ]
+
+
+def test_extract_deltas_broken_json_strips_fence_but_discards_entries(caplog):
+    import logging
+
+    body = "## Section\n\ntext\n\n```deltas\nnot valid json at all\n```\n"
+
+    with caplog.at_level(logging.WARNING):
+        result, deltas = extract_deltas(body)
+
+    assert "```deltas" not in result
+    assert deltas == []
+    assert any("not valid JSON" in r.message for r in caplog.records)
+
+
+def test_extract_deltas_non_array_json_discards_entries_and_warns(caplog):
+    import logging
+
+    body = '## Section\n\ntext\n\n```deltas\n{"heading": "not an array"}\n```\n'
+
+    with caplog.at_level(logging.WARNING):
+        result, deltas = extract_deltas(body)
+
+    assert "```deltas" not in result
+    assert deltas == []
+    assert any("not a JSON array" in r.message for r in caplog.records)
+
+
+def test_extract_deltas_drops_malformed_entries_keeps_wellformed_ones(caplog):
+    import logging
+
+    body = (
+        "## Section\n\ntext\n\n"
+        "```deltas\n"
+        "["
+        '{"heading": "Section", "previously": "old", "now": "new"},'
+        '{"heading": "Section"},'  # missing previously/now
+        '{"heading": "", "previously": "old", "now": "new"},'  # blank heading
+        '{"heading": 5, "previously": "old", "now": "new"},'  # non-string heading
+        '"not even an object"'
+        "]\n"
+        "```\n"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result, deltas = extract_deltas(body)
+
+    assert "```deltas" not in result
+    assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
+    assert any("dropped 4 malformed" in r.message for r in caplog.records)
+
+
+def test_extract_deltas_caps_at_max_entries():
+    entries = [
+        {"heading": f"Section {i}", "previously": "old", "now": "new"} for i in range(15)
+    ]
+    body = "## Section\n\ntext\n\n```deltas\n" + json.dumps(entries) + "\n```\n"
+
+    _result, deltas = extract_deltas(body)
+
+    assert len(deltas) == 12
+    assert [d["heading"] for d in deltas] == [f"Section {i}" for i in range(12)]
+
+
+def test_extract_deltas_fence_not_at_end_still_stripped_and_parsed():
+    body = (
+        "**TL;DR:** hi\n\n"
+        "```deltas\n"
+        '[{"heading": "Section", "previously": "old", "now": "new"}]\n'
+        "```\n\n"
+        "## Section\n\ntext after the fence\n"
+    )
+
+    result, deltas = extract_deltas(body)
+
+    assert "```deltas" not in result
+    assert "## Section" in result
+    assert "text after the fence" in result
+    assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
+
+
+def test_extract_deltas_two_fences_are_malformed_strips_both_discards_all(caplog):
+    import logging
+
+    body = (
+        "## Section\n\ntext\n\n"
+        "```deltas\n"
+        '[{"heading": "Section", "previously": "old", "now": "new"}]\n'
+        "```\n\n"
+        "```deltas\n"
+        '[{"heading": "Section", "previously": "old2", "now": "new2"}]\n'
+        "```\n"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result, deltas = extract_deltas(body)
+
+    assert "```deltas" not in result
+    assert deltas == []
+    assert any("found 2 ```deltas fences" in r.message for r in caplog.records)
+
+
+def test_extract_deltas_strips_whitespace_from_entry_fields():
+    body = (
+        "## Section\n\ntext\n\n"
+        "```deltas\n"
+        '[{"heading": "  Section  ", "previously": " old ", "now": " new "}]\n'
+        "```\n"
+    )
+
+    _result, deltas = extract_deltas(body)
+
+    assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
+
+
+# --- summarize(): deltas integration (PLAN.md §11.3) ---
+
+
+def test_summarize_returns_parsed_deltas_and_strips_fence_from_body(monkeypatch):
+    model_output = (
+        "**TL;DR:** hi\n\n"
+        "## Section\n\ntext\n\n"
+        "```deltas\n"
+        '[{"heading": "Section", "previously": "old", "now": "new"}]\n'
+        "```\n"
+    )
+    monkeypatch.setattr(
+        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
+
+    body_md, deltas = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+
+    assert "```deltas" not in body_md
+    assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
+
+
+def test_summarize_with_failed_sources_banner_still_strips_deltas_and_returns_them(monkeypatch):
+    model_output = (
+        "**TL;DR:** hi\n\n"
+        "## Section\n\ntext\n\n"
+        "```deltas\n"
+        '[{"heading": "Section", "previously": "old", "now": "new"}]\n'
+        "```\n"
+    )
+    monkeypatch.setattr(
+        summarize_mod, "build_prompt", lambda items, failed_sources, recent_coverage: "p"
+    )
+    monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
+
+    body_md, deltas = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
+
+    assert body_md.startswith("⚠ telegram collection failed this run\n\n")
+    assert "```deltas" not in body_md
+    assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
 
 
 # --- enforce_link_allowlist (Finding B) ---
@@ -1427,7 +1622,7 @@ def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatc
         lambda prompt, model, timeout_seconds, effort: model_output,
     )
 
-    result = summarize([known_item], [], "", "claude-opus-5", 300, "high")
+    result, _deltas = summarize([known_item], [], "", "claude-opus-5", 300, "high")
 
     assert f"[known]({known_item.url})" in result
     assert "https://attacker.example/phish" not in result
@@ -1450,7 +1645,7 @@ async def test_summarize_missing_tldr_logs_warning_but_still_ships(monkeypatch, 
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out = summarize_mod.summarize(items, [], "", "m", 10, "high")
+        out, _deltas = summarize_mod.summarize(items, [], "", "m", 10, "high")
     assert out == valid_no_tldr
     assert any("TL;DR opener" in r.message for r in caplog.records)
 
@@ -1495,7 +1690,7 @@ async def test_summarize_zero_links_logs_warning_but_still_ships(monkeypatch, ca
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out = summarize_mod.summarize(items, [], "", "m", 10, "high")
+        out, _deltas = summarize_mod.summarize(items, [], "", "m", 10, "high")
     assert out == no_links
     assert any("no citation links" in r.message for r in caplog.records)
 
@@ -1975,7 +2170,7 @@ def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
         dataclasses.replace(_item("a"), url="https://known.example/a"),
         dataclasses.replace(_item("b"), url="https://known.example/b"),
     ]
-    result = summarize(items, [], "", "claude-opus-5", 300, "high")
+    result, _deltas = summarize(items, [], "", "claude-opus-5", 300, "high")
 
     tldr_paragraph = result.split("\n\n", 1)[0]
     assert "[¹]" not in tldr_paragraph

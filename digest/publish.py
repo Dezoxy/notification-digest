@@ -538,6 +538,75 @@ def derive_topics(body_md: str) -> list[dict[str, str]]:
     return topics
 
 
+def map_deltas_to_slugs(body_md: str, deltas: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Map each parsed delta's heading to THIS digest's own topic slug, dropping any mismatch.
+
+    PLAN.md §11.3: `deltas` is digest/summarize.py's `extract_deltas` output
+    -- a list of `{"heading": ..., "previously": ..., "now": ...}` entries,
+    already stripped out of the model's ```deltas fence, but still keyed by
+    the RAW heading TEXT the model wrote, not a slug. This function is the
+    "heading -> slug" half of §11.3's storage step: each entry's `heading` is
+    folded through `_slugify` -- the IDENTICAL fold `derive_topics` (above)
+    applies to every real `## ` section heading in this same `body_md` -- and
+    kept only if that fold lands on a slug `derive_topics(body_md)` itself
+    produced for this digest.
+
+    This is a real filter, not a formality: `derive_topics` already excludes
+    "## Needs attention" and every `_STRUCTURAL_RUBRIC_HEADINGS` entry ("Also
+    this window", "Hungary", ...), caps at `_MAX_TOPICS`, and dedupes by
+    slug -- so a delta whose heading doesn't survive into `derive_topics`'
+    own output (because the model hallucinated a heading that isn't a real
+    section, cited a structural/routing heading, or the digest simply has
+    more than `_MAX_TOPICS` sections and this one didn't make the cut) is
+    dropped here too, automatically, with no separate exclusion list to keep
+    in sync. Defensive by design: the model wrote the RECENT_COVERAGE
+    continuity list and the current `## ` headings independently in the same
+    response, and prompt-level instructions are never a hard guarantee (this
+    module's own PLAN.md §5 lesson) -- a citation to a heading that doesn't
+    actually exist in this digest must be silently dropped, not stored as if
+    it were a real topic.
+
+    A dropped delta is never an error: only a COUNT is logged (one warning,
+    naming how many were dropped) -- never the heading text itself, which
+    (like every other model-generated heading string in this codebase, see
+    e.g. digest/summarize.py's format_recent_coverage SECURITY note) derives
+    from the same untrusted, scraped Telegram/X/news material as everything
+    else in this pipeline and must not reach a log line verbatim.
+
+    Returns a list of `{"slug": ..., "previously": ..., "now": ...}` entries
+    -- the `heading` key is dropped once it has served its one purpose
+    (matching), since digest/state.py's `deltas` table and the site's ingest
+    `deltas` payload field are both keyed on `slug`, never on heading text.
+    Order is preserved from the input `deltas` list, which is already
+    document order and already capped at 12 by `extract_deltas` -- this
+    function applies no cap of its own (a strict subset of an
+    already-capped, already-ordered list needs none).
+
+    Never raises: `deltas` entries are always well-formed dicts of strings by
+    the time they reach here (extract_deltas's own contract), so the only
+    thing this function does is a pure string fold and a set-membership
+    check, neither of which can throw on the input shapes it's given.
+    """
+    valid_slugs = {topic["slug"] for topic in derive_topics(body_md)}
+    mapped: list[dict[str, str]] = []
+    dropped = 0
+    for entry in deltas:
+        slug = _slugify(entry["heading"])
+        if slug not in valid_slugs:
+            dropped += 1
+            continue
+        mapped.append({"slug": slug, "previously": entry["previously"], "now": entry["now"]})
+
+    if dropped:
+        logger.warning(
+            "map_deltas_to_slugs: dropped %d delta(s) whose heading matched no "
+            "derive_topics slug for this digest",
+            dropped,
+        )
+
+    return mapped
+
+
 def publish_to_site(
     digest_id: int,
     body_md: str,
@@ -553,6 +622,7 @@ def publish_to_site(
     source_counts: dict[str, int] | None = None,
     failed_sources: list[str] | None = None,
     topics: list[dict[str, str]] | None = None,
+    deltas: list[dict[str, str]] | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -619,6 +689,33 @@ def publish_to_site(
     Worker's own `topics` contract (toom-edge PR #107), which treats an
     empty array the same as a missing field.
 
+    `deltas` (keyword-only, default None; PLAN.md §11.3) is the up-to-12
+    `{"slug": ..., "previously": ..., "now": ...}` list this module's own
+    `map_deltas_to_slugs` produces from `body_md` plus
+    digest/summarize.py's `extract_deltas` output -- the site's future
+    "what changed" rendering and §11.1's arc timelines both key off `slug`,
+    the same story-arc identity `topics` already establishes. Included under
+    the IDENTICAL truthy-only rule as `source_counts`/`failed_sources`/
+    `topics` above.
+
+    Site-validator finding (verified 2026-08-10 by reading
+    cloudflare-terraform/workers/news-site/worker.js's
+    `validateDigestPayload` directly, read-only, in the sibling repo): that
+    function destructures the JSON body into its OWN fixed list of known
+    field names and validates only those -- there is no
+    `Object.keys(payload)`/`...rest` check anywhere in it (unlike, say,
+    `validateTopics`' PER-ENTRY `...rest` check one level down) that would
+    reject an unrecognized TOP-LEVEL field. A `deltas` key the site doesn't
+    yet know about is therefore silently ignored today (not stored, not
+    validated, not a 400) -- NOT rejected. This means, unlike the ordering
+    PLAN.md §11.3's own status note assumed by analogy with the "weekly"
+    kind rollout, sending this field before the site half lands is
+    harmless: the row simply ingests without a `deltas` column until a
+    later site PR adds one. No config flag gates this field's inclusion as
+    a result -- `topics`/`source_counts`/`failed_sources` set the precedent
+    for an unconditionally-sent, server-ignored-until-supported optional
+    field, and `deltas` follows the same shape.
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -662,6 +759,8 @@ def publish_to_site(
         payload["failed_sources"] = failed_sources
     if topics:
         payload["topics"] = topics
+    if deltas:
+        payload["deltas"] = deltas
     data = json.dumps(payload).encode("utf-8")
     url = f"{publish_url}/ingest/{digest_id}"
     headers = {

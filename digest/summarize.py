@@ -1371,6 +1371,161 @@ def renumber_citations(markdown_text: str) -> str:
     return _CITATION_LINK_RE.sub(_renumber, markdown_text)
 
 
+# Matches the machine-facing ```deltas fenced block (PLAN.md §11.3):
+# prompts/digest.md instructs the model to append, at the very end of its
+# response, one fenced code block tagged `deltas` containing a JSON array of
+# {"heading", "previously", "now"} objects -- one entry per story that is a
+# DELTA-ONLY update to a RECENT_COVERAGE entry. DOTALL so `.` spans the
+# newlines inside the fenced content; the trailing `\n?` makes the closing
+# ``` optional-newline-prefixed so a fence with no blank line before the
+# closer still matches. Deliberately NOT anchored to the end of the string
+# (`\Z`) -- extract_deltas's own contract tolerates the fence appearing
+# anywhere in the document (see its docstring's "fence not at end" case),
+# even though the prompt instructs the model to always put it last.
+_DELTAS_FENCE_RE = re.compile(r"```deltas\s*\n(.*?)\n?```", re.DOTALL)
+
+# Caps how many delta entries extract_deltas keeps from one ```deltas block,
+# mirroring digest/publish.py's MAX_TOPICS parity constant (_MAX_TOPICS,
+# itself matching the site's own MAX_TOPICS ingest cap): a digest has at most
+# _MAX_TOPICS=12 topics in the first place (derive_topics), so no legitimate
+# response can ever produce more than 12 genuine delta entries either -- a
+# ```deltas array longer than this is either a pathological/hostile model
+# output or a bug, and capping here bounds this parser's own output exactly
+# like every other size-bounding constant in this module.
+_MAX_DELTAS = 12
+
+
+def extract_deltas(body_md: str) -> tuple[str, list[dict[str, str]]]:
+    """Extract and strip the model's machine-facing ```deltas fence, returning (body, entries).
+
+    PLAN.md §11.3: for each story that is a DELTA-ONLY update to a
+    RECENT_COVERAGE entry, prompts/digest.md instructs the model to append
+    one fenced ```deltas code block, as the LAST thing in its response,
+    containing a JSON array of `{"heading": ..., "previously": ...,
+    "now": ...}` objects. This is the pure parser for that block -- called
+    from `summarize()` immediately after `run_claude` returns, BEFORE any
+    other pass runs (validate_output, the TL;DR/citation soft checks,
+    enforce_link_allowlist, strip_tldr_citations/renumber_citations) -- so
+    every one of those passes, and every downstream consumer of the returned
+    body (digests.body_md storage, the Hungarian translation input, email/
+    site/Telegram rendering, and critically the daily/weekly prompt builders
+    which embed a WINDOW digest's stored body_md verbatim -- see PLAN.md
+    §11.3's fencing guardrail), sees a body with the raw ```deltas fence
+    already gone, by construction, rather than by a second fence someone has
+    to remember to add at each downstream layer.
+
+    Never raises: like this module's other output-parsing helpers
+    (validate_output aside, which raises only on the one hard structural
+    contract), a malformed machine-facing block must never kill a digest run
+    that otherwise shipped a perfectly good prose briefing -- see this
+    function's callers' own "never let a required output property depend on
+    model compliance" lesson. Every failure mode below degrades to "keep the
+    body, drop the deltas, log ONE loud warning" rather than raising.
+
+    Return value: `(body_md_with_fence_removed, parsed_entries)`.
+
+    - No fence at all: returns `(body_md, [])` unchanged -- the normal case
+      for a digest with no repeat-story deltas this window (the prompt
+      contract says to omit the block entirely when nothing qualifies).
+    - Exactly one fence, found ANYWHERE in the document (not only at the very
+      end -- the prompt instructs the model to place it last, but this parser
+      doesn't trust that placement blindly): the fence is stripped from
+      wherever it sits, and its JSON content is parsed.
+    - MORE than one fence: treated as malformed. The model was only ever
+      asked for one block, so a second one signals either a confused
+      response or an injection attempt riding along in the untrusted source
+      material this prompt summarizes -- there is no principled way to know
+      which fence (if either) is the "real" one. Both (all) fences are
+      stripped from the body regardless (a raw, unparsed ```deltas block must
+      never reach the reader on any channel), one warning is logged, and
+      every entry is discarded -- the prose briefing itself is unaffected and
+      still ships.
+    - The single fence's content fails `json.loads` (not valid JSON) or
+      parses to something other than a JSON array: one warning, fence
+      stripped, `[]` entries.
+    - The array parses, but some entries are malformed (not an object, or
+      missing/non-string/blank `heading`/`previously`/`now`): only THOSE
+      entries are dropped (one warning naming the count), every well-formed
+      entry among the rest still survives.
+    - More than `_MAX_DELTAS` (12) array entries: only the first 12, in
+      document order, are ever considered (mirroring `derive_topics`' own
+      `_MAX_TOPICS` cap and its "prompt orders most-important-first" logic) --
+      entries beyond the cap are silently dropped, never counted toward the
+      "malformed" warning (being over the cap is not malformed).
+
+    Every surviving entry's three string fields are `.strip()`ped. Heading
+    matching against this digest's own topic slugs (dropping a delta whose
+    heading doesn't correspond to a real `## ` section) is NOT this
+    function's job -- see digest/publish.py's `map_deltas_to_slugs`, which
+    consumes this function's `entries` output together with the same
+    (already-stripped) `body_md` to do that matching, one layer up.
+
+    Whitespace left behind by removing the fence (a run of 3+ newlines, most
+    commonly two blank lines where the fence used to sit between the closing
+    prose and the document's end) is collapsed to a single blank line
+    (`\\n\\n`) and trailing whitespace is trimmed -- so the returned body
+    reads as a normal, cleanly-terminated markdown document whether the fence
+    sat at the very end (the common case) or was excised from the middle.
+    """
+    matches = list(_DELTAS_FENCE_RE.finditer(body_md))
+    if not matches:
+        return body_md, []
+
+    stripped_body = _DELTAS_FENCE_RE.sub("", body_md)
+    stripped_body = re.sub(r"\n{3,}", "\n\n", stripped_body).rstrip()
+
+    if len(matches) > 1:
+        logger.warning(
+            "extract_deltas: found %d ```deltas fences (expected at most 1) -- "
+            "treating as malformed, stripping all and discarding every parsed entry",
+            len(matches),
+        )
+        return stripped_body, []
+
+    try:
+        parsed = json.loads(matches[0].group(1))
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("extract_deltas: ```deltas fence content is not valid JSON -- discarding")
+        return stripped_body, []
+
+    if not isinstance(parsed, list):
+        logger.warning("extract_deltas: ```deltas fence content is not a JSON array -- discarding")
+        return stripped_body, []
+
+    candidates = parsed[:_MAX_DELTAS]
+    entries: list[dict[str, str]] = []
+    dropped = 0
+    for candidate in candidates:
+        if (
+            isinstance(candidate, dict)
+            and isinstance(candidate.get("heading"), str)
+            and candidate["heading"].strip()
+            and isinstance(candidate.get("previously"), str)
+            and candidate["previously"].strip()
+            and isinstance(candidate.get("now"), str)
+            and candidate["now"].strip()
+        ):
+            entries.append(
+                {
+                    "heading": candidate["heading"].strip(),
+                    "previously": candidate["previously"].strip(),
+                    "now": candidate["now"].strip(),
+                }
+            )
+        else:
+            dropped += 1
+
+    if dropped:
+        logger.warning(
+            "extract_deltas: dropped %d malformed delta entr%s out of %d considered",
+            dropped,
+            "y" if dropped == 1 else "ies",
+            len(candidates),
+        )
+
+    return stripped_body, entries
+
+
 def summarize(
     items: list[Item],
     failed_sources: list[str],
@@ -1378,9 +1533,28 @@ def summarize(
     model: str,
     timeout_seconds: int,
     effort: str,
-) -> str:
+) -> tuple[str, list[dict[str, str]]]:
     """Build the prompt, run it through Claude, validate and repair the
     contract, and deterministically prepend the collector-failure banner.
+
+    Returns `(body_md, deltas)`, NOT a bare string -- PLAN.md §11.3 added a
+    second return value, `deltas`, the `extract_deltas`-parsed list of
+    `{"heading", "previously", "now"}` entries pulled off the model's
+    machine-facing ```deltas fence (see that function's own docstring). The
+    parsing happens HERE, immediately after `run_claude` returns and before
+    every other pass in this function, specifically so `body_md` -- the
+    first tuple element, and the only thing every downstream consumer ever
+    sees (digests.body_md storage, translate_digest's input, email/site/
+    Telegram rendering, and the daily/weekly prompt builders, which embed a
+    stored WINDOW digest's body_md verbatim) -- NEVER carries the raw fence.
+    This is the single choke point PLAN.md §11.3's fencing guardrail relies
+    on: strip once, here, before anything downstream can see the fence,
+    rather than trusting every future consumer to re-implement the same
+    fence exclusion independently. `deltas` itself is returned separately so
+    the caller (digest/main.py's `_deliver`) can map each entry's heading to
+    this digest's own topic slug (digest/publish.py's `map_deltas_to_slugs`)
+    and persist it (digest/state.py's `write_deltas`) -- summarize() itself
+    does no slug mapping or persistence; it only parses and strips.
 
     `recent_coverage` is passed straight through to build_prompt (see that
     function's docstring for the substitution-ordering hazard it addresses,
@@ -1437,6 +1611,14 @@ def summarize(
     """
     prompt = build_prompt(items, failed_sources, recent_coverage)
     output = run_claude(prompt, model, timeout_seconds, effort)
+    # extract_deltas runs FIRST, before validate_output or any other pass:
+    # see this function's own docstring for why this exact position is the
+    # single choke point the §11.3 fencing guardrail depends on. Running it
+    # here also means validate_output, the TL;DR/citation soft checks, and
+    # enforce_link_allowlist below all operate on the fence-free `output`,
+    # so nothing in the (untrusted-derived) "previously"/"now" prose sentences
+    # can be misread as a citation link or a TL;DR paragraph by those passes.
+    output, deltas = extract_deltas(output)
     validate_output(output)
     # The TL;DR opener is checked SOFTLY, unlike the heading requirement: a
     # missing TL;DR degrades one email cosmetically, while raising here
@@ -1468,5 +1650,5 @@ def summarize(
         banner = "".join(
             f"⚠ {source} collection failed this run\n" for source in failed_sources
         )
-        return banner + "\n" + output
-    return output
+        return banner + "\n" + output, deltas
+    return output, deltas

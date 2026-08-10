@@ -32,6 +32,7 @@ from digest.publish import (
 )
 from digest.state import (
     get_daily_allowed_urls,
+    get_deltas,
     get_digest_item_urls,
     get_digest_source_counts,
     get_pending_digests,
@@ -219,6 +220,20 @@ def _deliver_site(
     contract (see its own docstring) needs one single, stable source of
     heading text to fold, not two independently-translated ones that could
     fold to different slugs for what is really the same story.
+
+    `deltas` (PLAN.md §11.3) is READ BACK from the `deltas` table
+    (digest/state.py's `get_deltas`), unlike `source_counts`/`failed_sources`/
+    `topics` above, which are all re-DERIVED from `body_md` on every call --
+    the raw ```deltas fence this data originally came from is stripped out
+    of `body_md` before it is ever stored (digest/summarize.py's
+    `extract_deltas`, called inside `summarize()`), so there is nothing left
+    in `body_md` for a pending resend to re-derive it from. Reading it back
+    by `digest_id` instead is what makes this work identically on the
+    fresh-digest path (moments after digest/main.py's `_deliver` already
+    called `write_deltas` for this same `digest_id`) and a much-later
+    pending resend (which never re-summarizes, so `write_deltas` is never
+    called again -- see that function's own docstring for why this table is
+    written exactly once per digest).
     """
     body_html = render_body_html(body_md, allowed_urls)
     body_html_hu = (
@@ -229,6 +244,7 @@ def _deliver_site(
     source_counts = get_digest_source_counts(conn, digest_id)
     failed_sources = parse_failed_sources(body_md)
     topics = derive_topics(body_md)
+    deltas = get_deltas(conn, digest_id)
     try:
         publish_to_site(
             digest_id,
@@ -244,6 +260,7 @@ def _deliver_site(
             source_counts=source_counts,
             failed_sources=failed_sources,
             topics=topics,
+            deltas=deltas,
         )
     except Exception as exc:
         logger.error("site publish failed for digest %d: %s", digest_id, type(exc).__name__)
