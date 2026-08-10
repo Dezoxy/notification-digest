@@ -2600,16 +2600,13 @@ const CSS = `
     /* Must clear the sticky day headers (.dayhead, z-index: 1) or the panel
        would open underneath the ledger once the reader has scrolled. */
     z-index: 20;
-    background: var(--bg); border: 2px solid var(--rule-heavy);
-    /* Rounded like the controls (owner-requested — see summary.gear's
-       comment): panels join the rounded family at a card radius, not the
-       controls' full pill. */
+    /* Simple soft bubble (owner follow-up: the 2px ink border + hard offset
+       shadow read too heavy, especially in dark mode) — hairline border,
+       soft drop shadow, card radius. Same recipe as .searchpanel below. */
+    background: var(--bg); border: 1px solid var(--hairline);
     border-radius: 14px;
     padding: 1em 1.1em;
-    /* Hard offset shadow, no blur — the print-poster popover recipe (see
-       .searchpanel/.cmdpalette below, same box-shadow value): a flat ink
-       tint offset behind the panel, not a soft drop shadow. */
-    box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--rule-heavy) 14%, transparent);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
     display: flex; flex-direction: column; gap: 0.7em; min-width: 13em;
   }
   .settingsrow { display: flex; justify-content: space-between; align-items: baseline; gap: 1.2em; }
@@ -2713,10 +2710,12 @@ const CSS = `
   }
   .cmdpalette {
     width: min(34em, 100%); max-height: 70vh;
-    background: var(--bg); border: 2px solid var(--rule-heavy);
-    /* Rounded to match .settingspanel/.searchpanel (owner-requested). */
+    /* Simple soft bubble, same family as .settingspanel/.searchpanel (owner
+       follow-up) — deeper shadow than the small panels since it floats over
+       a dimmed backdrop, not beside its trigger. */
+    background: var(--bg); border: 1px solid var(--hairline);
     border-radius: 14px;
-    box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--rule-heavy) 14%, transparent);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
     display: flex; flex-direction: column; overflow: hidden;
   }
   @media (prefers-reduced-motion: no-preference) {
@@ -3339,14 +3338,12 @@ const CSS = `
   .searchpanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     z-index: 20;
-    background: var(--bg); border: 2px solid var(--rule-heavy);
-    /* Rounded to match .settingspanel (owner-requested) — one popover
-       family, one radius. */
+    /* Simple soft bubble — same recipe as .settingspanel above (owner
+       follow-up), one popover family. */
+    background: var(--bg); border: 1px solid var(--hairline);
     border-radius: 14px;
     padding: 1em 1.1em;
-    /* Hard offset shadow, no blur — same print-poster popover recipe as
-       .settingspanel above. */
-    box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--rule-heavy) 14%, transparent);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
     display: flex; flex-direction: column; gap: 0.7em; min-width: 16em;
   }
   @media (prefers-reduced-motion: no-preference) {
@@ -3368,7 +3365,10 @@ const CSS = `
   .searchpanel .filter {
     display: block; font: inherit; font-size: 0.9em;
     padding: 0.5em 0.9em;
-    border: 1px solid var(--rule-heavy); background: var(--bg); color: var(--text);
+    /* Hairline + a little rounding (owner follow-up): the heavy ink border
+       double-boxed with the accent focus ring right on top of it. */
+    border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--bg); color: var(--text);
   }
   .searchpanel .filter::placeholder { color: var(--muted); }
   .searchpanel .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -3482,7 +3482,9 @@ const CSS = `
   .searchform { display: flex; gap: 0.5em; margin: 0 0 1.6em; }
   .searchform .filter {
     flex: 1; font: inherit; font-size: 0.9em; padding: 0.5em 0.7em;
-    border: 1px solid var(--rule-heavy); background: var(--bg); color: var(--text);
+    /* Hairline + rounding — same reasoning as .searchpanel .filter above. */
+    border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--bg); color: var(--text);
   }
   .searchform .filter::placeholder { color: var(--muted); }
   .searchform .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
