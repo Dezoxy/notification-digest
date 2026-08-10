@@ -490,3 +490,295 @@ A design-improvement pass agreed 2026-08-08, executed one PR per step below, in 
 - [x] **Architecture doc refresh** — update this PLAN.md (sections 2–4) to describe the system as it exists (5 collectors, 3 delivery channels, daily brief mode, Hungarian translation, current schema), and tick off this checklist. (This PR.)
 
 All ten steps above are merged; `v0.8.0` is being cut on `main` now. `.github/workflows/release.yml` will publish `ghcr.io/dezoxy/notification-digest:v0.8.0`, and the homelab repo's Renovate picks up the bump from there.
+
+## 11. Redesign roadmap (2026-08-10) — proposals & execution checklists
+
+This section absorbs PLAN2.md (2026-08-10) — the former "proposals not yet
+accepted" file, whose entries came from a friend's verified-briefing
+suggestion (2026-08-09) and the triage of a Codex site-redesign brief
+(2026-08-10). A second Codex pass the same day, grounded in the shipped
+site, converged on the same phasing; its additions are folded into the
+entries below (momentum, the "you were here" marker, the four-part story
+structure) and its design-execution guidance is distilled in
+`docs/redesign-design-guidance.md` for the toom-edge implementation
+sessions. Approval semantics carry over unchanged: NOTHING in §11 is
+approved until its entry's status line says so; boxes are ticked only after
+the entry is approved; a rejected entry is removed, leaving a line in §9's
+decision log saying why. Entries appear in recommended execution order.
+Cross-repo steps are labeled (digest), (toom-edge = the news-site repo),
+(homelab = deploy repo); per §6/deploy note, digest code ships nothing until
+a tag is cut and homelab bumps it.
+
+### 11.1 Storyline-first site IA — NOW homepage and arc pages (proposed)
+
+**Status:** proposed 2026-08-10, discussion pending. Origin: Codex redesign
+brief for news.tomhorvath.me, triaged 2026-08-10.
+
+**What & why.** The site's primary browsing unit stops being the
+chronological brief and becomes the story arc — the same story-arc topics
+`digest/publish.py`'s `derive_topics` has derived and published since PR #56,
+promoted from a secondary label to the front door. The homepage becomes
+"NOW": the 3–5 arcs ranked by recency × update volume, each with its own
+page (current state, appearance timeline, deep links into the briefs that
+carried each update). Chronological briefs demote to an Archive section,
+still reachable, no longer the front page.
+
+**Guardrails:**
+- Slug-stability contract becomes a load-bearing PUBLIC URL, not just an
+  internal join key — this strengthens the existing contract, it does not
+  relax it: no change to `_slugify`/the fold rules ships alongside this
+  entry without re-verifying stability against real published slugs first.
+- The digest-HTML↔site anchor coupling (`_real_heading_lines` and the
+  needs-attention exclusion) becomes a PUBLIC contract for the first time —
+  any future anchor-scheme change must treat arc timelines as a consumer to
+  check, the same way `enforce_link_allowlist` treats every citation as a
+  consumer to check.
+- Briefs stay the source of truth, arcs stay derived — no storyline-first
+  storage inversion. That inversion was considered and rejected: it is a
+  rewrite of the publish pipeline disguised as a front-end feature.
+- Momentum labels must be data-derived. Arc appearance frequency across
+  digests supports arrows and trends ("↑ more coverage" is provable from
+  slug chains); severity words ("escalating") are content claims nothing in
+  the pipeline backs — they don't ship without a model judgment behind
+  them. Same overclaiming class as confidence badges (§11.4).
+
+**Steps:**
+- [ ] (toom-edge) Arc-chain reconstruction: extend the existing
+      slug-matching recurrence logic (toom-edge PR #107, 7-day window) to
+      the full archive — an arc = every digest sharing a slug, in time
+      order.
+- [ ] (toom-edge) Decide + implement the NOW ranking rule (recency ×
+      appearance volume) from data already published; no new digest fields
+      expected.
+- [ ] (toom-edge) Data-derived momentum indicator per arc: appearance
+      frequency across recent digests → ↑/→/↓ arrows. Frequency only — no
+      severity vocabulary (see guardrail above).
+- [ ] (toom-edge) Arc detail page: current state, appearance timeline, deep
+      links into each brief's section anchor.
+- [ ] (toom-edge) Homepage becomes NOW (top 3–5 arcs); chronological brief
+      feed demotes to Archive navigation.
+- [ ] (toom-edge) ⌘K command palette (arcs, briefs, commands) plus j/k
+      keyboard navigation — polish inside this entry, client-side only.
+- [ ] (digest) Only if a ranking signal turns out missing: expose it in the
+      publish payload — expected outcome is "none needed".
+- [ ] Deploy and verify on real data: slugs resolve, deep links land on the
+      right sections, Archive still reachable.
+
+### 11.2 Client-side catch-up — since your last visit (proposed)
+
+**Status:** proposed 2026-08-10, discussion pending. Origin: Codex redesign
+brief for news.tomhorvath.me, triaged 2026-08-10.
+
+**What & why.** Store a last-visit timestamp in `localStorage`; on load,
+diff it against published brief/arc timestamps and show "since your last
+visit: N briefs, M arc updates" with links straight to what's new. No
+accounts, no server-side state, no new privacy surface — the timestamp
+never leaves the reader's own browser.
+
+**Guardrails:**
+- No accounts, no server-side state; the timestamp never leaves the
+  reader's browser.
+- Ships independently of §11.1 — only the call-to-action placement differs
+  (links to briefs without arc pages, into arc pages once §11.1 ships).
+
+**Steps:**
+- [ ] (toom-edge) Store last-visit timestamp in `localStorage`; diff on
+      load against published brief/arc timestamps.
+- [ ] (toom-edge) "Since your last visit: N briefs, M arc updates" banner
+      linking straight to what's new.
+- [ ] (toom-edge) "You were here" marker in the briefing timeline at the
+      last-seen position — a subtle rule line inside the flow, not a
+      second banner.
+- [ ] (toom-edge, optional) Follow list in localStorage: followed arcs
+      rank slightly higher in the catch-up view. The site must stay fully
+      functional with nothing followed — automatic-first, configuration
+      optional.
+- [ ] Verify: zero new publish fields, zero server state.
+
+### 11.3 Delta persistence — "what changed" as data, not prose (proposed)
+
+**Status:** proposed 2026-08-10, discussion pending. Origin: Codex redesign
+brief for news.tomhorvath.me, triaged 2026-08-10.
+
+**What & why.** The delta-only reasoning lives in the WINDOW digest, not
+the daily: `prompts/digest.md` instructs each 3-hourly run to write repeat
+stories as deltas against `{{RECENT_COVERAGE}}`, rendered into the prompt
+by `digest/summarize.py`; the daily brief synthesizes `{{BRIEFINGS}}` and
+never sees `{{RECENT_COVERAGE}}` at all. "What changed" is already computed
+eight times a day at the window level, and survives only as prose that
+evaporates once the digest is archived. This entry has the window digest
+emit that delta as structured data alongside its prose — per arc:
+previously / now / changed-at, keyed to the same slug `derive_topics`
+already derives for the section — so both a "What changed" UI and §11.1's
+arc timelines can consume it as data instead of re-deriving it from prose.
+
+**Guardrails:**
+- `{{RECENT_COVERAGE}}` is a deliberately fenced replay channel; the
+  structured delta must not become an unfenced second one. In particular,
+  the daily and weekly briefs — which already synthesize briefings — must
+  not re-ingest structured deltas unless fenced identically to how
+  `{{RECENT_COVERAGE}}` is fenced today. This is the same two-hop trap
+  already hit once, with the weekly synthesis allowlist: data safely fenced
+  at hop one can still leak unfenced at hop two if each hop is designed in
+  isolation. Fence the delta at BOTH hops, or don't build the second hop
+  yet.
+- Schema changes go through the existing `PRAGMA user_version` sequential
+  migration — no ad hoc `ALTER TABLE` outside that sequence.
+- The window output contract change gets validated against real digests
+  before adoption, exactly as the BRIEFING contract itself was.
+- Idempotency: deltas key on `(arc slug, digest)` — a re-run over the same
+  window must not duplicate delta rows.
+
+**Steps:**
+- [ ] (digest) Extend `prompts/digest.md`: per repeat story a structured
+      delta block (previously / now / changed-at) tied to the section
+      heading whose slug `derive_topics` already derives.
+- [ ] (digest) Parser for the block in `digest/summarize.py` — pure
+      function, tested, malformed block degrades loudly, never silently
+      drops.
+- [ ] (digest) Migration: delta storage keyed (arc slug, digest), next
+      `user_version` step.
+- [ ] (digest) Publish payload carries deltas; confirm daily/weekly prompt
+      inputs remain byte-identical (fencing check).
+- [ ] (digest) Validate the new contract against real digests before
+      flag-on.
+- [ ] (toom-edge) "What changed" rendering + arc-timeline consumption of
+      the same data.
+- [ ] (digest, optional rider) While the window contract is open anyway,
+      decide whether repeat-story sections adopt the four-part structure
+      (what happened / what changed / why it matters / what to watch) from
+      the Codex round-2 brief — "Watching next week" already exists as a
+      weekly structural rubric, so the pattern has precedent. Same
+      validate-on-real-digests gate; skipping it is a fine outcome.
+- [ ] (homelab) Release train: tag → image → Renovate bump → deploy.
+
+### 11.4 Verified briefing — cross-reference the daily brief against the open web (proposed)
+
+**Status:** proposed 2026-08-09, discussion pending, with 2026-08-10 review
+adjustments folded in. Origin: the same friend whose "criteria, not names"
+advice produced the geopolitics prompt rule.
+
+**What & why.** Today the daily brief is a synthesis of what the owner's
+own sources said — nothing verifies whether those sources were right,
+complete, or alone in saying it. This makes it "checked against the
+world": per story, a corroboration status; where a source omitted
+something material, a cited gap-fill; where accounts conflict, a visible
+correction. Mark, never censor. Blast radius stays distorted text in a
+briefing the owner reads himself; it will NOT catch a claim the whole web
+repeats wrongly — no verifier does. Cost: one extra Opus-class call per day
+plus a bounded handful of web operations; wall-clock on the daily run
+roughly doubles, which nothing depends on (the daily timer is independent
+of the 3-hourly one).
+
+**Guardrails:**
+- **Wall 1 — toolless summarizer.** Verification is a SEPARATE second
+  `claude -p` pass on the daily only — never tools bolted onto
+  `summarize()`, never the 8×/day window runs (cost, latency, and
+  injection surface all explode there for marginal gain — deliberately out
+  of scope).
+- **Wall 2 — provenance.** The allowlist widens ONLY with URLs the
+  verifier provably fetched, extracted deterministically from the CLI
+  transcript, never from model prose. The invariant becomes: every live
+  link is either a collected item or a page this pipeline itself fetched.
+- **Transcript is not a stable API.** `claude -p --output-format json`'s
+  transcript shape must be pinned against defensively and drift tolerated;
+  a mis-parse soft-fails to the code-prepended `⚠ verification unavailable
+  this run` banner, never an unlabeled unverified brief dressed up as a
+  verified one.
+- **URL normalization rule required before shipping.** A fetched page's
+  requested URL and its final (post-redirect) URL can differ, and Wall 2's
+  match is verbatim — decide explicitly whether the requested URL, the
+  final URL, or both enter the widened allowlist, and write the
+  normalization rule (scheme, trailing slash, tracking params) down before
+  this ships, or the existing provenance layers will silently strip the
+  verifier's own citations for failing to match byte-for-byte.
+- **Label epistemics.** "Corroborated" is reserved for distinct reporting
+  origins, identified where discernible — a dozen outlets running the same
+  wire story is not a dozen origins; syndicated repetition is "widely
+  repeated", never counted as origins.
+- **Translation pass.** The pipeline becomes draft → verify → translate →
+  deliver, so `prompts/translate-hu.md` ingests web-derived text for the
+  first time. Its existing data-not-instructions framing covers this
+  (confirmed 2026-08-10 review) — no prompt change needed.
+- **Site confidence badges are strictly a rendering of this entry's
+  output** — the per-story corroboration status — and must never be built
+  independently of it.
+- **Soft-fail semantics**, matching `translate_digest`: unverified-on-time
+  beats no brief.
+- **Flag-first, default off:** `VERIFY_DAILY_ENABLED`, a search/fetch cap, its own
+  timeout, model/effort — validated against real briefs before adopting,
+  exactly as the BRIEFING contract was.
+
+**Steps:**
+- [ ] (digest) Decide + document the URL normalization and
+      requested-vs-final-redirect rule for allowlist widening.
+- [ ] (digest) `run_claude` variant with tool enablement + JSON-transcript
+      URL extraction — pure-function testable; existing call sites stay
+      byte-identical; parse drift routes to the soft-fail path.
+- [ ] (digest) `prompts/verify-daily.md`: per-story classify corroborated
+      (distinct origins, cited) / single-source / disputed; gap-fills only
+      from fetched pages, inside length discipline; a closing
+      "Verification notes" section; the strongest injection-resistance
+      preamble in the repo.
+- [ ] (digest) `run_daily` wiring draft → verify → translate → deliver;
+      widened-allowlist threading; `⚠ verification unavailable` banner on
+      any failure.
+- [ ] (digest) Config flags, default off.
+- [ ] (docs) New §8 risk row for the web-ingestion injection surface.
+- [ ] Flag on, live validation on real briefs; owner (and the friend who
+      proposed it) judge the output; then default on.
+- [ ] (homelab) Release train, including new env vars in the role.
+- [ ] (toom-edge, later) Render per-story status chips from the
+      verification output — only after this entry ships.
+
+### 11.5 Community signals — trending, radar, discuss-in-Telegram (PARKED)
+
+**Status:** proposed 2026-08-10, PARKED. Origin: Codex redesign brief for
+news.tomhorvath.me, triaged 2026-08-10.
+
+**What & why.** Per-arc Telegram message/reaction counts, a "trending in
+the community" list, an attention radar, and deep links into the Telegram
+discussion behind a story. Parked behind two named blockers.
+
+**Guardrails:**
+- (a) **The audience question is unanswered.** Is the site a personal
+  instrument or a community product? Building this first designs that
+  answer by accident instead of deciding it.
+- (b) **The attribution pipeline doesn't exist.** Mapping a Telegram
+  discussion message back to a specific arc is a new fuzzy pipeline, none
+  of it built today. Surfacing per-member message/reaction counts also
+  moves member activity across a boundary it doesn't cross today — right
+  now the digest reports content, never who said what how often — a
+  boundary to cross by explicit decision, not scope creep. (The Codex
+  round-2 brief reframes this toward Reddit vote/comment signals instead
+  of Telegram — more tractable, since the Reddit collector exists, but
+  per-item metrics aren't stored today and blocker (a) applies unchanged.)
+
+**Steps:**
+- [ ] Answer the audience question (owner decision — recorded in §9).
+- [ ] Only then: design the message→arc attribution pipeline as its own
+      §11 entry.
+
+### 11.6 Context mode — "60-second context" per arc (deferred)
+
+**Status:** proposed 2026-08-10, deferred. Origin: Codex redesign brief for
+news.tomhorvath.me, triaged 2026-08-10.
+
+**What & why.** Generated background explainers per arc, at 1-minute /
+5-minute / deep-dive depths, so a reader picking up a story mid-arc gets
+oriented without reading every prior brief. Deferred: value is unproven
+until §11.1 exists and reader behavior shows the need; every depth level is
+more model calls and another prompt to keep honest; explainers go stale as
+arcs evolve — a cache-invalidation cost nothing else here carries.
+
+**Guardrails:**
+- On-demand generation doesn't fit the current static-publish
+  architecture — if this ever ships, it is pre-generated at publish time,
+  for ranked arcs only, the same compute-once-publish-serve-static shape
+  everything else in this pipeline already uses.
+
+**Steps:**
+- [ ] Revisit after §11.1 ships and real usage exists.
+
+Recommended order: §11.1 → §11.2 → §11.3, with §11.4 as an independent
+track once approved; §11.5/§11.6 wait on their gates.
