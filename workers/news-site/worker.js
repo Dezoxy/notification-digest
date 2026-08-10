@@ -2283,6 +2283,11 @@ const CSS = `
     --mark: #ffe14d;
     --mark-ink: #101215;
     --faint: #8a90a0;
+    /* Article body tone (owner follow-up: headline/body/rule all at full
+       ink read as one undifferentiated wall, especially dark) — one step
+       quieter than --text, clearly brighter than --muted; strong/em inside
+       prose stay full --text so the stats pop against it. */
+    --prose: #3d4350;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -2304,6 +2309,7 @@ const CSS = `
       --mark: #f5cf3a;
       --mark-ink: #101215;
       --faint: #767d8b;
+      --prose: #c3c9d4;
     }
   }
 
@@ -2338,6 +2344,7 @@ const CSS = `
     --mark: #f5cf3a;
     --mark-ink: #101215;
     --faint: #767d8b;
+    --prose: #c3c9d4;
   }
   :root[data-theme="light"] {
     /* Pin the UA canvas too — see the color-scheme comment in :root. */
@@ -2360,6 +2367,7 @@ const CSS = `
     --mark: #ffe14d;
     --mark-ink: #101215;
     --faint: #8a90a0;
+    --prose: #3d4350;
   }
 
   * { box-sizing: border-box; }
@@ -3155,7 +3163,11 @@ const CSS = `
   .digest > h2 {
     counter-increment: secnum;
     font-size: 1.3em; font-weight: 800; letter-spacing: -0.025em; line-height: 1.15;
-    border-top: 2px solid var(--rule-heavy); padding-top: 0.7em;
+    /* Hairline, not --rule-heavy (owner follow-up): a bright 2px rule per
+       section glared in dark mode and flattened the hierarchy — the heavy
+       rule stays reserved for the masthead and colophon; inside the
+       article the white belongs to the headlines alone. */
+    border-top: 1px solid var(--hairline); padding-top: 0.8em;
     margin: 2.2em 0 0.7em; text-wrap: balance;
     /* So a TOC-jumped-to heading isn't flush against the viewport edge. */
     scroll-margin-top: 0.8em;
@@ -3165,7 +3177,12 @@ const CSS = `
     font-family: var(--font-data); font-size: 0.62em; font-weight: 400;
     letter-spacing: 0.08em; color: var(--accent); vertical-align: 0.15em;
   }
-  .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; }
+  /* Body prose one tonal step below the headlines (--prose, owner
+     follow-up: full-ink body next to full-ink h2s read as one wall);
+     strong/em snap back to full --text so bolded stats stand out AGAINST
+     the paragraph instead of vanishing into it. */
+  .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; color: var(--prose); }
+  .digest p strong, .digest p em { color: var(--text); }
   /* Reading polish (roadmap 4 step 2): hyphenate the prose blocks.
      html lang is already correct per page (en/hu, set by pageChrome) —
      the browser picks the right hyphenation dictionary on its own, this is
