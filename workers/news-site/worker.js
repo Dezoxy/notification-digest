@@ -3127,8 +3127,15 @@ const CSS = `
      stripInlineStyles) — only the presentation changed, so there is no
      second, duplicate TL;DR anywhere on the page. */
   .tldr {
-    background: none; color: var(--muted);
-    padding: 0; margin: 0 0 2em; font-weight: 400; font-size: 1.05em;
+    /* Emphasized bubble (owner follow-up — the plain leader paragraph
+       under-sold the one block that summarizes the whole briefing):
+       tinted background in the soft-bubble family (14px, like the
+       popovers), no border, text in the tint's own readable pair. Still
+       the same single server-rendered element from body_html — see the
+       stripInlineStyles comment. */
+    background: var(--tldr-bg); color: var(--tldr-text);
+    padding: 1em 1.2em; border-radius: 14px;
+    margin: 0 0 2em; font-weight: 400; font-size: 1.02em;
     font-family: var(--font-prose); line-height: 1.65;
   }
   /* The emailer's callout markup carries small eyebrow label spans
@@ -3687,13 +3694,10 @@ const CSS = `
        gray (acceptable) but the text itself forces to ink like every other
        digest-page text block above. */
     .sourcekey { color: #000; }
-    /* .tldr is a plain leader paragraph on screen now (no box, see the CSS
-       above) — print matches that, just forcing ink. .attention stays a
-       thin bordered outline in place of its tinted fill — a colored
-       background wastes ink and won't reproduce reliably across printers
-       anyway. */
-    .tldr { color: #000; }
-    .attention {
+    /* TL;DR/attention are tinted boxes on screen — print swaps the fills
+       for thin bordered outlines: a colored background wastes ink and
+       won't reproduce reliably across printers anyway. */
+    .tldr, .attention {
       background: none; border: 1px solid #999; color: #000;
     }
     .attention h2 { color: #000; }
