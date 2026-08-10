@@ -207,6 +207,25 @@ function arcIdentity(topicEntry) {
 const MAX_DELTAS = MAX_TOPICS;
 const DELTA_TEXT_MAX_LEN = 400;
 
+// arc_contexts (PLAN.md §11.6 context mode): optional, backward-compatible
+// TOP-LEVEL field on PUT /ingest/:id (see validateDigestPayload/
+// validateArcContexts) — a per-arc durable-background primer, not a
+// per-digest field, so it does not live inside the digests row at all (see
+// the arc_context table, schema.sql) — this cap only bounds one ingest
+// PAYLOAD's array, same "shape discipline" pattern as topics/deltas above.
+// MAX_ARC_CONTEXTS reuses MAX_TOPICS' own value, same reasoning MAX_DELTAS
+// already applies: a digest can have at most MAX_TOPICS topics/arcs in the
+// first place, so one ingest can never legitimately carry more primers than
+// that either. ARC_CONTEXT_MAX_BYTES bounds `context_md`: the spec is
+// "3-5 SHORT markdown paragraphs" (a primer, not a full digest body) —
+// 8KB is several times the size even a generous reading of "3-5 short
+// paragraphs" would produce (roughly 1000-1500 words at typical English
+// prose density), while staying two orders of magnitude below
+// MAX_BODY_FIELD_BYTES's 2MB full-digest-body cap, which this is nothing
+// like.
+const MAX_ARC_CONTEXTS = MAX_TOPICS;
+const ARC_CONTEXT_MAX_BYTES = 8 * 1024; // 8KB
+
 // Arc pages (§11.1 PR A, handleArcPage): how many of an arc's NEWEST
 // appearances get their digest's body_html fetched for #sN deep-link
 // resolution. 24 ≈ three days of 3-hourly windows — the span a reader
@@ -418,6 +437,43 @@ async function handleIngest(request, env, idParam) {
       .run();
   } catch {
     return json({ error: "database error" }, 500);
+  }
+
+  // arc_contexts (PLAN.md §11.6 context mode): a SECOND write, into the
+  // separate arc_context table — unlike every other optional ingest field,
+  // this one is not a digests column (see the arc_context table's own
+  // comment in schema.sql for why: a primer is per-ARC, not per-digest).
+  // Sequential, not batched: this file has no env.DB.batch() call anywhere
+  // (the digests upsert just above is the only other write here, also a
+  // single sequential .run()) — this follows that same established
+  // sequential pattern rather than introducing batching for one call site.
+  // That means the two writes are NOT atomic with each other, and an arc
+  // with several primers in one payload is not atomic across its own
+  // entries either: a failure partway through this loop leaves the digest
+  // row committed and only the earlier arc_context entries upserted. A
+  // retried ingest (the app's own recovery path — this endpoint is already
+  // idempotent by id) re-runs everything and self-heals, so this is a
+  // narrow, self-correcting window, not a lasting inconsistency — but it IS
+  // a real partial-failure possibility worth flagging rather than silently
+  // assuming atomicity that D1 (without an explicit .batch()) doesn't
+  // provide.
+  if (d.arc_contexts) {
+    const upsertedAt = new Date().toISOString();
+    try {
+      for (const entry of d.arc_contexts) {
+        await env.DB.prepare(
+          `INSERT INTO arc_context (key, context_md, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             context_md = excluded.context_md,
+             updated_at = excluded.updated_at`,
+        )
+          .bind(entry.key, entry.context_md, upsertedAt)
+          .run();
+      }
+    } catch {
+      return json({ error: "database error" }, 500);
+    }
   }
 
   return json({ ok: true }, 200);
@@ -887,12 +943,27 @@ async function handleArcPage(env, token, identity, url, lang) {
   // this feature's documented degraded mode (findArcSectionAnchor returning
   // null), not a new behavior — the fail-safe contract stays one contract.
   const anchorIds = chainRows.slice(0, ARC_ANCHOR_BODIES).map((r) => r.id);
-  const { results: bodyRows } = await env.DB.prepare(
-    `SELECT id, body_html FROM digests WHERE id IN (${anchorIds.map(() => "?").join(", ")})`,
-  )
-    .bind(...anchorIds)
-    .all();
+  // Arc context primer (§11.6 context mode): one extra query, ONLY on this
+  // page — never fetched for the index/digest/search pages, which have no
+  // single arc identity to look one up by. Run alongside the body-anchor
+  // query below (Promise.all, not a second sequential round trip) since
+  // neither depends on the other's result. `identity` is the exact primary
+  // key arc_context.key is upserted under (handleIngest's arc_contexts
+  // upsert uses the SAME `key` field topics' own optional key uses — see
+  // arcIdentity/ARC_IDENTITY_SQL), so this is a direct lookup, not a fold
+  // over topics like the chain query below. No row (the common case: most
+  // arcs have no primer, or never will) leaves contextMd null — renderArcPage
+  // renders nothing for the disclosure in that case, see renderArcContext.
+  const [{ results: bodyRows }, contextRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, body_html FROM digests WHERE id IN (${anchorIds.map(() => "?").join(", ")})`,
+    )
+      .bind(...anchorIds)
+      .all(),
+    env.DB.prepare("SELECT context_md FROM arc_context WHERE key = ?1").bind(identity).first(),
+  ]);
   const bodyById = new Map((bodyRows ?? []).map((r) => [r.id, r.body_html]));
+  const contextMd = contextRow?.context_md ?? null;
 
   // Reversed to ASC (oldest first): renderArcPage's first/latest handling
   // and its own display-only re-reversal both rely on ASC input — see there.
@@ -920,7 +991,9 @@ async function handleArcPage(env, token, identity, url, lang) {
     };
   });
 
-  return htmlResponse(renderArcPage(identity, appearances, token, url.hostname, lang, Date.now()));
+  return htmlResponse(
+    renderArcPage(identity, appearances, token, url.hostname, lang, Date.now(), contextMd),
+  );
 }
 
 // Fail-safe slug->section mapping for arc-page deep links (§11.1 guardrail:
@@ -1001,6 +1074,7 @@ function validateDigestPayload(payload) {
     failed_sources,
     topics,
     deltas,
+    arc_contexts,
   } = payload;
 
   if (
@@ -1127,6 +1201,17 @@ function validateDigestPayload(payload) {
     return { ok: false, error: deltasResult.error };
   }
 
+  // arc_contexts (PLAN.md §11.6 context mode): optional, independent of
+  // every field above — see validateArcContexts for the per-entry shape
+  // rules. UNLIKE source_counts/failed_sources/topics/deltas, this is not a
+  // digests-row column — it's a per-arc primer, upserted into the separate
+  // arc_context table by handleIngest — so the parsed array itself rides
+  // through below (arc_contexts), not a JSON-stringified string.
+  const arcContextsResult = validateArcContexts(arc_contexts);
+  if (!arcContextsResult.ok) {
+    return { ok: false, error: arcContextsResult.error };
+  }
+
   return {
     ok: true,
     value: {
@@ -1145,6 +1230,7 @@ function validateDigestPayload(payload) {
       failed_sources: failedSourcesResult.value ? JSON.stringify(failedSourcesResult.value) : null,
       topics: topicsResult.value ? JSON.stringify(topicsResult.value) : null,
       deltas: deltasResult.value ? JSON.stringify(deltasResult.value) : null,
+      arc_contexts: arcContextsResult.value,
     },
   };
 }
@@ -1328,6 +1414,58 @@ function validateDeltas(value) {
       return { ok: false, error: `deltas["${slug}"].now must be 1-${DELTA_TEXT_MAX_LEN} characters` };
     }
     normalized.push({ slug, previously: previously.trim(), now: now.trim() });
+  }
+  return { ok: true, value: normalized.length === 0 ? null : normalized };
+}
+
+// arc_contexts (PLAN.md §11.6 context mode): absent/null is valid (no
+// primers this run — every app version before this feature, and any run
+// that didn't generate one). Present, it must be a JSON array (Array.isArray,
+// not typeof — same reasoning as topics/deltas above), at most
+// MAX_ARC_CONTEXTS entries, each entry a plain object (not an array, not
+// null) with EXACTLY two keys: `key` (the SAME stable-arc-identity shape
+// topics' own optional `key` field uses — TOPIC_SLUG_RE, capped at
+// ARC_KEY_MAX_LEN — since a primer is looked up by that same arc identity,
+// see arcIdentity/ARC_IDENTITY_SQL) and `context_md` (a non-empty string,
+// trimmed length capped at ARC_CONTEXT_MAX_BYTES bytes). Unknown per-entry
+// keys are rejected via the `...rest` check, mirroring validateTopics/
+// validateDeltas' own discipline. Unlike topics, a duplicate `key` across two
+// entries in one payload is NOT rejected here — same posture validateDeltas
+// already takes on duplicate delta slugs: this validator polices shape, not
+// cross-entry semantics, and handleIngest's upsert loop just applies entries
+// in order, so a later duplicate naturally wins (ON CONFLICT DO UPDATE would
+// make that true even if it didn't).
+function validateArcContexts(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "arc_contexts must be a JSON array" };
+  }
+  if (value.length > MAX_ARC_CONTEXTS) {
+    return { ok: false, error: `arc_contexts must have at most ${MAX_ARC_CONTEXTS} entries` };
+  }
+  const normalized = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, error: "each arc_contexts entry must be an object" };
+    }
+    const { key, context_md, ...rest } = entry;
+    if (Object.keys(rest).length > 0) {
+      return { ok: false, error: "each arc_contexts entry must have exactly key and context_md" };
+    }
+    if (typeof key !== "string" || !TOPIC_SLUG_RE.test(key) || key.length > ARC_KEY_MAX_LEN) {
+      return { ok: false, error: `arc_contexts has an invalid key: "${key}"` };
+    }
+    if (
+      typeof context_md !== "string" ||
+      context_md.trim().length === 0 ||
+      byteLength(context_md) > ARC_CONTEXT_MAX_BYTES
+    ) {
+      return {
+        ok: false,
+        error: `arc_contexts["${key}"].context_md must be a non-empty string within size limits`,
+      };
+    }
+    normalized.push({ key, context_md: context_md.trim() });
   }
   return { ok: true, value: normalized.length === 0 ? null : normalized };
 }
@@ -1806,6 +1944,12 @@ const STRINGS = {
     // arcTimelineLabel/archiveResults/nowLabel above, so this is a plain
     // one-off string, not a template.
     whatChangedLabel: "What changed",
+    // Background primer disclosure (PLAN.md §11.6 context mode, renderArcContext):
+    // the <summary> text for the arc page's collapsed durable-context panel.
+    // Deliberately calm/factual, not a marketing verb ("Learn more") — the
+    // design guidance's "evidence over certainty" / "calm urgency" register
+    // applies to interface labels too, not just status text.
+    arcContextLabel: "Background",
   },
   hu: {
     locale: "hu-HU",
@@ -1915,6 +2059,10 @@ const STRINGS = {
     // Owner: please review — new HU string, "What changed" block (§11.3
     // delta persistence, ingest v4), mirrors the EN block's pattern.
     whatChangedLabel: "Mi változott",
+    // Owner: please review — new HU string, background primer disclosure
+    // (PLAN.md §11.6 context mode), mirrors the EN block's pattern. "Háttér"
+    // ("Background/context") — a plain, calm noun, no verb/CTA framing.
+    arcContextLabel: "Háttér",
   },
 };
 
@@ -2682,6 +2830,30 @@ const CSS = `
   }
   .followtoggle:hover, .followtoggle:focus-visible { color: var(--accent); }
   .followtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  /* Background primer disclosure (§11.6 context mode, renderArcContext):
+     native <details>/<summary>, collapsed by default, sitting directly under
+     the title/metadata line and above the appearances timeline. No card
+     (design guidance) — a thin bottom hairline is the only separator, same
+     "typography, not chrome" recipe as .deltas just below. Summary text is
+     in the mono metadata register (matches .archivelabel/.followtoggle), NOT
+     the h1's editorial serif — this is an interface control revealing
+     prose, not a second headline. Body paragraphs reuse .digest p's own
+     serif/line-height but in --muted rather than --text: durable background
+     reads one register quieter than the article itself (design guidance:
+     "prose register matching the article body, muted"). */
+  .arccontext { margin: 0 0 1.6em; padding-bottom: 1.2em; border-bottom: 1px solid var(--hairline); }
+  .arccontext summary {
+    cursor: pointer; font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .arccontext summary:hover, .arccontext summary:focus-visible { color: var(--accent); }
+  .arccontext summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .arccontextbody { margin-top: 0.9em; }
+  .arccontextbody p {
+    margin: 0 0 0.9em; font-family: var(--font-prose); font-size: 0.95em;
+    line-height: 1.65; color: var(--muted);
+  }
+  .arccontextbody p:last-child { margin-bottom: 0; }
   /* Section index (TOC, roadmap step 5): chip-link row built from the
      article's own <h2>s at render time (see buildSectionToc). Chips speak
      for themselves — no label string. */
@@ -2800,7 +2972,7 @@ const CSS = `
      narrow line; -webkit- is what iOS Safari actually honors. Headings and
      chrome stay un-hyphenated on purpose — this is for reading paragraphs,
      not labels. */
-  .digest p, .tldr, .entry .excerpt, .attention p {
+  .digest p, .tldr, .entry .excerpt, .attention p, .arccontextbody p {
     hyphens: auto; -webkit-hyphens: auto;
   }
   /* nh3 allows pre/code through (digest repo, emailer.py's _ALLOWED_TAGS),
@@ -3264,7 +3436,8 @@ const CSS = `
     .archiveresults, .catchup, .followtoggle {
       display: none;
     }
-    .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note, .arctitle {
+    .digest, .digest p, .digest h2, .stamp, .dayhead, .empty, .en-only-note, .arctitle,
+    .arccontext, .arccontextbody p {
       color: #000;
     }
     /* "What changed" block (§11.3 delta persistence, ingest v4): CONTENT,
@@ -5749,6 +5922,43 @@ function renderDeltas(deltas, topicArcs, strings, token, lang) {
   return `<div class="archivelabel">${esc(strings.whatChangedLabel)}</div><nav class="deltas" aria-label="${esc(strings.whatChangedLabel)}">${rows}</nav>\n`;
 }
 
+// Arc context primer disclosure (PLAN.md §11.6 context mode): the arc page's
+// COLLAPSED background primer, rendered directly under the title/metadata
+// line and above the appearances timeline (see renderArcPage's call site).
+// Native <details>/<summary>, same "no JS needed" contract as this file's
+// other disclosures (.settings, .searchpop) — collapsed by default so a
+// reader who already knows the background isn't forced past it, and it still
+// works with JS disabled. No primer -> render nothing at all (no empty
+// state), same "absent data renders as absence" contract as renderDeltas.
+//
+// `contextMd` is markdown from a MODEL — UNTRUSTED, same trust posture as
+// any other free-text field this app produces. Unlike body_html/body_html_hu
+// (the only fields anywhere in this file that skip esc() — see the
+// file-header comment), context_md does NOT arrive pre-rendered/pre-
+// sanitized: it's raw markdown, and this Worker has no markdown-to-HTML
+// renderer anywhere in it. Adding one (a library, or a hand-rolled parser)
+// would be new attack surface purpose-built for one field whose input is a
+// model's raw text — not justified by what the spec actually asks for (3-5
+// SHORT paragraphs of durable background, no rich formatting requirement).
+// Instead this gets the same treatment search snippets already get before
+// their <mark> tags go back in (see markSnippet's comment) — escape
+// everything, then structure: split on blank lines, esc() EVERY paragraph,
+// wrap each in a plain <p>. Markdown syntax in the source (e.g. "**word**",
+// a bare "<script>") renders as inert escaped text, never as markup or a
+// live tag — a deliberate degradation (no bold/links/etc. render), not a
+// bug: nothing here can ever inject unescaped model output into the page.
+function renderArcContext(contextMd, strings) {
+  if (!contextMd) return "";
+  const paragraphs = contextMd
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${esc(p)}</p>`)
+    .join("");
+  if (!paragraphs) return "";
+  return `<details class="arccontext"><summary>${esc(strings.arcContextLabel)}</summary><div class="arccontextbody">${paragraphs}</div></details>\n`;
+}
+
 function renderDigestPage(digest, older, newer, token, host, lang, view, topicArcs, deltas) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
@@ -5977,8 +6187,10 @@ function renderArcAppearance(row, token, lang) {
 // arc's own address: the data-arc-slug attribute name and the follow-list's
 // "slug" vocabulary below are UNCHANGED (client-side string matching, see
 // the follow-toggle IIFE in pageChrome), only the value they now carry can
-// be a key instead of a slug.
-function renderArcPage(identity, appearances, token, host, lang, nowMs) {
+// be a key instead of a slug. `contextMd` (§11.6 context mode) is this arc's
+// primer text from arc_context, or null when it has none — see
+// renderArcContext for how it renders (or doesn't).
+function renderArcPage(identity, appearances, token, host, lang, nowMs, contextMd) {
   const strings = STRINGS[lang];
   const first = appearances[0];
   const latest = appearances[appearances.length - 1];
@@ -6041,10 +6253,16 @@ ${group.items.map((row) => renderArcAppearance(row, token, lang)).join("\n")}`,
   // paletteconfig, …): the toggle itself is entirely client-side (a
   // localStorage array of followed slugs, never sent here), so this is the
   // only place slug/i18n strings meet the DOM for it to read.
+  // Background primer (§11.6 context mode): collapsed disclosure directly
+  // under the title/metadata line, above the timeline — see
+  // renderArcContext, which renders "" (nothing at all, no empty state) when
+  // this arc has no primer.
+  const contextHtml = renderArcContext(contextMd, strings);
+
   const body = `<nav class="digestnav"><a href="${indexHref(token, lang, "all")}">${esc(strings.allDigests)}</a></nav>
 <div class="archead"><h1 class="arctitle" data-arc-slug="${esc(identity)}" data-follow-add="${esc(strings.followAdd)}" data-follow-remove="${esc(strings.followRemove)}">${esc(title)}</h1></div>
 <p class="stamp">${esc(metaLine)}</p>
-<div class="archivelabel">${esc(strings.arcTimelineLabel)}</div>
+${contextHtml}<div class="archivelabel">${esc(strings.arcTimelineLabel)}</div>
 ${timelineHtml}`;
 
   // view "all": an arc has no view of its own (see the file-header comment)
