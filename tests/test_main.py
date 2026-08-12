@@ -2965,6 +2965,205 @@ def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatc
     verify_conn.close()
 
 
+# --- run_daily duplicate-fire guard (a double-fire of the once-a-day timer
+#     must be a harmless no-op, not a second daily brief) ---
+
+
+def _existing_daily_digest(
+    conn, hours_ago: float, *, telegram_sent: bool = True, site_published: bool = True
+) -> int:
+    """A real `kind='daily'` row `hours_ago` in the past, for the guard tests below.
+
+    `telegram_sent`/`site_published` default to already-delivered (mirrors
+    `_daily_digest`'s own "fully delivered" default further down, used by
+    the run_weekly tests) so a test that only cares about the guard itself
+    doesn't also have to reason about deliver_pending retrying this row --
+    the one test that DOES care (the "still retries pending delivery" test
+    below) passes `telegram_sent=False` explicitly.
+    """
+    digest_id = create_digest(conn, "**TL;DR:** yesterday\n\n## An arc\n\nstuff", [], kind="daily")
+    conn.execute(
+        "UPDATE digests SET created_at = ?, email_sent = 1, site_published = ?, "
+        "telegram_sent = ? WHERE id = ?",
+        (
+            _recent_created_at(hours_ago=hours_ago),
+            1 if site_published else 0,
+            1 if telegram_sent else 0,
+            digest_id,
+        ),
+    )
+    conn.commit()
+    return digest_id
+
+
+def test_run_daily_duplicate_within_guard_window_is_skipped_returns_true(
+    conn, monkeypatch, tmp_path, caplog
+):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    # Well within the guard window -- this is what a genuine double-fire of
+    # the once-a-day timer looks like (the 2026-08-09 incident this guard
+    # exists for: two runs 31 minutes apart).
+    within_delta = main_mod._DAILY_DUPLICATE_GUARD_WINDOW - timedelta(hours=1)
+    within_hours = within_delta.total_seconds() / 3600
+    _existing_daily_digest(real_conn, within_hours)
+    _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("must not be called: the duplicate guard should skip this run")
+
+    monkeypatch.setattr(main_mod, "summarize_daily", boom)
+    monkeypatch.setattr(deliver_mod, "publish_to_site", boom)
+    monkeypatch.setattr(main_mod, "archive", boom)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    with caplog.at_level("INFO", logger=main_mod.logger.name):
+        ok = run_daily(cfg)
+
+    assert ok is True
+
+    verify_conn = connect(db_path)
+    count = verify_conn.execute("SELECT COUNT(*) FROM digests WHERE kind = 'daily'").fetchone()[0]
+    verify_conn.close()
+    assert count == 1  # no second daily digest was created
+
+    line = next(r.message for r in caplog.records if r.message.startswith("run_summary "))
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["mode"] == "daily"
+    assert payload["skipped_duplicate"] is True
+    assert payload["ok"] is True
+
+
+def test_run_daily_older_than_guard_window_proceeds_normally(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    # Just outside the guard window -- a legitimate consecutive-day gap.
+    outside_delta = main_mod._DAILY_DUPLICATE_GUARD_WINDOW + timedelta(hours=1)
+    outside_hours = outside_delta.total_seconds() / 3600
+    _existing_daily_digest(real_conn, outside_hours)
+    _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    monkeypatch.setattr(
+        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** today\n\n## An arc\n\nstuff"
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    verify_conn = connect(db_path)
+    count = verify_conn.execute("SELECT COUNT(*) FROM digests WHERE kind = 'daily'").fetchone()[0]
+    verify_conn.close()
+    assert count == 2  # yesterday's daily plus today's freshly created one
+
+
+def test_run_daily_first_ever_run_no_prior_daily_digest_proceeds_normally(
+    conn, monkeypatch, tmp_path
+):
+    # No `kind='daily'` row exists at all yet -- get_daily_digests_since must
+    # return empty and the guard must not mistake "no prior runs" for
+    # "recently ran".
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    summarize_calls = []
+    monkeypatch.setattr(
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: summarize_calls.append(1) or "**TL;DR:** today\n\n## An arc\n\nstuff",
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert len(summarize_calls) == 1
+
+
+def test_run_daily_force_bypasses_duplicate_guard(conn, monkeypatch, tmp_path):
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    # Minutes-old duplicate -- would normally be skipped, but --force must
+    # override the guard.
+    _existing_daily_digest(real_conn, hours_ago=0.1)
+    _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=2))
+    real_conn.close()
+
+    summarize_calls = []
+    monkeypatch.setattr(
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: summarize_calls.append(1) or "**TL;DR:** forced\n\n## An arc\n\nstuff",
+    )
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg, force=True)
+
+    assert ok is True
+    assert len(summarize_calls) == 1
+    verify_conn = connect(db_path)
+    count = verify_conn.execute("SELECT COUNT(*) FROM digests WHERE kind = 'daily'").fetchone()[0]
+    verify_conn.close()
+    assert count == 2
+
+
+def test_run_daily_duplicate_skip_still_retries_pending_delivery(conn, monkeypatch, tmp_path):
+    # The duplicate-fire guard must never suppress step 1 (deliver_pending):
+    # a daily brief stuck pending on one channel must still be retried on a
+    # run the guard is about to skip, or it would never be retried until the
+    # NEXT day's daily run.
+    db_path = str(tmp_path / "state.db")
+    real_conn = connect(db_path)
+    init_db(real_conn)
+    pending_id = _existing_daily_digest(
+        real_conn, hours_ago=1, telegram_sent=False, site_published=True
+    )
+    real_conn.close()
+
+    def boom_summarize(*args, **kwargs):
+        raise AssertionError("must not be called: the duplicate guard should skip this run")
+
+    monkeypatch.setattr(main_mod, "summarize_daily", boom_summarize)
+    telegram_calls = []
+    monkeypatch.setattr(
+        deliver_mod,
+        "send_telegram_tldr",
+        lambda digest_id_, body_md_, created_at, bot_token, chat_id, thread_id, public_base: (
+            telegram_calls.append(digest_id_)
+        ),
+    )
+
+    cfg = _daily_cfg(state_db_path=db_path)
+    ok = run_daily(cfg)
+
+    assert ok is True
+    assert telegram_calls == [pending_id]  # deliver_pending retried it despite the skip
+
+    verify_conn = connect(db_path)
+    row = verify_conn.execute(
+        "SELECT telegram_sent FROM digests WHERE id = ?", (pending_id,)
+    ).fetchone()
+    verify_conn.close()
+    assert row == (1,)
+
+
 def test_daily_and_weekly_modules_never_reference_arc_key_functions():
     # Structural guardrail, belt-and-suspenders alongside the two behavioral
     # tests below: digest/daily.py and digest/weekly.py must not so much as
