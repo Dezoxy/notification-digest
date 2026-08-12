@@ -2837,6 +2837,18 @@ const CSS = `
   @media (max-width: 40em) {
     section[data-unread-label] { grid-template-columns: 1fr; }
   }
+  /* One-card-per-row views (owner-reported: "the text has just half the
+     width"). Two columns only pay for themselves where the ledger is dense
+     enough to fill both — the ALL view's ~8 window digests a day. The daily
+     view carries at most ONE brief per day and the weekly view one per week,
+     so there every single row placed a ~26em card in column 1 against a
+     permanently empty column 2. Those views drop to a single column and let
+     each card use the full ~55em measure — the same measure the digest page's
+     own prose already runs at, per the owner's "desktop text should be wider
+     about 30 percent" call recorded in the .wrap block below. Keyed off
+     data-ledger rather than a media query because this is a function of how
+     many cards the VIEW yields, not of viewport width. */
+  section[data-ledger="single"] { grid-template-columns: 1fr; }
   .dayhead {
     grid-column: 1 / -1;
     font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.11em;
@@ -6104,6 +6116,15 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // fence or advance the lastVisit stamp.
   const archiveAttr = isCurrent ? "" : ' data-week-archive="1"';
 
+  // data-ledger (owner-reported half-width cards): marks the <section> on the
+  // views whose ledger yields at most one card per day-group — see the
+  // section[data-ledger="single"] rule in the stylesheet for the full
+  // reasoning. The ALL view is the only dense one, so it alone keeps the
+  // two-column grid. Purely presentational: nothing scripted reads this, and
+  // the DOM structure/sibling order the unread-fence and filter IIFEs walk is
+  // untouched.
+  const ledgerAttr = view === "all" ? "" : ' data-ledger="single"';
+
   // data-unread-label (roadmap 2 step 2): the unread-fence label text,
   // rendered server-side so the bottom script that builds the fence stays
   // language-agnostic — it just reads this attribute rather than knowing
@@ -6156,7 +6177,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
     lang,
     view,
     renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
-    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
+    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}${ledgerAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     prefetchHref,
     buildIssueLine(leadRow, rows, view, strings),
