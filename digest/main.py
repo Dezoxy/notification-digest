@@ -127,6 +127,37 @@ _RECENT_ARCS_WINDOW = timedelta(days=7)
 # link-provenance allowlist at delivery time, and the two uses must never
 # drift apart (see that constant's own docstring for why).
 
+# Minimum spacing `run_daily` requires between "now" and the most recent
+# `kind='daily'` digest's `created_at` before it will produce a NEW one --
+# below this spacing, a `run_daily` invocation is treated as a duplicate
+# fire of the once-a-day timer and skipped as a no-op (see run_daily's own
+# docstring, step 2). Exists because the scheduling that decides WHEN
+# `python -m digest daily` runs is a systemd timer that lives OUTSIDE this
+# repo (see CLAUDE.md's Deploy note) -- this code cannot assume that timer
+# only ever fires once a day, so it has to defend against a double-fire
+# itself, the same way `_TELEGRAM_MAX_AGE`/GUARD 1 defends the Telegram send
+# path against a different failure mode.
+#
+# 20 hours, not `DAILY_LOOKBACK_WINDOW`'s 24: the incident this guards
+# against (2026-08-09, two daily briefs 31 minutes apart -- 20:06 and 20:37
+# Europe/Budapest) shows the timer's own run-time jitter is on the order of
+# ~30 minutes, so a LEGITIMATE consecutive-day gap between two daily briefs
+# is roughly 23.5h (24h minus that jitter) -- comfortably clear of a 20h
+# threshold on either side -- while a same-evening double-fire (minutes to a
+# few hours apart) is always caught. Any threshold from roughly 21h up to
+# just under 23.5h would work equally well; 20h was chosen for a wide, easy
+# margin rather than cutting it close.
+#
+# A pure UTC recency comparison against `digests.created_at` -- via
+# `get_daily_digests_since` (digest/state.py), reused rather than a new
+# query (see that function's own docstring: it already returns `kind =
+# 'daily'` rows at/after a given ISO instant, exactly the shape this guard
+# needs) -- NOT a Budapest-calendar-day check: CLAUDE.md requires timestamps
+# stay UTC and be converted to Europe/Budapest only at render/email time,
+# never in storage or state comparisons, so this guard has no
+# daylight-saving or local-midnight boundary edge cases of its own.
+_DAILY_DUPLICATE_GUARD_WINDOW = timedelta(hours=20)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -756,7 +787,7 @@ def _generate_arc_context_primers(conn: sqlite3.Connection, cfg: Config, now: da
     return generated
 
 
-def run_daily(cfg: Config) -> bool:
+def run_daily(cfg: Config, *, force: bool = False) -> bool:
     """Run the once-a-day brief synthesis + delivery cycle. Returns True if it completed OK.
 
     Invoked by `python -m digest daily` -- a SEPARATE systemd timer on the
@@ -769,6 +800,11 @@ def run_daily(cfg: Config) -> bool:
     deliver machinery `_deliver` does, so there is nothing here that needs an
     event loop.
 
+    `force` (keyword-only, default False) is the escape hatch for a
+    deliberate manual re-run -- wired through from `python -m digest daily
+    --force` (see `main()`'s dispatch) -- and bypasses step 2's
+    duplicate-fire guard below ONLY; every other step runs exactly as normal.
+
     Pipeline:
     1. Connect/init_db, then run `deliver_pending` FIRST -- exactly like
        `_deliver` does for the window-digest run mode, and reusing that same
@@ -778,8 +814,30 @@ def run_daily(cfg: Config) -> bool:
        brief is even summarized. This also opportunistically retries any
        still-pending WINDOW digest this run happens to see, which is
        harmless (idempotent per channel) even though the every-3-hours job
-       already covers that case on its own schedule.
-    2. `rows = get_window_digests_since(conn, since)`, `since` being
+       already covers that case on its own schedule. Runs BEFORE step 2's
+       duplicate-fire guard, and unconditionally of it (`force` never skips
+       this step): a stuck partially-delivered brief must still be retried
+       even on a run this guard is about to skip as a duplicate, or it would
+       never get retried until the NEXT day's daily run.
+    2. Duplicate-fire guard (unless `force`): the scheduling that decides
+       WHEN this function runs is a systemd timer living OUTSIDE this repo
+       (see CLAUDE.md's Deploy note), so this code cannot assume the timer
+       only ever fires once a day. `get_daily_digests_since(conn, since)`,
+       `since` being `_DAILY_DUPLICATE_GUARD_WINDOW` (20h, this module) before
+       now, is reused (rather than a new query -- see that function's own
+       docstring: it already returns `kind = 'daily'` rows at/after a given
+       ISO instant, exactly this guard's shape) to check whether a daily
+       brief already exists within that window. If one does, this run is
+       treated as a duplicate fire and skipped as a harmless no-op: logged,
+       `run_summary` stamped with `skipped_duplicate: true`, and step 1's
+       `all_ok` returned as-is -- no window digests are read, no `claude -p`
+       call is made, no new digest row is created. See
+       `_DAILY_DUPLICATE_GUARD_WINDOW`'s own docstring for why 20h (not
+       `DAILY_LOOKBACK_WINDOW`'s 24h) is the right threshold, and
+       `scripts/backfill_daily.py`'s module docstring for why a backfilled
+       historical row never trips this guard on a later live run (its
+       `created_at` is a past evening's boundary, not "now").
+    3. `rows = get_window_digests_since(conn, since)`, `since` being
        `DAILY_LOOKBACK_WINDOW` (24h, digest/state.py) before now -- the day's worth of
        already-curated window briefings to synthesize (kind='window' only;
        see that function's docstring for why a prior daily brief can never
@@ -788,16 +846,16 @@ def run_daily(cfg: Config) -> bool:
        is logged and returns `all_ok` from step 1 as-is: nothing to brief is
        a normal empty day, not a failure, exactly like `_deliver`'s own
        "no unsummarized items" branch.
-    3. `allowed_urls` is the UNION of `get_digest_item_urls` over every
+    4. `allowed_urls` is the UNION of `get_digest_item_urls` over every
        source window digest -- a daily brief may cite any URL any of its
        source briefings could cite, never a fresh set of raw item URLs (a
        daily brief never sees raw items at all).
-    4. `summarize_daily` (digest/daily.py) -- UNLIKE `_deliver`'s own
+    5. `summarize_daily` (digest/daily.py) -- UNLIKE `_deliver`'s own
        `summarize()` call, a `SummarizeError` here is caught, logged, and
        turned into a `False` return rather than propagating further: this
        function's contract (like `_deliver`'s) is "return whether the run
        succeeded", not "raise on failure".
-    5. PLAN.md §11.4's OPTIONAL verification pass (`VERIFY_DAILY_ENABLED`,
+    6. PLAN.md §11.4's OPTIONAL verification pass (`VERIFY_DAILY_ENABLED`,
        default off): `digest/verify.py`'s `verify_daily` cross-checks the
        draft against the open web and returns a corrected/corroborated
        brief plus a WIDENED allowlist. Any failure (CLI/transcript trouble,
@@ -805,15 +863,15 @@ def run_daily(cfg: Config) -> bool:
        unchanged except for a code-prepended `⚠ verification unavailable
        this run` banner (`_VERIFY_UNAVAILABLE_BANNER`), and the allowlist
        stays un-widened. Never raises, never returns `False` -- unlike step
-       4's `summarize_daily`, an unverified brief on time still beats no
+       5's `summarize_daily`, an unverified brief on time still beats no
        brief at all.
-    6. The optional Hungarian translation -- identical `translate_digest`
+    7. The optional Hungarian translation -- identical `translate_digest`
        call, identical soft-failing contract, as `_deliver` uses for a
-       window digest -- checked against step 5's (possibly widened)
-       allowlist, not step 3's original one, so a verified brief's
+       window digest -- checked against step 6's (possibly widened)
+       allowlist, not step 4's original one, so a verified brief's
        translation isn't stripped of citations the English verified body
        was allowed to keep.
-    7. `create_digest(..., items=[], kind="daily", item_count=...)` -- a
+    8. `create_digest(..., items=[], kind="daily", item_count=...)` -- a
        daily brief stamps NO items (it consumes digests, not items; the
        empty-items path is exercised and supported, see digest/state.py's
        `create_digest` and its test coverage) but its stored `item_count` is
@@ -823,21 +881,29 @@ def run_daily(cfg: Config) -> bool:
        the closing-line count sanity actually describe for a daily brief,
        not "0 items" (which `len(items)` would otherwise store) and not any
        single source digest's own count.
-    8. `archive()` it, exactly like any digest -- unconditional, not gated
+    9. `archive()` it, exactly like any digest -- unconditional, not gated
        on any channel's success, identical rationale to `_deliver`'s own
        archiving.
-    9. `deliver_channels` with a FRESH `done` map (this digest was just
-       created, nothing attempted yet), this function's own
-       `telegram_state` -- shared with step 1's `deliver_pending` call, for
-       the identical GUARD-2-circuit-breaker reason `_deliver` shares one
-       `TelegramRunState` across its own two `deliver_channels` call
-       sites -- and step 5's allowlist as `extra_allowed_urls`, so a
-       verified brief's own widened citations survive render time too, not
-       just this function's own translation call in step 6.
+    10. `deliver_channels` with a FRESH `done` map (this digest was just
+        created, nothing attempted yet), this function's own
+        `telegram_state` -- shared with step 1's `deliver_pending` call, for
+        the identical GUARD-2-circuit-breaker reason `_deliver` shares one
+        `TelegramRunState` across its own two `deliver_channels` call
+        sites -- and step 6's allowlist as `extra_allowed_urls`, so a
+        verified brief's own widened citations survive render time too, not
+        just this function's own translation call in step 7.
 
     Returns True iff step 1's pending pass AND this run's own fresh delivery
     (when a brief was actually produced) both succeeded -- the AND of the
     same two-part contract `_deliver` upholds for the window-digest run mode.
+    A run skipped by step 2's duplicate-fire guard returns step 1's `all_ok`
+    alone (there is no "fresh delivery" half to AND it with): a skipped
+    duplicate is a SUCCESSFUL no-op, and `main()` uses this return value only
+    to pick the process exit code (0 vs 1, the sole Loki alert trigger -- see
+    `main()`'s own comment), so returning anything other than step 1's own
+    result here would either mask a genuine pending-delivery failure (if
+    hardcoded True) or spuriously alert on a correctly-skipped duplicate (if
+    hardcoded False).
     """
     conn = connect(cfg.state_db_path)
     try:
@@ -847,6 +913,37 @@ def run_daily(cfg: Config) -> bool:
         all_ok = deliver_pending(conn, cfg, telegram_state)
 
         now = datetime.now(UTC)
+
+        # Step 2 (see docstring): unless `force`, skip this run as a
+        # duplicate no-op when a daily brief already exists within the last
+        # _DAILY_DUPLICATE_GUARD_WINDOW. Deliberately BEFORE step 3 reads any
+        # window digests and BEFORE step 5's `claude -p` call -- the whole
+        # point is to avoid the expensive work, not just avoid a duplicate
+        # digest row.
+        if not force:
+            guard_since = (now - _DAILY_DUPLICATE_GUARD_WINDOW).isoformat()
+            if get_daily_digests_since(conn, guard_since):
+                logger.info(
+                    "a daily brief already ran within the last %s, skipping "
+                    "as a duplicate no-op (use --force to override)",
+                    _DAILY_DUPLICATE_GUARD_WINDOW,
+                )
+                logger.info(
+                    "run_summary %s",
+                    json.dumps(
+                        {
+                            "mode": "daily",
+                            "source_digests": 0,
+                            "delivered": all_ok,
+                            "ok": all_ok,
+                            "context_generated": 0,
+                            "skipped_duplicate": True,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+                return all_ok
+
         since = now - DAILY_LOOKBACK_WINDOW
         rows = get_window_digests_since(conn, since.isoformat())
         if not rows:
@@ -1224,8 +1321,17 @@ def main() -> None:
     # unchanged. The scheduling itself (which timer fires which mode, and
     # when) lives entirely outside this repo (see CLAUDE.md's Deploy note);
     # this is just the dispatch a systemd unit's ExecStart invokes into.
+    #
+    # `python -m digest daily --force` bypasses run_daily's own
+    # duplicate-fire guard (see that function's docstring, step 2, and
+    # `_DAILY_DUPLICATE_GUARD_WINDOW`) -- the owner's manual escape hatch for
+    # a deliberate second daily run on the same day. No argparse: this
+    # dispatch is already a plain positional-argv check, not a flag parser,
+    # so `--force` is checked the same way, as a bare substring match against
+    # the remaining argv -- only meaningful (and only checked) alongside
+    # `daily`.
     if len(sys.argv) > 1 and sys.argv[1] == "daily":
-        ok = run_daily(cfg)
+        ok = run_daily(cfg, force="--force" in sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "weekly":
         ok = run_weekly(cfg)
     else:
