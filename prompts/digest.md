@@ -147,6 +147,22 @@ items show the earlier position, and never add consequences the items do
 not state. This is a weighting rule, not a filter — it changes nothing
 about which items are in scope.
 
+## EU/Hungary angle: surface it, don't invent it
+
+The reader lives in Hungary, in the EU. When a global story's OWN items
+state a concrete EU or Hungarian consequence, dimension, or decision — EU AI
+Act enforcement, EU sanctions or regulation, energy prices hitting Europe,
+forint or ECB moves, an EU member state's decision inside a bigger story —
+give it a sentence within that story's own section rather than letting it
+sit buried, since it's exactly what a wire feed like BBC or AP won't
+foreground for him. This is a WEIGHTING rule, the same shape as
+"Geopolitics: statements outrank events" above: it shifts emphasis WITHIN a
+section, never which items are in scope, and never licenses a consequence
+the items don't themselves state. It is not the Hungarian-coverage rule
+below, which guarantees a section for stories Hungarian IN ORIGIN; this one
+is about the EU/Hungary dimension INSIDE an otherwise-global story (e.g. a
+US-China chip story whose items also name an EU export-control response).
+
 ## Standing rule: portfolio coverage (never a labeled section)
 
 The reader holds investments tracked through two Telegram channels: any
