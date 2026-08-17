@@ -291,13 +291,20 @@ def allocate_by_source(
     defers the freshest to the next run -- is the same one the pre-quota
     LIMIT already made globally.
 
+    When `budget` is SMALLER than the quotas' sum (select_balanced_items_
+    for_prompt shrinking to fit the prompt byte cap), each lane's quota is
+    scaled down proportionally (floor, min 1 for a lane with a quota) so
+    the reduced budget keeps the same editorial mix -- NOT consumed
+    first-come in lane-encounter order, which would hand the whole reduced
+    budget to whichever collector ran first and reintroduce exactly the
+    ordering bias this function exists to remove.
+
     When everything fits (`len(items) <= budget`), returns `items` as-is:
     quotas exist to arbitrate scarcity, not to thin a window that was never
-    oversubscribed.
+    oversubscribed. (The allocation log line below still fires either way
+    -- lane pressure should be Loki-visible on every run, not only
+    oversubscribed ones, or a quiet-window positions burst is invisible.)
     """
-    if len(items) <= budget:
-        return items
-
     positions_prefixes = tuple(
         f"https://t.me/{channel.lower()}/" for channel in positions_channels
     )
@@ -306,12 +313,37 @@ def allocate_by_source(
     for item in items:
         lanes.setdefault(_allocation_lane(item, positions_prefixes), []).append(item)
 
-    # First pass: every lane takes min(quota, available). Lanes stay
+    if len(items) <= budget:
+        logger.info(
+            "allocation %s",
+            json.dumps(
+                {
+                    lane: {"taken": len(lane_items), "available": len(lane_items)}
+                    for lane, lane_items in sorted(lanes.items())
+                },
+                sort_keys=True,
+            ),
+        )
+        return items
+
+    # Scale quotas proportionally when the budget is below their sum (see
+    # docstring) -- at the full budget the scale is 1.0 and every quota is
+    # its literal configured value.
+    total_quota = sum(_SOURCE_QUOTAS.values())
+    quota_scale = min(1.0, budget / total_quota)
+
+    def _lane_quota(lane: str) -> int:
+        quota = _SOURCE_QUOTAS.get(lane, 0)
+        if quota == 0:
+            return 0
+        return max(1, int(quota * quota_scale))
+
+    # First pass: every lane takes min(scaled quota, available). Lanes stay
     # oldest-first because `items` was.
     taken: dict[str, int] = {}
     spent = 0
     for lane, lane_items in lanes.items():
-        take = min(_SOURCE_QUOTAS.get(lane, 0), len(lane_items), budget - spent)
+        take = min(_lane_quota(lane), len(lane_items), budget - spent)
         taken[lane] = take
         spent += take
 
@@ -335,10 +367,10 @@ def allocate_by_source(
         if not progressed:
             break
 
-    # Counts only, never content -- one line per oversubscribed run so a
-    # Loki query can see WHICH lane is under pressure (e.g. a positions
-    # backlog growing because the hard cap keeps binding run after run)
-    # without a log dive.
+    # Counts only, never content -- one line per run (the under-budget fast
+    # path above logs its own) so a Loki query can see WHICH lane is under
+    # pressure (e.g. a positions backlog growing because the hard cap keeps
+    # binding run after run) without a log dive.
     logger.info(
         "allocation %s",
         json.dumps(
@@ -471,6 +503,70 @@ def select_items_for_prompt(
         else:
             hi = mid - 1
     return items[:lo]
+
+
+def select_balanced_items_for_prompt(
+    pool: list[Item],
+    budget: int,
+    positions_channels: Collection[str],
+    failed_sources: list[str],
+    recent_coverage: str,
+    max_prompt_bytes: int,
+    recent_arcs: str = "",
+) -> list[Item]:
+    """Allocate a source-balanced batch from `pool` that also fits the prompt byte cap.
+
+    Composes the two selection concerns this module previously handled
+    separately -- and, when both bound at once, INCOMPATIBLY:
+    allocate_by_source balances lanes by quota, while select_items_for_prompt
+    shrinks to the byte cap by keeping the longest fitting PREFIX of the
+    fetched_at-ordered list. Because collectors batch-stamp fetched_at in
+    run order (telegram, x, news, polymarket, reddit -- digest/main.py's
+    `_run`), that prefix cut always discards the LAST collectors first: the
+    exact windows fat enough to trip the byte cap were the ones where the
+    quota's balance got chopped from the reddit/news end. This function
+    closes that gap by shrinking the ALLOCATION BUDGET instead of the list's
+    tail: when the allocated batch doesn't fit, it re-allocates at a smaller
+    budget (proportionally scaled quotas -- see allocate_by_source), so
+    every lane gives up items in its quota's own ratio rather than the last
+    collectors giving up everything.
+
+    Search strategy: the first over-budget miss reuses select_items_for_
+    prompt's binary search to learn HOW MANY items actually fit (the longest
+    fitting prefix's length is a solid byte-informed estimate of the right
+    budget, at O(log n) build_prompt calls), re-allocates at that budget,
+    then walks down by ~10% steps for the rare case where the balanced batch
+    at that count is byte-heavier than the prefix was (different items, so
+    the fit isn't guaranteed transferable). Floors at a 1-item budget,
+    returned even if it somehow doesn't fit -- the same floor
+    select_items_for_prompt itself guarantees, for the same reason.
+
+    Like both parents: a pure filter of `pool`, order preserved, so the
+    summarized set and create_digest's stamped set stay identical by
+    construction.
+    """
+    items = allocate_by_source(pool, budget, positions_channels)
+
+    def _fits(candidate: list[Item]) -> bool:
+        built = build_prompt(candidate, failed_sources, recent_coverage, recent_arcs)
+        return len(built.encode("utf-8")) <= max_prompt_bytes
+
+    if _fits(items):
+        return items
+
+    # Byte-informed budget estimate: how many of THESE items fit as a
+    # prefix. The re-allocated batch at this budget usually fits too, since
+    # it has the same count drawn from the same pool.
+    fitted_budget = len(
+        select_items_for_prompt(
+            items, failed_sources, recent_coverage, max_prompt_bytes, recent_arcs=recent_arcs
+        )
+    )
+    while True:
+        candidate = allocate_by_source(pool, fitted_budget, positions_channels)
+        if _fits(candidate) or fitted_budget <= 1:
+            return candidate
+        fitted_budget = max(1, int(fitted_budget * 0.9))
 
 
 # The fixed, content-free marker run_claude checks a non-zero exit's stdout

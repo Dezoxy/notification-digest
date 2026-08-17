@@ -23,6 +23,7 @@ from digest.summarize import (
     format_recent_coverage,
     renumber_citations,
     run_claude,
+    select_balanced_items_for_prompt,
     select_items_for_prompt,
     strip_tldr_citations,
     summarize,
@@ -2315,6 +2316,81 @@ def test_allocate_by_source_without_positions_config_treats_channels_as_telegram
     # No positions channels configured -> plain telegram items; underfull
     # window passes through untouched either way.
     assert allocate_by_source(items, 250) is items
+
+
+def test_allocate_by_source_reduced_budget_scales_quotas_proportionally():
+    # A shrunk budget (select_balanced_items_for_prompt's byte-cap path)
+    # must keep the editorial mix, not hand the whole reduced budget to
+    # whichever lane was encountered first in the item list.
+    items = (
+        [_lane_item("telegram", i) for i in range(300)]
+        + [_lane_item("x", i) for i in range(200)]
+        + [_lane_item("news", i) for i in range(200)]
+    )
+
+    result = allocate_by_source(items, 100)
+
+    by_source: dict[str, int] = {}
+    for item in result:
+        by_source[item.source] = by_source.get(item.source, 0) + 1
+    assert len(result) == 100
+    # Quotas news 60 / telegram 55 / x 55 scale to ~24/22/22 at budget 100,
+    # then redistribution round-robins the remainder -- every lane must land
+    # well clear of both starvation and domination.
+    assert all(by_source[s] >= 20 for s in ("telegram", "x", "news"))
+    assert all(by_source[s] <= 45 for s in ("telegram", "x", "news"))
+
+
+def test_select_balanced_items_for_prompt_returns_allocation_when_it_fits():
+    items = [_lane_item("telegram", i) for i in range(10)]
+
+    result = select_balanced_items_for_prompt(
+        items, 250, (), [], "(no prior briefings in the last 24 hours)", 10_000_000
+    )
+
+    assert result == items
+
+
+def test_select_balanced_items_for_prompt_shrinks_by_reallocating_not_tail_chopping():
+    # Fat window: every lane has items, and the byte cap forces a shrink.
+    # The old prefix-chop would drop the x lane (batch-stamped last)
+    # entirely; the balanced shrink must keep every lane represented.
+    items = [
+        dataclasses.replace(_lane_item("telegram", i), text="t" * 1500) for i in range(120)
+    ] + [dataclasses.replace(_lane_item("x", i), text="x" * 1500) for i in range(120)]
+
+    # A cap that fits roughly half the batch.
+    cap = len(
+        build_prompt(items[:120], [], "(no prior briefings in the last 24 hours)").encode()
+    )
+    result = select_balanced_items_for_prompt(
+        items, 240, (), [], "(no prior briefings in the last 24 hours)", cap
+    )
+
+    by_source: dict[str, int] = {}
+    for item in result:
+        by_source[item.source] = by_source.get(item.source, 0) + 1
+    assert 0 < len(result) < 240
+    # Both lanes survive the shrink -- the tail-chop bug would have left
+    # by_source == {"telegram": ~120} with x wiped out.
+    assert by_source.get("x", 0) > 0
+    assert by_source.get("telegram", 0) > 0
+    # And the result actually fits the cap.
+    built = build_prompt(result, [], "(no prior briefings in the last 24 hours)")
+    assert len(built.encode()) <= cap
+
+
+def test_select_balanced_items_for_prompt_one_item_floor():
+    # Even a pathologically small cap returns at least one item rather than
+    # looping forever or returning nothing -- same floor contract as
+    # select_items_for_prompt.
+    items = [_lane_item("telegram", i) for i in range(300)]
+
+    result = select_balanced_items_for_prompt(
+        items, 250, (), [], "(no prior briefings in the last 24 hours)", 1
+    )
+
+    assert len(result) == 1
 
 
 # --- format_recent_arcs (the {{RECENT_ARCS}} prompt block, stable-arc-keys feature) ---
