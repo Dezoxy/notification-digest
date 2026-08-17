@@ -2169,6 +2169,58 @@ def prune_delivered_items(
         raise
 
 
+# How long an item that never made it into any digest is kept before
+# prune_stale_unsummarized deletes it. 14 days is ~56 window runs at the
+# 6-hourly cadence -- if an item hasn't been selected by then, it never
+# will be: the drain loop (digest/main.py's _MAX_ITEMS_PER_DIGEST comment)
+# retries oldest-first every run, so anything still unstamped after two
+# weeks is structurally unselectable overflow (a lane persistently past its
+# quota -- most plausibly the hard-capped "positions" lane during a channel
+# flood -- or byte-shrink casualties), not backlog that is still draining.
+# Deliberately much shorter than _ITEMS_PRUNE_DAYS (90): a DELIVERED item's
+# row backs rendered citations for pending resends, so it earns a long
+# retention; an unstamped row backs nothing at all.
+_STALE_UNSUMMARIZED_PRUNE_DAYS = 14
+
+
+def prune_stale_unsummarized(conn: sqlite3.Connection) -> int:
+    """Delete unsummarized items older than _STALE_UNSUMMARIZED_PRUNE_DAYS. Returns count deleted.
+
+    Companion to prune_delivered_items (below), covering the rows that
+    function can NEVER touch: its `digest_id IS NOT NULL` guard is
+    load-bearing (delivered items back pending resends), which means an
+    item that never gets selected for a digest -- quota-lane overflow that
+    outpaces the drain loop, or a byte-shrink casualty -- lived in `items`
+    FOREVER before this function existed, growing both the table and
+    get_unsummarized_items' candidate-pool reads without bound.
+
+    This is a deliberate, narrow relaxation of the "never lose items"
+    posture: what is lost is only material the selection layer has already
+    passed over ~56 consecutive times (see the constant's comment), i.e.
+    content that was never going to reach the reader anyway -- the deletion
+    just makes the already-true editorial outcome durable. Idempotency is
+    unaffected: the UNIQUE(source, source_id) dedup key rows these carry
+    are past every collector's lookback/cursor horizon at 14 days, so a
+    pruned row can't be re-offered and re-inserted by a later run.
+
+    Same standalone-transaction shape as prune_delivered_items, same
+    lexicographic ISO-8601 cutoff comparison (see that function's docstring
+    for why both are safe), called right beside it from digest/main.py's
+    `_run` after delivery.
+    """
+    cutoff = (datetime.now(UTC) - timedelta(days=_STALE_UNSUMMARIZED_PRUNE_DAYS)).isoformat()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM items WHERE fetched_at < ? AND digest_id IS NULL", (cutoff,))
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
     """Flip a digest's email_sent flag to 1 after SMTP confirms delivery."""
     conn.execute("UPDATE digests SET email_sent = 1 WHERE id = ?", (digest_id,))

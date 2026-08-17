@@ -32,6 +32,7 @@ from digest.state import (
     mark_digest_site_published,
     mark_digest_telegram_sent,
     prune_delivered_items,
+    prune_stale_unsummarized,
     write_arc_context,
     write_arc_keys,
     write_deltas,
@@ -2068,6 +2069,45 @@ def test_prune_delivered_items_keeps_fresh_rows_even_if_fully_delivered(conn):
     deleted = prune_delivered_items(
         conn, email_enabled=True, site_enabled=True, telegram_enabled=True
     )
+
+    assert deleted == 0
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+# --- prune_stale_unsummarized ---
+
+
+def test_prune_stale_unsummarized_deletes_old_never_selected_rows(conn):
+    stale = (datetime.now(UTC) - timedelta(days=15)).isoformat()
+    _insert_item_row(conn, "1", fetched_at=stale, digest_id=None)
+
+    deleted = prune_stale_unsummarized(conn)
+
+    assert deleted == 1
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+
+def test_prune_stale_unsummarized_keeps_recent_backlog(conn):
+    # 13 days old: still inside the retention window -- genuine backlog that
+    # the drain loop may yet select.
+    recent = (datetime.now(UTC) - timedelta(days=13)).isoformat()
+    _insert_item_row(conn, "1", fetched_at=recent, digest_id=None)
+
+    deleted = prune_stale_unsummarized(conn)
+
+    assert deleted == 0
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+def test_prune_stale_unsummarized_never_touches_delivered_rows(conn):
+    # A stamped row -- however old -- is prune_delivered_items' territory:
+    # it backs citation rendering for pending resends and has its own,
+    # longer retention rule.
+    ancient = (datetime.now(UTC) - timedelta(days=400)).isoformat()
+    digest_id = _digest_row(conn, "done", email_sent=1, site_published=1, telegram_sent=1)
+    _insert_item_row(conn, "1", fetched_at=ancient, digest_id=digest_id)
+
+    deleted = prune_stale_unsummarized(conn)
 
     assert deleted == 0
     assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
