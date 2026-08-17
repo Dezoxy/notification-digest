@@ -67,9 +67,9 @@ out, nothing to add."
 ## What to do, per story
 
 For each `## ` arc section in the draft — the real story sections, not
-`## Also today` or `## Hungary` (light-touch those only if your budget
-allows; they do not need their own search) — decide whether it is worth
-checking, then, if so:
+`## Also today` (light-touch that one only if your budget allows; it does
+not need its own search) — decide whether it is worth checking, then, if
+so:
 
 1. **Search for independent coverage** of the story's central claim(s).
    Judge "independent" by REPORTING ORIGIN, not by outlet count: a dozen
@@ -144,8 +144,8 @@ digits right.
 - Keep every `## ` section from the draft, in the same order, under the
   same headings, with the same prose EXCEPT where a correction or a
   narrowly-scoped gap-fill applies.
-- Keep `## Also today` and `## Hungary` (if the draft has them) as-is unless
-  you specifically checked and corrected something in them.
+- Keep `## Also today` (if the draft has it) as-is unless you specifically
+  checked and corrected something in it.
 - **Closing — `## Verification notes`:** a new section, after every other
   section, before the closing italic line. One short line per story you
   actually checked, in the SAME order the sections above appear, each

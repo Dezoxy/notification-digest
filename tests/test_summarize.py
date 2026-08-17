@@ -2070,24 +2070,28 @@ def test_format_recent_coverage_newest_digest_first():
     assert result == "- 2h ago: Newer story\n- 6h ago: Older story"
 
 
-def test_format_recent_coverage_skips_positions_and_hungary_standing_headings():
-    # Standing sections appear every window BY RULE -- replaying them into
-    # {{RECENT_COVERAGE}} would tell the model its own standing section is
-    # "already covered" and invite the delta-compression the standing rules
-    # explicitly exempt them from.
+def test_format_recent_coverage_keeps_story_titled_standing_coverage_headings():
+    # The portfolio/Hungarian standing-coverage rules are STORY-FIRST
+    # (prompts/digest.md): their sections carry ordinary story headings, so
+    # they participate in the "Recently covered" delta rule like any story
+    # -- the reader wants what's NEW from those lanes each window, and
+    # coverage suppression is exactly the mechanism that delivers that.
+    # Only the "Needs attention" routing label is skipped.
     now = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
     digests = [
         _digest(
             "2026-07-29T10:00:00+00:00",
-            "## Positions\n- holdings news\n\n## Hungary\n- HU news\n\n## A real story\n- text\n",
+            "## Needs attention\n- ping\n\n"
+            "## Oma finishes the audit\n- FET news\n\n"
+            "## Twelve killed on the M3\n- HU news\n",
         )
     ]
 
     result = format_recent_coverage(digests, now)
 
-    assert result == "- 2h ago: A real story"
-    assert "Positions" not in result
-    assert "Hungary" not in result
+    assert "Needs attention" not in result
+    assert "- 2h ago: Oma finishes the audit" in result
+    assert "- 2h ago: Twelve killed on the M3" in result
 
 
 def test_format_recent_coverage_skips_needs_attention_heading():

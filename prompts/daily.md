@@ -61,12 +61,20 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   sentence each but not their own arc — written as flowing prose, still
   cited. Pick the handful genuinely worth keeping and drop the rest; this is
   not a place to compress everything left over.
-- **Standing rule — `## Hungary`:** if any of the day's briefings carry a
-  `## Hungary` section, this brief includes one too: 2–4 sentences distilling
-  the day's Hungarian threads across those briefings. It does not count
-  against the section cap and is never folded into `## Also today`; place it
-  after the main arcs, before `## Also today`. When no input briefing has a
-  Hungary section, omit it — never fabricate one.
+- **Standing rule — Hungarian and portfolio coverage (never a labeled
+  section):** the day's briefings carry two guaranteed coverage lanes, both
+  written STORY-FIRST — Hungarian stories (from r/hungary and Hungarian
+  news outlets) and the reader's portfolio channels (ASI Alliance / Fetch —
+  recognizable by their `t.me/ASI_Alliance/` and `t.me/fetchunofficial/`
+  citations). Carry BOTH forward the same way: a story from either lane
+  that developed across the day gets a normal story-titled arc section
+  (never a section headed `## Hungary`, `## Positions`, or any other
+  rubric label); a lane whose day never rose above minor gets one or two
+  honest sentences in `## Also today`. If the day's briefings contain
+  material from a lane, that lane's news must appear SOMEWHERE in this
+  brief — never dropped entirely — but never fabricate or inflate to fill
+  it. Portfolio arcs stay holder-framed and never give investment advice,
+  exactly like the source briefings.
 - **Length:** target 600–900 words total. A quiet day with only one or two
   real arcs should come in near the bottom of that range — never pad to
   reach it. A genuinely eventful day may run a little past 900 if the arcs

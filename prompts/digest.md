@@ -136,52 +136,56 @@ items show the earlier position, and never add consequences the items do
 not state. This is a weighting rule, not a filter — it changes nothing
 about which items are in scope.
 
-## Standing rule: the Positions section
+## Standing rule: portfolio coverage (never a labeled section)
 
-The reader holds investments tracked through two Telegram channels:
-any item whose `url` begins with `https://t.me/ASI_Alliance/` or
-`https://t.me/fetchunofficial/`. These items NEVER appear in the general
-story sections above — they have a reserved section of their own.
+The reader holds investments tracked through two Telegram channels: any
+item whose `url` begins with `https://t.me/ASI_Alliance/` or
+`https://t.me/fetchunofficial/`.
 
-If ANY such item is in this window, the briefing MUST include a
-`## Positions` section. Write it for a holder, not a general reader:
-announcements and delivery milestones, tokenomics/governance/buyback
-developments, statements from the team, and shifts in what holders
-themselves are arguing — a quiet window is a valid summary ("quiet in the
-Fetch channels: mostly X"). Report what was said and by whom, with
-citations, at whatever length the window's actual developments earn (a
-paragraph is typical; a genuinely major development may take two). Never
-give investment advice, price predictions, or buy/sell framing — report,
-don't recommend. When there are zero such items in this window, omit the
-section entirely.
+When such items carry real news this window — announcements, delivery
+milestones, tokenomics/governance/buyback developments, team statements, a
+genuine shift in what holders are arguing — that story gets its own `## `
+section, STORY-TITLED like every other section (`## Oma finishes the audit
+and holders want the buyback`, never `## Positions`, `## Fetch`, or any
+other portfolio/rubric label — the reader must not be able to tell from
+the heading that this section exists by standing rule). Write it for a
+holder: what was said, by whom, with citations. Never give investment
+advice, price predictions, or buy/sell framing — report, don't recommend.
 
-This section is exempt from the normal editorial rules that shape every
-other section: it does NOT count against the section budget below, it must
-NEVER be folded into `## Also this window`, and the "Recently covered"
-delta rule does NOT apply to it — cover the window's channel activity in
-full every time, even when yesterday's briefing covered the same
-storyline. It is a standing rubric, not a story: it gets NO story-arc key.
-Place it after the main story sections, before `## Hungary`.
+GUARANTEED PRESENCE: if ANY such item is in this window, its news must
+appear somewhere — a real development earns a section as above; a quiet
+window earns one honest sentence in `## Also this window` ("quiet in the
+Fetch channels: mostly price chatter"). Never drop this coverage entirely
+while qualifying items exist.
 
-## Standing rule: the Hungary section
+These sections are otherwise ordinary: they count against the section
+budget, they take normal story-arc keys, and the "Recently covered" delta
+rule applies to them exactly like any story — the reader wants the LATEST
+from these channels each window, which is precisely what delta-only
+treatment delivers, not a re-explanation of the storyline every 6 hours.
+Place portfolio sections after the general story sections they'd otherwise
+interleave with, unless one is genuinely the window's biggest story.
 
-If ANY item in this window has a `chat_title` of exactly `r/hungary`, OR is
-a `news` item whose `url` is on `telex.hu` or `portfolio.hu`, the briefing
-MUST include a `## Hungary` section — regardless of whether anything major
-happened. Write 2–5 sentences summarizing that window's Hungarian
-news/discussions from those items, leading with real news over forum
-chatter when both exist; a quiet window is a valid summary ("quiet day in
-Hungarian threads: mostly X") — never skip the section just because nothing
-significant occurred, and never fabricate content to fill it. A Hungarian
-story of genuinely international consequence may ALSO earn its own general
-section above; ordinary domestic news belongs only here. When there are
-zero qualifying items in this window, omit the section entirely.
+## Standing rule: Hungarian coverage (never a labeled section)
 
-This section is exempt from the normal editorial rules that shape every
-other section: it does NOT count against the section budget below, and
-it must NEVER be folded into `## Also this window` even if it would
-otherwise only earn a sentence or two. Place it after `## Positions`
-(when present) and before `## Also this window`.
+Hungarian material — any item with `chat_title` exactly `r/hungary`, or a
+`news` item whose `url` is on `telex.hu` or `portfolio.hu` — is covered
+STORY-FIRST, exactly like everything else: a significant Hungarian story
+gets its own story-titled `## ` section (`## Twelve killed in a bus crash
+on the M3`, never `## Hungary` as a heading). Lead with real news over
+forum chatter when both exist. A Hungarian story of international
+consequence is simply a general section like any other.
+
+GUARANTEED PRESENCE: if ANY qualifying Hungarian item is in this window,
+Hungarian coverage must appear somewhere — significant stories as their own
+sections; on a window where nothing rose to that level, one or two honest
+sentences in `## Also this window` ("quiet day in Hungarian threads:
+mostly X"). Never fabricate content to fill the guarantee, and never drop
+Hungarian coverage entirely while qualifying items exist.
+
+These sections are otherwise ordinary: they count against the section
+budget, take normal story-arc keys, and follow the "Recently covered"
+delta rule like any story.
 
 ## Output contract
 
@@ -213,9 +217,8 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   central-bank chief on rates, a regulator on a rule it enforces, a
   government on a policy it sets, a company on its own product — outranks
   any amount of third-party commentary on the same topic.
-- **Section budget:** at most about 10 `## ` sections (not counting the
-  standing `## Positions` and `## Hungary` sections — see their own rules
-  above). Anything that would only earn one or two sentences must NOT
+- **Section budget:** at most about 10 `## ` sections.
+  Anything that would only earn one or two sentences must NOT
   get its own heading — fold every such minor item into a single final
   `## Also this window` section instead, written as flowing prose (still
   cited). This keeps headings meaningful on a phone. Before writing any
@@ -295,8 +298,7 @@ new items — and place those sentences in `## Also this window`, NOT under a
 heading of their own (see the section-budget rule above). Escape hatch: if
 the new development is BIGGER than what was covered, give it a full section
 again regardless — this list narrows what you repeat, it never caps what a
-story can grow into. The `## Positions` standing section is exempt from
-this rule entirely (see its own rule above).
+story can grow into.
 
 ## Story-arc keys — naming the story, not this run's angle on it
 
@@ -311,8 +313,9 @@ names the ONGOING STORY, not this run's headline: `hormuz`, `openai`,
 digits, and hyphens only, at most 48 characters, and must NEVER be derived
 from this run's heading wording — it names the story itself, which stays
 constant while the heading keeps changing. `## Also this window`,
-`## Positions`, `## Hungary`, `## Needs attention`, and any other
-structural/rubric section are not stories and get no key.
+`## Needs attention`, and any other structural/rubric section are not
+stories and get no key. Portfolio and Hungarian story sections (the two
+standing-coverage rules above) ARE stories and take keys normally.
 
 Check the "Recently used story-arc keys" list just below FIRST: if a section
 above continues one of those stories, REUSE THAT KEY VERBATIM — do not mint
@@ -336,8 +339,8 @@ order:
 
 1. **`arcs`** (stable-arc-keys, see the rule above): a JSON array with one
    entry per `## ` story section from the "Story-arc keys" rule above (never
-   for `## Also this window`, `## Positions`, `## Hungary`,
-   `## Needs attention`, or any other structural/rubric section): `{"heading": "<that section's exact ##
+   for `## Also this window`, `## Needs attention`, or any other
+   structural/rubric section): `{"heading": "<that section's exact ##
    heading text>", "key": "<stable arc key>"}`. If this window has no real
    `## ` story sections at all, omit this block entirely — never emit an
    empty array.
