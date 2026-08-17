@@ -45,14 +45,23 @@ from digest.state import (
 )
 
 # A Telegram TL;DR notification is a REAL-TIME ping, not an archive record --
-# announcing a stale digest is pure noise. 12h = 4 digest windows at the
-# 3-hourly cadence: generous for ordinary retry-after-a-failed-run catch-up,
+# announcing a stale digest is pure noise. 24h = 4 digest windows at the
+# 6-hourly cadence: generous for ordinary retry-after-a-failed-run catch-up,
 # far below "archive dump" territory. Site and email are deliberately NOT
 # windowed -- the site is an archive and SHOULD backfill every pending
 # digest regardless of age; only a live-ping channel needs this guard.
+#
+# Track the run interval if it changes: this was 12h while the timer ran
+# 3-hourly (homelab's myapps_digest_on_calendar). What the guard is really
+# sized for is "a few consecutive failed runs of catch-up" -- at 6h, holding
+# 12h would have cut that from ~3 retries to ~1. Widening the window does NOT
+# meaningfully weaken the flood protection this guard exists for: the bound
+# on a backlog blast is windows-admitted, not hours, and that is still 4 --
+# far below the ~20 sends that tripped Telegram's 429 in the incident. GUARD 2
+# (the per-run 429 circuit breaker) is the real backstop for the blast case.
 # Full incident story (why this exists at all):
 # docs/incidents/2026-08-06-telegram-flood.md
-_TELEGRAM_MAX_AGE = timedelta(hours=12)
+_TELEGRAM_MAX_AGE = timedelta(hours=24)
 
 logger = logging.getLogger(__name__)
 

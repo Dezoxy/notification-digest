@@ -64,12 +64,19 @@ _MIN_SECONDS_BETWEEN_SAME_HOST = 45
 # REPLACES cursors entirely (news has none, see `collect`'s docstring): the
 # items table's UNIQUE(source, source_id) + INSERT..ON CONFLICT DO NOTHING
 # (digest/state.py) is the idempotency layer, so an overlapping window
-# across runs costs nothing -- already-seen entries are just no-ops. A 12h
-# window is 4x the 3h run interval, which tolerates missed runs (a skipped
+# across runs costs nothing -- already-seen entries are just no-ops. A 24h
+# window is 4x the 6h run interval, which tolerates missed runs (a skipped
 # scheduled run, a redeploy window) and late-published entries (a feed that
 # backdates or slowly propagates) without ever needing to persist state.
 # Entries older than this are an accepted, permanent miss.
-_LOOKBACK_HOURS = 12
+#
+# Track the run interval if it changes: this was 12h while the timer ran
+# 3-hourly (homelab's myapps_digest_on_calendar). Keeping the 4x ratio, not
+# the absolute 12h, is what preserves the missed-run tolerance -- at 6h,
+# a 12h window would leave only 2 runs of slack. 24h also lines up with
+# reddit.py's own _LOOKBACK_HOURS, which is 24 for unrelated reasons
+# (Reddit's t=day window), so the two no-cursor collectors now agree.
+_LOOKBACK_HOURS = 24
 
 # Bounds per-feed work. The lookback window trims real feeds far below this
 # anyway -- this is a hard backstop against a misbehaving feed that returns

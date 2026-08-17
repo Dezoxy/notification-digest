@@ -36,10 +36,18 @@ live-ping channel a batch of old news to blast out in one run.
 Both live in `digest/deliver.py`.
 
 **GUARD 1 — freshness window** (`_TELEGRAM_MAX_AGE`, `_deliver_telegram`).
-A digest older than 12h (4 digest windows at the 3-hourly cadence) is never
+A digest older than 24h (4 digest windows at the 6-hourly cadence) is never
 sent to Telegram — it's marked `telegram_sent` directly, without calling
-`send_telegram_tldr`, and counts as done rather than failed. 12h is generous
+`send_telegram_tldr`, and counts as done rather than failed. 24h is generous
 for ordinary catch-up after a failed run, far below "archive-dump" territory.
+
+> The guard shipped as **12h**, which was 4 digest windows back when the
+> timer ran 3-hourly. It was widened to 24h when the homelab timer moved to
+> 6-hourly (`myapps_digest_on_calendar`), to hold that same 4-window
+> catch-up budget. The sizing rule is *windows*, not hours — re-derive it if
+> the cadence changes again. Note that the flood ceiling this guard imposes
+> is likewise measured in windows (still 4, still far below the ~20 sends
+> that tripped the 429), so widening the hours did not loosen it.
 
 **GUARD 2 — per-run 429 circuit breaker** (`TelegramRunState`,
 `_deliver_telegram`). The first 429 in a run flips a shared flag; every

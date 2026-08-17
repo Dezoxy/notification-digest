@@ -69,13 +69,13 @@ def _recent_created_at(hours_ago: float = 1) -> str:
     `datetime.now(UTC)` at call time, so a fixed literal would eventually
     age out of the window and start failing these tests for a reason that
     has nothing to do with the behavior under test. Default of 1 hour ago is
-    comfortably inside the 12h window.
+    comfortably inside the 24h window.
     """
     return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
 
 
-def _stale_created_at(hours_ago: float = 13) -> str:
-    """An ISO8601 UTC created_at `hours_ago` ago -- outside GUARD 1's 12h window by default."""
+def _stale_created_at(hours_ago: float = 25) -> str:
+    """An ISO8601 UTC created_at `hours_ago` ago -- outside GUARD 1's 24h window by default."""
     return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
 
 
@@ -1804,6 +1804,40 @@ def test_deliver_channels_telegram_freshness_window_still_sends_a_fresh_digest(
     assert telegram_calls == [digest_id]
     row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)
+
+
+def test_deliver_channels_telegram_freshness_window_sends_between_the_old_and_new_bound(
+    conn, monkeypatch
+):
+    """Pins `_TELEGRAM_MAX_AGE` at 24h specifically, not merely "some window".
+
+    18h ago is INSIDE the current 24h window but OUTSIDE the 12h one the
+    guard held while the timer ran 3-hourly. The two tests above both pass
+    at either value (1h is fresh under both, 25h is stale under both), so
+    without this one nothing in the suite would notice the window being
+    narrowed back to 12h -- which would silently drop the catch-up budget
+    from ~3 failed runs to ~1 at the 6-hourly cadence.
+    """
+    digest_id = create_digest(conn, "**TL;DR:** hi\n\n## Worth knowing\n\nstuff", [])
+
+    telegram_calls = []
+    monkeypatch.setattr(
+        deliver_mod, "send_telegram_tldr", lambda *a, **k: telegram_calls.append(a[0])
+    )
+
+    ok = deliver_channels(
+        conn,
+        _telegram_only_cfg(),
+        digest_id,
+        "**TL;DR:** hi\n\n## Worth knowing\n\nstuff",
+        1,
+        _recent_created_at(hours_ago=18),
+        _NO_CHANNELS_DONE,
+        _fresh_telegram_state(),
+    )
+
+    assert ok is True
+    assert telegram_calls == [digest_id]
 
 
 def test_deliver_incident_replay_stale_backlog_all_skip_telegram_only_fresh_one_sends(
