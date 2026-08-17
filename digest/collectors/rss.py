@@ -14,16 +14,18 @@ collection.
 Failure semantics deliberately DIVERGE from telegram.py/x.py: those set
 `failed=True` on ANY per-chat/pagination hiccup, because a single Telegram
 chat or the one X notifications timeline failing is itself the whole
-signal. Here, `failed=True` only when EVERY configured feed failed (a total
-outage) -- a lone flaky publisher (dead DNS, a 500, a five-second timeout) is
-routine and expected across a curated feed list, and must not trip the ⚠
+signal. Here, `failed=True` only when a MAJORITY of configured feeds failed
+this run -- a lone flaky publisher (dead DNS, a 500, a five-second timeout)
+is routine and expected across a curated feed list, and must not trip the ⚠
 banner / non-zero exit / Loki alert for what is, in practice, background
-noise. See `collect`'s docstring for the exact rule.
+noise. See `collect`'s docstring for the exact rule and the `rss_health`
+log line that keeps sub-threshold rot visible.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 import time
@@ -100,6 +102,46 @@ _WHITESPACE_RE = re.compile(r"\s+")
 # to the next slash" so it stops cleanly before a `.rss`/`.json` suffix or a
 # sort segment glued on without a separating slash (e.g. `/r/hungary.rss`).
 _REDDIT_SUBREDDIT_PATH_RE = re.compile(r"/r/([A-Za-z0-9_]+)")
+
+# chat_title overrides keyed by feed HOST (exact hostname or a parent
+# domain -- `_feed_display_title` matches suffix-wise, so "bbc.co.uk"
+# covers "feeds.bbci.co.uk" via its own entry below). Purely MODEL-FACING
+# metadata: `chat_title` is the per-item source label the summarizer prompt
+# sees when weighing provenance -- it never appears in the briefing itself
+# (headings are story-titled by contract; sources surface only behind
+# citation links). Exists because several publishers ship <title> values
+# that are useless as a source identity -- live-verified 2026-08-17:
+# ft.com's world feed titles itself literally "World", telex.hu says
+# "Telex RSS: Legfrissebb", feedx.net (an AP mirror) needs to read as AP
+# since its entry links point at apnews.com. A feed whose host has no
+# entry here keeps its own <title>, which is fine for most publishers
+# ("The Verge", "Ars Technica", ...).
+_FEED_TITLE_OVERRIDES: dict[str, str] = {
+    "ft.com": "Financial Times",
+    "telex.hu": "Telex",
+    "portfolio.hu": "Portfolio",
+    "feedx.net": "Associated Press",
+    "bbci.co.uk": "BBC World",
+    "bbc.co.uk": "BBC World",
+    "aljazeera.com": "Al Jazeera",
+    "politico.eu": "POLITICO Europe",
+}
+
+
+def _feed_display_title(feed_url: str, feed_title: str | None) -> str | None:
+    """The chat_title for a non-reddit feed: a host-keyed override, else the feed's own title.
+
+    Matches `_FEED_TITLE_OVERRIDES` by exact hostname or any parent domain
+    (`www.ft.com` -> "ft.com" entry), so publisher CDN/subdomain choices
+    can't silently break an override.
+    """
+    host = urlsplit(feed_url).hostname
+    if host is not None:
+        host = host.lower()
+        for domain, title in _FEED_TITLE_OVERRIDES.items():
+            if host == domain or host.endswith("." + domain):
+                return title
+    return feed_title
 
 
 def _clean_summary(raw_summary: str | None) -> str:
@@ -210,7 +252,10 @@ def _entries_from_feed(parsed: Any, feed_url: str) -> list[Item]:
     """
     feed_title = parsed.feed.get("title")
     feed_title = feed_title if isinstance(feed_title, str) and feed_title else None
-    chat_title = _reddit_chat_title(feed_url, feed_title)
+    # Reddit's `r/<sub>` derivation wins for reddit hosts (it is load-bearing
+    # for the Hungarian-coverage rule's r/hungary match); every other host
+    # goes through the display-title override map.
+    chat_title = _reddit_chat_title(feed_url, _feed_display_title(feed_url, feed_title))
     fetched_at = datetime.now(UTC).isoformat()
     cutoff = datetime.now(UTC).timestamp() - _LOOKBACK_HOURS * 3600
 
@@ -301,14 +346,21 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
     but entry CONTENT is never logged) and skipped; the rest of the run
     proceeds normally.
 
-    `failed=True` on the result ONLY when feeds were configured and EVERY
-    single one of them failed -- i.e. a total outage. This deliberately
-    DIVERGES from telegram.py/x.py's per-chat/pagination failure semantics
-    (see module docstring): a curated feed list realistically has an
-    occasionally-flaky publisher in it at any given time, and that must not
-    trip the digest's ⚠ collection-failed banner, non-zero exit, or Loki
-    alert -- those are reserved for "the news source is unusable this run",
-    not "one of N feeds hiccupped".
+    `failed=True` on the result when feeds were configured and a MAJORITY
+    of them failed this run (strictly more failures than successes --
+    which subsumes the original every-feed-failed total-outage rule). This
+    deliberately DIVERGES from telegram.py/x.py's per-chat/pagination
+    failure semantics (see module docstring): a curated feed list
+    realistically has an occasionally-flaky publisher in it at any given
+    time, and that must not trip the digest's ⚠ collection-failed banner,
+    non-zero exit, or Loki alert. The majority threshold (rather than the
+    original ALL-failed rule) exists because the list grew from 8 niche
+    AI/robotics feeds to 15 desks the briefing structurally depends on
+    (world wires, Hungary, business): with ALL-failed semantics, 14 of 15
+    feeds could die and the run would still report healthy, the briefing
+    just quietly gutted. Every run also emits one `rss_health` log line
+    with the ok/failed counts, so a Loki query can watch per-feed rot long
+    before it crosses the majority threshold.
 
     Entries are yielded newest-first per feed (feedparser's own entry order),
     capped at `_MAX_ENTRIES_PER_FEED`, with `chat_title` set to the feed's
@@ -334,6 +386,7 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
         return result
 
     succeeded = 0
+    failed_count = 0
     last_fetch_monotonic: dict[str, float] = {}
     for feed_url in feed_urls:
         host = urlsplit(feed_url).hostname
@@ -349,12 +402,21 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
             items = _fetch_and_parse_one_feed(feed_url)
         except Exception as exc:
             logger.warning("rss feed failed: %s (%s)", feed_url, type(exc).__name__)
+            failed_count += 1
             continue
 
         succeeded += 1
         result.items.extend(items)
 
-    if succeeded == 0:
+    # Loki-queryable per-run feed health -- the per-feed WARNING lines above
+    # name WHICH feed failed; this line is what lets a query watch the
+    # ok/failed ratio over time without a log dive.
+    logger.info(
+        "rss_health %s",
+        json.dumps({"feeds_ok": succeeded, "feeds_failed": failed_count}, sort_keys=True),
+    )
+
+    if failed_count > succeeded:
         result.failed = True
 
     return result
