@@ -183,7 +183,7 @@ _BASE_URL = "https://old.reddit.com"
 # Courtesy pacing between per-subreddit requests. Logged-in old.reddit.com's
 # own rate limits are undocumented/unproven for this cookie-session path
 # (unlike the now-dead OAuth grant's documented 100 req/min) -- 2s across a
-# handful of subreddits once every 3 hours is free insurance, and this
+# handful of subreddits once every 6 hours is free insurance, and this
 # collector must err polite given the account-risk posture (module
 # docstring's "Auth back-off mid-run" section).
 _INTER_SUB_SLEEP_SECONDS = 2.0

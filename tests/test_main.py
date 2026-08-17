@@ -2886,7 +2886,7 @@ def _window_digest(conn, body_md: str, item_count: int, created_at: str) -> int:
     stamped item URLs and the real item_count column back off the digests
     table (via get_window_digests_since / get_digest_item_urls) -- so these
     tests need genuine window digests, not hand-inserted rows missing that
-    data. All three channel flags are marked done (as if a prior 3-hourly
+    data. All three channel flags are marked done (as if a prior 6-hourly
     run already delivered it) so run_daily's own `_deliver_pending` pass
     finds nothing left to retry for it -- isolating these tests to run_daily's
     OWN fresh daily-digest delivery, which is what they're checking.

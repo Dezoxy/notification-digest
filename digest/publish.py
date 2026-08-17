@@ -71,9 +71,10 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 # files is a straight read-down, not a hunt:
 #
 # - "Also this window" -- prompts/digest.md's fixed second-tier section.
-#   The highest-frequency one by far: window digests run every 3 hours, so
-#   a false arc here reaches "×5 this week" within a day (owner-reported,
-#   2026-08-10).
+#   The highest-frequency one by far: window digests run every 6 hours, so
+#   a false arc here reaches "×5 this week" in a bit over a day -- 4 runs a
+#   day, so 5 repeats lands early on day two (owner-reported 2026-08-10,
+#   when the timer was 3-hourly and the same arc got there within a day).
 # - "Also today" -- prompts/daily.md's fixed second-tier section, present
 #   in nearly every daily brief by construction.
 # - "Also this week" -- prompts/weekly.md's fixed second-tier section, the

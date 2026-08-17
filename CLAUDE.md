@@ -1,11 +1,20 @@
 # digest
 
-Personal notification-digest service. Every 3 hours it collects new items from
+Personal notification-digest service. Every 6 hours it collects new items from
 the owner's own Telegram groups (Telethon, MTProto user session) and own
 X/Twitter notifications (twikit, cookie session, unofficial API — ToS risk
-accepted by the owner), tracks state in SQLite, summarizes new items with the
-Claude CLI headless (`claude -p`), and emails a structured HTML digest with
-deep links. See PLAN.md for the full plan and current phase status.
+accepted by the owner), plus RSS/Reddit/Polymarket collectors, tracks state in
+SQLite, summarizes new items with the Claude CLI headless (`claude -p`), and
+delivers a structured digest with deep links. See PLAN.md for the full plan and
+current phase status.
+
+Delivery is multi-channel (PR #25). On the real VM the live channels are a
+**Telegram TL;DR ping** and the **news site**; **email is disabled**
+(`myapps_digest_email_enabled: false` in the homelab host_vars). Email is still
+fully implemented and remains the role DEFAULT, so a host that never configures
+the other two keeps working — the app refuses to start with every channel
+disabled. Don't describe this service as "emails a digest": that stopped being
+true at the multi-channel cutover.
 
 ## Conventions
 

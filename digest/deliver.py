@@ -5,7 +5,7 @@ Owns getting an already-recorded digest out the door across its three
 channels (email, site, Telegram) -- summarizing and durably persisting a
 digest in the first place is main.py's job (see its `_deliver`/`run_daily`),
 this module only ever operates on a `digest_id` that already exists in the
-`digests` table. main.py's two run modes (`_deliver` for the 3-hourly window
+`digests` table. main.py's two run modes (`_deliver` for the 6-hourly window
 cycle, `run_daily` for the once-a-day brief) both compose `deliver_pending`
 and `deliver_channels` from here after producing a digest, threading their
 own `TelegramRunState` instance through both calls in the same run (see that
@@ -687,7 +687,7 @@ def deliver_pending(
 ) -> bool:
     """Retry channel delivery for every pending digest (any kind), oldest first.
 
-    Shared by `_deliver` (the 3-hourly run's own pending-resend pass) and
+    Shared by `_deliver` (the 6-hourly run's own pending-resend pass) and
     `run_daily` (so a daily brief left partially delivered by a previous
     day's run gets retried before today's new brief is even summarized) --
     extracted specifically so this retry logic has exactly one

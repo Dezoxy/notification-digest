@@ -196,7 +196,7 @@ def generate_arc_context(label: str, model: str, timeout_seconds: int) -> str | 
     was condensed from) gets stripped to plain text or defanged, exactly
     like an unrecognized citation in a digest body would be. This primer is
     generated once and stored/shipped forever, unlike a window digest that
-    gets a fresh allowlist every 3 hours -- there is no natural "recheck"
+    gets a fresh allowlist every 6 hours -- there is no natural "recheck"
     point later, so this is the one and only chance to neutralize a bad
     link before it becomes permanent, world-readable site content.
 

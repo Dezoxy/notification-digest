@@ -40,7 +40,7 @@ _TRUNCATION_MARKER = " …[truncated]"
 # 300_000 bytes is <= ~200k tokens even in the worst case and ~75k tokens
 # for a typical ASCII-heavy batch -- deliberately conservative on both ends,
 # since a shrunk prefix here just means the remainder drains on a later run
-# (the 3-hourly timer is the drain loop -- see _MAX_ITEMS_PER_DIGEST in
+# (the 6-hourly timer is the drain loop -- see _MAX_ITEMS_PER_DIGEST in
 # digest/main.py). Per-item text is already capped at _MAX_ITEM_TEXT_CHARS,
 # but _MAX_ITEMS_PER_DIGEST (digest/main.py) items of emoji/CJK-heavy source
 # text can still serialize to far more BYTES than a naive character count
@@ -682,12 +682,15 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 # format_recent_coverage caps the number of "recently covered" lines it will
 # ever render, regardless of how many digests or headings are available.
 # This is a hard ceiling on how much of the prompt budget the coverage block
-# can consume: at 24h of history and an 8-section-ish briefing every 3 hours,
-# a healthy run produces on the order of 8 runs * ~8 headings = ~64 candidate
-# lines even before the "Needs attention" skip -- close enough to this cap
-# that an unusually busy day (or a pathological run that somehow emits far
-# more headings than the prompt's own ~8-section budget asks for) could
-# otherwise make this block grow open-endedly every single run. 50 keeps the
+# can consume: at 24h of history and an 8-section-ish briefing every 6 hours,
+# a healthy run produces on the order of 4 runs * ~8 headings = ~32 candidate
+# lines even before the "Needs attention" skip -- comfortably under this cap.
+# It was NOT comfortable while the timer ran 3-hourly: the same math gave
+# 8 runs * ~8 = ~64, which pressed against the cap on any ordinary day. The
+# cap deliberately stays 50 anyway, because what it defends against did not
+# get any rarer with the cadence -- an unusually busy day, or a pathological
+# run that emits far more headings than the prompt's own ~8-section budget
+# asks for, could still make this block grow open-endedly. 50 keeps the
 # coverage block bounded and cheap relative to _MAX_PROMPT_BYTES's other
 # consumers (items, collector status) without needing to special-case why a
 # particular day's history was unusually large.
@@ -799,7 +802,7 @@ def format_recent_coverage(digests: list[tuple[str, str]], now: datetime) -> str
 
     This is the "running story memory" feature: without it, the summarizer
     has zero awareness of what a previous digest already told the reader,
-    and re-explains the same story in full every 3 hours. `digests` is the
+    and re-explains the same story in full every 6 hours. `digests` is the
     output of digest/state.py's get_recent_digests -- (created_at, body_md)
     pairs for every digest created in roughly the last 24 hours, newest
     first, INCLUDING unsent ones (see that function's docstring for why

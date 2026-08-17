@@ -2,11 +2,13 @@
 
 A personal notification-digest service. It collects new messages from the
 owner's own Telegram groups and new notifications from the owner's own
-X/Twitter account, summarizes what's new with Claude, and emails a single
-HTML digest every few hours. Telegram collection uses the official MTProto
-API (Telethon). X collection uses `twikit`, an unofficial scraper driven by a
-cookie session — this carries ToS and account-ban risk, which the owner has
-explicitly accepted.
+X/Twitter account, summarizes what's new with Claude, and delivers a single
+digest every six hours. Delivery is multi-channel: a Telegram TL;DR ping and
+a published news-site entry are the live channels, and email — the original
+and still-implemented channel — is disabled on the owner's deployment.
+Telegram collection uses the official MTProto API (Telethon). X collection
+uses `twikit`, an unofficial scraper driven by a cookie session — this
+carries ToS and account-ban risk, which the owner has explicitly accepted.
 
 ## Architecture
 

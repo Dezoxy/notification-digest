@@ -345,7 +345,7 @@ def test_derive_topics_excludes_structural_rubric_headings():
 def test_derive_topics_excludes_also_this_window_the_window_prompt_rubric():
     # Regression, owner-reported 2026-08-10: the site rendered a live
     # "ALSO THIS WINDOW ×5 THIS WEEK" story-arc chip. Window digests run
-    # every 3 hours, so this rubric recurs faster than any real story and
+    # every 6 hours, so this rubric recurs faster than any real story and
     # was the most visible false arc of the set. Called out on its own
     # (rather than only inside the union above) because the window prompt
     # is the highest-frequency producer in the system.

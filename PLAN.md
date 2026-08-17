@@ -4,17 +4,17 @@
 
 ## 1. Goal & constraints
 
-- Personal notification-digest service: scrape own Telegram group notifications and own X/Twitter notifications, summarize new items every 3 hours with Claude, email an HTML digest.
+- Personal notification-digest service: scrape own Telegram group notifications and own X/Twitter notifications, summarize new items every 6 hours with Claude, deliver the digest. Delivery was email-only at inception; since the multi-channel cutover (§ PR #25) the live channels on the real VM are the Telegram TL;DR ping and the news site, with email implemented but disabled there.
 - Solo project, homelab-hosted (VM `01-myapps-vm`, Docker Compose), deployed via the existing Ansible `myapps` role in a separate repo — this repo is app source only.
 - No official API path exists for X notifications at acceptable cost; twikit (unofficial, cookie-based) is accepted with explicit ToS/ban risk and mitigations (§8).
-- Idempotent by design: a crashed run must never lose or duplicate items. Empty window → no email, no noise.
+- Idempotent by design: a crashed run must never lose or duplicate items. Empty window → nothing delivered on any channel, no noise.
 - Partial-failure-tolerant: one collector failing must not suppress the other collector's digest — send what was collected with a failure banner.
 - Secrets never committed; injected as env vars at deploy time from Azure Key Vault (`kv-homelab-prod-th`).
 
 ## 2. Architecture
 
 ```
-     systemd timer (OnCalendar=*/3h)          systemd timer (OnCalendar=daily)
+     systemd timer (OnCalendar=*/6h)          systemd timer (OnCalendar=daily)
      `docker compose run --rm digest`         `docker compose run --rm digest daily`
      window mode                              daily mode
                     │                                       │
@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS digests (
     telegram_sent   INTEGER NOT NULL DEFAULT 0,
     body_md         TEXT NOT NULL,                -- summarizer output; enables per-channel retry without re-summarizing
     body_md_hu      TEXT,                          -- optional Hungarian translation; NULL if disabled/failed
-    kind            TEXT NOT NULL DEFAULT 'window' -- 'window' (every-3h) or 'daily' (once-a-day synthesis)
+    kind            TEXT NOT NULL DEFAULT 'window' -- 'window' (every-6h) or 'daily' (once-a-day synthesis)
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -250,7 +250,7 @@ Idempotency contract:
 - **Auth:** the CLI authenticates via the owner's Claude Max subscription (one-time interactive `claude` login performed by the owner on the VM), not an API key. Its config/credentials dir is persisted in a volume (`/srv/appdata/digest/claude-home`), mounted into the container as the CLI's home/config dir — mirrors the existing T3MP3ST pattern on the same VM that persists an agent home at `/srv/appdata/agent`. No `ANTHROPIC_API_KEY` is set.
 - **Input:** `ANTHROPIC_MODEL` (default `claude-opus-5`), `CLAUDE_EFFORT` (default `high`), items JSON, collector failure flags (to inject the "⚠ X collection failed" banner context).
 - **Reasoning effort:** `claude -p` is invoked with an explicit `--effort` flag rather than the CLI's own default. An A/B on 50 real production items showed `high` produces materially better editorial judgment (tighter story clustering, output closer to the target length) than the CLI default, while `max` was near-identical output for 65% more wall-clock — so `high` is the chosen default, not `max`. Configurable via `CLAUDE_EFFORT` rather than hardcoded because the owner authenticates via a Max subscription (no per-token billing), so a higher effort's real cost is shared subscription usage limits, spent on 8 unattended runs/day forever — a knob the owner should control, not a fixed maximum.
-- **Bounds & continuity:** `main.py` caps a single run to `_MAX_ITEMS_PER_DIGEST` (200) unsummarized items, oldest first, before ever calling `summarize()` — the 3-hourly timer drains any remainder over later runs. `select_items_for_prompt` (in this module) then shrinks that list further, if needed, so the built prompt's UTF-8 byte length stays under `_MAX_PROMPT_BYTES` (300,000) — bytes, not characters, since CJK/emoji-heavy text can serialize to far more bytes than its character count suggests (see that function's own docstring for the binary-search mechanics). `format_recent_coverage` renders the last 24h of prior digests' own `## ` headings into the prompt's `{{RECENT_COVERAGE}}` block — a "running story memory" so the model writes delta-only updates for a still-developing story instead of re-explaining it every 3 hours (`main.py`'s `_RECENT_COVERAGE_WINDOW`).
+- **Bounds & continuity:** `main.py` caps a single run to `_MAX_ITEMS_PER_DIGEST` (200) unsummarized items, oldest first, before ever calling `summarize()` — the 6-hourly timer drains any remainder over later runs. `select_items_for_prompt` (in this module) then shrinks that list further, if needed, so the built prompt's UTF-8 byte length stays under `_MAX_PROMPT_BYTES` (300,000) — bytes, not characters, since CJK/emoji-heavy text can serialize to far more bytes than its character count suggests (see that function's own docstring for the binary-search mechanics). `format_recent_coverage` renders the last 24h of prior digests' own `## ` headings into the prompt's `{{RECENT_COVERAGE}}` block — a "running story memory" so the model writes delta-only updates for a still-developing story instead of re-explaining it every 6 hours (`main.py`'s `_RECENT_COVERAGE_WINDOW`).
 - **Output:** markdown string matching the BRIEFING contract (§5).
 - **Error handling:** non-zero exit / empty stdout from `claude -p` → treat as summarizer failure, do not send a garbage email; log and exit non-zero so systemd/journal record the failure (surfaces via Loki). No automatic retry within the run — next scheduled run picks up the same unsummarized items since `digest_id` was never assigned. A subscription session expiry/revocation fails the same way (non-zero exit → existing Loki alert); recovery is a manual re-login on the VM, not automated (§8).
 
@@ -349,7 +349,7 @@ The site and Telegram channels, both thin stdlib-urllib HTTP calls, kept in one 
 
 `prompts/digest.md` is a fixed template (no per-run templating engine — string substitution of the JSON items block is sufficient).
 
-**The problem the current (BRIEFING) contract solves:** the owner gets 50–100 items per 3h window from three structurally different kinds of source — news channels (self-contained events), discussion groups (conversations, e.g. a crypto group debating tokenomics in 30-char messages), and pure chatter (greetings, reactions, promo). An earlier flat bullet-list contract made him read everything to find what mattered; a single-narrative newsletter rewrite invented connections between unrelated stories that didn't exist. The current contract — validated live against 50 real items before being adopted — handles the three kinds differently instead of forcing one shape on all of them:
+**The problem the current (BRIEFING) contract solves:** the owner gets on the order of 100–200 items per 6h window (50–100 was the figure measured when this contract was validated, under the former 3-hourly timer — the count scales with the window, the contract's reasoning does not) from three structurally different kinds of source — news channels (self-contained events), discussion groups (conversations, e.g. a crypto group debating tokenomics in 30-char messages), and pure chatter (greetings, reactions, promo). An earlier flat bullet-list contract made him read everything to find what mattered; a single-narrative newsletter rewrite invented connections between unrelated stories that didn't exist. The current contract — validated live against 50 real items before being adopted — handles the three kinds differently instead of forcing one shape on all of them:
 
 - **Events** are clustered by STORY: every item about the same event, across every source, merges into one passage.
 - **Conversations** are characterized, not transcribed: what a group discussed, whether it reached a conclusion, anything worth knowing — never a message-by-message recap.
@@ -408,10 +408,10 @@ TimeoutStartSec=600
 ```ini
 # /etc/systemd/system/digest.timer
 [Unit]
-Description=Run digest every 3 hours
+Description=Run digest every 6 hours
 
 [Timer]
-OnCalendar=*-*-* 0/3:00:00
+OnCalendar=*-*-* 0/6:00:00
 RandomizedDelaySec=600
 Persistent=true
 Unit=digest.service
@@ -676,7 +676,7 @@ against real digests, which starts with the first 0.12.0 window run.
 Origin: Codex redesign brief for news.tomhorvath.me, triaged 2026-08-10.
 
 **What & why.** The delta-only reasoning lives in the WINDOW digest, not
-the daily: `prompts/digest.md` instructs each 3-hourly run to write repeat
+the daily: `prompts/digest.md` instructs each 6-hourly run to write repeat
 stories as deltas against `{{RECENT_COVERAGE}}`, rendered into the prompt
 by `digest/summarize.py`; the daily brief synthesizes `{{BRIEFINGS}}` and
 never sees `{{RECENT_COVERAGE}}` at all. "What changed" is already computed
@@ -767,7 +767,7 @@ briefing the owner reads himself; it will NOT catch a claim the whole web
 repeats wrongly — no verifier does. Cost: one extra Opus-class call per day
 plus a bounded handful of web operations; wall-clock on the daily run
 roughly doubles, which nothing depends on (the daily timer is independent
-of the 3-hourly one).
+of the 6-hourly one).
 
 **Guardrails:**
 - **Wall 1 — toolless summarizer.** Verification is a SEPARATE second

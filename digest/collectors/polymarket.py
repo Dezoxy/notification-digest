@@ -27,7 +27,7 @@ OBSERVED one:
 
 That last point is the crux of the design, not an oversight: if the anchor
 moved to `current` on every observation regardless of threshold, a slow,
-steady drift (say 5 percentage points per 3-hour run, forever) would never
+steady drift (say 5 percentage points per 6-hour run, forever) would never
 trip the threshold -- each step is individually too small, and the
 comparison base keeps sliding right along with the drift, so the gap between
 consecutive observations never grows. Anchoring at the last REPORTED value
