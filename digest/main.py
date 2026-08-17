@@ -70,8 +70,8 @@ from digest.weekly import summarize_weekly
 # {{RECENT_COVERAGE}} prompt block (digest/summarize.py's
 # format_recent_coverage) -- the "running story memory" that lets the
 # summarizer write delta-only updates for stories it already covered instead
-# of re-explaining them every 3 hours. 24 hours is a full day's worth of
-# briefings (8 runs at the 3-hourly cadence) -- long enough that a story
+# of re-explaining them every 6 hours. 24 hours is a full day's worth of
+# briefings (4 runs at the 6-hourly cadence) -- long enough that a story
 # spanning a slow news day is still recognized as "already covered" on its
 # second or third mention, short enough that genuinely stale coverage
 # eventually ages out and stops suppressing a fresh full write-up.
@@ -191,7 +191,7 @@ _VERIFY_UNAVAILABLE_BANNER = "⚠ verification unavailable this run\n\n"
 # no cap, the prompt for an accumulated backlog can exceed the model's
 # context window, and an oversized prompt then fails every subsequent run
 # forever (no items ever get stamped). The remainder ships in later runs:
-# the 3-hourly timer is the drain loop for a large backlog, at
+# the 6-hourly timer is the drain loop for a large backlog, at
 # _MAX_ITEMS_PER_DIGEST items per digest.
 _MAX_ITEMS_PER_DIGEST = 200
 
@@ -386,7 +386,7 @@ def _deliver(
     all_ok = all_ok and ok
 
     # One Opus call per run keeps cost and runtime bounded -- do NOT loop
-    # summarize here even if a remainder is left; the 3-hourly timer is the
+    # summarize here even if a remainder is left; the 6-hourly timer is the
     # drain loop that picks up the rest on its next invocation.
     remaining = count_unsummarized_items(conn)
     if remaining:
@@ -792,7 +792,7 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
 
     Invoked by `python -m digest daily` -- a SEPARATE systemd timer on the
     homelab side (not this repo, see CLAUDE.md's Deploy note) fires this once
-    a day, independently of the every-3-hours `python -m digest` timer that
+    a day, independently of the every-6-hours `python -m digest` timer that
     drives `_run`/`_deliver` above. Deliberately synchronous (plain `def`,
     no `asyncio.run` at the call site in `main()`): unlike `_run`, this mode
     never touches Telethon/twikit -- it only reads already-collected digests
@@ -813,7 +813,7 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
        (e.g. site published, Telegram 429'd) is retried before today's new
        brief is even summarized. This also opportunistically retries any
        still-pending WINDOW digest this run happens to see, which is
-       harmless (idempotent per channel) even though the every-3-hours job
+       harmless (idempotent per channel) even though the every-6-hours job
        already covers that case on its own schedule. Runs BEFORE step 2's
        duplicate-fire guard, and unconditionally of it (`force` never skips
        this step): a stuck partially-delivered brief must still be retried
@@ -1111,7 +1111,7 @@ def run_weekly(cfg: Config) -> bool:
 
     Invoked by `python -m digest weekly` -- a THIRD, separate systemd timer
     on the homelab side (not this repo, see CLAUDE.md's Deploy note) fires
-    this once a week, independently of both the every-3-hours `python -m
+    this once a week, independently of both the every-6-hours `python -m
     digest` timer (`_run`/`_deliver`) and the once-a-day `python -m digest
     daily` timer (`run_daily`). Deliberately synchronous (plain `def`, no
     `asyncio.run` at the call site in `main()`), for the identical reason
@@ -1317,7 +1317,7 @@ def main() -> None:
     # argv-based mode dispatch: `python -m digest daily` runs the once-a-day
     # brief (run_daily); `python -m digest weekly` runs the once-a-week
     # report (run_weekly); no argument (or anything else) keeps today's
-    # behavior exactly -- the every-3-hours collect+deliver cycle (_run),
+    # behavior exactly -- the every-6-hours collect+deliver cycle (_run),
     # unchanged. The scheduling itself (which timer fires which mode, and
     # when) lives entirely outside this repo (see CLAUDE.md's Deploy note);
     # this is just the dispatch a systemd unit's ExecStart invokes into.

@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS digests (
     telegram_sent   INTEGER NOT NULL DEFAULT 0,
     body_md         TEXT NOT NULL,
     body_md_hu      TEXT,
-    -- 'window' (the every-3-hours item digest, the only kind that ever
+    -- 'window' (the every-6-hours item digest, the only kind that ever
     -- existed before the daily-brief feature) or 'daily' (the once-a-day
     -- synthesis of a day's worth of window digests, digest/daily.py).
     -- DEFAULT 'window' means every pre-existing row -- every digest this
@@ -155,7 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
 
 # How long a polymarket_probs row survives without being observed again
 # before commit_new_items prunes it (see that function's docstring). 30 days
-# comfortably outlives this collector's 3-hourly run cadence many times
+# comfortably outlives this collector's 6-hourly run cadence many times
 # over, so only a market that has genuinely resolved/delisted/fallen out of
 # the top-N for a full month ages out -- not a market that merely missed a
 # handful of runs.
@@ -1262,7 +1262,7 @@ def create_digest(
     body_md was subject to, so there is nothing left for create_digest to
     check.
 
-    `kind` (keyword-only, default "window") distinguishes the every-3-hours
+    `kind` (keyword-only, default "window") distinguishes the every-6-hours
     item digest (the only kind that existed before the daily-brief feature)
     from a "daily" brief (digest/daily.py's `summarize_daily`, synthesized
     from a day's worth of window digests, never from raw items). Stored

@@ -8,7 +8,7 @@ a deliberately distinct type -- see its own module docstring -- and does not
 use this class.)
 
 `items` carries this run's new items in the normalized `Item` shape
-(`digest.state.Item`) -- what actually gets summarized and emailed.
+(`digest.state.Item`) -- what actually gets summarized and delivered.
 `cursor_updates` is keyed by `(source, scope)` (e.g. `("telegram",
 "<chat_id>")`, `("x", "notifications")`) -- `digest/main.py` merges every
 collector's dict together and persists it via `digest/state.py`'s

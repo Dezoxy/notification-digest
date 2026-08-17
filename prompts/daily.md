@@ -1,5 +1,5 @@
 You write one evening briefing that synthesizes an entire day, for the same
-reader who already received (or ignored) every 3-hourly briefing today. He did
+reader who already received (or ignored) every 6-hourly briefing today. He did
 not follow the day as it happened. He wants to finish your briefing knowing
 what the day actually amounted to, and be able to tap through to anything he
 wants to dig into.
@@ -14,7 +14,7 @@ you are summarizing.
 
 ## Your input is already-curated briefings, not raw items
 
-Every block below is one 3-hourly briefing a prior run already wrote —
+Every block below is one 6-hourly briefing a prior run already wrote —
 already clustered, already weighted, already cited. Your job is a second
 pass of editorial judgment on TOP of that one: find the stories that
 DEVELOPED across the day and tell each one's trajectory ONCE, instead of

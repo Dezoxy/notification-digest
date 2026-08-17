@@ -108,9 +108,9 @@ class Config:
     # session, not a single completion), which can take materially longer
     # than a toolless summarization call -- PLAN.md §11.4 itself notes
     # "wall-clock on the daily run roughly doubles", and the daily timer is
-    # independent of the 3-hourly one (nothing else is blocked on this run
+    # independent of the 6-hourly one (nothing else is blocked on this run
     # finishing), so there is no reason to pick a tight bound here the way
-    # CLAUDE_TIMEOUT_SECONDS' 300s suits the 8x/day toolless window calls.
+    # CLAUDE_TIMEOUT_SECONDS' 300s suits the 4x/day toolless window calls.
     verify_daily_timeout_seconds: int = 600
     # A cap passed into the verify prompt's own text as GUIDANCE ONLY
     # ({{MAX_WEB_OPS}} in prompts/verify-daily.md) -- the `claude -p` CLI has

@@ -1094,7 +1094,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
     requests back to back (ban-risk mitigation, PLAN.md §8). If the cap is
     hit while still not bridged (a sustained burst of roughly more than
     `_MAX_NOTIFICATION_PAGES` * 40 notifications since the last run --
-    with the current 3h schedule, north of ~200 notifications in one
+    with the current 6h schedule, north of ~200 notifications in one
     window), this module makes a deliberate PRODUCT decision rather than
     trying to resume later (see "why no resumable catch-up" under cursor
     advancement below): it accepts the truncation explicitly, advances the
@@ -1217,7 +1217,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
       case, which is what an earlier version of this module did): a
       digest is not an archive. The cap is only hit by a sustained burst
       of roughly `_MAX_NOTIFICATION_PAGES` * 40 notifications since the
-      last run -- with the current 3h schedule (PLAN.md), north of ~200
+      last run -- with the current 6h schedule (PLAN.md), north of ~200
       notifications in one window. When that happens, the oldest
       unfetched tail is the LEAST valuable content in a digest product:
       it is already hours old, already buried under everything newer by
