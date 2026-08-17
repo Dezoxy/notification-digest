@@ -21,13 +21,14 @@
  *   with `wrangler secret put`.
  *
  * Routes: URL grammar is /t/:token/(hu/)?(daily/|weekly/)?( | d/:id) plus
- * the standalone /t/:token/(hu/)?search and /t/:token/(hu/)?a/:slug
- * endpoints — the language segment always comes first, then either an
- * optional literal "daily/" or "weekly/" view segment, the literal "search"
- * endpoint, or the literal "a/:slug" arc-page endpoint (search and arc pages
- * have no daily/weekly/week variant of their own — both span the whole
- * archive, not one view). No view segment is the ALL view (every digest,
- * mixed).
+ * the standalone /t/:token/(hu/)?search, /t/:token/(hu/)?a/:slug, and
+ * /t/:token/(hu/)?about endpoints — the language segment always comes
+ * first, then either an optional literal "daily/" or "weekly/" view
+ * segment, the literal "search" endpoint, the literal "a/:slug" arc-page
+ * endpoint, or the literal "about" endpoint (search, arc, and about pages
+ * have no daily/weekly/week variant of their own — each spans, or stands
+ * outside, the whole archive rather than belonging to one view). No view
+ * segment is the ALL view (every digest, mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
  *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
  *   GET  /t/:token/               -> index (EN, all view), newest-first, grouped by day
@@ -46,6 +47,8 @@
  *   GET  /t/:token/hu/search      -> same search, Hungarian chrome
  *   GET  /t/:token/a/:slug        -> arc page (EN): every digest carrying that topic slug
  *   GET  /t/:token/hu/a/:slug     -> same arc page, Hungarian chrome
+ *   GET  /t/:token/about          -> about page (EN): static, no D1 query beyond the token check
+ *   GET  /t/:token/hu/about       -> same about page, Hungarian chrome
  *   anything else                 -> plain 404, wrong token included
  *
  * Story-arc pages (PLAN.md §11.1 PR A, this feature): a slug is the digest
@@ -304,6 +307,18 @@ export default {
     if (arcMatch && request.method === "GET") {
       const lang = arcMatch[2] ? "hu" : "en";
       return handleArcPage(env, arcMatch[1], arcMatch[3], url, lang);
+    }
+
+    // About page (static, no-JS, no D1 query beyond the token check): also
+    // standalone, same shape as search/arc just above — no daily/weekly/w/
+    // variant, since the about text doesn't depend on which view a reader
+    // came from. Reuses the exact same token-gate/404 contract as every
+    // other route here (see handleAboutPage) — a wrong token 404s
+    // byte-identically to a wrong token anywhere else.
+    const aboutMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?about$/);
+    if (aboutMatch && request.method === "GET") {
+      const lang = aboutMatch[2] ? "hu" : "en";
+      return handleAboutPage(env, aboutMatch[1], url, lang);
     }
 
     // Roadmap 3 (weekly pagination): one optional, always-LAST segment,
@@ -851,6 +866,17 @@ async function handleSearchPage(env, token, url, lang) {
   if (isFragment) return htmlResponse(renderSearchFragment(results, token, lang));
 
   return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang));
+}
+
+// About page: a short static page explaining what the site is, for the
+// friends the owner shares a capability link with — same token gate/404
+// contract as every other route (see the file-header comment), no D1 query
+// at all beyond that check. `url` is only used for the hostname (renderer
+// signature parity with the other simple pages, e.g. renderSearchPage), same
+// as handleSearchPage/handleArcPage.
+async function handleAboutPage(env, token, url, lang) {
+  if (!(await tokenMatches(env, token))) return notFound();
+  return htmlResponse(renderAboutPage(token, url.hostname, lang));
 }
 
 // Arc page (§11.1 PR A): reconstructs the full appearance chain for one arc
@@ -1950,6 +1976,24 @@ const STRINGS = {
     issueEdition: "No. {n}",
     issueEditionsToday: "{n} editions today",
     issueEditionsTodayOne: "{n} edition today",
+    // About page: a short static page explaining what the site is, for the
+    // friends the owner shares a capability link with (see
+    // renderAboutPage). aboutLabel does double duty as the page <title> and
+    // as the link text in the settings panel (renderSwitchers) — both
+    // surfaces want the exact same word, so one string covers both rather
+    // than two identical keys.
+    aboutLabel: "About",
+    aboutWhatTitle: "What this is",
+    aboutWhatBody:
+      "A private, automatically curated news briefing, built for a small circle the owner shares this link with. Every six hours, a pipeline pulls new items from the owner's own sources — their Telegram groups, their X/Twitter notifications, a set of curated news desks (world wire services and Hungarian outlets), Reddit, prediction markets, and Hacker News — and an AI editor summarizes and organizes them into a briefing. Every claim links back to the source it came from.",
+    aboutRhythmTitle: "The rhythm",
+    aboutRhythmBody:
+      "A window briefing lands four times a day, covering whatever's new since the last one. Every evening, a daily brief re-checks the day's stories against the open web and writes a verified summary. On Sundays, a weekly report ties the week together.",
+    aboutReadingTitle: "How to read it",
+    aboutReadingBody:
+      "Each briefing is organized under story headings. The small numbers next to a claim are citations — hover or tap one to see where it came from. Stories that keep developing get their own story-arc page, reachable from a “story so far” link, so you can catch up without re-reading every briefing. To read in Hungarian, use the EN/HU switcher in the settings menu.",
+    aboutCaveat:
+      "Everything on this site is written by an AI, working only from the sources listed above — it can misread a source or miss context. If something matters, follow the citation and check it yourself.",
   },
   hu: {
     locale: "hu-HU",
@@ -2073,6 +2117,21 @@ const STRINGS = {
     issueEdition: "{n}. szám",
     issueEditionsToday: "{n} kiadás ma",
     issueEditionsTodayOne: "{n} kiadás ma",
+    // Owner: please review — new HU strings, about page (this feature),
+    // mirror the EN block's pattern. Machine-drafted translation, not yet
+    // read by a native speaker.
+    aboutLabel: "Névjegy",
+    aboutWhatTitle: "Miről van szó",
+    aboutWhatBody:
+      "Ez egy privát, automatikusan összeállított hírösszefoglaló, egy szűk körnek, akikkel a tulajdonos megosztja ezt a linket. Hat óránként egy folyamat összegyűjti az újdonságokat a tulajdonos saját forrásaiból — Telegram-csoportjaiból, X/Twitter-értesítéseiből, egy válogatott hírforrás-készletből (nemzetközi hírügynökségek és magyar hírportálok), a Redditből, előrejelzési piacokról és a Hacker Newsból —, egy AI szerkesztő pedig összefoglalóvá szerkeszti és rendezi őket. Minden állítás visszalinkel a forrására.",
+    aboutRhythmTitle: "A ritmus",
+    aboutRhythmBody:
+      "Naponta négyszer érkezik egy ablak-összefoglaló, amely az előző óta történteket gyűjti össze. Minden este egy napi összefoglaló újra ellenőrzi a nap híreit a nyílt weben, és egy hitelesített összegzést ír. Vasárnaponként egy heti jelentés fogja össze a hetet.",
+    aboutReadingTitle: "Hogyan olvasd",
+    aboutReadingBody:
+      "Minden összefoglaló témák szerinti címsorok alá van rendezve. Az állítások melletti kis számok hivatkozások — vidd rájuk az egeret, vagy koppints rájuk, hogy lásd, honnan származnak. A tovább fejlődő történeteknek saját sztori-oldaluk van, egy „eddig történt” hivatkozással elérve, hogy ne kelljen minden korábbi összefoglalót újraolvasnod. Ha inkább magyarul olvasnál, használd az EN/HU váltót a beállítások menüben.",
+    aboutCaveat:
+      "Ezen az oldalon minden szöveget egy AI ír, kizárólag a fent felsorolt forrásokból dolgozva — előfordulhat, hogy félreért egy forrást, vagy kihagy egy összefüggést. Ha valami fontos, kövesd a hivatkozást, és nézd meg magad.",
   },
 };
 
@@ -2120,6 +2179,14 @@ function searchHref(token, lang) {
 function arcHref(token, lang, slug) {
   const langSeg = lang === "hu" ? "hu/" : "";
   return `/t/${encodeURIComponent(token)}/${langSeg}a/${esc(slug)}`;
+}
+
+// Like searchHref, to the about page — no `view` parameter either, same
+// reasoning: the about text doesn't belong to one view (see the file-header
+// comment).
+function aboutHref(token, lang) {
+  const langSeg = lang === "hu" ? "hu/" : "";
+  return `/t/${encodeURIComponent(token)}/${langSeg}about`;
 }
 
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
@@ -2235,13 +2302,22 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
     pageKind === "index"
       ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
       : "";
+  // About link (discoverability for friends the owner shares the capability
+  // link with): lives in this same settings panel, not a dedicated footer —
+  // the site has no <footer> element (chrome is masthead + this popover
+  // only, see pageChrome), and this panel is already the one place every
+  // page (index, digest, search, arc) renders identically, so one row here
+  // makes the link reachable everywhere, not just the index. A single link,
+  // no settingslabel column — .settingsrow's flex layout degrades cleanly
+  // to one child.
+  const aboutRow = `<div class="settingsrow"><a href="${aboutHref(token, lang)}">${esc(strings.aboutLabel)}</a></div>`;
   // The settings trigger is TEXT-ONLY on desktop and ICON-ONLY on the phone
   // (owner follow-up: no gear glyph next to the label; the phone button
   // matches the search icon's size). Both halves live in their own spans so
   // each breakpoint hides one — .gearicon desktop-hidden, .gearlabel
   // phone-hidden (see the CSS) — and the aria-label covers it everywhere.
   const searchHtml = showSearch ? renderSearchBubble(token, lang, strings) : "";
-  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${fontRow}${densityRow}</div></details>`;
+  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${fontRow}${densityRow}${aboutRow}</div></details>`;
 }
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -6992,5 +7068,45 @@ function renderSearchPage(results, q, token, host, lang) {
     renderSwitchers(token, lang, "all", "index"),
     `${formHtml}${resultsHtml}`,
     strings.searchLabel,
+  );
+}
+
+// About page: short, static, no D1 data at all — the simplest page this
+// file renders. Reuses the site's existing chrome/typography wholesale
+// rather than inventing anything new:
+//   - pageChrome for the masthead/CSS/settings popover, same as every other
+//     page (see renderSearchPage just above for the closest example).
+//   - `.digest` (the article-body class the digest pages use for their own
+//     prose — see the CSS) for the h2/p typography, including its numbered-
+//     section h2::before counter, so "01 What this is" etc. reads as the
+//     same voice as a briefing's own section headings.
+//   - `.closing` (the digest article's own italic closing-line style) for
+//     the honest-caveat paragraph at the end — same register that class
+//     already carries elsewhere, just applied here directly since this page
+//     has no body_html of its own to style through.
+// No new CSS at all, deliberately — every class below already exists.
+function renderAboutPage(token, host, lang) {
+  const strings = STRINGS[lang];
+  const bodyHtml = `<div class="digest">
+    <h2>${esc(strings.aboutWhatTitle)}</h2>
+    <p>${esc(strings.aboutWhatBody)}</p>
+    <h2>${esc(strings.aboutRhythmTitle)}</h2>
+    <p>${esc(strings.aboutRhythmBody)}</p>
+    <h2>${esc(strings.aboutReadingTitle)}</h2>
+    <p>${esc(strings.aboutReadingBody)}</p>
+    <p class="closing">${esc(strings.aboutCaveat)}</p>
+  </div>`;
+  // Switchers/view: same "all"/"index" pageKind choice as renderSearchPage
+  // just above, and for the same reason — the about page has no
+  // daily/weekly/week variant of its own (see aboutHref), so the view tabs
+  // just need some valid view to render against.
+  return pageChrome(
+    host,
+    token,
+    lang,
+    "all",
+    renderSwitchers(token, lang, "all", "index"),
+    bodyHtml,
+    strings.aboutLabel,
   );
 }
