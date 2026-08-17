@@ -1844,6 +1844,12 @@ const STRINGS = {
     // this week" string comes from the template, never hand-composed.
     arcsLabel: "Story threads",
     arcRepeat: "×{n} this week",
+    // Inline per-section arc link (this feature, addInlineArcLinks): a small
+    // link right at a RECURRING section heading, pointing to that story's
+    // arc page — same {n} = total appearances convention as arcRepeat, just
+    // worded for a link sitting inline in the body rather than a chip in the
+    // top-of-page line.
+    storySoFar: "story so far ×{n}",
     // Arc page (§11.1 PR A, renderArcPage). arcAppearances/arcFirstSeen/
     // arcUpdated are placeholder templates ({n}/{date}/{t}), same convention
     // as arcRepeat/weekLabel/searchResults above — each whole metadata
@@ -2013,6 +2019,9 @@ const STRINGS = {
     // strings same as everywhere else in this file.
     arcsLabel: "Történetszálak",
     arcRepeat: "×{n} ezen a héten",
+    // Owner: please review — new HU string, inline per-section arc link
+    // (this feature), mirrors arcRepeat's {n} convention.
+    storySoFar: "eddig ×{n} alkalommal",
     // Arc page (§11.1 PR A) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     arcAppearances: "{n} előfordulás",
@@ -3140,6 +3149,24 @@ const CSS = `
      button just because it became clickable. */
   .arcs .arc:hover .arclabel { text-decoration: underline; }
   .arcs .arc:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Inline per-section arc link (this feature, addInlineArcLinks): a small
+     link directly under a RECURRING section heading (count >= 2, same
+     threshold as the .arcs chips just above), letting a reader already
+     mid-section jump straight to that story's arc page instead of
+     scrolling back to the top chip line. Same mono data voice as .arcs/
+     .toc, deliberately quieter (muted, not a tinted chip) — this is the
+     below-the-fold echo of the chip line, not a second competing signal. */
+  .secarc {
+    display: block; font-family: var(--font-data); font-size: 0.7em;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    text-decoration: none; margin: 0.35em 0 0;
+  }
+  .secarc:hover { color: var(--accent); text-decoration: underline; }
+  .secarc:focus-visible {
+    color: var(--accent); text-decoration: underline;
+    outline: 2px solid var(--text); outline-offset: 2px;
+  }
 
   /* "What changed" block (§11.3 delta persistence, ingest v4, renderDeltas):
      typography-led per the design guidance — no cards, a hairline between
@@ -6222,6 +6249,60 @@ function buildSectionToc(articleHtml) {
   return { html, sections };
 }
 
+// Inline per-section arc links (this feature): complements renderArcs' own
+// top-of-page "Story threads" chip line by putting a small link right at
+// EACH body section whose heading is a RECURRING topic (count >= 2, the
+// same threshold renderArcs already filters on) — so a reader already
+// mid-section can jump to that story's full arc page without scrolling back
+// up. Runs on buildSectionToc's OWN OUTPUT (`html`/`sections` above),
+// matching the exact `<h2 id="sN">title</h2>` shape that pass just
+// produced. Only ever APPENDS a sibling `<a>` right after a matched
+// heading's closing tag — the heading's text and its #sN id are never
+// touched, so the buildSectionToc <-> app section_link_targets anchor
+// coupling (see the file header) is completely unaffected by this feature.
+//
+// Matching a heading to a topic is EXACT `section.title === label.trim()`,
+// the same comparison findArcSectionAnchor already uses to resolve arc-page
+// deep links (see that function's comment): derive_topics (notification-
+// digest repo, digest/publish.py) folds a topic's label directly from the
+// section heading text, so — for labels under 80 chars, never truncated —
+// the two strings are byte-identical, and reusing that proven comparison
+// here is deliberate rather than inventing a second matching rule. A label
+// matching more than one section, or a section matching more than one
+// recurring topic (two headings/labels that happen to collide), is
+// ambiguous and is skipped — same fail-safe "wrong link is worse than no
+// link" posture as findArcSectionAnchor, never a guess.
+//
+// Fail-safe by construction, not just by the try/catch: a heading with no
+// unambiguous match is simply never added to `linkBySectionId` and the
+// regex replace leaves it untouched. The try/catch below exists only to
+// guarantee this pass can never turn a rendering hiccup (a malformed topic
+// entry, an unexpected label shape) into a broken page — worst case is the
+// same "no inline links" degradation as any other unmatched heading.
+function addInlineArcLinks(html, sections, topicArcs, strings, token, lang) {
+  if (!topicArcs || topicArcs.length === 0 || !sections || sections.length === 0) return html;
+  try {
+    const recurring = topicArcs.filter(({ count }) => count >= 2);
+    if (recurring.length === 0) return html;
+    const linkBySectionId = new Map();
+    for (const s of sections) {
+      const matches = recurring.filter(
+        (t) => typeof t.label === "string" && t.label.trim() === s.title,
+      );
+      if (matches.length === 1) linkBySectionId.set(s.id, matches[0]);
+    }
+    if (linkBySectionId.size === 0) return html;
+    return html.replace(/<h2 id="(s\d+)">[^<]*<\/h2>/g, (match, id) => {
+      const topic = linkBySectionId.get(id);
+      if (!topic) return match;
+      const label = strings.storySoFar.replace("{n}", String(topic.count));
+      return `${match}<a class="secarc" href="${arcHref(token, lang, topic.identity)}">${esc(label)}</a>`;
+    });
+  } catch {
+    return html; // fail-safe: never let this pass break the page
+  }
+}
+
 // Zero or one section needs no index — a one-section brief has nothing to
 // jump between, so skip the nav entirely rather than render a single
 // pointless chip. Title text is passed through esc() — it originated from
@@ -6459,11 +6540,20 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   // HU page: prefer the translated body; if the app never sent one for this
   // digest, fall back to the English body_html and say so above the article
   // rather than silently presenting untranslated content on a HU URL.
+  //
+  // `usingEnglishBody` (this feature, addInlineArcLinks below): true both on
+  // an EN page AND on a HU page that fell back to the English body — the
+  // condition that matters isn't "is this the /hu/ URL", it's "are these
+  // headings actually the English ones topics.label was derived from" (see
+  // addInlineArcLinks' own comment for why a real HU translation's headings
+  // can never match).
   let articleHtml = digest.body_html;
   let enOnlyNoteHtml = "";
+  let usingEnglishBody = true;
   if (lang === "hu") {
     if (digest.body_html_hu) {
       articleHtml = digest.body_html_hu;
+      usingEnglishBody = false;
     } else {
       enOnlyNoteHtml = `<p class="en-only-note">${esc(strings.enOnlyNote)}</p>`;
     }
@@ -6492,9 +6582,18 @@ function renderDigestPage(digest, older, newer, token, host, lang, view, topicAr
   const { html: articleHtmlWithIds, sections } = buildSectionToc(articleHtmlThemed);
   const tocHtml = renderToc(sections);
 
+  // Inline per-section arc links (this feature, addInlineArcLinks): only
+  // when `sections` is actually the English heading text topics.label was
+  // derived from (see usingEnglishBody above) — a real HU translation's
+  // headings are independently worded and would never match, so this pass
+  // is skipped there rather than silently rendering zero links every time.
+  const articleHtmlWithArcs = usingEnglishBody
+    ? addInlineArcLinks(articleHtmlWithIds, sections, topicArcs, strings, token, lang)
+    : articleHtmlWithIds;
+
   // Separate pass, one job each (see addCiteTitles): citation chips gain a
   // hover title naming their destination hostname.
-  const articleHtmlFinal = addCiteTitles(articleHtmlWithIds);
+  const articleHtmlFinal = addCiteTitles(articleHtmlWithArcs);
 
   // Same links, top and bottom: after an ~900-word read the natural gesture
   // is older/next, not scroll-to-top (roadmap step 2) — mirror the nav below
