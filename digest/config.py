@@ -160,6 +160,16 @@ class Config:
     # An empty tuple is the natural "not configured" default, so a second
     # on/off switch would just be a way for the two to disagree.
     news_feeds: tuple[str, ...] = ()
+    # Telegram public-channel usernames (comma-separated, no "@" or "t.me/"
+    # prefix -- e.g. "ASI_Alliance,fetchunofficial") whose items feed the
+    # digest's reserved "positions" selection lane and standing `## Positions`
+    # section (prompts/digest.md): the owner's investment-related channels,
+    # guaranteed their own item quota in digest/summarize.py's
+    # allocate_by_source so a busy window can neither drown them out nor let
+    # them crowd out everything else. Empty tuple = no positions lane at all
+    # -- mirroring news_feeds' empty-means-disabled shape (there is no sane
+    # default channel list), NOT a separate on/off flag.
+    positions_tg_channels: tuple[str, ...] = ()
     # Polymarket collector (see digest/collectors/polymarket.py). Like
     # x_enabled, this IS a separate on/off flag rather than an
     # empty-means-disabled sentinel (contrast news_feeds above) -- there is
@@ -384,6 +394,7 @@ class Config:
             "CLAUDE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES
         )
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
+        positions_tg_channels = _optional_tg_channel_tuple("POSITIONS_TG_CHANNELS")
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
         translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
@@ -505,6 +516,7 @@ class Config:
             verify_daily_model=verify_daily_model,
             verify_daily_effort=verify_daily_effort,
             news_feeds=news_feeds,
+            positions_tg_channels=positions_tg_channels,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,
             polymarket_proxy_key=polymarket_proxy_key,
@@ -736,6 +748,36 @@ def _optional_url_tuple(name: str) -> tuple[str, ...]:
         if not url.startswith("http://") and not url.startswith("https://"):
             raise ConfigError(f"{name} entries must each start with http:// or https://")
     return urls
+
+
+_TG_CHANNEL_NAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def _optional_tg_channel_tuple(name: str) -> tuple[str, ...]:
+    """Read an optional comma-separated list of Telegram public-channel usernames.
+
+    Unset or blank -> `()`, meaning "no positions lane configured" (see
+    Config.positions_tg_channels' own comment). Each entry must be a bare
+    username -- no "@", no "t.me/" prefix -- matching Telegram's own public
+    username shape (letters, digits, underscore, 5-32 chars,
+    _TG_CHANNEL_NAME_RE): these names are compared against t.me item URLs in
+    digest/summarize.py's allocate_by_source, and a prefixed or malformed
+    entry would silently never match anything, quietly disabling the lane it
+    was meant to configure -- exactly the "surface a typo at startup, not as
+    a silent no-op deep inside a scheduled run" rationale behind
+    _optional_url_tuple's own validation.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return ()
+    names = tuple(p.strip() for p in raw.split(",") if p.strip())
+    for channel in names:
+        if not _TG_CHANNEL_NAME_RE.match(channel):
+            raise ConfigError(
+                f"{name} entries must be bare Telegram usernames "
+                "(letters, digits, underscore; 5-32 chars; no @ or t.me/ prefix)"
+            )
+    return names
 
 
 def _optional_url(name: str, *, default: str) -> str:

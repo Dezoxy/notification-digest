@@ -2264,7 +2264,7 @@ def test_get_recent_arc_keys_empty_when_nothing_written(conn):
     assert get_recent_arc_keys(conn, "2026-07-01T00:00:00+00:00") == []
 
 
-def test_get_recent_arc_keys_returns_distinct_keys_sorted(conn):
+def test_get_recent_arc_keys_returns_counted_keys_most_frequent_first(conn):
     digest_id_1 = create_digest(conn, "body one", get_unsummarized_items(conn))
     write_arc_keys(
         conn,
@@ -2276,10 +2276,16 @@ def test_get_recent_arc_keys_returns_distinct_keys_sorted(conn):
     )
     commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
     digest_id_2 = create_digest(conn, "body two", get_unsummarized_items(conn))
-    # Same key reused across two digests -- must appear only once (DISTINCT).
+    # Same key reused across two digests -- must appear once, with its
+    # appearance COUNT, and ahead of the single-appearance key: frequency
+    # ordering is what keeps the cap from shedding the most-covered arcs
+    # (the alphabetical-order bug this replaced).
     write_arc_keys(conn, digest_id_2, [{"slug": "story-c", "label": "c", "key": "hormuz"}])
 
-    assert get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00") == ["hormuz", "openai"]
+    assert get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00") == [
+        ("hormuz", 2),
+        ("openai", 1),
+    ]
 
 
 def test_get_recent_arc_keys_excludes_rows_older_than_since(conn):
@@ -2313,7 +2319,7 @@ def test_get_recent_arc_keys_excludes_daily_kind_digests(conn):
     )
     conn.commit()
 
-    assert get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00") == ["window-key"]
+    assert get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00") == [("window-key", 1)]
 
 
 def test_get_recent_arc_keys_caps_at_fifty(conn):
@@ -2327,6 +2333,31 @@ def test_get_recent_arc_keys_caps_at_fifty(conn):
     result = get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00")
 
     assert len(result) == 50
+
+
+def test_get_recent_arc_keys_cap_sheds_rare_keys_not_alphabetically_late_ones(conn):
+    # THE bug this ordering fixed (live, 2026-08-17): 135 distinct keys in
+    # the 7-day window and an `ORDER BY key ASC LIMIT 50` cut every key from
+    # "h" onward -- including `hormuz` (29 appearances) -- while keeping
+    # dozens of one-off keys that happened to sort early. A frequently-used
+    # key must survive the cap regardless of where it sorts alphabetically.
+    digest_id_1 = create_digest(conn, "body one", get_unsummarized_items(conn))
+    write_arc_keys(
+        conn,
+        digest_id_1,
+        # 60 one-off keys that all sort BEFORE "zz-hot-story"...
+        [{"slug": f"story-{i}", "label": f"s{i}", "key": f"key-{i:03d}"} for i in range(60)]
+        + [{"slug": "hot", "label": "hot", "key": "zz-hot-story"}],
+    )
+    commit_new_items(conn, [_item("2")], {("telegram", "123"): "2"})
+    digest_id_2 = create_digest(conn, "body two", get_unsummarized_items(conn))
+    # ...and the alphabetically-last key recurs in a second digest.
+    write_arc_keys(conn, digest_id_2, [{"slug": "hot2", "label": "hot", "key": "zz-hot-story"}])
+
+    result = get_recent_arc_keys(conn, "2000-01-01T00:00:00+00:00")
+
+    assert len(result) == 50
+    assert result[0] == ("zz-hot-story", 2)
 
 
 # --- write_arc_context / get_arc_context / get_arc_keys_needing_context /

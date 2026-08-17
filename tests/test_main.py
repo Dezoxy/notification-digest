@@ -3243,7 +3243,7 @@ def test_run_daily_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
     verify_conn = connect(db_path)
     after_count = verify_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
     assert after_count == before_count  # unchanged -- run_daily wrote nothing
-    assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == ["hormuz"]
+    assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == [("hormuz", 1)]
     verify_conn.close()
 
 
@@ -4006,7 +4006,7 @@ def test_run_weekly_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
     verify_conn = connect(db_path)
     after_count = verify_conn.execute("SELECT COUNT(*) FROM arc_keys").fetchone()[0]
     assert after_count == before_count  # unchanged -- run_weekly wrote nothing
-    assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == ["hormuz"]
+    assert get_recent_arc_keys(verify_conn, "2000-01-01T00:00:00+00:00") == [("hormuz", 1)]
     verify_conn.close()
 
 
