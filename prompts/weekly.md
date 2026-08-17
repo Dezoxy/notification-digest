@@ -70,10 +70,15 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   drop the rest; this is not a place to compress everything left over.
 - **`## Watching next week`**: a short forward-looking watchlist — the
   threads still open, unresolved, or clearly building as the week ends, that
-  the reader should expect to hear more about. Two to four sentences, prose,
-  still cited where a claim needs one. Omit this section entirely on a week
-  where nothing is genuinely left hanging — never invent a watch item to
-  fill it.
+  the reader should expect to hear more about. Ground it in forward-looking
+  facts the week's daily briefs already stated: a named date or deadline (a
+  scheduled vote, an ultimatum's expiry, an earnings or release date), an
+  explicitly announced upcoming event, or prediction-market odds worth
+  re-checking, alongside any thread left genuinely unresolved. Two to four
+  sentences, prose, still cited where a claim needs one. No speculation or
+  invented outlook beyond what the week's briefs already stated. Omit this
+  section entirely on a week where nothing is genuinely left hanging — never
+  invent a watch item to fill it.
 - **Standing rule — Hungarian and portfolio coverage (never a labeled
   section):** the week's daily briefs carry two guaranteed coverage lanes,
   both written STORY-FIRST — Hungarian stories, and the reader's portfolio
