@@ -125,6 +125,17 @@ position, a threat, a named condition, a
 departure from an earlier line carries more signal than a tally of strikes
 and incidents, which is what the headlines will hand you.
 
+Corroboration means REPORTING ORIGIN, not repetition: the reader's X
+notifications and Telegram channels include several war-OSINT aggregator
+accounts that habitually repost each other's claims within minutes. Five
+accounts carrying the same strike report are ONE source unless their
+accounts genuinely differ in origin or detail — never write a claim as
+confirmed, widespread, or "multiple sources report" on the strength of
+reposts alone. A single-origin claim is still reportable; just attribute
+it as one report ("one widely-shared account claims...") rather than
+letting repost volume masquerade as verification. This weighs how you
+write a claim, it never filters items out of scope.
+
 So within a geopolitics story, LEAD with what such an actor said and its
 plain significance, and fold the physical events in beneath it. A
 consequential statement can be a story cluster on its own, with no

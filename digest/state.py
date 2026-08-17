@@ -242,12 +242,28 @@ class Item:
 
 
 def connect(db_path: str) -> sqlite3.Connection:
-    """Open (creating parent dirs as needed) a SQLite connection with FK enforcement."""
+    """Open (creating parent dirs as needed) a SQLite connection with FK enforcement.
+
+    `journal_mode=WAL` is durability hygiene for a state file whose loss
+    means a re-summarize/duplicate-delivery burst: WAL survives a crash
+    mid-write with the main DB intact (the incomplete transaction lives in
+    the -wal sidecar), and it is what lets an external `sqlite3 .backup`
+    snapshot run against the live file without blocking or being blocked by
+    a concurrently-running digest process. The pragma is persistent (stored
+    in the DB header), so re-issuing it on every connect is a cheap no-op
+    after the first; `:memory:` databases (tests) simply report "memory"
+    and stay unaffected. `busy_timeout` covers the one real concurrency
+    window this deployment has: a backup/backfill process holding the file
+    briefly while the timer-driven run starts -- 5s of patience instead of
+    an instant "database is locked" crash.
+    """
     path = Path(db_path)
     if path.parent and str(path.parent) not in ("", "."):
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
