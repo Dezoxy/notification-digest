@@ -917,10 +917,10 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
 def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     conn, monkeypatch
 ):
-    # P1 fix: select_items_for_prompt must run BEFORE both summarize() and
-    # create_digest(), and both must receive its output -- not the
-    # pre-shrink batch -- so the summarized set and the stamped set never
-    # diverge. Monkeypatching select_items_for_prompt to a known,
+    # P1 fix: the selection pass (select_balanced_items_for_prompt) must run
+    # BEFORE both summarize() and create_digest(), and both must receive its
+    # output -- not the pre-shrink batch -- so the summarized set and the
+    # stamped set never diverge. Monkeypatching the selection to a known,
     # deliberately different subset (just item "2", dropping item "1")
     # proves this: if create_digest were still called with the full
     # pre-shrink batch, item "1" would show up stamped despite never having
@@ -936,7 +936,8 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     selected_subset = [i for i in full_batch if i.source_id == "2"]
 
     def fake_select_items_for_prompt(
-        items, failed_sources, recent_coverage, max_prompt_bytes, recent_arcs=""
+        items, budget, positions_channels, failed_sources, recent_coverage,
+        max_prompt_bytes, recent_arcs="",
     ):
         return selected_subset
 
@@ -948,7 +949,9 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
         summarize_received["items"] = items
         return "## Needs attention\n...selected...", [], []
 
-    monkeypatch.setattr(main_mod, "select_items_for_prompt", fake_select_items_for_prompt)
+    monkeypatch.setattr(
+        main_mod, "select_balanced_items_for_prompt", fake_select_items_for_prompt
+    )
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)

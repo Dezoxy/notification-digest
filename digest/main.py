@@ -57,10 +57,9 @@ from digest.state import (
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
     SummarizeError,
-    allocate_by_source,
     format_recent_arcs,
     format_recent_coverage,
-    select_items_for_prompt,
+    select_balanced_items_for_prompt,
     summarize,
 )
 from digest.translate import translate_digest
@@ -291,13 +290,6 @@ def _deliver(
         logger.info("no unsummarized items, nothing to send")
         return all_ok
 
-    # Per-source quota pass (digest/summarize.py's allocate_by_source) BEFORE
-    # the byte-budget shrink below: the candidate pool is deliberately wider
-    # than one digest's budget (_MAX_ITEMS_FETCH_POOL vs
-    # _MAX_ITEMS_PER_DIGEST, see both constants' comments), and this is the
-    # step that turns that pool into a source-balanced batch -- including the
-    # reserved "positions" lane for the owner's POSITIONS_TG_CHANNELS.
-    items = allocate_by_source(items, _MAX_ITEMS_PER_DIGEST, cfg.positions_tg_channels)
 
     # "Recently covered" continuity context (digest/summarize.py's
     # format_recent_coverage): every digest created in the last
@@ -323,25 +315,29 @@ def _deliver(
     arcs_since = now - _RECENT_ARCS_WINDOW
     recent_arcs = format_recent_arcs(get_recent_arc_keys(conn, arcs_since.isoformat()))
 
-    # Shrink to whatever actually fits in one prompt BEFORE both summarize()
-    # and create_digest(): the item-count cap above (_MAX_ITEMS_PER_DIGEST)
-    # bounds source characters, but json.dumps(ensure_ascii=False) still lets
-    # an emoji/CJK-heavy batch serialize to far more UTF-8 BYTES than that
-    # count implies, and select_items_for_prompt (measured in bytes, not
-    # characters -- see _MAX_PROMPT_BYTES) is what catches that. The shrink
-    # has to happen HERE, not inside summarize(), because create_digest stamps
-    # whatever list it's given as "handled" -- if summarize() only saw a
-    # trimmed subset internally while create_digest stamped the full
-    # pre-shrink `items`, the untrimmed remainder would be marked summarized
-    # without ever actually being sent to the model. Keeping the shrink in
-    # _deliver and passing its result to both calls keeps the summarized set
-    # and the stamped set identical by construction. `recent_coverage` and
-    # `recent_arcs` are both passed through here too: each is embedded in
-    # every built prompt exactly like the items are, so their bytes count
-    # toward _MAX_PROMPT_BYTES automatically (see select_items_for_prompt's
-    # docstring).
-    items = select_items_for_prompt(
-        items, failed_sources, recent_coverage, _MAX_PROMPT_BYTES, recent_arcs=recent_arcs
+    # One combined selection pass (digest/summarize.py's
+    # select_balanced_items_for_prompt): the candidate pool is deliberately
+    # wider than one digest's budget (_MAX_ITEMS_FETCH_POOL vs
+    # _MAX_ITEMS_PER_DIGEST, see both constants' comments); this turns it
+    # into a source-balanced batch -- per-lane quotas including the reserved
+    # "positions" lane for POSITIONS_TG_CHANNELS -- that ALSO fits the
+    # prompt's byte cap (_MAX_PROMPT_BYTES; when the byte cap binds, the
+    # allocation budget shrinks so every lane gives up items in quota ratio,
+    # never a tail-chop of whichever collectors ran last -- see that
+    # function's docstring). The selection has to happen HERE, not inside
+    # summarize(), because create_digest stamps whatever list it's given as
+    # "handled" -- the summarized set and the stamped set must stay
+    # identical by construction. `recent_coverage`/`recent_arcs` are
+    # embedded in every built prompt exactly like the items are, so their
+    # bytes count toward the cap automatically.
+    items = select_balanced_items_for_prompt(
+        items,
+        _MAX_ITEMS_PER_DIGEST,
+        cfg.positions_tg_channels,
+        failed_sources,
+        recent_coverage,
+        _MAX_PROMPT_BYTES,
+        recent_arcs=recent_arcs,
     )
 
     try:
