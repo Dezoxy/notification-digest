@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from digest.collectors import hackernews as hackernews_collector
 from digest.collectors import polymarket as polymarket_collector
 from digest.collectors import reddit as reddit_collector
 from digest.collectors import rss as rss_collector
@@ -578,6 +579,40 @@ def _run_reddit_collector(cfg: Config) -> CollectResult:
         return CollectResult(failed=True)
 
 
+def _run_hackernews_collector(cfg: Config) -> CollectResult:
+    """Run one Hacker News front-page collect pass, if `cfg.hackernews_enabled`.
+
+    No-ops entirely (returns a fresh, unfailed CollectResult) when the flag
+    is off -- mirrors `_run_reddit_collector`'s/`_run_polymarket_collector`'s
+    own flag check, not `_run_news_collector`'s empty-tuple-means-disabled
+    shape: Hacker News has no natural "unconfigured" sentinel the way an
+    empty feed list does (see Config.hackernews_enabled's own comment).
+
+    Plain `def`, called synchronously from inside this `async def _run` --
+    matching every other synchronous collector wrapper's own rationale
+    (collectors already run one at a time; there's nothing else in flight
+    for an executor wrapper to protect against blocking).
+
+    `hackernews_collector.collect` already never raises past its own
+    try/except around its single request (module docstring's "Failure
+    semantics"), but this call is wrapped in a catch-all here too as a
+    second line of defense, mirroring every other collector wrapper in this
+    module: a not-yet-anticipated bug must not take down the whole run (and
+    the other collectors' already-collected items) before `commit_new_items`
+    gets a chance to persist them. Only the exception's type name is logged,
+    consistent with how every other collector-crash log line in this module
+    avoids echoing exception text that could embed response content.
+    """
+    if not cfg.hackernews_enabled:
+        return CollectResult()
+
+    try:
+        return hackernews_collector.collect(cfg.hackernews_top_n)
+    except Exception as exc:
+        logger.warning("hackernews collection crashed unexpectedly: %s", type(exc).__name__)
+        return CollectResult(failed=True)
+
+
 async def _run(cfg: Config) -> bool:
     """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
@@ -603,6 +638,7 @@ async def _run(cfg: Config) -> bool:
         news_result = _run_news_collector(cfg)
         polymarket_result = _run_polymarket_collector(conn, cfg)
         reddit_result = _run_reddit_collector(cfg)
+        hackernews_result = _run_hackernews_collector(cfg)
 
         items = (
             tg_result.items
@@ -610,23 +646,27 @@ async def _run(cfg: Config) -> bool:
             + news_result.items
             + polymarket_result.items
             + reddit_result.items
+            + hackernews_result.items
         )
         # news never contributes cursor_updates (it has no cursor axis, see
         # digest/collectors/rss.py's module docstring) -- merging its
         # (always-empty) dict in here anyway keeps this line generic over
         # every collector rather than special-casing the one with nothing
         # to add. reddit is identical (see digest/collectors/reddit.py's
-        # module docstring, "No cursor axis"). polymarket ALSO has no cursor
-        # axis (its own state lives in the polymarket_probs table, see
-        # digest/collectors/polymarket.py's module docstring), but unlike
-        # news/reddit it doesn't even have a cursor_updates field on its
-        # result type -- PolymarketCollectResult is a distinct type carrying
-        # `prob_updates` instead (handled below, not here).
+        # module docstring, "No cursor axis"), and so is hackernews (see
+        # digest/collectors/hackernews.py's module docstring, "No cursor
+        # axis"). polymarket ALSO has no cursor axis (its own state lives in
+        # the polymarket_probs table, see digest/collectors/polymarket.py's
+        # module docstring), but unlike news/reddit/hackernews it doesn't
+        # even have a cursor_updates field on its result type --
+        # PolymarketCollectResult is a distinct type carrying `prob_updates`
+        # instead (handled below, not here).
         cursor_updates = {
             **tg_result.cursor_updates,
             **x_result.cursor_updates,
             **news_result.cursor_updates,
             **reddit_result.cursor_updates,
+            **hackernews_result.cursor_updates,
         }
 
         # `polymarket_prob_updates` is only passed as a keyword argument when
@@ -660,6 +700,7 @@ async def _run(cfg: Config) -> bool:
                 ("news", news_result.failed),
                 ("polymarket", polymarket_result.failed),
                 ("reddit", reddit_result.failed),
+                ("hackernews", hackernews_result.failed),
             )
             if failed
         ]
@@ -698,6 +739,8 @@ async def _run(cfg: Config) -> bool:
             collectors["polymarket"] = "failed" if polymarket_result.failed else "ok"
         if cfg.reddit_enabled:
             collectors["reddit"] = "failed" if reddit_result.failed else "ok"
+        if cfg.hackernews_enabled:
+            collectors["hackernews"] = "failed" if hackernews_result.failed else "ok"
         logger.info(
             "run_summary %s",
             json.dumps(

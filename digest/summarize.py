@@ -225,11 +225,21 @@ def build_prompt(
 # other source). Weights are the owner's editorial mix: curated journalism
 # ("news") deliberately outweighs raw group chatter now that NEWS_FEEDS
 # carries general-news desks, not just the AI/robotics feeds.
+#
+# Adding the "hackernews" lane (digest/collectors/hackernews.py) required
+# shrinking every other lane's share to keep the sum at 250, rather than
+# raising the total budget itself: news 60->55, telegram 55->50, x 55->50,
+# reddit 40->35, freeing exactly 20 slots for the new lane. "positions" and
+# "polymarket" are untouched by the rebalance -- "positions" is a reserved
+# carve-out with its own fixed rationale above, not an ordinary source lane
+# to shrink, and "polymarket"'s swing-detection lane was already
+# deliberately small.
 _SOURCE_QUOTAS: dict[str, int] = {
-    "news": 60,
-    "telegram": 55,
-    "x": 55,
-    "reddit": 40,
+    "news": 55,
+    "telegram": 50,
+    "x": 50,
+    "reddit": 35,
+    "hackernews": 20,
     "positions": 30,
     "polymarket": 10,
 }

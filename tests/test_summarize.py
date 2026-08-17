@@ -2236,6 +2236,7 @@ def test_allocate_by_source_one_source_cannot_fill_the_whole_budget():
         + [_lane_item("x", i) for i in range(40)]
         + [_lane_item("news", i) for i in range(20)]
         + [_lane_item("reddit", i) for i in range(10)]
+        + [_lane_item("hackernews", i) for i in range(5)]
     )
 
     result = allocate_by_source(items, 250)
@@ -2244,12 +2245,14 @@ def test_allocate_by_source_one_source_cannot_fill_the_whole_budget():
     for item in result:
         by_source[item.source] = by_source.get(item.source, 0) + 1
     assert len(result) == 250
-    # x/news/reddit are under their quotas -> taken in full; telegram gets
-    # its own quota plus every slot the underfull lanes couldn't use.
+    # x/news/reddit/hackernews are under their quotas -> taken in full;
+    # telegram gets its own quota plus every slot the underfull lanes
+    # couldn't use.
     assert by_source["x"] == 40
     assert by_source["news"] == 20
     assert by_source["reddit"] == 10
-    assert by_source["telegram"] == 180
+    assert by_source["hackernews"] == 5
+    assert by_source["telegram"] == 175
 
 
 def test_allocate_by_source_preserves_input_order_and_prefers_oldest():
@@ -2334,7 +2337,7 @@ def test_allocate_by_source_reduced_budget_scales_quotas_proportionally():
     for item in result:
         by_source[item.source] = by_source.get(item.source, 0) + 1
     assert len(result) == 100
-    # Quotas news 60 / telegram 55 / x 55 scale to ~24/22/22 at budget 100,
+    # Quotas news 55 / telegram 50 / x 50 scale to ~22/20/20 at budget 100,
     # then redistribution round-robins the remainder -- every lane must land
     # well clear of both starvation and domination.
     assert all(by_source[s] >= 20 for s in ("telegram", "x", "news"))

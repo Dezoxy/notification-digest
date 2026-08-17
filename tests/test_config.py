@@ -579,6 +579,56 @@ def test_reddit_posts_per_sub_boundary_values_are_accepted(monkeypatch):
     assert Config.from_env().reddit_posts_per_sub == 25
 
 
+# --- HACKERNEWS_ENABLED / HACKERNEWS_TOP_N ---
+
+
+def test_hackernews_defaults_when_unset(monkeypatch):
+    _set_base_env(monkeypatch)
+    for name in ("HACKERNEWS_ENABLED", "HACKERNEWS_TOP_N"):
+        monkeypatch.delenv(name, raising=False)
+
+    config = Config.from_env()
+
+    assert config.hackernews_enabled is False
+    assert config.hackernews_top_n == 15
+
+
+def test_hackernews_enabled_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("HACKERNEWS_ENABLED", "true")
+
+    config = Config.from_env()
+
+    assert config.hackernews_enabled is True
+
+
+def test_hackernews_top_n_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("HACKERNEWS_TOP_N", "20")
+
+    config = Config.from_env()
+
+    assert config.hackernews_top_n == 20
+
+
+@pytest.mark.parametrize("value", ["0", "31", "not-a-number"])
+def test_hackernews_top_n_out_of_range_raises_config_error(monkeypatch, value):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("HACKERNEWS_TOP_N", value)
+
+    with pytest.raises(ConfigError, match="HACKERNEWS_TOP_N"):
+        Config.from_env()
+
+
+def test_hackernews_top_n_boundary_values_are_accepted(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("HACKERNEWS_TOP_N", "1")
+    assert Config.from_env().hackernews_top_n == 1
+
+    monkeypatch.setenv("HACKERNEWS_TOP_N", "30")
+    assert Config.from_env().hackernews_top_n == 30
+
+
 # --- EMAIL_ENABLED / SITE_PUBLISH_URL / SITE_INGEST_KEY / SITE_PUBLIC_BASE /
 #     TELEGRAM_NOTIFY_BOT_TOKEN / TELEGRAM_NOTIFY_CHAT_ID /
 #     TELEGRAM_NOTIFY_THREAD_ID (delivery-channels feature) ---
