@@ -935,6 +935,45 @@ def test_verify_daily_timeout_seconds_override_is_used(monkeypatch):
     assert config.verify_daily_timeout_seconds == 900
 
 
+def test_translate_timeout_seconds_defaults_to_300(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("TRANSLATE_TIMEOUT_SECONDS", raising=False)
+
+    config = Config.from_env()
+
+    assert config.translate_timeout_seconds == 300
+
+
+def test_translate_timeout_seconds_override_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TRANSLATE_TIMEOUT_SECONDS", "120")
+
+    config = Config.from_env()
+
+    assert config.translate_timeout_seconds == 120
+
+
+def test_translate_timeout_is_independent_of_claude_timeout(monkeypatch):
+    """The whole point of the knob: translation must NOT inherit the summarizer's budget.
+
+    translate_digest can call the model twice (primary, then
+    translate_model_fallback on a safeguards refusal), each at the full
+    timeout. While it reused claude_timeout_seconds, raising the summarizer
+    budget silently doubled the daily run's translation worst case too --
+    which is what pushed digest-daily.service past its systemd
+    TimeoutStartSec. Setting them to different values here fails if anyone
+    re-couples them.
+    """
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("TRANSLATE_TIMEOUT_SECONDS", "300")
+
+    config = Config.from_env()
+
+    assert config.claude_timeout_seconds == 600
+    assert config.translate_timeout_seconds == 300
+
+
 def test_verify_daily_timeout_seconds_zero_raises_config_error(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("VERIFY_DAILY_TIMEOUT_SECONDS", "0")

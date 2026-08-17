@@ -347,7 +347,7 @@ def _deliver(
             body_md,
             {item.url for item in items},
             cfg.translate_model,
-            cfg.claude_timeout_seconds,
+            cfg.translate_timeout_seconds,
             fallback_model=cfg.translate_model_fallback,
         )
 
@@ -1041,7 +1041,7 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
                 body_md,
                 delivery_allowed_urls,
                 cfg.translate_model,
-                cfg.claude_timeout_seconds,
+                cfg.translate_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
             )
 
@@ -1266,7 +1266,7 @@ def run_weekly(cfg: Config) -> bool:
                 body_md,
                 allowed_urls,
                 cfg.translate_model,
-                cfg.claude_timeout_seconds,
+                cfg.translate_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
             )
 

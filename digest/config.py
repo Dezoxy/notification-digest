@@ -93,6 +93,22 @@ class Config:
     # entirely (translate_digest treats a falsy fallback_model as "none
     # configured" and re-raises the refusal instead of retrying).
     translate_model_fallback: str = "claude-sonnet-4-6"
+    # Its own timeout rather than a reuse of claude_timeout_seconds, for the
+    # same reason context_timeout_seconds is separate (see its comment): the
+    # call shape differs. Translation is a fixed-size rewrite of one already-
+    # written body -- it never carries the items/coverage payload that sizes
+    # claude_timeout_seconds.
+    #
+    # This knob exists because reusing claude_timeout_seconds made the DAILY
+    # run's worst case unbounded in practice: translate_digest may call the
+    # model TWICE (primary, then translate_model_fallback on a safeguards
+    # refusal), each at the full timeout. At the deployed
+    # CLAUDE_TIMEOUT_SECONDS=600 that is 1200s for translation alone, on top
+    # of summarize (600) and verify (600) -- which is how digest-daily.service
+    # came to exceed its own systemd TimeoutStartSec. Sizing this separately
+    # caps BOTH translate legs, so the run mode's total is actually bounded by
+    # something the homelab role can assert against at deploy time.
+    translate_timeout_seconds: int = 300
     # PLAN.md §11.4 -- the optional verified-briefing pass (digest/verify.py)
     # over the daily brief, run between summarize_daily and translate_digest
     # (draft -> verify -> translate -> deliver). Defaults OFF: the entry is
@@ -374,6 +390,9 @@ class Config:
         translate_model_fallback = os.environ.get(
             "TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6"
         )
+        translate_timeout_seconds = _optional_positive_int(
+            "TRANSLATE_TIMEOUT_SECONDS", default=300
+        )
 
         verify_daily_enabled = _parse_bool(os.environ.get("VERIFY_DAILY_ENABLED", "false"))
         verify_daily_timeout_seconds = _optional_positive_int(
@@ -479,6 +498,7 @@ class Config:
             translate_hu_enabled=translate_hu_enabled,
             translate_model=translate_model,
             translate_model_fallback=translate_model_fallback,
+            translate_timeout_seconds=translate_timeout_seconds,
             verify_daily_enabled=verify_daily_enabled,
             verify_daily_timeout_seconds=verify_daily_timeout_seconds,
             verify_daily_max_web_ops=verify_daily_max_web_ops,
