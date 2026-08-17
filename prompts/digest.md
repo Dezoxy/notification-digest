@@ -311,6 +311,22 @@ the new development is BIGGER than what was covered, give it a full section
 again regardless — this list narrows what you repeat, it never caps what a
 story can grow into.
 
+**Corrections:** when the items below show that something a Recently-covered
+briefing reported was WRONG, or has been retracted or reversed — not merely
+developed further, which is an ordinary delta, not a correction — the update
+sentence must open with the literal bold marker `**Correction:**`, followed
+by what was previously reported and what the items now show, with citations.
+A correction rides wherever the update itself belongs under the rules above:
+normally a sentence in `## Also this window` like any other delta, or a full
+section of its own via the escape hatch just above when the reversal is
+genuinely big enough to earn one — in that case the section itself opens
+with the marker instead. Never manufacture a correction when the items
+merely add detail to a story that still stands. And never call a
+single-source contradiction of a multi-source story a correction while it's
+genuinely unclear which account is right — the Hard rule below ("where two
+sources conflict, say so") governs that case instead; the Correction marker
+is only for when the new items clearly supersede the earlier account.
+
 ## Story-arc keys — naming the story, not this run's angle on it
 
 A single ongoing story is often covered many times under DIFFERENTLY WORDED
