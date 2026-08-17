@@ -50,6 +50,7 @@ from digest.state import (
     get_window_digests_since,
     init_db,
     prune_delivered_items,
+    prune_stale_unsummarized,
     write_arc_context,
     write_arc_keys,
     write_deltas,
@@ -673,6 +674,14 @@ async def _run(cfg: Config) -> bool:
         )
         if pruned:
             logger.info("pruned %d delivered items older than %d days", pruned, _ITEMS_PRUNE_DAYS)
+
+        # Companion prune for rows the one above can never touch: items that
+        # NEVER got selected into a digest (quota-lane overflow, byte-shrink
+        # casualties) -- see prune_stale_unsummarized's docstring for why 14
+        # days of consecutive non-selection means "never going to ship".
+        stale_pruned = prune_stale_unsummarized(conn)
+        if stale_pruned:
+            logger.info("pruned %d stale unsummarized items", stale_pruned)
 
         ok = delivered and not failed_sources
 
