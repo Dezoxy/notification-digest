@@ -202,7 +202,7 @@ def test_atom_feed_id_and_summary_and_updated_fallback(monkeypatch: pytest.Monke
 
 
 def test_entry_older_than_lookback_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    old = _rfc822(_NOW - timedelta(hours=20))
+    old = _rfc822(_NOW - timedelta(hours=30))
     body = _rss(
         f"""
         <item>
@@ -218,6 +218,36 @@ def test_entry_older_than_lookback_is_skipped(monkeypatch: pytest.MonkeyPatch) -
     result = collect(["https://feed.example/rss"])
 
     assert result.items == []
+    assert result.failed is False
+
+
+def test_entry_between_the_old_and_new_lookback_bound_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins `_LOOKBACK_HOURS` at 24, not merely "some window".
+
+    18h ago is INSIDE the current 24h lookback but OUTSIDE the 12h one this
+    collector used while the timer ran 3-hourly. The skip test above passes
+    at either value, so without this one nothing would catch the window
+    being narrowed back to 12h -- which at a 6h cadence would cut the
+    missed-run tolerance from 4 runs to 2.
+    """
+    recent = _rfc822(_NOW - timedelta(hours=18))
+    body = _rss(
+        f"""
+        <item>
+          <title>Eighteen Hours Old</title>
+          <link>https://example.com/eighteen</link>
+          <guid>guid-eighteen</guid>
+          <pubDate>{recent}</pubDate>
+        </item>
+        """
+    )
+    _patch_urlopen(monkeypatch, {"https://feed.example/rss": body})
+
+    result = collect(["https://feed.example/rss"])
+
+    assert [item.source_id for item in result.items] == ["guid-eighteen"]
     assert result.failed is False
 
 
