@@ -1473,8 +1473,8 @@ def get_arc_keys(conn: sqlite3.Connection, digest_id: int) -> dict[str, str]:
 _MAX_RECENT_ARC_KEYS = 50
 
 
-def get_recent_arc_keys(conn: sqlite3.Connection, since_iso: str) -> list[str]:
-    """Return the distinct stable arc keys used by window digests at/after `since_iso`.
+def get_recent_arc_keys(conn: sqlite3.Connection, since_iso: str) -> list[tuple[str, int]]:
+    """Return (arc key, appearance count) pairs for window digests at/after `since_iso`.
 
     Feeds digest/summarize.py's `format_recent_arcs`, which renders these
     into the {{RECENT_ARCS}} prompt block -- the "story continuity" list
@@ -1492,10 +1492,23 @@ def get_recent_arc_keys(conn: sqlite3.Connection, since_iso: str) -> list[str]:
     correction, matching `get_recent_digests`' own belt-and-suspenders
     posture.
 
-    DISTINCT and ordered deterministically (`ORDER BY ak.key ASC` -- there is
-    no natural "most recent" ordering across possibly-many digests that used
-    the same key, so alphabetical is the simplest reproducible choice),
-    capped at `_MAX_RECENT_ARC_KEYS` (50) via `LIMIT`.
+    Returns (key, appearance_count) pairs, ordered by appearance count
+    DESCENDING (ties broken by key ASC for determinism), capped at
+    `_MAX_RECENT_ARC_KEYS` (50) via `LIMIT`. Frequency order is load-bearing,
+    not cosmetic: an earlier revision ordered by `ak.key ASC`, and once the
+    live 7-day window grew past 50 distinct keys, the alphabetical cut
+    silently dropped every key from "h" onward -- including `hormuz` (29
+    appearances) and `ukraine-strikes` (22), the very stories the reuse
+    feature exists for -- while keeping dozens of single-appearance keys
+    that happened to sort early. The model then re-minted fresh keys for
+    the invisible stories every run (six coexisting `qwen-*` keys, live),
+    which is exactly the key-fragmentation failure this feature was built
+    to fix. Ordering by how often a key actually recurs makes the cap shed
+    one-off keys first, which is the only cut direction that preserves the
+    feature. The count itself is returned (not just used for ordering) so
+    digest/summarize.py's format_recent_arcs can show the model HOW
+    established each arc is, giving it a basis for judging a story as
+    over-covered -- a bare key list carries no frequency signal at all.
 
     `since_iso` is compared lexicographically against `created_at`, safe for
     the identical reason `get_recent_digests` relies on: both are ISO8601
@@ -1505,15 +1518,17 @@ def get_recent_arc_keys(conn: sqlite3.Connection, since_iso: str) -> list[str]:
     """
     rows = conn.execute(
         """
-        SELECT DISTINCT ak.key FROM arc_keys ak
+        SELECT ak.key, COUNT(DISTINCT ak.digest_id) AS appearances
+        FROM arc_keys ak
         JOIN digests d ON ak.digest_id = d.id
         WHERE d.created_at >= ? AND d.kind = 'window'
-        ORDER BY ak.key ASC
+        GROUP BY ak.key
+        ORDER BY appearances DESC, ak.key ASC
         LIMIT ?
         """,
         (since_iso, _MAX_RECENT_ARC_KEYS),
     ).fetchall()
-    return [row[0] for row in rows]
+    return [(row[0], row[1]) for row in rows]
 
 
 # --- Arc-context background primers (PLAN.md §11.6, "context mode") ---

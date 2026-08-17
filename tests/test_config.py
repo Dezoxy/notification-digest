@@ -319,6 +319,38 @@ def test_news_feeds_non_http_entry_raises_config_error_naming_the_variable(monke
         Config.from_env()
 
 
+# --- POSITIONS_TG_CHANNELS ---
+
+
+def test_positions_tg_channels_unset_defaults_to_empty_tuple(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("POSITIONS_TG_CHANNELS", raising=False)
+
+    config = Config.from_env()
+
+    assert config.positions_tg_channels == ()
+
+
+def test_positions_tg_channels_two_names_parsed_and_stripped(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POSITIONS_TG_CHANNELS", " ASI_Alliance , fetchunofficial ")
+
+    config = Config.from_env()
+
+    assert config.positions_tg_channels == ("ASI_Alliance", "fetchunofficial")
+
+
+def test_positions_tg_channels_prefixed_entry_raises_config_error(monkeypatch):
+    # An "@" or "t.me/" prefix would silently never match any item URL in
+    # allocate_by_source -- exactly the quiet misconfiguration the startup
+    # validation exists to catch.
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("POSITIONS_TG_CHANNELS", "@ASI_Alliance")
+
+    with pytest.raises(ConfigError, match="POSITIONS_TG_CHANNELS"):
+        Config.from_env()
+
+
 # --- POLYMARKET_ENABLED / POLYMARKET_API_BASE / POLYMARKET_PROXY_KEY /
 #     POLYMARKET_TOP_N / POLYMARKET_SWING_THRESHOLD ---
 

@@ -14,6 +14,7 @@ from digest.summarize import (
     SafeguardsRefusalError,
     SummarizeError,
     _real_heading_lines,
+    allocate_by_source,
     build_prompt,
     enforce_link_allowlist,
     extract_arc_keys,
@@ -2069,6 +2070,26 @@ def test_format_recent_coverage_newest_digest_first():
     assert result == "- 2h ago: Newer story\n- 6h ago: Older story"
 
 
+def test_format_recent_coverage_skips_positions_and_hungary_standing_headings():
+    # Standing sections appear every window BY RULE -- replaying them into
+    # {{RECENT_COVERAGE}} would tell the model its own standing section is
+    # "already covered" and invite the delta-compression the standing rules
+    # explicitly exempt them from.
+    now = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
+    digests = [
+        _digest(
+            "2026-07-29T10:00:00+00:00",
+            "## Positions\n- holdings news\n\n## Hungary\n- HU news\n\n## A real story\n- text\n",
+        )
+    ]
+
+    result = format_recent_coverage(digests, now)
+
+    assert result == "- 2h ago: A real story"
+    assert "Positions" not in result
+    assert "Hungary" not in result
+
+
 def test_format_recent_coverage_skips_needs_attention_heading():
     now = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
     digests = [
@@ -2179,6 +2200,119 @@ def test_format_recent_coverage_ignores_headings_inside_fenced_blocks():
     assert result == "- 2h ago: Real Story"
 
 
+# --- allocate_by_source (per-lane quotas + reserved positions lane) ---
+
+
+def _lane_item(source: str, n: int, url: str | None = None) -> Item:
+    return Item(
+        source=source,
+        source_id=f"{source}-{n}",
+        chat_id="123" if source == "telegram" else None,
+        author=None,
+        text=f"{source} item {n}",
+        url=url or f"https://example.com/{source}/{n}",
+        fetched_at=f"2026-08-17T00:00:{n % 60:02d}+00:00",
+    )
+
+
+def test_allocate_by_source_underfull_window_returns_items_unchanged():
+    items = [_lane_item("telegram", i) for i in range(10)]
+
+    assert allocate_by_source(items, 250) is items
+
+
+def test_allocate_by_source_one_source_cannot_fill_the_whole_budget():
+    # The 2026-08-13T07:20Z incident shape: a Telegram burst plus a modest
+    # amount of everything else. Pre-quota, telegram took the entire budget
+    # and every other source got zero; the quota must keep every source
+    # represented.
+    items = (
+        [_lane_item("telegram", i) for i in range(300)]
+        + [_lane_item("x", i) for i in range(40)]
+        + [_lane_item("news", i) for i in range(20)]
+        + [_lane_item("reddit", i) for i in range(10)]
+    )
+
+    result = allocate_by_source(items, 250)
+
+    by_source: dict[str, int] = {}
+    for item in result:
+        by_source[item.source] = by_source.get(item.source, 0) + 1
+    assert len(result) == 250
+    # x/news/reddit are under their quotas -> taken in full; telegram gets
+    # its own quota plus every slot the underfull lanes couldn't use.
+    assert by_source["x"] == 40
+    assert by_source["news"] == 20
+    assert by_source["reddit"] == 10
+    assert by_source["telegram"] == 180
+
+
+def test_allocate_by_source_preserves_input_order_and_prefers_oldest():
+    items = [_lane_item("telegram", i) for i in range(300)] + [
+        _lane_item("x", i) for i in range(5)
+    ]
+
+    result = allocate_by_source(items, 100)
+
+    # Order preserved (a filter of the input, never a reorder)...
+    ids = [item.source_id for item in result]
+    selected = set(ids)
+    assert ids == [item.source_id for item in items if item.source_id in selected]
+    # ...and within the oversubscribed telegram lane, the OLDEST items are
+    # kept (backlog-drain contract), so telegram-0 is in and telegram-299 out.
+    assert "telegram-0" in ids
+    assert "telegram-299" not in ids
+    assert all(f"x-{i}" in ids for i in range(5))
+
+
+def test_allocate_by_source_positions_lane_reserved_both_ways():
+    positions = ["ASI_Alliance", "fetchunofficial"]
+    items = (
+        # 100 items from the positions channels (public t.me urls)...
+        [
+            _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}")
+            for i in range(100)
+        ]
+        # ...plus 300 items of other telegram traffic.
+        + [_lane_item("telegram", 1000 + i) for i in range(300)]
+    )
+
+    result = allocate_by_source(items, 250, positions)
+
+    positions_taken = sum(1 for i in result if i.url.startswith("https://t.me/ASI_Alliance/"))
+    # The positions quota is a hard cap, not a floor: exactly 30 of the 100
+    # available positions items are taken (never more, regardless of spare
+    # budget -- redistribution skips the lane), and the general telegram
+    # lane absorbs the rest of the budget. Reserved in BOTH directions.
+    assert positions_taken == 30
+    assert len(result) == 250
+
+
+def test_allocate_by_source_positions_matching_is_case_insensitive():
+    items = [
+        _lane_item("telegram", i, url=f"https://t.me/asi_alliance/{i}") for i in range(400)
+    ]
+
+    result = allocate_by_source(items, 250, ["ASI_Alliance"])
+
+    # Every item lands in the positions lane despite the URL/config case
+    # difference, and the lane's hard cap holds: exactly its 30-slot quota
+    # is taken. (Had the match failed, these would be plain telegram items
+    # and the telegram lane + redistribution would fill all 250 -- so the
+    # count doubles as proof the case-insensitive match actually fired.)
+    assert len(result) == 30
+
+
+def test_allocate_by_source_without_positions_config_treats_channels_as_telegram():
+    items = [
+        _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(10)
+    ] + [_lane_item("x", i) for i in range(10)]
+
+    # No positions channels configured -> plain telegram items; underfull
+    # window passes through untouched either way.
+    assert allocate_by_source(items, 250) is items
+
+
 # --- format_recent_arcs (the {{RECENT_ARCS}} prompt block, stable-arc-keys feature) ---
 
 
@@ -2186,35 +2320,49 @@ def test_format_recent_arcs_empty_list_returns_sentinel():
     assert format_recent_arcs([]) == "(no arcs recorded yet)"
 
 
-def test_format_recent_arcs_renders_one_key_per_line():
-    result = format_recent_arcs(["hormuz", "openai"])
+def test_format_recent_arcs_renders_one_key_per_line_with_counts():
+    result = format_recent_arcs([("hormuz", 29), ("openai", 1)])
 
-    assert result == "- hormuz\n- openai"
+    # The count is the model's over-coverage signal (prompts/digest.md's
+    # section-budget rule) -- it must survive into the rendered block, with
+    # singular/plural agreement so the line reads as prose.
+    assert result == "- hormuz (covered in 29 briefings)\n- openai (covered in 1 briefing)"
 
 
 def test_format_recent_arcs_invalid_key_is_dropped_not_rendered_raw():
     # Defense in depth: a key that somehow reached storage without passing
     # _ARC_KEY_RE (a hand-edited row, a future storage bug) must never be
     # replayed into a future prompt verbatim.
-    result = format_recent_arcs(["valid-key", "Has-Uppercase", "has space", ""])
+    result = format_recent_arcs(
+        [("valid-key", 2), ("Has-Uppercase", 3), ("has space", 4), ("", 5)]
+    )
 
-    assert result == "- valid-key"
+    assert result == "- valid-key (covered in 2 briefings)"
 
 
 def test_format_recent_arcs_all_invalid_keys_returns_sentinel():
-    result = format_recent_arcs(["INVALID", "also bad", ""])
+    result = format_recent_arcs([("INVALID", 1), ("also bad", 2), ("", 3)])
 
     assert result == "(no arcs recorded yet)"
 
 
+def test_format_recent_arcs_nonpositive_count_clamped_to_one():
+    # Counts are display data clamped defensively -- a zero/negative count
+    # (impossible from the GROUP BY query, but cheap to guard) must not
+    # render as nonsense like "covered in 0 briefings".
+    result = format_recent_arcs([("hormuz", 0)])
+
+    assert result == "- hormuz (covered in 1 briefing)"
+
+
 def test_format_recent_arcs_caps_at_fifty_entries():
-    keys = [f"key-{i}" for i in range(80)]
+    keys = [(f"key-{i}", 1) for i in range(80)]
 
     result = format_recent_arcs(keys)
 
     assert len(result.splitlines()) == 50
-    assert result.splitlines()[0] == "- key-0"
-    assert result.splitlines()[-1] == "- key-49"
+    assert result.splitlines()[0] == "- key-0 (covered in 1 briefing)"
+    assert result.splitlines()[-1] == "- key-49 (covered in 1 briefing)"
 
 
 # --- build_prompt: {{RECENT_COVERAGE}} substitution ---

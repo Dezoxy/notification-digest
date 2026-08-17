@@ -57,6 +57,7 @@ from digest.state import (
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
     SummarizeError,
+    allocate_by_source,
     format_recent_arcs,
     format_recent_coverage,
     select_items_for_prompt,
@@ -192,8 +193,25 @@ _VERIFY_UNAVAILABLE_BANNER = "⚠ verification unavailable this run\n\n"
 # context window, and an oversized prompt then fails every subsequent run
 # forever (no items ever get stamped). The remainder ships in later runs:
 # the 6-hourly timer is the drain loop for a large backlog, at
-# _MAX_ITEMS_PER_DIGEST items per digest.
-_MAX_ITEMS_PER_DIGEST = 200
+# _MAX_ITEMS_PER_DIGEST items per digest. 250 (was 200 at the 3-hourly
+# cadence): the 6-hourly windows carry roughly double the items, and this
+# value must equal the sum of digest/summarize.py's _SOURCE_QUOTAS -- the
+# quotas ARE the allocation of this budget (see that constant's comment).
+_MAX_ITEMS_PER_DIGEST = 250
+
+# How many unsummarized items are read back as the CANDIDATE POOL that
+# allocate_by_source picks _MAX_ITEMS_PER_DIGEST from. Deliberately much
+# larger than the per-digest cap: the pre-quota code passed
+# `limit=_MAX_ITEMS_PER_DIGEST` straight to get_unsummarized_items, which
+# meant the cap was applied BEFORE any notion of source balance existed --
+# and since every collector stamps one fetched_at for its whole batch and
+# Telegram runs first, a Telegram backlog burst filled the entire window
+# with Telegram alone (live incident: 2026-08-13T07:20Z, a briefing built
+# from 200 telegram items and 0 news/x/reddit/polymarket, and the three
+# runs after it were nearly as skewed). The quota can only balance sources
+# it can actually see, so the pool read must be wide enough to reach past
+# one source's backlog to the items behind it.
+_MAX_ITEMS_FETCH_POOL = 1000
 
 
 async def _client_ready(client: TelegramClient) -> bool:
@@ -268,10 +286,18 @@ def _deliver(
     telegram_state = TelegramRunState()
     all_ok = deliver_pending(conn, cfg, telegram_state)
 
-    items = get_unsummarized_items(conn, limit=_MAX_ITEMS_PER_DIGEST)
+    items = get_unsummarized_items(conn, limit=_MAX_ITEMS_FETCH_POOL)
     if not items:
         logger.info("no unsummarized items, nothing to send")
         return all_ok
+
+    # Per-source quota pass (digest/summarize.py's allocate_by_source) BEFORE
+    # the byte-budget shrink below: the candidate pool is deliberately wider
+    # than one digest's budget (_MAX_ITEMS_FETCH_POOL vs
+    # _MAX_ITEMS_PER_DIGEST, see both constants' comments), and this is the
+    # step that turns that pool into a source-balanced batch -- including the
+    # reserved "positions" lane for the owner's POSITIONS_TG_CHANNELS.
+    items = allocate_by_source(items, _MAX_ITEMS_PER_DIGEST, cfg.positions_tg_channels)
 
     # "Recently covered" continuity context (digest/summarize.py's
     # format_recent_coverage): every digest created in the last
