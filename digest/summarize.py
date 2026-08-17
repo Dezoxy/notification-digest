@@ -826,19 +826,19 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 
 # format_recent_coverage's skip list: structural/rubric headings that appear
 # by STANDING RULE rather than because a story happened (prompts/digest.md).
-# "Needs attention" is the original member (see _NEEDS_ATTENTION_HEADING's
-# comment above for the suppression rationale); "Positions" and "Hungary"
-# joined when the Positions standing section was added, for the identical
-# reason -- each appears every (or nearly every) window BY DESIGN, so
-# replaying one into {{RECENT_COVERAGE}} would tell the model its own
-# standing section is "already covered" and invite delta-compression the
-# standing rules explicitly exempt these sections from. ("Also this window"
-# needs no entry: _real_heading_lines returns it too, but its content is by
-# definition one-window ephemera -- treating it as covered is harmless and
-# was the pre-Positions behavior for Hungary as well; Hungary is added now
-# because its standing rule, unlike Also's, mandates fresh prose every
-# window.)
-_STANDING_RUBRIC_HEADINGS = frozenset({_NEEDS_ATTENTION_HEADING, "positions", "hungary"})
+# "Needs attention" is the only member: it is a routing label, not a story
+# (see _NEEDS_ATTENTION_HEADING's comment above). The portfolio and
+# Hungarian standing-coverage rules deliberately do NOT add entries here --
+# their sections are STORY-TITLED by contract (never a fixed "Positions"/
+# "Hungary" label to match on), and having them participate in the
+# "Recently covered" delta rule is the POINT: the reader wants what's new
+# from those channels each window, not a re-explanation, and their
+# guaranteed presence is enforced by the prompt's own presence rule (one
+# sentence in Also-this-window minimum), never by hiding them from
+# coverage. A briefly-labeled experiment (2026-08-17, PR #75) that DID skip
+# literal "positions"/"hungary" headings here was reverted the same day
+# when the sections went story-first.
+_STANDING_RUBRIC_HEADINGS = frozenset({_NEEDS_ATTENTION_HEADING})
 
 # format_recent_coverage caps the number of "recently covered" lines it will
 # ever render, regardless of how many digests or headings are available.

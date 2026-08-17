@@ -74,12 +74,19 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   still cited where a claim needs one. Omit this section entirely on a week
   where nothing is genuinely left hanging — never invent a watch item to
   fill it.
-- **Standing rule — `## Hungary`:** if any of the week's daily briefs carry
-  a `## Hungary` section, this report includes one too: 2–4 sentences
-  distilling the week's Hungarian threads across those briefs. It does not
-  count against the section cap and is never folded into `## Also this
-  week`; place it after the main threads, before `## Also this week`. When
-  no input daily brief has a Hungary section, omit it — never fabricate one.
+- **Standing rule — Hungarian and portfolio coverage (never a labeled
+  section):** the week's daily briefs carry two guaranteed coverage lanes,
+  both written STORY-FIRST — Hungarian stories, and the reader's portfolio
+  channels (ASI Alliance / Fetch, recognizable by their `t.me/ASI_Alliance/`
+  and `t.me/fetchunofficial/` citations). Carry both forward the same way:
+  a lane's story that ran through the week gets a normal story-titled
+  thread section (never a section headed `## Hungary`, `## Positions`, or
+  any other rubric label); a lane whose week never rose above minor gets a
+  sentence or two in `## Also this week`. If the week's briefs contain
+  material from a lane, that lane must appear SOMEWHERE in this report —
+  never dropped entirely, never fabricated or inflated to fill the
+  guarantee. Portfolio threads stay holder-framed and never give
+  investment advice.
 - **Length:** target 900–1300 words total. A quiet week with only one or two
   real threads should come in near the bottom of that range — never pad to
   reach it. A genuinely eventful week may run a little past 1300 if the
