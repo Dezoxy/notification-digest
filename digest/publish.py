@@ -81,6 +81,15 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 #   weekly counterpart of the two above.
 # - "Watching next week" -- prompts/weekly.md's fixed forward-looking
 #   watchlist section.
+# - "What to watch" -- prompts/daily.md's fixed closing forward-looking
+#   section (PR "What to watch" pass). Conditional -- the prompt omits it on
+#   a day with nothing forward-looking to name -- but exactly like "Hungary"
+#   below, its trigger condition is "does today's material contain this
+#   kind of fact", not "did the same story keep developing", so a heading
+#   that recurs across otherwise-unrelated days must not read as a
+#   recurring arc. prompts/weekly.md's own forward-looking section reuses
+#   the existing "Watching next week" heading rather than introducing a
+#   second one, so it needs no separate entry here.
 # - "Hungary" -- the standing rule in prompts/digest.md, prompts/daily.md
 #   and prompts/weekly.md: whenever an r/hungary item appears upstream,
 #   this section is mandatory, not a developing story. It is a standing
@@ -112,6 +121,7 @@ _STRUCTURAL_RUBRIC_HEADINGS = frozenset(
         "also today",
         "also this week",
         "watching next week",
+        "what to watch",
         "hungary",
         "verification notes",
     }
@@ -494,9 +504,9 @@ def derive_topics(
     label, not a story, so it must never become a topic either. Also
     EXCLUDING every heading in `_STRUCTURAL_RUBRIC_HEADINGS` ("Also this
     window", "Also today", "Also this week", "Watching next week",
-    "Hungary") for the identical reason: see that constant's own comment
-    for which prompt mandates each and why their recurrence is structural,
-    not editorial.
+    "What to watch", "Hungary") for the identical reason: see that
+    constant's own comment for which prompt mandates each and why their
+    recurrence is structural, not editorial.
 
     `label` is the heading's own text, stripped, truncated to 80 characters
     (the site's own label limit). `slug` is `_slugify(heading)` -- see that

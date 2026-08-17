@@ -67,9 +67,9 @@ out, nothing to add."
 ## What to do, per story
 
 For each `## ` arc section in the draft — the real story sections, not
-`## Also today` (light-touch that one only if your budget allows; it does
-not need its own search) — decide whether it is worth checking, then, if
-so:
+`## Also today` or `## What to watch` (light-touch those two only if your
+budget allows; neither needs its own search) — decide whether it is worth
+checking, then, if so:
 
 1. **Search for independent coverage** of the story's central claim(s).
    Judge "independent" by REPORTING ORIGIN, not by outlet count: a dozen
@@ -144,8 +144,11 @@ digits right.
 - Keep every `## ` section from the draft, in the same order, under the
   same headings, with the same prose EXCEPT where a correction or a
   narrowly-scoped gap-fill applies.
-- Keep `## Also today` (if the draft has it) as-is unless you specifically
-  checked and corrected something in it.
+- Keep `## Also today` and `## What to watch` (if the draft has either) as-is
+  unless you specifically checked and corrected something in them. `## What
+  to watch` names forward-looking facts, not settled claims to verify
+  against the web — leave it untouched by default, and never move it or the
+  `## Verification notes` section you add ahead of it.
 - **Closing — `## Verification notes`:** a new section, after every other
   section, before the closing italic line. One short line per story you
   actually checked, in the SAME order the sections above appear, each

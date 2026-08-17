@@ -61,6 +61,18 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   sentence each but not their own arc — written as flowing prose, still
   cited. Pick the handful genuinely worth keeping and drop the rest; this is
   not a place to compress everything left over.
+- **`## What to watch`** closes the brief, after `## Also today` and before
+  the closing italic line: 2 to 4 short sentences of prose (no bullets,
+  same as every other section) naming what's coming. Draw ONLY from
+  forward-looking facts the day's briefings already stated — a named date
+  or deadline (a scheduled vote, an ultimatum's expiry, an earnings or
+  release date), an explicitly announced upcoming event, or
+  prediction-market odds worth re-checking. No speculation and no invented
+  outlook of your own beyond what the briefings already say. It is a
+  structural/rubric section, like `## Also today`, not a story: if today's
+  material names nothing forward-looking, OMIT the section entirely rather
+  than manufacture one. Citations follow the same carry-forward-verbatim
+  rule as every other section.
 - **Standing rule — Hungarian and portfolio coverage (never a labeled
   section):** the day's briefings carry two guaranteed coverage lanes, both
   written STORY-FIRST — Hungarian stories (from r/hungary and Hungarian
