@@ -460,6 +460,109 @@ def test_all_feeds_fail_marks_result_failed(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.items == []
 
 
+def test_majority_of_feeds_failing_marks_result_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2 of 3 fail -> majority-failed rule trips even though one succeeded;
+    # the all-failed rule alone would have reported this run as healthy.
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    good = _rss(
+        f"<item><title>Ok</title><link>https://example.com/ok</link>"
+        f"<guid>guid-ok</guid><pubDate>{recent}</pubDate></item>"
+    )
+    _patch_urlopen(
+        monkeypatch,
+        {
+            "https://feed.example/good": good,
+            "https://feed.example/bad1": urllib.error.URLError("dns failure"),
+            "https://feed.example/bad2": TimeoutError("timed out"),
+        },
+    )
+
+    result = collect(
+        ["https://feed.example/good", "https://feed.example/bad1", "https://feed.example/bad2"]
+    )
+
+    assert result.failed is True
+    # The surviving feed's items are still collected -- failed is a health
+    # signal, never a reason to discard good data.
+    assert [i.source_id for i in result.items] == ["guid-ok"]
+
+
+def test_minority_of_feeds_failing_stays_unfailed_and_logs_health(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    good = _rss(
+        f"<item><title>Ok</title><link>https://example.com/ok</link>"
+        f"<guid>guid-ok</guid><pubDate>{recent}</pubDate></item>"
+    )
+    good2 = _rss(
+        f"<item><title>Ok2</title><link>https://example.com/ok2</link>"
+        f"<guid>guid-ok2</guid><pubDate>{recent}</pubDate></item>"
+    )
+    _patch_urlopen(
+        monkeypatch,
+        {
+            "https://feed.example/good": good,
+            "https://feed.example/good2": good2,
+            "https://feed.example/bad": urllib.error.URLError("dns failure"),
+        },
+    )
+
+    with caplog.at_level("INFO"):
+        result = collect(
+            [
+                "https://feed.example/good",
+                "https://feed.example/good2",
+                "https://feed.example/bad",
+            ]
+        )
+
+    assert result.failed is False
+    health_lines = [r.message for r in caplog.records if "rss_health" in r.message]
+    assert len(health_lines) == 1
+    assert '"feeds_failed": 1' in health_lines[0]
+    assert '"feeds_ok": 2' in health_lines[0]
+
+
+# --- feed display-title overrides ---
+
+
+def test_feed_title_override_applies_by_host_and_parent_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    # ft.com's real feed titles itself literally "World" -- the override
+    # must replace it, including from a www. subdomain.
+    ft = _rss(
+        f"<item><title>Story</title><link>https://www.ft.com/content/abc</link>"
+        f"<guid>guid-ft</guid><pubDate>{recent}</pubDate></item>",
+        feed_title="World",
+    )
+    _patch_urlopen(monkeypatch, {"https://www.ft.com/world?format=rss": ft})
+
+    result = collect(["https://www.ft.com/world?format=rss"])
+
+    assert result.items[0].chat_title == "Financial Times"
+
+
+def test_feed_without_override_keeps_its_own_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    verge = _rss(
+        f"<item><title>Story</title><link>https://example.com/story</link>"
+        f"<guid>guid-v</guid><pubDate>{recent}</pubDate></item>",
+        feed_title="The Verge",
+    )
+    _patch_urlopen(monkeypatch, {"https://www.theverge.com/rss/index.xml": verge})
+
+    result = collect(["https://www.theverge.com/rss/index.xml"])
+
+    assert result.items[0].chat_title == "The Verge"
+
+
 # --- bozo handling ---
 
 
