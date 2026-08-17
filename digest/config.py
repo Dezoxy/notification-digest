@@ -363,6 +363,21 @@ class Config:
     # verify_daily_timeout_seconds' 600s (an agentic, tool-calling loop) --
     # neither of those call shapes applies here.
     context_timeout_seconds: int = 120
+    # Hacker News collector (digest/collectors/hackernews.py). Like
+    # x_enabled/polymarket_enabled/reddit_enabled, this is an explicit on/off
+    # flag rather than an empty-means-disabled sentinel -- unlike news_feeds,
+    # there is no accompanying required value with a natural "unconfigured"
+    # empty shape (the collector needs nothing beyond the public Algolia API
+    # itself and hackernews_top_n's own sane default), so an explicit flag is
+    # the only unambiguous way to represent "collector present but off" (same
+    # rationale as polymarket_enabled's own comment).
+    hackernews_enabled: bool = False
+    # How many front-page stories digest/collectors/hackernews.py requests
+    # per run (Algolia's own `hitsPerPage` query parameter). 15 is a
+    # reasonable default for a personal digest; bounded to [1, 30] for the
+    # same "catch a typo/misconfiguration at startup, not deep inside a
+    # scheduled run" reason as POLYMARKET_TOP_N/REDDIT_POSTS_PER_SUB.
+    hackernews_top_n: int = 15
 
     @classmethod
     def from_env(cls) -> Config:
@@ -441,6 +456,11 @@ class Config:
         if reddit_enabled:
             reddit_session_cookie = _require_str("REDDIT_SESSION_COOKIE")
             reddit_subreddits = _require_subreddit_tuple("REDDIT_SUBREDDITS")
+
+        hackernews_enabled = _parse_bool(os.environ.get("HACKERNEWS_ENABLED", "false"))
+        hackernews_top_n = _optional_int_in_range(
+            "HACKERNEWS_TOP_N", default=15, minimum=1, maximum=30
+        )
 
         arc_keys_site_enabled = _parse_bool(os.environ.get("ARC_KEYS_SITE_ENABLED", "true"))
 
@@ -526,6 +546,8 @@ class Config:
             reddit_session_cookie=reddit_session_cookie,
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
+            hackernews_enabled=hackernews_enabled,
+            hackernews_top_n=hackernews_top_n,
             arc_keys_site_enabled=arc_keys_site_enabled,
             context_enabled=context_enabled,
             context_max_per_run=context_max_per_run,

@@ -218,7 +218,7 @@ WEEKLY_LOOKBACK_WINDOW = timedelta(days=7)
 # no CHECK constraint (see _SCHEMA's comment on items.source and
 # commit_new_items's docstring) -- adding a new source is a one-line edit
 # here instead of a full-table rebuild migration.
-_KNOWN_SOURCES = frozenset({"telegram", "x", "news", "polymarket", "reddit"})
+_KNOWN_SOURCES = frozenset({"telegram", "x", "news", "polymarket", "reddit", "hackernews"})
 
 
 @dataclass(frozen=True)

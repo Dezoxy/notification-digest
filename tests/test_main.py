@@ -24,6 +24,7 @@ from digest.deliver import (
 from digest.main import (
     _client_ready,
     _deliver,
+    _run_hackernews_collector,
     _run_news_collector,
     _run_polymarket_collector,
     _run_reddit_collector,
@@ -2042,8 +2043,8 @@ def test_run_logs_run_summary_line_with_exactly_the_enabled_collectors(
     monkeypatch, tmp_path, caplog
 ):
     # Telegram is always enabled; X is turned on here via x_enabled=True.
-    # news/polymarket/reddit stay off (plain _cfg() defaults), so the
-    # run_summary line's "collectors" dict must contain exactly telegram+x,
+    # news/polymarket/reddit/hackernews stay off (plain _cfg() defaults), so
+    # the run_summary line's "collectors" dict must contain exactly telegram+x,
     # not every collector this module knows how to run. Reuses this test
     # file's own end-to-end _run() wiring pattern (see the test right below,
     # which this one is placed ahead of).
@@ -2692,6 +2693,134 @@ def test_run_reddit_collector_failure_surfaces_in_failed_sources(monkeypatch, tm
     ok = asyncio.run(main_mod._run(cfg))
 
     assert captured["failed_sources"] == ["reddit"]
+    assert ok is False
+
+
+# --- _run_hackernews_collector (Hacker News collector,
+#     Config.hackernews_enabled-gated) ---
+
+
+def test_run_hackernews_disabled_never_calls_collector():
+    cfg = replace(_cfg(), hackernews_enabled=False)
+
+    result = _run_hackernews_collector(cfg)
+
+    assert result == CollectResult()
+
+
+def test_run_hackernews_disabled_collect_function_untouched(monkeypatch):
+    cfg = replace(_cfg(), hackernews_enabled=False)
+
+    def boom_collect(*a, **k):
+        raise AssertionError("hackernews_collector.collect must not be called when disabled")
+
+    monkeypatch.setattr(main_mod.hackernews_collector, "collect", boom_collect)
+
+    result = _run_hackernews_collector(cfg)
+
+    assert result == CollectResult()
+
+
+def test_run_hackernews_enabled_delegates_to_collect_with_configured_top_n(monkeypatch):
+    cfg = replace(_cfg(), hackernews_enabled=True, hackernews_top_n=20)
+    expected = CollectResult(items=[_item("hackernews-1")])
+
+    captured = {}
+
+    def fake_collect(top_n):
+        captured["top_n"] = top_n
+        return expected
+
+    monkeypatch.setattr(main_mod.hackernews_collector, "collect", fake_collect)
+
+    result = _run_hackernews_collector(cfg)
+
+    assert result is expected
+    assert captured == {"top_n": 20}
+
+
+def test_run_hackernews_collector_crash_is_caught_returns_failed_result(monkeypatch):
+    cfg = replace(_cfg(), hackernews_enabled=True)
+
+    def boom_collect(*a, **k):
+        raise RuntimeError("hackernews api shape changed")
+
+    monkeypatch.setattr(main_mod.hackernews_collector, "collect", boom_collect)
+
+    result = _run_hackernews_collector(cfg)
+
+    assert result.failed is True
+    assert result.items == []
+
+
+# --- _run: hackernews wiring end to end (merge into commit, failed_sources) ---
+
+
+def test_run_merges_hackernews_items_into_commit_alongside_telegram(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), hackernews_enabled=True
+    )
+
+    tg_item = _item("1")
+    hn_item = Item(
+        source="hackernews",
+        source_id="123456",
+        chat_id=None,
+        chat_title="Hacker News",
+        author="submitter1",
+        text="headline\n\n[score 500, 200 comments]",
+        url="https://news.ycombinator.com/item?id=123456",
+        fetched_at="2026-07-29T10:00:00+00:00",
+    )
+
+    _patch_telegram_client(
+        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
+    )
+
+    def fake_hackernews_collect(top_n):
+        return CollectResult(items=[hn_item])
+
+    monkeypatch.setattr(main_mod.hackernews_collector, "collect", fake_hackernews_collect)
+
+    captured = {}
+
+    def fake_commit_new_items(conn, items, cursor_updates):
+        captured["items"] = items
+        captured["cursor_updates"] = cursor_updates
+        return len(items)
+
+    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
+    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert ok is True
+    assert captured["items"] == [tg_item, hn_item]
+    # hackernews never contributes a cursor_update -- only telegram's shows up.
+    assert captured["cursor_updates"] == {("telegram", "123"): "1"}
+
+
+def test_run_hackernews_collector_failure_surfaces_in_failed_sources(monkeypatch, tmp_path):
+    cfg = replace(
+        _cfg(), state_db_path=str(tmp_path / "state.db"), hackernews_enabled=True
+    )
+
+    _patch_telegram_client(monkeypatch, CollectResult())
+    monkeypatch.setattr(
+        main_mod.hackernews_collector, "collect", lambda *a, **k: CollectResult(failed=True)
+    )
+
+    captured = {}
+
+    def fake_deliver(conn, cfg, failed_sources):
+        captured["failed_sources"] = failed_sources
+        return True
+
+    monkeypatch.setattr(main_mod, "_deliver", fake_deliver)
+
+    ok = asyncio.run(main_mod._run(cfg))
+
+    assert captured["failed_sources"] == ["hackernews"]
     assert ok is False
 
 
