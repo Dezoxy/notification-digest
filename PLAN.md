@@ -71,7 +71,7 @@
                        │  email    -- emailer.py / SMTP          │
                        │  site     -- publish.py -> ingest       │
                        │  telegram -- publish.py bot sendMessage │
-                       │   (site-before-telegram ordering; 12h   │
+                       │   (site-before-telegram ordering; 24h   │
                        │   freshness guard + per-run 429 breaker,│
                        │   docs/incidents/2026-08-06-telegram-   │
                        │   flood.md)                             │
@@ -339,7 +339,7 @@ Optional Hungarian translation of an already-validated English digest (`TRANSLAT
 
 ### 4.13 `digest/deliver.py`
 
-Owns getting an already-recorded digest out across its three independent channels — email, site, Telegram — plus the pending-digest retry pass; it never summarizes or persists a digest itself (that's `main.py`'s job). `deliver_channels` attempts every ENABLED, not-yet-done channel for one digest, each with its own try/except and its own `mark_digest_*` commit, so one channel's failure never rolls back or blocks another. Site is attempted before Telegram — a real dependency: the Telegram message links to the site's own page for that digest, so Telegram is skipped for a digest this run if its site publish isn't done yet. Telegram carries two extra guards, added after the incident in `docs/incidents/2026-08-06-telegram-flood.md`: a digest older than 12h is marked sent without ever notifying (a stale "just caught up" ping is pure noise for a real-time channel), and a per-run `TelegramRunState` circuit breaker skips every remaining Telegram send for the rest of the run once any send in it hits HTTP 429. `deliver_pending` retries every digest (window or daily) still pending on at least one enabled channel, oldest first, sharing one `TelegramRunState` with whatever fresh digest the caller summarizes in the same run. Logs one structured JSON `digest_delivery` line per digest handled (per-channel outcome).
+Owns getting an already-recorded digest out across its three independent channels — email, site, Telegram — plus the pending-digest retry pass; it never summarizes or persists a digest itself (that's `main.py`'s job). `deliver_channels` attempts every ENABLED, not-yet-done channel for one digest, each with its own try/except and its own `mark_digest_*` commit, so one channel's failure never rolls back or blocks another. Site is attempted before Telegram — a real dependency: the Telegram message links to the site's own page for that digest, so Telegram is skipped for a digest this run if its site publish isn't done yet. Telegram carries two extra guards, added after the incident in `docs/incidents/2026-08-06-telegram-flood.md`: a digest older than `_TELEGRAM_MAX_AGE` (24h = 4 window runs at the 6-hourly cadence; it was 12h while the timer ran 3-hourly) is marked sent without ever notifying (a stale "just caught up" ping is pure noise for a real-time channel), and a per-run `TelegramRunState` circuit breaker skips every remaining Telegram send for the rest of the run once any send in it hits HTTP 429. `deliver_pending` retries every digest (window or daily) still pending on at least one enabled channel, oldest first, sharing one `TelegramRunState` with whatever fresh digest the caller summarizes in the same run. Logs one structured JSON `digest_delivery` line per digest handled (per-channel outcome).
 
 ### 4.14 `digest/publish.py`
 
