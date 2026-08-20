@@ -2076,7 +2076,9 @@ def test_run_logs_run_summary_line_with_exactly_the_enabled_collectors(
     monkeypatch.setattr(
         main_mod, "commit_new_items", lambda conn, items, cursor_updates: len(items)
     )
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     with caplog.at_level("INFO", logger=main_mod.logger.name):
         ok = asyncio.run(main_mod._run(cfg))
@@ -2127,7 +2129,9 @@ def test_run_merges_telegram_and_x_items_into_one_commit(monkeypatch, tmp_path):
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2163,7 +2167,7 @@ def test_run_failed_sources_reflects_exactly_the_failing_collectors(
 
     captured = {}
 
-    def fake_deliver(conn, cfg, failed_sources):
+    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
         captured["failed_sources"] = failed_sources
         return True
 
@@ -2239,7 +2243,9 @@ def test_run_x_collector_crash_does_not_prevent_telegram_items_from_committing(
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2333,7 +2339,9 @@ def test_run_merges_news_items_into_commit_alongside_telegram(monkeypatch, tmp_p
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2357,7 +2365,7 @@ def test_run_news_collector_failure_surfaces_in_failed_sources(monkeypatch, tmp_
 
     captured = {}
 
-    def fake_deliver(conn, cfg, failed_sources):
+    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
         captured["failed_sources"] = failed_sources
         return True
 
@@ -2497,7 +2505,9 @@ def test_run_merges_polymarket_items_and_prob_updates_into_commit(monkeypatch, t
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2524,7 +2534,9 @@ def test_run_polymarket_disabled_commit_call_shape_is_unaffected(monkeypatch, tm
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2545,7 +2557,7 @@ def test_run_polymarket_failure_surfaces_in_failed_sources(monkeypatch, tmp_path
 
     captured = {}
 
-    def fake_deliver(conn, cfg, failed_sources):
+    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
         captured["failed_sources"] = failed_sources
         return True
 
@@ -2662,7 +2674,9 @@ def test_run_merges_reddit_items_into_commit_alongside_telegram(monkeypatch, tmp
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2684,7 +2698,7 @@ def test_run_reddit_collector_failure_surfaces_in_failed_sources(monkeypatch, tm
 
     captured = {}
 
-    def fake_deliver(conn, cfg, failed_sources):
+    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
         captured["failed_sources"] = failed_sources
         return True
 
@@ -2790,7 +2804,9 @@ def test_run_merges_hackernews_items_into_commit_alongside_telegram(monkeypatch,
         return len(items)
 
     monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(main_mod, "_deliver", lambda conn, cfg, failed_sources: True)
+    monkeypatch.setattr(
+        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
+    )
 
     ok = asyncio.run(main_mod._run(cfg))
 
@@ -2812,7 +2828,7 @@ def test_run_hackernews_collector_failure_surfaces_in_failed_sources(monkeypatch
 
     captured = {}
 
-    def fake_deliver(conn, cfg, failed_sources):
+    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
         captured["failed_sources"] = failed_sources
         return True
 
@@ -4330,3 +4346,110 @@ def test_run_weekly_retry_path_picks_weekly_thread_from_stored_kind(conn, monkey
     assert telegram_calls == [141]
     row = conn.execute("SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)
+
+
+# --- hidden delivery channels (hide:<channel> window runs) ---
+
+
+def test_parse_hidden_channels_accepts_a_single_channel():
+    assert main_mod._parse_hidden_channels(["hide:telegram"]) == frozenset({"telegram"})
+
+
+def test_parse_hidden_channels_accepts_a_comma_list_and_normalizes_case():
+    assert main_mod._parse_hidden_channels(["hide:Telegram, SITE"]) == frozenset(
+        {"telegram", "site"}
+    )
+
+
+def test_parse_hidden_channels_is_empty_without_the_argument():
+    # The default window run must be completely unaffected.
+    assert main_mod._parse_hidden_channels([]) == frozenset()
+    assert main_mod._parse_hidden_channels(["--force"]) == frozenset()
+
+
+def test_parse_hidden_channels_rejects_an_unknown_channel():
+    # A typo must fail loudly at startup, not silently deliver everywhere:
+    # the whole point of the flag is that something is NOT shown.
+    with pytest.raises(ValueError, match="unknown delivery channel 'telegran'"):
+        main_mod._parse_hidden_channels(["hide:telegran"])
+
+
+def test_parse_hidden_channels_rejects_hiding_the_site_without_telegram():
+    # deliver_channels only defers Telegram while the site publish is NOT
+    # done; a suppressed site reads as done there, so this combination would
+    # send a real ping linking to a page that was never published.
+    with pytest.raises(ValueError, match="hide:site requires hide:telegram"):
+        main_mod._parse_hidden_channels(["hide:site"])
+
+
+def test_deliver_channels_hidden_telegram_is_marked_done_and_never_sent(conn, monkeypatch):
+    # The load-bearing behaviour: a hidden channel must be STAMPED, not just
+    # skipped. get_pending_digests treats an enabled channel with a 0 flag as
+    # an incomplete delivery, so a merely-skipped channel would be picked up
+    # by the next run's deliver_pending and shown then -- turning "hidden"
+    # into "delivered late".
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "## Heading\n...body...", get_unsummarized_items(conn))
+
+    sent: list[int] = []
+    monkeypatch.setattr(
+        deliver_mod, "send_telegram_tldr", lambda *a, **k: sent.append(digest_id)
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+
+    cfg = replace(
+        _cfg(), telegram_notify_bot_token="tok", telegram_notify_chat_id="-100", email_enabled=True
+    )
+    ok = deliver_channels(
+        conn,
+        cfg,
+        digest_id,
+        "## Heading\n...body...",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        dict(_NO_CHANNELS_DONE),
+        _fresh_telegram_state(),
+        hidden=frozenset({"telegram"}),
+    )
+
+    assert ok is True
+    assert sent == []  # never transmitted...
+    # ...but recorded as resolved, so no later run resurrects it.
+    row = conn.execute(
+        "SELECT telegram_sent FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone()
+    assert row[0] == 1
+    assert get_pending_digests(conn, True, False, True) == []
+
+
+def test_deliver_channels_hidden_channel_does_not_suppress_the_others(conn, monkeypatch):
+    # Hiding one channel must leave every other enabled channel delivering
+    # normally -- this is a per-channel suppression, not a quiet mode.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    digest_id = create_digest(conn, "## Heading\n...body...", get_unsummarized_items(conn))
+
+    emailed: list[str] = []
+    monkeypatch.setattr(
+        deliver_mod, "send_digest", lambda *a, **k: emailed.append("sent")
+    )
+    monkeypatch.setattr(
+        deliver_mod, "send_telegram_tldr", lambda *a, **k: pytest.fail("telegram was hidden")
+    )
+
+    cfg = replace(
+        _cfg(), telegram_notify_bot_token="tok", telegram_notify_chat_id="-100", email_enabled=True
+    )
+    ok = deliver_channels(
+        conn,
+        cfg,
+        digest_id,
+        "## Heading\n...body...",
+        1,
+        "2026-07-29T10:00:00+00:00",
+        dict(_NO_CHANNELS_DONE),
+        _fresh_telegram_state(),
+        hidden=frozenset({"telegram"}),
+    )
+
+    assert ok is True
+    assert emailed == ["sent"]
