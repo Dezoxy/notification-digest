@@ -170,6 +170,21 @@ class Config:
     # -- mirroring news_feeds' empty-means-disabled shape (there is no sane
     # default channel list), NOT a separate on/off flag.
     positions_tg_channels: tuple[str, ...] = ()
+    # How old an unsummarized item must get before digest/main.py's `_deliver`
+    # logs a `stale_backlog` WARNING naming its source. Purely a reporting
+    # threshold -- nothing schedules, retries, or fails on it, and the run's
+    # exit code is untouched (a lagging source is not a failed run, and making
+    # it one would fire the OnFailure Telegram alert every 6 hours).
+    #
+    # 24h = 4 window runs at the 6-hourly cadence. Deliberately well above one
+    # window: leftovers from a single oversubscribed run are NORMAL and drain
+    # on the next one (measured 2026-08-20, the worst non-positions lag over a
+    # week was 6.2h -- exactly one window), so a threshold at or near 6h would
+    # fire on healthy behaviour. It is also well BELOW
+    # _STALE_UNSUMMARIZED_PRUNE_DAYS' 14 days (digest/state.py), which is the
+    # deadline at which unselected items are deleted unread -- a warning that
+    # only fired once material was already being discarded would be useless.
+    stale_backlog_warn_hours: int = 24
     # Polymarket collector (see digest/collectors/polymarket.py). Like
     # x_enabled, this IS a separate on/off flag rather than an
     # empty-means-disabled sentinel (contrast news_feeds above) -- there is
@@ -410,6 +425,9 @@ class Config:
         )
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
         positions_tg_channels = _optional_tg_channel_tuple("POSITIONS_TG_CHANNELS")
+        stale_backlog_warn_hours = _optional_positive_int(
+            "STALE_BACKLOG_WARN_HOURS", default=24
+        )
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
         translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
@@ -537,6 +555,7 @@ class Config:
             verify_daily_effort=verify_daily_effort,
             news_feeds=news_feeds,
             positions_tg_channels=positions_tg_channels,
+            stale_backlog_warn_hours=stale_backlog_warn_hours,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,
             polymarket_proxy_key=polymarket_proxy_key,

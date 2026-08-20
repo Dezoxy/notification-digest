@@ -37,6 +37,7 @@ from digest.state import (
     WEEKLY_LOOKBACK_WINDOW,
     commit_new_items,
     connect,
+    count_stale_unsummarized_by_source,
     count_unsummarized_items,
     create_digest,
     get_arc_keys_needing_context,
@@ -415,7 +416,60 @@ def _deliver(
     remaining = count_unsummarized_items(conn)
     if remaining:
         logger.info("%d unsummarized items remain, will ship in the next digest", remaining)
+    _warn_on_stale_backlog(conn, cfg)
     return all_ok
+
+
+def _warn_on_stale_backlog(conn: sqlite3.Connection, cfg: Config) -> None:
+    """Log a WARNING naming any source that has stopped draining. Never raises.
+
+    The counterpart to the `remaining` INFO line above, and deliberately a
+    different severity for a different condition: a remainder is normal (the
+    6-hourly timer is the drain loop and clears it next run), whereas an item
+    that has sat unsummarized for `cfg.stale_backlog_warn_hours` has outlived
+    several drain cycles and is not going to be picked up by the mechanism
+    that is supposed to pick it up.
+
+    This exists because that condition is otherwise INVISIBLE. It does not
+    fail a run -- the digest is written and delivered, the process exits 0 --
+    so `OnFailure=digest-notify.service`, the only alerting wired to this
+    service, never fires. The positions lane accumulated for days in exactly
+    this way and surfaced only by coincidence.
+
+    Report-only, on purpose: no retry, no scheduling change, and `all_ok` is
+    untouched by anything here. A lagging source is a signal to go look at
+    quotas or inflow, not a failed run -- promoting it to one would fire the
+    owner's Telegram alert every 6 hours for a condition that needs a
+    considered fix, not a page. Wrapped so a malformed row or a query error
+    can never take down a run that has already delivered its digest, matching
+    how `_generate_arc_context_primers` treats its own post-delivery work.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=cfg.stale_backlog_warn_hours)
+    positions_prefixes = tuple(
+        f"https://t.me/{channel.lower()}/" for channel in cfg.positions_tg_channels
+    )
+    try:
+        stale = count_stale_unsummarized_by_source(
+            conn, cutoff.isoformat(), positions_prefixes
+        )
+    except sqlite3.Error:
+        logger.exception("stale-backlog check failed; digest already delivered")
+        return
+    if not stale:
+        return
+    logger.warning(
+        "stale_backlog %s",
+        json.dumps(
+            {
+                "threshold_hours": cfg.stale_backlog_warn_hours,
+                "sources": {
+                    source: {"count": count, "oldest": oldest}
+                    for source, count, oldest in stale
+                },
+            },
+            sort_keys=True,
+        ),
+    )
 
 
 async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResult:

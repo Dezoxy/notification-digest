@@ -8,6 +8,7 @@ from digest.state import (
     Item,
     commit_new_items,
     connect,
+    count_stale_unsummarized_by_source,
     count_unsummarized_items,
     create_digest,
     get_all_arc_contexts,
@@ -232,6 +233,94 @@ def test_count_unsummarized_items_matches_unstamped_row_count(conn):
     assert digest_id  # sanity
 
     assert count_unsummarized_items(conn) == 1
+
+
+# --- count_stale_unsummarized_by_source (drain-failure detection) ---
+
+_STALE_CUTOFF = "2026-07-29T12:00:00+00:00"
+
+
+def test_count_stale_unsummarized_reports_only_items_older_than_the_cutoff(conn):
+    commit_new_items(
+        conn,
+        [
+            _item("old", fetched_at="2026-07-27T10:00:00+00:00"),
+            _item("also-old", fetched_at="2026-07-28T10:00:00+00:00"),
+            # After the cutoff -- a normal remainder, not a stalled lane.
+            _item("fresh", fetched_at="2026-07-29T13:00:00+00:00"),
+        ],
+        {},
+    )
+
+    assert count_stale_unsummarized_by_source(conn, _STALE_CUTOFF) == [
+        ("telegram", 2, "2026-07-27T10:00:00+00:00")
+    ]
+
+
+def test_count_stale_unsummarized_ignores_items_already_in_a_digest(conn):
+    commit_new_items(conn, [_item("1", fetched_at="2026-07-27T10:00:00+00:00")], {})
+    create_digest(conn, "## Heading\n...", get_unsummarized_items(conn, limit=None))
+
+    # Stamped items are summarized by definition -- age is irrelevant.
+    assert count_stale_unsummarized_by_source(conn, _STALE_CUTOFF) == []
+
+
+def test_count_stale_unsummarized_excludes_the_positions_lane(conn):
+    commit_new_items(
+        conn,
+        [
+            _item("pos", url="https://t.me/ASI_Alliance/1", fetched_at="2026-07-20T10:00:00+00:00"),
+            _item(
+                "news-1", source="news", url="https://ex.com/1",
+                fetched_at="2026-07-27T10:00:00+00:00",
+            ),
+        ],
+        {},
+    )
+
+    result = count_stale_unsummarized_by_source(
+        conn, _STALE_CUTOFF, ("https://t.me/asi_alliance/",)
+    )
+
+    # The positions lane is hard-capped and deliberately newest-first (PR #85):
+    # a permanently starved tail is its designed steady state, so counting it
+    # would fire this warning on every run forever. Case-insensitive, matching
+    # allocate_by_source's own lowercase-prefix comparison.
+    assert result == [("news", 1, "2026-07-27T10:00:00+00:00")]
+
+
+def test_count_stale_unsummarized_keeps_non_positions_telegram_items(conn):
+    # The exclusion must be narrow. A private-chat item carries the
+    # `t.me/c/<internal_id>/` form (collectors/telegram.py's
+    # build_message_url), which matches no positions prefix -- it is ordinary
+    # telegram traffic and must still be counted, or the exclusion would
+    # blind the warning to the whole source rather than to one lane.
+    commit_new_items(
+        conn,
+        [
+            _item(
+                "private", url="https://t.me/c/1234567890/7",
+                fetched_at="2026-07-27T10:00:00+00:00",
+            ),
+            _item("pos", url="https://t.me/ASI_Alliance/1", fetched_at="2026-07-26T10:00:00+00:00"),
+        ],
+        {},
+    )
+
+    result = count_stale_unsummarized_by_source(
+        conn, _STALE_CUTOFF, ("https://t.me/asi_alliance/",)
+    )
+
+    # Only the private-chat item -- and its own fetched_at is the reported
+    # oldest, proving the positions row was excluded from MIN() too, not just
+    # from the count.
+    assert result == [("telegram", 1, "2026-07-27T10:00:00+00:00")]
+
+
+def test_count_stale_unsummarized_returns_empty_when_everything_is_draining(conn):
+    commit_new_items(conn, [_item("fresh", fetched_at="2026-07-29T13:00:00+00:00")], {})
+
+    assert count_stale_unsummarized_by_source(conn, _STALE_CUTOFF) == []
 
 
 # --- digest bookkeeping (Phase 2) ---
