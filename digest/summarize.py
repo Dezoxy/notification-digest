@@ -245,6 +245,27 @@ _SOURCE_QUOTAS: dict[str, int] = {
 }
 
 
+# Lanes whose within-lane selection takes the NEWEST items rather than the
+# oldest. Only "positions" -- it is the one lane whose quota is a hard cap
+# (see allocate_by_source), so a lane whose channels sustainably out-post
+# that cap has a queue that never drains, and oldest-first there degrades
+# into "always show the stalest item available". Observed 2026-08-20: the
+# two configured channels were arriving at ~77 items per 6h run against the
+# 30-slot quota, a backlog growing ~188/day whose steady state is a lead
+# item pinned at the 14-day prune horizon.
+#
+# Every other lane keeps oldest-first: their quotas are floors that DO
+# receive redistribution, so their backlogs genuinely drain and the
+# drain-loop contract (_MAX_ITEMS_PER_DIGEST in digest/main.py) still holds
+# for them. What this lane gives up in exchange is its own unread tail --
+# deliberately starved, and eventually deleted by prune_stale_unsummarized's
+# 14-day sweep (digest/state.py, whose own comment already names this lane
+# as the overflow it was written for). That is an accepted trade, not an
+# oversight: these are high-volume community channels whose items lose their
+# worth long before that sweep would reach them.
+_NEWEST_FIRST_LANES: frozenset[str] = frozenset({"positions"})
+
+
 def _allocation_lane(item: Item, positions_prefixes: tuple[str, ...]) -> str:
     """The quota lane an item draws from: its source, or the reserved "positions" lane.
 
@@ -300,6 +321,16 @@ def allocate_by_source(
     during a burst, a lane summarizes its stalest pending items first and
     defers the freshest to the next run -- is the same one the pre-quota
     LIMIT already made globally.
+
+    The lanes in _NEWEST_FIRST_LANES ("positions") are the exception, and
+    for the reason that paragraph names: the drain-loop contract assumes a
+    lane's backlog eventually drains, which a HARD-CAPPED lane's cannot once
+    its channels sustainably out-post the cap. There, "starve the oldest
+    backlog forever" stops being the failure mode to avoid and becomes the
+    only sane policy -- the alternative is a digest that reports two-week-old
+    chatter as today's positions. See that constant for the measured numbers.
+    Only the CHOICE of items changes; the returned order is oldest-first
+    either way (this is still a filter of `items`, never a reorder).
 
     When `budget` is SMALLER than the quotas' sum (select_balanced_items_
     for_prompt shrinking to fit the prompt byte cap), each lane's quota is
@@ -394,7 +425,15 @@ def allocate_by_source(
 
     chosen: set[int] = set()
     for lane, lane_items in lanes.items():
-        for item in lane_items[: taken[lane]]:
+        take = taken[lane]
+        # Load-bearing guard, not defensive noise: `lane_items[-0:]` is the
+        # WHOLE list, not the empty one, so a newest-first lane that won zero
+        # slots would otherwise be handed every item it had -- silently
+        # blowing past both its quota and `budget`.
+        if take == 0:
+            continue
+        picked = lane_items[-take:] if lane in _NEWEST_FIRST_LANES else lane_items[:take]
+        for item in picked:
             chosen.add(id(item))
     return [item for item in items if id(item) in chosen]
 
