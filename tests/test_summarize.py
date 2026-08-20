@@ -2321,6 +2321,59 @@ def test_allocate_by_source_without_positions_config_treats_channels_as_telegram
     assert allocate_by_source(items, 250) is items
 
 
+def test_allocate_by_source_positions_lane_takes_newest_not_oldest():
+    # The positions lane is hard-capped, so once its channels sustainably
+    # out-post the cap its queue never drains and oldest-first would pin the
+    # digest to an ever-staler backlog. It must take the NEWEST items
+    # instead -- the inverse of the general-lane rule asserted in
+    # test_allocate_by_source_preserves_input_order_and_prefers_oldest.
+    items = [
+        _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(400)
+    ]
+
+    result = allocate_by_source(items, 250, ["ASI_Alliance"])
+
+    ids = [item.source_id for item in result]
+    assert len(ids) == 30
+    # The 30 most recent (telegram-370..399), never the 30 oldest.
+    assert ids == [f"telegram-{i}" for i in range(370, 400)]
+    assert "telegram-0" not in ids
+
+
+def test_allocate_by_source_positions_newest_first_preserves_input_order():
+    # Choosing from the tail must not reorder the output: the return value
+    # is still a filter of `items` (oldest-first), which
+    # select_items_for_prompt and create_digest both rely on.
+    items = (
+        [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(100)]
+        + [_lane_item("x", i) for i in range(60)]
+        + [_lane_item("news", i) for i in range(60)]
+    )
+
+    result = allocate_by_source(items, 250, ["ASI_Alliance"])
+
+    ids = [item.source_id for item in result]
+    selected = set(ids)
+    assert ids == [item.source_id for item in items if item.source_id in selected]
+
+
+def test_allocate_by_source_positions_lane_winning_zero_slots_takes_nothing():
+    # Regression guard for the negative-slice trap: `lane_items[-0:]` is the
+    # WHOLE list, so a newest-first lane allocated zero slots must be skipped
+    # explicitly or it silently takes everything it has, breaking both its
+    # own quota and the overall budget.
+    items = [
+        _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(50)
+    ] + [_lane_item("news", i) for i in range(50)]
+
+    # Budget 1 scales every quota to its floor of 1, and the first pass
+    # spends that single slot on whichever lane it reaches first -- leaving
+    # at least one lane, possibly positions, on zero.
+    result = allocate_by_source(items, 1, ["ASI_Alliance"])
+
+    assert len(result) == 1
+
+
 def test_allocate_by_source_reduced_budget_scales_quotas_proportionally():
     # A shrunk budget (select_balanced_items_for_prompt's byte-cap path)
     # must keep the editorial mix, not hand the whole reduced budget to
