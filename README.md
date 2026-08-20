@@ -13,10 +13,27 @@ carries ToS and account-ban risk, which the owner has explicitly accepted.
 ## Architecture
 
 ```
-Telegram (Telethon) ─┐
-                      ├─> collectors ─> SQLite state ─> Claude summarize ─> SMTP email + markdown archive
-X/Twitter (twikit)  ─┘
+Telegram (Telethon) ─┐                                              ┌─> Telegram TL;DR ping
+X/Twitter (twikit)   │                                              │
+RSS / news feeds     ├─> collectors ─> SQLite state ─> Claude ──────┼─> news site (D1 Worker)
+Reddit               │                  (items,        summarize    │
+Polymarket           │                   cursors,      + translate  ├─> SMTP email (implemented,
+Hacker News         ─┘                   digests)                   │   disabled on the deployment)
+                                                                    └─> markdown archive
 ```
+
+Four run modes, each its own systemd timer on the VM (scheduling lives in the
+homelab repo, not here):
+
+| Mode | Command | Cadence | Input |
+|---|---|---|---|
+| window | `python -m digest` | every 6h | raw items |
+| daily | `python -m digest daily` | 20:30 Budapest | that day's window digests |
+| weekly | `python -m digest weekly` | Sun 21:45 Budapest | the week's daily briefs |
+| backfill/ops | `scripts/*.py` | manual | — |
+
+Each rung consumes the one below: the daily never sees raw items, and the
+weekly never sees anything but daily briefs.
 
 Runs as a one-shot container (`docker compose run --rm digest`) on a systemd
 timer, not a long-running service.
@@ -33,24 +50,74 @@ uv run python -m digest
 
 ## Environment variables
 
+Read exclusively in `config.py` — no other module touches `os.environ`.
+Defaults in parentheses; **(secret)** means it comes from Azure Key Vault at
+deploy time and must never be committed or logged.
+
+**Core**
+
 | Variable | Description |
 |---|---|
-| `TG_API_ID` | Telegram API ID from my.telegram.org. |
-| `TG_API_HASH` | Telegram API hash from my.telegram.org. |
-| `TG_SESSION` | Telethon user session string (secret). |
+| `TG_API_ID` / `TG_API_HASH` | Telegram API credentials from my.telegram.org. **(secret)** |
+| `TG_SESSION` | Telethon user session string. **(secret)** |
 | `TG_CHAT_ALLOWLIST` | Comma-separated chat/group IDs to collect from. |
-| `X_ENABLED` | `true`/`false` — master switch for the X collector. |
-| `X_COOKIES_PATH` | Path to the X/Twitter session cookies file (secret). |
-| `ANTHROPIC_MODEL` | Claude model used for headless summarization (e.g. `claude-opus-5`). |
-| `SMTP_HOST` | iCloud SMTP server, `smtp.mail.me.com`. |
-| `SMTP_PORT` | `587` (STARTTLS). |
-| `SMTP_USER` | iCloud account username. |
-| `SMTP_PASSWORD` | iCloud app-specific password (secret, generated at account.apple.com). |
-| `DIGEST_FROM` | From address for the digest email. |
-| `DIGEST_TO` | Recipient address for the digest email. |
-| `STATE_DB_PATH` | Path to the SQLite state database. |
-| `ARCHIVE_DIR` | Directory where markdown digest copies are archived. |
-| `NEWS_FEEDS` | Comma-separated RSS/Atom feed URLs. Enables the news collector iff non-empty — no separate on/off flag. |
+| `STATE_DB_PATH` | SQLite state database (`./state.db`). |
+| `ARCHIVE_DIR` | Where markdown digest copies are archived (`./archive`). |
+
+**Collectors** — each is off unless enabled; `NEWS_FEEDS` and `POSITIONS_TG_CHANNELS` use an empty-means-disabled shape instead of a flag.
+
+| Variable | Description |
+|---|---|
+| `X_ENABLED` | Master switch for the X collector (`false`). |
+| `X_COOKIES_PATH` / `X_COOKIES` | X session cookies — supply exactly one. **(secret)** |
+| `NEWS_FEEDS` | Comma-separated RSS/Atom URLs. Enables the news collector iff non-empty. |
+| `REDDIT_ENABLED` | Reddit collector switch (`false`). |
+| `REDDIT_SESSION_COOKIE` | Required when Reddit is enabled. **(secret)** |
+| `REDDIT_SUBREDDITS` | Comma-separated names, no `r/` prefix. Required when enabled. |
+| `REDDIT_POSTS_PER_SUB` | Posts pulled per subreddit per run. |
+| `POLYMARKET_ENABLED` | Polymarket collector switch (`false`). |
+| `POLYMARKET_API_BASE` / `POLYMARKET_PROXY_KEY` | Endpoint and its key. **(secret)** |
+| `POLYMARKET_TOP_N` / `POLYMARKET_SWING_THRESHOLD` | How many markets, and the probability move that makes one notable. |
+| `HACKERNEWS_ENABLED` / `HACKERNEWS_TOP_N` | Hacker News front-page collector (`false`). |
+| `POSITIONS_TG_CHANNELS` | Telegram usernames (no `@`) routed to the reserved `positions` selection lane. |
+
+**Summarization**
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_MODEL` | Model for headless summarization (`claude-opus-5`). |
+| `CLAUDE_TIMEOUT_SECONDS` | Per summarize call (`300`; the deployment sets 600). |
+| `CLAUDE_EFFORT` | `low`/`medium`/`high`/`xhigh`/`max` (`high`). |
+| `TRANSLATE_HU_ENABLED` | Hungarian translation pass (`false`). |
+| `TRANSLATE_MODEL` / `TRANSLATE_MODEL_FALLBACK` | Primary (`sonnet`) and the model retried on a safeguards refusal (`claude-sonnet-4-6`; empty disables the retry). |
+| `TRANSLATE_TIMEOUT_SECONDS` | Per translate leg (`300`) — **applies to each leg, so the worst case is 2×**. |
+| `VERIFY_DAILY_ENABLED` | Web-verification pass over the daily brief (`false`). |
+| `VERIFY_DAILY_TIMEOUT_SECONDS` / `VERIFY_DAILY_MAX_WEB_OPS` | Its budget (`600`) and its self-policed tool-call guidance (`20`). |
+| `VERIFY_DAILY_MODEL` / `VERIFY_DAILY_EFFORT` | Default to `ANTHROPIC_MODEL` / `CLAUDE_EFFORT`. |
+| `CONTEXT_ENABLED` | Story-arc context primers, generated after the daily brief ships (`false`). |
+| `CONTEXT_MAX_PER_RUN` / `CONTEXT_MODEL` / `CONTEXT_TIMEOUT_SECONDS` | Primer bounds (`sonnet`, `120`). |
+
+**Delivery** — the app refuses to start with every channel disabled.
+
+| Variable | Description |
+|---|---|
+| `EMAIL_ENABLED` | Email channel (`true` — the role default; **disabled on the owner's deployment**). |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` | iCloud SMTP (`smtp.mail.me.com`, `587` STARTTLS). |
+| `SMTP_PASSWORD` | iCloud app-specific password. **(secret)** |
+| `DIGEST_FROM` / `DIGEST_TO` / `DIGEST_FROM_NAME` | Envelope fields (`Digest`). |
+| `SITE_PUBLISH_URL` / `SITE_INGEST_KEY` | News-site ingest endpoint and its key. **(secret)** |
+| `SITE_PUBLIC_BASE` | Public base URL used to build reader-facing links. |
+| `ARC_KEYS_SITE_ENABLED` | Send story-arc keys with the site payload (`true`). |
+| `TELEGRAM_NOTIFY_BOT_TOKEN` | Bot token for the TL;DR ping. **(secret)** |
+| `TELEGRAM_NOTIFY_CHAT_ID` | Target chat/group. |
+| `TELEGRAM_NOTIFY_THREAD_ID` | Forum topic for window digests. |
+| `TELEGRAM_DAILY_THREAD_ID` / `TELEGRAM_WEEKLY_THREAD_ID` | Separate topics for the daily and weekly briefs; unset means they land in the window topic. |
+
+**Operations**
+
+| Variable | Description |
+|---|---|
+| `STALE_BACKLOG_WARN_HOURS` | Age at which an unsummarized item makes a run log a `stale_backlog` WARNING naming its source (`24`). Report-only — it never fails a run. Detects a source that has stopped draining, which is otherwise invisible because the run still succeeds. |
 
 ## Container
 
@@ -113,5 +180,8 @@ Ansible role `myapps`, secrets wiring via Azure Key Vault) happens from there.
 
 ## Status
 
-Pre-implementation. See PLAN.md for the phased plan and current progress.
+In production on the owner's VM. The window, daily, and weekly modes all run
+on their own systemd timers; the live delivery channels are the Telegram
+TL;DR ping and the news site, with email implemented but disabled there.
+See PLAN.md for the phased plan and per-phase progress.
 `docs/pr-summaries/` is auto-generated on merge (see `.github/workflows/pr-summary.yml`) — don't hand-edit it.
