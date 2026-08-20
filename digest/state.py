@@ -1232,6 +1232,65 @@ def count_unsummarized_items(conn: sqlite3.Connection) -> int:
     ).fetchone()[0]
 
 
+def count_stale_unsummarized_by_source(
+    conn: sqlite3.Connection,
+    cutoff: str,
+    positions_prefixes: Sequence[str] = (),
+) -> list[tuple[str, int, str]]:
+    """Return `(source, count, oldest_fetched_at)` per source still unsummarized before `cutoff`.
+
+    The detection half of the quota system. `count_unsummarized_items` above
+    answers "is there a backlog at all", which is normal and self-correcting
+    -- the 6-hourly timer is the drain loop, and a lane that overflows one
+    run is caught up by the next. What it cannot answer is "has one source
+    STOPPED draining", which is a different condition entirely: the run still
+    succeeds, still exits 0, still delivers a healthy-looking digest, so
+    systemd's OnFailure alerting (the only alerting this service has) never
+    fires. That blind spot is why the positions lane accumulated for days
+    before anyone noticed, and it was noticed then only because an unrelated
+    timeout put an `allocation` line under someone's eye.
+
+    Measuring AGE rather than queue depth is deliberate: depth is a proxy
+    that a busy-but-healthy source trips constantly (news routinely carries
+    ~120 waiting items and still turns them over within one window), while
+    age measures the thing that actually matters -- an item nobody has
+    written up yet. At the 6-hourly cadence anything older than a few
+    windows is, by definition, not draining.
+
+    `positions_prefixes` (lowercase `https://t.me/<name>/` forms, exactly as
+    digest/summarize.py's `allocate_by_source` builds them) names the items
+    to EXCLUDE. That lane is hard-capped and, since PR #85, deliberately
+    newest-first: a permanently starved tail is its designed steady state,
+    not a fault, so counting it here would fire this warning on every single
+    run forever and train the reader to ignore it. The coupling is real --
+    a change to how that lane is identified must update both call sites.
+
+    Ordered heaviest-first. An empty list means every source is draining.
+    """
+    sql = [
+        "SELECT source, COUNT(*), MIN(fetched_at) FROM items",
+        "WHERE digest_id IS NULL AND fetched_at < ?",
+    ]
+    params: list[str] = [cutoff]
+    if positions_prefixes:
+        # A bare `lower(url)` is safe here only because `url` is TEXT NOT
+        # NULL and every collector honours it -- collectors/telegram.py's
+        # build_message_url always returns a string (a chat with no public
+        # username still gets the `t.me/c/<internal_id>/` form; it raises
+        # rather than returning None). Were a NULL ever possible, the LIKE
+        # would be NULL, the AND would be NULL, and `NOT NULL` would drop the
+        # row -- silently hiding items from a warning whose whole job is to
+        # surface them. If `url` is ever made nullable, this needs COALESCE.
+        likes = " OR ".join("lower(url) LIKE ?" for _ in positions_prefixes)
+        sql.append(f"AND NOT (source = 'telegram' AND ({likes}))")
+        params.extend(f"{prefix}%" for prefix in positions_prefixes)
+    sql.append("GROUP BY source ORDER BY 2 DESC")
+    return [
+        (source, count, oldest)
+        for source, count, oldest in conn.execute(" ".join(sql), params).fetchall()
+    ]
+
+
 def create_digest(
     conn: sqlite3.Connection,
     body_md: str,
