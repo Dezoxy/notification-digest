@@ -63,6 +63,16 @@ from digest.state import (
 # docs/incidents/2026-08-06-telegram-flood.md
 _TELEGRAM_MAX_AGE = timedelta(hours=24)
 
+# Channel name -> the state.py helper that stamps its "resolved" flag. Used
+# only by the `hidden` path in deliver_channels; the normal delivery paths
+# call these directly inside their own _deliver_* helper, next to the send
+# they are recording.
+_MARK_CHANNEL_DONE = {
+    "email": mark_digest_sent,
+    "site": mark_digest_site_published,
+    "telegram": mark_digest_telegram_sent,
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -509,6 +519,7 @@ def deliver_channels(
     body_md_hu: str | None = None,
     kind: str = "window",
     extra_allowed_urls: Collection[str] = (),
+    hidden: frozenset[str] = frozenset(),
 ) -> bool:
     """Attempt every ENABLED, not-yet-done channel for one digest, independently.
 
@@ -592,6 +603,39 @@ def deliver_channels(
     email_status = "disabled" if not email_enabled else "done" if email_done else None
     site_status = "disabled" if not site_enabled else "done" if site_done else None
     telegram_status = "disabled" if not telegram_enabled else "done" if telegram_done else None
+
+    # `hidden` channels: this digest is produced and stored, but deliberately
+    # never shown on these channels (see `_parse_hidden_channels` in
+    # digest/main.py for which runs use it and why).
+    #
+    # Marking the DB flag is NOT optional bookkeeping, it is the whole
+    # mechanism. `get_pending_digests` treats any enabled channel whose flag
+    # is 0 as an incomplete delivery, so a merely-skipped channel would be
+    # picked up by the NEXT run's `deliver_pending` and shown then -- turning
+    # "hidden" into "delivered late", which is worse than not hiding it at
+    # all. The flag has to say resolved.
+    #
+    # That does mean the stored flag reads "done" for something that was
+    # never transmitted -- the flags are two-state and there is no
+    # `*_suppressed` column to say otherwise (adding one is a schema
+    # migration for a distinction only this log line cares about). The
+    # digest_delivery line below therefore reports "hidden" rather than
+    # "sent", so the operational record stays honest even though the column
+    # cannot.
+    for channel, enabled in (
+        ("email", email_enabled),
+        ("site", site_enabled),
+        ("telegram", telegram_enabled),
+    ):
+        if channel not in hidden or not enabled or done[channel]:
+            continue
+        _MARK_CHANNEL_DONE[channel](conn, digest_id)
+        if channel == "email":
+            email_done, email_status = True, "hidden"
+        elif channel == "site":
+            site_done, site_status = True, "hidden"
+        else:
+            telegram_done, telegram_status = True, "hidden"
 
     # A "daily" digest stamps NO items of its own (it consumes a day's worth
     # of window digests, never raw items -- see state.py's create_digest

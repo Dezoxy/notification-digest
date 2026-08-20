@@ -233,8 +233,61 @@ async def _client_ready(client: TelegramClient) -> bool:
         return False
 
 
+_HIDE_ARG_PREFIX = "hide:"
+_DELIVERY_CHANNELS = frozenset({"email", "site", "telegram"})
+
+
+def _parse_hidden_channels(argv: list[str]) -> frozenset[str]:
+    """Parse `hide:<channel>[,<channel>...]` out of argv. Raises ValueError on anything invalid.
+
+    A hidden channel means: produce this digest and store it exactly as
+    normal, but never show it there. The digest row, its stamped items, its
+    archive copy, and every downstream consumer are untouched -- the daily
+    brief reads window digests by `kind`, never by delivery state, and
+    `get_recent_digests` (the "recently covered" continuity feed)
+    deliberately does not filter on delivery either. Only the reader-facing
+    channels change.
+
+    Which runs use it is a homelab scheduling decision (see CLAUDE.md's
+    Deploy note), not this repo's: today the 02:00 Budapest window runs
+    `hide:telegram` (no 2am ping, but the site still carries overnight news
+    for morning readers) and the 20:00 one runs `hide:telegram,site` (the
+    20:30 daily brief republishes that same window to the site 30 minutes
+    later, so its own entry is redundant).
+
+    Hiding `site` WITHOUT also hiding `telegram` is rejected. The Telegram
+    TL;DR links to the digest's own site page, and `deliver_channels` only
+    defers Telegram while the site publish is NOT done -- a suppressed site
+    reads as done there, so that combination would send a real ping pointing
+    at a page that was never published. That is a broken link shipped to
+    readers, so it is a startup error rather than a documented footgun.
+    """
+    hidden: set[str] = set()
+    for arg in argv:
+        if not arg.startswith(_HIDE_ARG_PREFIX):
+            continue
+        for name in arg[len(_HIDE_ARG_PREFIX) :].split(","):
+            channel = name.strip().lower()
+            if channel not in _DELIVERY_CHANNELS:
+                raise ValueError(
+                    f"unknown delivery channel {channel!r} in {arg!r}; "
+                    f"valid channels: {', '.join(sorted(_DELIVERY_CHANNELS))}"
+                )
+            hidden.add(channel)
+    if "site" in hidden and "telegram" not in hidden:
+        raise ValueError(
+            "hide:site requires hide:telegram -- the Telegram TL;DR links to the "
+            "digest's site page, so hiding only the site would ping readers with a "
+            "link to a page that was never published"
+        )
+    return frozenset(hidden)
+
+
 def _deliver(
-    conn: sqlite3.Connection, cfg: Config, failed_sources: list[str]
+    conn: sqlite3.Connection,
+    cfg: Config,
+    failed_sources: list[str],
+    hidden: frozenset[str] = frozenset(),
 ) -> bool:
     """Post-collection delivery: retry every pending digest, then summarize+deliver new items.
 
@@ -407,6 +460,12 @@ def _deliver(
     ok = deliver_channels(
         conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
         kind=kind,
+        # Only THIS run's own fresh digest is hidden. The `deliver_pending`
+        # pass above deliberately does not get `hidden`: a digest still
+        # pending there is one whose delivery genuinely failed on an earlier,
+        # non-hidden run, and it is owed its retry regardless of how this run
+        # was invoked.
+        hidden=hidden,
     )
     all_ok = all_ok and ok
 
@@ -667,7 +726,7 @@ def _run_hackernews_collector(cfg: Config) -> CollectResult:
         return CollectResult(failed=True)
 
 
-async def _run(cfg: Config) -> bool:
+async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
     """Run one collection + delivery cycle. Returns True if it completed without failure."""
     conn = connect(cfg.state_db_path)
     try:
@@ -759,7 +818,7 @@ async def _run(cfg: Config) -> bool:
             if failed
         ]
 
-        delivered = _deliver(conn, cfg, failed_sources)
+        delivered = _deliver(conn, cfg, failed_sources, hidden)
 
         pruned = prune_delivered_items(
             conn,
@@ -1458,12 +1517,25 @@ def main() -> None:
     # so `--force` is checked the same way, as a bare substring match against
     # the remaining argv -- only meaningful (and only checked) alongside
     # `daily`.
+    #
+    # `python -m digest hide:telegram` / `hide:telegram,site` runs the SAME
+    # window cycle but suppresses those reader-facing channels for the
+    # digest this run produces (see `_parse_hidden_channels`). Checked the
+    # same bare-argv way, and only on the window path -- the daily and
+    # weekly briefs are the deliverables the whole cascade exists to produce,
+    # so there is no sensible reason to hide one, and silently accepting a
+    # `hide:` alongside `daily` would suggest otherwise.
     if len(sys.argv) > 1 and sys.argv[1] == "daily":
         ok = run_daily(cfg, force="--force" in sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "weekly":
         ok = run_weekly(cfg)
     else:
-        ok = asyncio.run(_run(cfg))
+        try:
+            hidden = _parse_hidden_channels(sys.argv[1:])
+        except ValueError as exc:
+            print(f"configuration error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        ok = asyncio.run(_run(cfg, hidden))
     sys.exit(0 if ok else 1)
 
 
