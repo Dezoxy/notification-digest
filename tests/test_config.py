@@ -116,9 +116,7 @@ def test_x_enabled_true_with_neither_cookie_var_raises_config_error(monkeypatch)
     monkeypatch.delenv("X_COOKIES_PATH", raising=False)
     monkeypatch.delenv("X_COOKIES", raising=False)
 
-    with pytest.raises(
-        ConfigError, match="exactly one of X_COOKIES_PATH or X_COOKIES is required"
-    ):
+    with pytest.raises(ConfigError, match="exactly one of X_COOKIES_PATH or X_COOKIES is required"):
         Config.from_env()
 
 
@@ -1165,3 +1163,75 @@ def test_arc_keys_site_enabled_true_is_parsed(monkeypatch):
     config = Config.from_env()
 
     assert config.arc_keys_site_enabled is True
+
+
+# --- Patreon collector (PATREON_CAMPAIGN_ID / PATREON_SESSION_COOKIE) ---
+
+
+def test_patreon_is_disabled_when_neither_var_is_set(monkeypatch):
+    # The empty-means-disabled default matters operationally: digest.env is
+    # rendered by the homelab Ansible role, so an unrendered or reverted
+    # file must degrade to "collector off", never to a crash.
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("PATREON_CAMPAIGN_ID", raising=False)
+    monkeypatch.delenv("PATREON_SESSION_COOKIE", raising=False)
+
+    cfg = Config.from_env()
+
+    assert cfg.patreon_campaign_id == ""
+    assert cfg.patreon_session_cookie == ""
+
+
+def test_patreon_campaign_id_without_cookie_raises(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("PATREON_CAMPAIGN_ID", "7095842")
+    monkeypatch.delenv("PATREON_SESSION_COOKIE", raising=False)
+
+    with pytest.raises(ConfigError, match="PATREON_SESSION_COOKIE is required"):
+        Config.from_env()
+
+
+def test_patreon_cookie_without_campaign_id_raises(monkeypatch):
+    # A cookie with nothing to point it at is a half-finished deploy, not a
+    # disabled collector -- fail loudly rather than silently doing nothing.
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("PATREON_SESSION_COOKIE", "cookie-value")
+    monkeypatch.delenv("PATREON_CAMPAIGN_ID", raising=False)
+
+    with pytest.raises(ConfigError, match="PATREON_CAMPAIGN_ID is required"):
+        Config.from_env()
+
+
+def test_patreon_fully_configured_is_accepted(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("PATREON_CAMPAIGN_ID", "7095842")
+    monkeypatch.setenv("PATREON_SESSION_COOKIE", "cookie-value")
+
+    cfg = Config.from_env()
+
+    assert cfg.patreon_campaign_id == "7095842"
+    assert cfg.patreon_session_cookie == "cookie-value"
+
+
+def test_patreon_cookie_is_kept_out_of_repr(monkeypatch):
+    # It is a live credential to a paid account; repr=False keeps it out of
+    # any accidental repr(cfg) log line.
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("PATREON_CAMPAIGN_ID", "7095842")
+    monkeypatch.setenv("PATREON_SESSION_COOKIE", "super-secret-cookie")
+
+    assert "super-secret-cookie" not in repr(Config.from_env())
+
+
+def test_telegram_patreon_thread_id_defaults_to_none(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("TELEGRAM_PATREON_THREAD_ID", raising=False)
+
+    assert Config.from_env().telegram_patreon_thread_id is None
+
+
+def test_telegram_patreon_thread_id_is_parsed(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PATREON_THREAD_ID", "317")
+
+    assert Config.from_env().telegram_patreon_thread_id == 317
