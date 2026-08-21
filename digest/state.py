@@ -2389,6 +2389,32 @@ def prune_stale_unsummarized(conn: sqlite3.Connection) -> int:
         raise
 
 
+def get_digest_post_link(conn: sqlite3.Connection, digest_id: int) -> tuple[str, str | None]:
+    """Return `(url, embed_url)` for a one-post digest's single item.
+
+    Only meaningful for `kind = 'patreon'`, the one kind where a digest maps
+    to exactly ONE item (digest/patreon.py's module docstring explains why).
+    Every other kind summarizes many items, so "the digest's link" is not a
+    question with an answer there -- which is why this is a narrow helper
+    rather than a general accessor.
+
+    Ordering by `id` and taking the first row is defensive rather than
+    expected: a patreon digest is created with a single-item snapshot, so
+    there is only ever one. Deterministic selection just means a hand-
+    repaired database cannot make delivery non-reproducible.
+
+    Raises LookupError when the digest has no items at all -- the caller
+    must not fall back to sending a message whose button points nowhere.
+    """
+    row = conn.execute(
+        "SELECT url, embed_url FROM items WHERE digest_id = ? ORDER BY id LIMIT 1",
+        (digest_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"digest {digest_id} has no items to link to")
+    return row[0], row[1]
+
+
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
     """Flip a digest's email_sent flag to 1 after SMTP confirms delivery."""
     conn.execute("UPDATE digests SET email_sent = 1 WHERE id = ?", (digest_id,))

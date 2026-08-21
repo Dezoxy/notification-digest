@@ -28,6 +28,7 @@ from digest.publish import (
     derive_topics,
     parse_failed_sources,
     publish_to_site,
+    send_telegram_post,
     send_telegram_tldr,
 )
 from digest.state import (
@@ -36,6 +37,7 @@ from digest.state import (
     get_daily_allowed_urls,
     get_deltas,
     get_digest_item_urls,
+    get_digest_post_link,
     get_digest_source_counts,
     get_pending_digests,
     get_weekly_allowed_urls,
@@ -393,7 +395,14 @@ def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
     always uses `cfg.telegram_notify_thread_id` unconditionally; there are
     only two non-default kinds to special-case today.
     """
-    if kind == "daily":
+    if kind == "patreon":
+        if cfg.telegram_patreon_thread_id is not None:
+            return cfg.telegram_patreon_thread_id
+        logger.info(
+            "TELEGRAM_PATREON_THREAD_ID unset, falling back to the window digest's "
+            "telegram thread for this patreon post"
+        )
+    elif kind == "daily":
         if cfg.telegram_daily_thread_id is not None:
             return cfg.telegram_daily_thread_id
         logger.info(
@@ -482,15 +491,38 @@ def _deliver_telegram(
         return False
 
     try:
-        send_telegram_tldr(
-            digest_id,
-            body_md,
-            created_at,
-            cfg.telegram_notify_bot_token,
-            cfg.telegram_notify_chat_id,
-            _telegram_thread_id_for_kind(cfg, kind),
-            cfg.site_public_base,
-        )
+        if kind == "patreon":
+            # A different message shape entirely, not a parameterization --
+            # see publish.send_telegram_post. Both buttons point OFF-site
+            # (the post, and its embedded video when it has one), so
+            # site_public_base has no role here.
+            post_url, embed_url = get_digest_post_link(conn, digest_id)
+            send_telegram_post(
+                body_md,
+                created_at,
+                post_url,
+                embed_url,
+                cfg.telegram_notify_bot_token,
+                cfg.telegram_notify_chat_id,
+                _telegram_thread_id_for_kind(cfg, kind),
+            )
+        else:
+            send_telegram_tldr(
+                digest_id,
+                body_md,
+                created_at,
+                cfg.telegram_notify_bot_token,
+                cfg.telegram_notify_chat_id,
+                _telegram_thread_id_for_kind(cfg, kind),
+                cfg.site_public_base,
+            )
+    except LookupError:
+        # A patreon digest with no linked item cannot produce a button, and
+        # a post message whose button points nowhere is worse than a retry.
+        # Left telegram_sent = 0 so a later run picks it up, exactly like
+        # any other non-429 failure below.
+        logger.error("patreon digest %d has no item to link to; not sending", digest_id)
+        return False
     except TelegramSendError as exc:
         if exc.status == 429:
             telegram_state.rate_limited = True
