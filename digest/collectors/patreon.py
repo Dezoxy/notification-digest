@@ -50,6 +50,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from digest.collectors.base import CollectResult
@@ -79,6 +80,31 @@ _PAGE_COUNT = 25
 # and every character is prompt budget. Mirrors rss.py's _MAX_SUMMARY_CHARS,
 # larger because these are full articles rather than feed blurbs.
 _MAX_BODY_CHARS = 6000
+
+
+# How many posts the FIRST run delivers. The API page is 25 deep and this
+# creator posts roughly daily, so an uncapped first run would fire about a
+# month of backlog into the topic at once. Five gives the reader a little
+# history without a flood.
+_FIRST_RUN_LIMIT = 5
+
+
+@dataclass
+class PatreonCollectResult(CollectResult):
+    """A CollectResult that also carries first-run posts to absorb silently.
+
+    `seeded` posts are real, valid items that must be RECORDED as seen but
+    NOT delivered -- see `collect`'s first-run note. They ride on the result
+    rather than being handled inside the collector because writing to the
+    database is the caller's job here, exactly as it is for `items`.
+
+    Subclasses CollectResult rather than replacing it so every existing
+    caller-side helper that accepts a CollectResult keeps working; a caller
+    that does not know about seeding simply ignores the extra field, which
+    is the correct degradation (it delivers the full first page once).
+    """
+
+    seeded: list[Item] = field(default_factory=list)
 
 
 class PatreonUnavailable(Exception):
@@ -173,6 +199,39 @@ def _prosemirror_text(content_json_string: str) -> str:
     return "".join(parts).strip()
 
 
+def _embed_link(attributes: dict[str, object]) -> str | None:
+    """The post's embedded-video URL, or None.
+
+    Patreon states this STRUCTURALLY in `attributes.embed` -- verified
+    2026-08-21: every `post_type == "video_embed"` post carried an embed
+    object with `url` ("https://youtu.be/V2F83U2r22A"), `provider`
+    ("YouTube"), and `subject` (the video's own title). So this is a field
+    read, never a regex over body text.
+
+    Body prose DOES also carry links -- ProseMirror link marks pointing at
+    treasury.gov, bls.gov, federalreserve.gov and the like -- but those are
+    the post's source citations, not the thing the reader wants a button
+    for. They are deliberately NOT considered here: a button per citation
+    would bury the video under five Fed speeches.
+
+    Provider-agnostic on purpose. `provider` was "YouTube" on every sample,
+    but the owner's account also has Vimeo connected, and a Vimeo embed
+    deserves the same button. Any http(s) URL in `embed.url` qualifies; the
+    scheme/netloc check is the same guard `rss.py`'s `_entry_link` applies,
+    for the same reason -- this URL becomes a Telegram button target.
+    """
+    embed = attributes.get("embed")
+    if not isinstance(embed, dict):
+        return None
+    url = embed.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return url
+
+
 def _item_from_post(post: dict[str, object], fetched_at: str) -> Item | None:
     """Normalize one API post object into an Item, or None if unusable.
 
@@ -220,6 +279,7 @@ def _item_from_post(post: dict[str, object], fetched_at: str) -> Item | None:
         author=None,
         text=text,
         url=url,
+        embed_url=_embed_link(attributes),
         fetched_at=fetched_at,
     )
 
@@ -279,6 +339,7 @@ def collect(
     campaign_id: str,
     session_cookie: str,
     known_ids_lookup: Callable[[Sequence[str]], set[str]],
+    first_run_limit: int = _FIRST_RUN_LIMIT,
 ) -> CollectResult:
     """Fetch the newest posts and return the ones not already stored.
 
@@ -293,6 +354,18 @@ def collect(
     stored cursor, and cannot be defeated by an edited or backdated post.
 
     `cursor_updates` is always `{}` -- identical rationale to `rss.py`.
+
+    FIRST RUN: when the lookup reports NOTHING known -- an empty state, a
+    restored backup, a newly enabled collector -- only the newest
+    `first_run_limit` posts are returned. The API's page is 25 deep and
+    this creator posts roughly daily, so without this the collector's very
+    first run would deliver about a month of backlog as ~25 separate
+    Telegram messages in one burst. That is both unreadable and precisely
+    the send pattern the 2026-08-06 flood guards exist to prevent.
+
+    The posts BEYOND that limit are returned as `seeded` on the result --
+    NOT silently dropped. The caller must record them as seen, or the next
+    run finds them unknown again and the cap achieves nothing but a delay.
 
     `failed=True` on any `PatreonUnavailable`, including an unauthorized
     session. This is a SINGLE-source collector, so rss.py's
@@ -323,13 +396,19 @@ def collect(
     already_known = known_ids_lookup(listed_ids)
 
     fetched_at = datetime.now(UTC).isoformat()
-    items: list[Item] = []
-    for post in posts:
-        if post.get("id") in already_known:
-            continue
-        item = _item_from_post(post, fetched_at)
-        if item is not None:
-            items.append(item)
+    fresh = [post for post in posts if post.get("id") not in already_known]
+
+    # `posts` arrives newest-first (sort=-published_at), so slicing the head
+    # takes the most recent -- the ones worth a little history in the topic.
+    seeded_posts: list[dict[str, object]] = []
+    if not already_known and len(fresh) > first_run_limit:
+        seeded_posts = fresh[first_run_limit:]
+        fresh = fresh[:first_run_limit]
+
+    items = [item for post in fresh if (item := _item_from_post(post, fetched_at)) is not None]
+    seeded = [
+        item for post in seeded_posts if (item := _item_from_post(post, fetched_at)) is not None
+    ]
 
     logger.info(
         "patreon_health %s",
@@ -339,8 +418,18 @@ def collect(
                 "listed": len(posts),
                 "already_known": len(already_known),
                 "items_kept": len(items),
+                "seeded": len(seeded),
+                "with_embed": sum(1 for item in items if item.embed_url),
             },
             sort_keys=True,
         ),
     )
-    return CollectResult(items=items)
+    if seeded:
+        # Never let a first-run cap look like "that was everything".
+        logger.info(
+            "patreon: first run -- delivering the newest %d post(s), "
+            "absorbing %d older one(s) as already-seen",
+            len(items),
+            len(seeded),
+        )
+    return PatreonCollectResult(items=items, seeded=seeded)

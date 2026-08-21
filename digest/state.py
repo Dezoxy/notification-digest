@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS items (
     author      TEXT,
     text        TEXT,
     url         TEXT NOT NULL,
+    -- A secondary link the item carries in its own right -- today a
+    -- YouTube/Vimeo video a Patreon post embeds (Patreon states it
+    -- structurally in `attributes.embed`, so it is read, never regexed out
+    -- of body text). Nullable and additive: every source that has no such
+    -- concept leaves it NULL, and no backfill is needed.
+    embed_url   TEXT,
     fetched_at  TEXT NOT NULL,
     digest_id   INTEGER REFERENCES digests(id),
     UNIQUE (source, source_id)
@@ -222,6 +228,18 @@ _KNOWN_SOURCES = frozenset(
     {"telegram", "x", "news", "polymarket", "reddit", "hackernews", "patreon"}
 )
 
+# Sources that run their OWN delivery pipeline rather than feeding the
+# window digest's unsummarized-items sweep. Their items must never be
+# picked up by get_unsummarized_items: a Patreon post belongs in its own
+# topic as its own message, and letting it also land in the 06:00/12:00
+# briefing would deliver it twice, in two different topics.
+#
+# This is a structural guarantee rather than a timing one. Without it the
+# invariant would depend on the patreon run stamping a digest_id before the
+# next window run started -- true almost always, and false exactly when a
+# crash lands in between.
+_SELF_DELIVERED_SOURCES = frozenset({"patreon"})
+
 
 @dataclass(frozen=True)
 class Item:
@@ -241,6 +259,11 @@ class Item:
     # working unchanged. None for chats where the entity carries no title
     # (e.g. a DM) and for rows collected before this field existed.
     chat_title: str | None = None
+    # Secondary link this item carries (see items.embed_url). None for every
+    # source with no such concept. LAST with a default so every existing
+    # keyword-based Item(...) construction keeps working unchanged, exactly
+    # as chat_title above was added.
+    embed_url: str | None = None
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -283,7 +306,9 @@ def connect(db_path: str) -> sqlite3.Connection:
 #
 # Version 4 (PLAN.md §11.6, "context mode"): adds the `arc_context` table --
 # see `_migrate_add_arc_context_table` and init_db's `if version < 4:` step.
-_LATEST_SCHEMA_VERSION = 4
+# The Patreon collector's embedded-video link: see `_migrate_add_embed_url_column`
+# and init_db's `if version < 5:` step.
+_LATEST_SCHEMA_VERSION = 5
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -394,6 +419,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         # before this feature existed).
         _migrate_add_arc_context_table(conn)
 
+    if version < 5:
+        # The Patreon collector's `items.embed_url`. Unlike the version-2/3/4
+        # steps above this is NOT a no-op on an existing database: _SCHEMA's
+        # `CREATE TABLE IF NOT EXISTS` never alters a table that already
+        # exists, so a live state.db reaches this point still missing the
+        # column, and every commit_new_items INSERT would fail without it.
+        _migrate_add_embed_url_column(conn)
+
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
 
@@ -463,6 +496,26 @@ def _migrate_add_telegram_sent_column(conn: sqlite3.Connection) -> None:
     if "telegram_sent" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN telegram_sent INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+
+
+def _migrate_add_embed_url_column(conn: sqlite3.Connection) -> None:
+    """Add `items.embed_url` to a database predating the Patreon collector.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_body_md_hu_column` below. The duplicate-column OperationalError
+    is swallowed because this runs unconditionally for any database below
+    version 5, including one already carrying the column from a _SCHEMA
+    execution on a fresh create.
+
+    The column is nullable with no default, so every pre-existing row is
+    correctly NULL -- no source before Patreon had a secondary link, so
+    there is nothing to backfill.
+    """
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN embed_url TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def _migrate_add_body_md_hu_column(conn: sqlite3.Connection) -> None:
@@ -1059,6 +1112,12 @@ def known_source_ids(
     almost all of them away. This lets that collector filter to genuinely
     new ids BEFORE it fetches anything.
 
+    Only items ALREADY ATTACHED TO A DIGEST count as known. Mere presence in
+    the table is not enough: an item committed by a run that then crashed
+    before creating its digest was never delivered, and treating it as seen
+    would lose it silently and permanently. Requiring `digest_id IS NOT
+    NULL` makes that case self-healing -- the next run simply re-offers it.
+
     Empty `candidate_ids` -> empty set without touching the database, same
     no-op shape as `polymarket_probs_for` above.
     """
@@ -1066,7 +1125,8 @@ def known_source_ids(
         return set()
     placeholders = ",".join("?" for _ in candidate_ids)
     rows = conn.execute(
-        f"SELECT source_id FROM items WHERE source = ? AND source_id IN ({placeholders})",
+        f"SELECT source_id FROM items "
+        f"WHERE source = ? AND digest_id IS NOT NULL AND source_id IN ({placeholders})",
         (source, *candidate_ids),
     ).fetchall()
     return {row[0] for row in rows}
@@ -1167,8 +1227,9 @@ def commit_new_items(
             cur.execute(
                 """
                 INSERT INTO items
-                    (source, source_id, chat_id, chat_title, author, text, url, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (source, source_id, chat_id, chat_title, author, text, url,
+                     embed_url, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (source, source_id) DO NOTHING
                 """,
                 (
@@ -1179,6 +1240,7 @@ def commit_new_items(
                     item.author,
                     item.text,
                     item.url,
+                    item.embed_url,
                     item.fetched_at,
                 ),
             )
@@ -1229,17 +1291,24 @@ def get_unsummarized_items(conn: sqlite3.Connection, limit: int | None = None) -
     lets a caller drain a large backlog in bounded batches across multiple
     runs instead of loading everything at once (see digest/main.py's
     _MAX_ITEMS_PER_DIGEST).
+
+    `_SELF_DELIVERED_SOURCES` are excluded outright -- see that constant.
+    Their items are delivered by their own pipeline into their own topic,
+    and sweeping them in here would deliver each one a second time inside
+    the window briefing.
     """
-    query = """
-        SELECT source, source_id, chat_id, chat_title, author, text, url, fetched_at
+    excluded = tuple(sorted(_SELF_DELIVERED_SOURCES))
+    placeholders = ",".join("?" for _ in excluded)
+    query = f"""
+        SELECT source, source_id, chat_id, chat_title, author, text, url, fetched_at, embed_url
         FROM items
-        WHERE digest_id IS NULL
+        WHERE digest_id IS NULL AND source NOT IN ({placeholders})
         ORDER BY fetched_at ASC
         """
-    params: tuple[int, ...] = ()
+    params: tuple[object, ...] = excluded
     if limit is not None:
         query += " LIMIT ?"
-        params = (limit,)
+        params = (*excluded, limit)
     rows = conn.execute(query, params).fetchall()
     return [
         Item(
@@ -1251,6 +1320,7 @@ def get_unsummarized_items(conn: sqlite3.Connection, limit: int | None = None) -
             text=row[5],
             url=row[6],
             fetched_at=row[7],
+            embed_url=row[8],
         )
         for row in rows
     ]

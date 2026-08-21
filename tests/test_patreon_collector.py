@@ -18,6 +18,7 @@ from digest.collectors import patreon
 from digest.collectors.patreon import (
     PatreonUnavailable,
     _authorization_state,
+    _embed_link,
     _item_from_post,
     _prosemirror_text,
     collect,
@@ -223,3 +224,84 @@ class TestFetchPageErrorHandling:
         message = str(exc.value)
         assert "403" in message
         assert "secret-cookie-value" not in message
+
+
+YT_EMBED = {
+    "url": "https://youtu.be/V2F83U2r22A",
+    "provider": "YouTube",
+    "subject": "Az elkerülhető nagy hibák 1. rész",
+    "html": '<iframe src="https://www.youtube.com/embed/V2F83U2r22A"></iframe>',
+}
+
+
+class TestEmbedLink:
+    def test_reads_the_youtube_url_from_the_embed_object(self):
+        # Verified live: every video_embed post carries this structurally,
+        # so it is a field read rather than a regex over body text.
+        assert _embed_link({"embed": YT_EMBED}) == "https://youtu.be/V2F83U2r22A"
+
+    def test_no_embed_means_no_link(self):
+        assert _embed_link({}) is None
+        assert _embed_link({"embed": None}) is None
+
+    def test_non_http_embed_url_is_rejected(self):
+        # This URL becomes a Telegram button target -- same guard rss.py
+        # applies to entry links, for the same reason.
+        assert _embed_link({"embed": {"url": "javascript:alert(1)"}}) is None
+        assert _embed_link({"embed": {"url": ""}}) is None
+
+    def test_non_youtube_providers_are_accepted(self):
+        # Provider-agnostic on purpose: the owner also has Vimeo connected.
+        embed = {"url": "https://vimeo.com/12345", "provider": "Vimeo"}
+        assert _embed_link({"embed": embed}) == "https://vimeo.com/12345"
+
+
+class TestFirstRunSeeding:
+    @staticmethod
+    def _patch(monkeypatch, posts):
+        monkeypatch.setattr(patreon, "_fetch_page", lambda c, s: posts)
+
+    def test_first_run_delivers_only_the_newest_five(self, monkeypatch):
+        # posts arrive newest-first, so the head is the most recent.
+        self._patch(monkeypatch, [make_post(str(i)) for i in range(20)])
+        out = collect("7095842", "cookie", lambda ids: set())
+        assert [i.source_id for i in out.items] == ["0", "1", "2", "3", "4"]
+
+    def test_the_rest_are_returned_as_seeded_not_dropped(self, monkeypatch):
+        # If the caller didn't record these, the next run would find them
+        # unknown again and the cap would only have delayed the flood.
+        self._patch(monkeypatch, [make_post(str(i)) for i in range(20)])
+        out = collect("7095842", "cookie", lambda ids: set())
+        assert [i.source_id for i in out.seeded] == [str(i) for i in range(5, 20)]
+
+    def test_seeding_applies_only_when_nothing_is_known(self, monkeypatch):
+        # A steady-state run with a big genuine backlog must NOT be capped:
+        # that would silently drop posts the reader never saw.
+        self._patch(monkeypatch, [make_post(str(i)) for i in range(20)])
+        out = collect("7095842", "cookie", lambda ids: {"19"})
+        assert len(out.items) == 19
+        assert out.seeded == []
+
+    def test_a_short_first_page_is_not_seeded(self, monkeypatch):
+        self._patch(monkeypatch, [make_post("1"), make_post("2")])
+        out = collect("7095842", "cookie", lambda ids: set())
+        assert len(out.items) == 2
+        assert out.seeded == []
+
+    def test_limit_is_configurable(self, monkeypatch):
+        self._patch(monkeypatch, [make_post(str(i)) for i in range(20)])
+        out = collect("7095842", "cookie", lambda ids: set(), first_run_limit=2)
+        assert len(out.items) == 2
+        assert len(out.seeded) == 18
+
+    def test_embed_url_survives_onto_the_item(self, monkeypatch):
+        post = make_post("1")
+        post["attributes"]["embed"] = YT_EMBED
+        self._patch(monkeypatch, [post])
+        out = collect("7095842", "cookie", lambda ids: set())
+        assert out.items[0].embed_url == "https://youtu.be/V2F83U2r22A"
+
+    def test_posts_without_an_embed_carry_none(self, monkeypatch):
+        self._patch(monkeypatch, [make_post("1")])
+        out = collect("7095842", "cookie", lambda ids: set())
+        assert out.items[0].embed_url is None

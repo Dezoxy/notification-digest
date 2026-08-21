@@ -206,8 +206,10 @@ def test_get_unsummarized_items_limit_returns_n_oldest_by_fetched_at(conn):
 def test_get_unsummarized_items_limit_none_returns_all(conn):
     commit_new_items(
         conn,
-        [_item("1", fetched_at="2026-07-29T10:00:00+00:00"),
-         _item("2", fetched_at="2026-07-29T11:00:00+00:00")],
+        [
+            _item("1", fetched_at="2026-07-29T10:00:00+00:00"),
+            _item("2", fetched_at="2026-07-29T11:00:00+00:00"),
+        ],
         {},
     )
 
@@ -271,7 +273,9 @@ def test_count_stale_unsummarized_excludes_the_positions_lane(conn):
         [
             _item("pos", url="https://t.me/ASI_Alliance/1", fetched_at="2026-07-20T10:00:00+00:00"),
             _item(
-                "news-1", source="news", url="https://ex.com/1",
+                "news-1",
+                source="news",
+                url="https://ex.com/1",
                 fetched_at="2026-07-27T10:00:00+00:00",
             ),
         ],
@@ -299,7 +303,8 @@ def test_count_stale_unsummarized_keeps_non_positions_telegram_items(conn):
         conn,
         [
             _item(
-                "private", url="https://t.me/c/1234567890/7",
+                "private",
+                url="https://t.me/c/1234567890/7",
                 fetched_at="2026-07-27T10:00:00+00:00",
             ),
             _item("pos", url="https://t.me/ASI_Alliance/1", fetched_at="2026-07-26T10:00:00+00:00"),
@@ -621,10 +626,7 @@ def test_init_db_migrates_pre_news_source_check_with_preexisting_rows(tmp_path: 
     old_conn.commit()
 
     tg_id, x_id = (
-        row[0]
-        for row in old_conn.execute(
-            "SELECT id FROM items ORDER BY source_id"
-        ).fetchall()
+        row[0] for row in old_conn.execute("SELECT id FROM items ORDER BY source_id").fetchall()
     )
 
     init_db(old_conn)  # applies chat_title migration, THEN the news-CHECK migration
@@ -860,9 +862,7 @@ def test_commit_new_items_polymarket_prob_updates_defaults_to_none_unaffected(co
     inserted = commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
     assert inserted == 1
-    assert (
-        conn.execute("SELECT COUNT(*) FROM polymarket_probs").fetchone()[0] == 0
-    )
+    assert conn.execute("SELECT COUNT(*) FROM polymarket_probs").fetchone()[0] == 0
 
 
 def test_commit_new_items_rolls_back_polymarket_prob_updates_on_item_insert_failure(conn):
@@ -1023,9 +1023,7 @@ def test_init_db_migrates_pre_polymarket_source_check_with_preexisting_rows(tmp_
         polymarket_prob_updates={"m1": (0.6, "Will X happen?")},
     )
 
-    rows = {
-        row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()
-    }
+    rows = {row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()}
     assert rows[tg_id] == "telegram"  # pre-existing row preserved, same id
     assert get_polymarket_probs(old_conn, ["m1"]) == {"m1": 0.6}
 
@@ -1133,9 +1131,7 @@ def test_init_db_migrates_pre_reddit_source_check_with_preexisting_rows(tmp_path
         {},
     )
 
-    rows = {
-        row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()
-    }
+    rows = {row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()}
     assert rows[tg_id] == "telegram"  # pre-existing row preserved, same id
     reddit_sources = [
         row[0] for row in old_conn.execute("SELECT source FROM items WHERE source_id = 'h1'")
@@ -1161,11 +1157,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1240,12 +1236,10 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
 
-    preserved = old_conn.execute(
-        "SELECT id, source FROM items WHERE id = ?", (row_id,)
-    ).fetchone()
+    preserved = old_conn.execute("SELECT id, source FROM items WHERE id = ?", (row_id,)).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
@@ -1291,7 +1285,7 @@ def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Pa
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
@@ -1325,7 +1319,7 @@ def test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it(tmp_path: 
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
     arc_keys_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
     ).fetchone()
@@ -1359,7 +1353,7 @@ def test_init_db_migrates_v3_db_predating_arc_context_table_by_adding_it(tmp_pat
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
     arc_context_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
     ).fetchone()
@@ -1483,16 +1477,12 @@ def test_init_db_migrates_pre_delivery_channels_digests_table_missing_new_column
     # Idempotent: a second call must not raise or alter the schema again.
     init_db(old_conn)
 
-    row = old_conn.execute(
-        "SELECT site_published, telegram_sent FROM digests"
-    ).fetchone()
+    row = old_conn.execute("SELECT site_published, telegram_sent FROM digests").fetchone()
     assert row == (0, 0)  # pre-existing row defaults to not-yet-delivered on both new channels
 
     mark_digest_site_published(old_conn, 1)
     mark_digest_telegram_sent(old_conn, 1)
-    row = old_conn.execute(
-        "SELECT site_published, telegram_sent FROM digests"
-    ).fetchone()
+    row = old_conn.execute("SELECT site_published, telegram_sent FROM digests").fetchone()
     assert row == (1, 1)
 
     old_conn.close()
@@ -1610,9 +1600,7 @@ def test_create_digest_defaults_body_md_hu_to_null(conn):
 
     digest_id = create_digest(conn, "english body", items)
 
-    row = conn.execute(
-        "SELECT body_md_hu FROM digests WHERE id = ?", (digest_id,)
-    ).fetchone()
+    row = conn.execute("SELECT body_md_hu FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (None,)
 
 
@@ -1677,9 +1665,7 @@ def test_init_db_migrates_pre_translation_digests_table_missing_body_md_hu(tmp_p
     digest_id = create_digest(
         old_conn, "second body", get_unsummarized_items(old_conn), body_md_hu="fordítás"
     )
-    row = old_conn.execute(
-        "SELECT body_md_hu FROM digests WHERE id = ?", (digest_id,)
-    ).fetchone()
+    row = old_conn.execute("SELECT body_md_hu FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == ("fordítás",)
 
     old_conn.close()
@@ -1710,9 +1696,7 @@ def test_create_digest_empty_items_list_is_a_supported_call_shape(conn):
     # support).
     digest_id = create_digest(conn, "daily body", [], kind="daily")
 
-    row = conn.execute(
-        "SELECT item_count, kind FROM digests WHERE id = ?", (digest_id,)
-    ).fetchone()
+    row = conn.execute("SELECT item_count, kind FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (0, "daily")
 
 
@@ -2119,9 +2103,7 @@ def test_prune_delivered_items_keeps_unsummarized_backlog_regardless_of_age(conn
 
 def test_prune_delivered_items_keeps_row_whose_digest_is_pending_on_an_enabled_channel(conn):
     old = (datetime.now(UTC) - timedelta(days=91)).isoformat()
-    digest_id = _digest_row(
-        conn, "site pending", email_sent=1, site_published=0, telegram_sent=1
-    )
+    digest_id = _digest_row(conn, "site pending", email_sent=1, site_published=0, telegram_sent=1)
     _insert_item_row(conn, "1", fetched_at=old, digest_id=digest_id)
 
     deleted = prune_delivered_items(
@@ -2211,9 +2193,7 @@ def test_get_digest_source_counts_returns_counts_across_sources(conn):
         _item("2"),
         _item("100", source="x", chat_id=None, url="https://x.com/i/status/100"),
     ]
-    commit_new_items(
-        conn, items, {("telegram", "123"): "2", ("x", "notifications"): "100"}
-    )
+    commit_new_items(conn, items, {("telegram", "123"): "2", ("x", "notifications"): "100"})
     digest_id = create_digest(conn, "body", get_unsummarized_items(conn))
 
     assert get_digest_source_counts(conn, digest_id) == {"telegram": 2, "x": 1}
@@ -2287,12 +2267,8 @@ def test_write_deltas_scoped_per_digest_id(conn):
     digest_id_2 = create_digest(conn, "body two", get_unsummarized_items(conn))
     write_deltas(conn, digest_id_2, [{"slug": "story-one", "previously": "x", "now": "y"}])
 
-    assert get_deltas(conn, digest_id_1) == [
-        {"slug": "story-one", "previously": "a", "now": "b"}
-    ]
-    assert get_deltas(conn, digest_id_2) == [
-        {"slug": "story-one", "previously": "x", "now": "y"}
-    ]
+    assert get_deltas(conn, digest_id_1) == [{"slug": "story-one", "previously": "a", "now": "b"}]
+    assert get_deltas(conn, digest_id_2) == [{"slug": "story-one", "previously": "x", "now": "y"}]
 
 
 # --- write_arc_keys / get_arc_keys (stable-arc-keys feature) ---
@@ -2674,3 +2650,59 @@ def test_get_all_arc_contexts_respects_limit(conn):
     result = get_all_arc_contexts(conn, limit=2)
 
     assert len(result) == 2
+
+
+def test_init_db_migrates_v4_db_predating_embed_url_column_by_adding_it(tmp_path):
+    # A database migrated through version 4 (arc_context exists, but the
+    # Patreon collector's items.embed_url does not) must gain the column on
+    # the next init_db call. Unlike the version-2/3/4 steps this is NOT a
+    # no-op on an existing database: _SCHEMA's CREATE TABLE IF NOT EXISTS
+    # never alters a table that already exists, so without this migration a
+    # live state.db would reach commit_new_items with the column missing and
+    # every INSERT would fail.
+    db_path = str(tmp_path / "v4.db")
+    old_conn = connect(db_path)
+    init_db(old_conn)
+    # Force the DB back to a "just migrated through version 4" shape by
+    # rebuilding `items` without embed_url, the way every v4 database that
+    # predates this feature actually looks on disk.
+    old_conn.execute("DROP TABLE items")
+    old_conn.execute(
+        """
+        CREATE TABLE items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL, source_id TEXT NOT NULL,
+            chat_id TEXT, chat_title TEXT, author TEXT, text TEXT,
+            url TEXT NOT NULL, fetched_at TEXT NOT NULL,
+            digest_id INTEGER REFERENCES digests(id),
+            UNIQUE (source, source_id)
+        )
+        """
+    )
+    old_conn.execute("PRAGMA user_version = 4")
+    old_conn.commit()
+    columns = {r[1] for r in old_conn.execute("PRAGMA table_info(items)").fetchall()}
+    assert "embed_url" not in columns
+
+    init_db(old_conn)
+
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    columns = {r[1] for r in old_conn.execute("PRAGMA table_info(items)").fetchall()}
+    assert "embed_url" in columns
+
+    old_conn.close()
+
+
+def test_embed_url_migration_is_idempotent(tmp_path):
+    # It runs unconditionally for any database below version 5, including
+    # one that already carries the column from a fresh _SCHEMA execution.
+    conn = connect(str(tmp_path / "twice.db"))
+    init_db(conn)
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+
+    init_db(conn)  # must not raise on the duplicate column
+
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
+    assert "embed_url" in columns
+    conn.close()
