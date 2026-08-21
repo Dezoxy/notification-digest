@@ -114,6 +114,28 @@ class PatreonCollectResult(CollectResult):
     seeded: list[Item] = field(default_factory=list)
 
 
+# Posts published longer ago than this are never collected, mirroring
+# rss.py's own `_LOOKBACK_HOURS` and adopted for the same class of reason.
+#
+# It is what keeps this collector safe from state.py's
+# `prune_delivered_items`, which deletes DELIVERED items after
+# `_ITEMS_PRUNE_DAYS` (90). Once an item is pruned, `known_source_ids`
+# forgets it -- so any post still on the API's first page when its item is
+# pruned would be collected and delivered a SECOND time.
+#
+# Without a cutoff that safety is only accidental: it holds because this
+# creator posts roughly daily, so `_PAGE_COUNT` posts span ~25 days, well
+# inside 90. At one post a month the same page would span two years and the
+# re-delivery would be routine. This makes the invariant structural instead
+# -- nothing older than 45 days is ever offered, so nothing prunable can be.
+#
+# MUST stay well below `_ITEMS_PRUNE_DAYS` -- a test pins the relationship
+# rather than trusting this comment. 30 days is a 3x margin. Like rss.py's
+# window, anything older is an accepted, permanent miss, which here would
+# take 30 straight days of downtime.
+_MAX_POST_AGE_DAYS = 30
+
+
 class PatreonUnavailable(Exception):
     """The API could not be read, or answered in a shape that cannot be trusted.
 
@@ -122,6 +144,37 @@ class PatreonUnavailable(Exception):
     differs. Raised for transport failures, non-JSON answers, and -- most
     importantly -- for a session that is no longer authorized.
     """
+
+
+def _published_at(attributes: dict[str, object]) -> datetime | None:
+    """The post's publish time as an aware UTC datetime, or None if unreadable.
+
+    Patreon returns ISO8601 with a numeric offset ("2026-08-20T20:46:04.000+00:00"),
+    which `datetime.fromisoformat` parses natively on 3.12. A value that
+    will not parse returns None, and `_within_age_cutoff` treats that as
+    "keep" -- dropping a post because its timestamp was odd would lose real
+    content, whereas keeping it costs at most one duplicate.
+    """
+    raw = attributes.get("published_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _within_age_cutoff(post: dict[str, object], now: datetime) -> bool:
+    """Whether this post is recent enough to collect. See `_MAX_POST_AGE_DAYS`."""
+    attributes = post.get("attributes")
+    if not isinstance(attributes, dict):
+        return False
+    published = _published_at(attributes)
+    if published is None:
+        # Unparseable timestamp: keep it. See `_published_at`.
+        return True
+    return (now - published).days <= _MAX_POST_AGE_DAYS
 
 
 def _authorization_state(posts: Sequence[dict[str, object]]) -> str:
@@ -403,11 +456,15 @@ def collect(
         )
         return CollectResult(failed=True)
 
-    listed_ids = [post["id"] for post in posts if isinstance(post.get("id"), str)]
+    now = datetime.now(UTC)
+    fresh_enough = [post for post in posts if _within_age_cutoff(post, now)]
+    aged_out = len(posts) - len(fresh_enough)
+
+    listed_ids = [post["id"] for post in fresh_enough if isinstance(post.get("id"), str)]
     already_known = known_ids_lookup(listed_ids)
 
     fetched_at = datetime.now(UTC).isoformat()
-    fresh = [post for post in posts if post.get("id") not in already_known]
+    fresh = [post for post in fresh_enough if post.get("id") not in already_known]
 
     # `posts` arrives newest-first (sort=-published_at), so slicing the head
     # takes the most recent -- the ones worth a little history in the topic.
@@ -427,6 +484,7 @@ def collect(
             {
                 "state": state,
                 "listed": len(posts),
+                "aged_out": aged_out,
                 "already_known": len(already_known),
                 "items_kept": len(items),
                 "seeded": len(seeded),
