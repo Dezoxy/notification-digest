@@ -218,7 +218,9 @@ WEEKLY_LOOKBACK_WINDOW = timedelta(days=7)
 # no CHECK constraint (see _SCHEMA's comment on items.source and
 # commit_new_items's docstring) -- adding a new source is a one-line edit
 # here instead of a full-table rebuild migration.
-_KNOWN_SOURCES = frozenset({"telegram", "x", "news", "polymarket", "reddit", "hackernews"})
+_KNOWN_SOURCES = frozenset(
+    {"telegram", "x", "news", "polymarket", "reddit", "hackernews", "patreon"}
+)
 
 
 @dataclass(frozen=True)
@@ -1039,6 +1041,37 @@ def get_polymarket_probs(conn: sqlite3.Connection, market_ids: Sequence[str]) ->
     return {market_id: probability for market_id, probability in rows}
 
 
+def known_source_ids(
+    conn: sqlite3.Connection, source: str, candidate_ids: Sequence[str]
+) -> set[str]:
+    """Which of `candidate_ids` this source has ALREADY stored.
+
+    Every other collector can skip this: they fetch an item's full content
+    in the same request that reveals the item exists, so letting
+    `commit_new_items`' INSERT..ON CONFLICT DO NOTHING silently drop a
+    re-seen row costs nothing.
+
+    `collectors/patreon.py` is the exception. There, the listing page
+    yields only (id, title, url) -- the post BODY needs a separate browser
+    page load each, against a rate-limited, ToS-sensitive, session-based
+    site sharing one Chromium with another job. Discovering "already seen"
+    at commit time would mean paying for ~22 page loads an hour to throw
+    almost all of them away. This lets that collector filter to genuinely
+    new ids BEFORE it fetches anything.
+
+    Empty `candidate_ids` -> empty set without touching the database, same
+    no-op shape as `polymarket_probs_for` above.
+    """
+    if not candidate_ids:
+        return set()
+    placeholders = ",".join("?" for _ in candidate_ids)
+    rows = conn.execute(
+        f"SELECT source_id FROM items WHERE source = ? AND source_id IN ({placeholders})",
+        (source, *candidate_ids),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def commit_new_items(
     conn: sqlite3.Connection,
     items: list[Item],
@@ -1187,9 +1220,7 @@ def commit_new_items(
         raise
 
 
-def get_unsummarized_items(
-    conn: sqlite3.Connection, limit: int | None = None
-) -> list[Item]:
+def get_unsummarized_items(conn: sqlite3.Connection, limit: int | None = None) -> list[Item]:
     """Return items not yet attached to a digest, ordered by fetched_at ascending.
 
     `limit`, when given, caps the number of rows returned to the `limit`
@@ -1227,9 +1258,7 @@ def get_unsummarized_items(
 
 def count_unsummarized_items(conn: sqlite3.Connection) -> int:
     """Return the total number of items not yet attached to a digest."""
-    return conn.execute(
-        "SELECT COUNT(*) FROM items WHERE digest_id IS NULL"
-    ).fetchone()[0]
+    return conn.execute("SELECT COUNT(*) FROM items WHERE digest_id IS NULL").fetchone()[0]
 
 
 def count_stale_unsummarized_by_source(
@@ -1383,9 +1412,7 @@ def create_digest(
             )
             stamped += cur.rowcount
         if stamped != len(items):
-            raise ValueError(
-                f"digest stamping affected {stamped} of {len(items)} items"
-            )
+            raise ValueError(f"digest stamping affected {stamped} of {len(items)} items")
         conn.commit()
         return digest_id
     except Exception:
@@ -1650,9 +1677,7 @@ def get_arc_context(conn: sqlite3.Connection, key: str) -> str | None:
     return row[0] if row is not None else None
 
 
-def get_arc_keys_needing_context(
-    conn: sqlite3.Connection, since_iso: str, limit: int
-) -> list[str]:
+def get_arc_keys_needing_context(conn: sqlite3.Connection, since_iso: str, limit: int) -> list[str]:
     """Return up to `limit` arc keys due a background primer, oldest-first-seen (PLAN.md §11.6).
 
     A key QUALIFIES when both are true:
@@ -1835,9 +1860,7 @@ def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
     called, on both the fresh-digest and pending-resend paths. So this
     query works identically for both.
     """
-    rows = conn.execute(
-        "SELECT url FROM items WHERE digest_id = ?", (digest_id,)
-    ).fetchall()
+    rows = conn.execute("SELECT url FROM items WHERE digest_id = ?", (digest_id,)).fetchall()
     return {row[0] for row in rows}
 
 
