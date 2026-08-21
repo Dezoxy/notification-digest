@@ -203,9 +203,7 @@ def translate_digest(
                 model,
                 fallback_model,
             )
-            output = run_claude(
-                prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT
-            )
+            output = run_claude(prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT)
         validate_output(output)
     # Broad on purpose, not just SummarizeError: this function's contract is
     # NEVER raises -- translation is cosmetic, and an unanticipated failure

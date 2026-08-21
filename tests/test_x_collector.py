@@ -246,11 +246,7 @@ def _user_tweets_response(legacies: list[dict]) -> dict:
     return {
         "data": {
             "user": {
-                "result": {
-                    "timeline_v2": {
-                        "timeline": {"instructions": [{"entries": entries}]}
-                    }
-                }
+                "result": {"timeline_v2": {"timeline": {"instructions": [{"entries": entries}]}}}
             }
         }
     }
@@ -573,9 +569,7 @@ async def test_pagination_page_cap_reached_unbridged_cursor_advances_to_newest_a
     # 6 pages, all-new timestamps (never <= cursor), forcing the cap at 5 pages.
     timestamps = (600, 500, 400, 300, 200, 100)
     pages = [
-        _page()
-        .add(f"n{ts}", ts, tweet_id=str(ts), text=f"t{ts}")
-        .build(next_cursor=f"c{ts}")
+        _page().add(f"n{ts}", ts, tweet_id=str(ts), text=f"t{ts}").build(next_cursor=f"c{ts}")
         for ts in timestamps
     ]
     client = FakeXClient(pages=pages)
@@ -593,9 +587,7 @@ async def test_pagination_page_cap_reached_unbridged_cursor_advances_to_newest_a
     # Items are unaffected by the cursor-advancement choice: everything
     # fetched and > the (unchanged, true) input cursor(50) is still collected.
     assert [i.source_id for i in result.items] == ["200", "300", "400", "500", "600"]
-    assert any(
-        "backlog exceeded the page cap" in record.message for record in caplog.records
-    )
+    assert any("backlog exceeded the page cap" in record.message for record in caplog.records)
     assert any(
         "between 50 and 200 were deliberately skipped" in record.message
         for record in caplog.records
@@ -621,9 +613,7 @@ async def test_followup_after_unbridged_cap_collects_only_newer_notifications(mo
     # --- Phase 1: same cap-hit setup as the test above. ---
     timestamps = (600, 500, 400, 300, 200, 100)
     phase1_pages = [
-        _page()
-        .add(f"n{ts}", ts, tweet_id=str(ts), text=f"t{ts}")
-        .build(next_cursor=f"c{ts}")
+        _page().add(f"n{ts}", ts, tweet_id=str(ts), text=f"t{ts}").build(next_cursor=f"c{ts}")
         for ts in timestamps
     ]
     phase1_client = FakeXClient(pages=phase1_pages)
@@ -1423,15 +1413,11 @@ async def test_bell_notification_fetches_and_emits_posts_once_account_cursor_exi
 
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
-    page = (
-        _page().add_bell("n1", 500, from_user_ids=["111"], screen_names={"111": "alice"}).build()
-    )
+    page = _page().add_bell("n1", 500, from_user_ids=["111"], screen_names={"111": "alice"}).build()
     gql = FakeGqlClient({"111": _user_tweets_response([_legacy_tweet("900001", "hello world")])})
     client = FakeXClient(pages=[page], gql=gql)
 
-    result = await collect(
-        client, cursors={"notifications": "0", "posts:111": "0"}
-    )
+    result = await collect(client, cursors={"notifications": "0", "posts:111": "0"})
 
     assert gql.calls == ["111"]
     post_items = [i for i in result.items if i.source_id == "900001"]
@@ -1471,11 +1457,7 @@ async def test_posts_filtered_by_snowflake_timestamp_vs_account_cursor_inclusive
     tied_id = id_for(cursor_ms)
     new_id = id_for(cursor_ms + 1000)
 
-    page = (
-        _page()
-        .add_bell("n1", cursor_ms, from_user_ids=["7"], screen_names={"7": "bob"})
-        .build()
-    )
+    page = _page().add_bell("n1", cursor_ms, from_user_ids=["7"], screen_names={"7": "bob"}).build()
     gql = FakeGqlClient(
         {
             "7": _user_tweets_response(
@@ -1502,9 +1484,7 @@ async def test_posts_filtered_by_snowflake_timestamp_vs_account_cursor_inclusive
 
 async def test_first_run_never_fetches_posts_even_with_bell_notification():
     page = _page().add_bell("n1", 500, from_user_ids=["111"]).build()
-    gql = FakeGqlClient(
-        {"111": _user_tweets_response([_legacy_tweet("1", "should not appear")])}
-    )
+    gql = FakeGqlClient({"111": _user_tweets_response([_legacy_tweet("1", "should not appear")])})
     client = FakeXClient(pages=[page], gql=gql)
 
     result = await collect(client, cursors={})
@@ -1535,9 +1515,7 @@ async def test_per_user_post_fetch_failure_skips_user_keeps_others_items(monkeyp
     # Both accounts already have a posts cursor (not first sight) -- user 1's
     # fetch fails and its cursor ("posts:1") must stay untouched; user 2's
     # succeeds and its items/cursor advance normally.
-    result = await collect(
-        client, cursors={"notifications": "0", "posts:1": "0", "posts:2": "0"}
-    )
+    result = await collect(client, cursors={"notifications": "0", "posts:1": "0", "posts:2": "0"})
 
     assert result.failed is False
     assert [i.source_id for i in result.items if i.source_id == "900001"] == ["900001"]
@@ -1674,9 +1652,7 @@ def test_resolve_post_screen_name_ignores_retweeted_status_result():
     tweet_obj = {
         "full_text": "hi",
         "id_str": "1",
-        "retweeted_status_result": {
-            "result": {"legacy": {"screen_name": "original_author"}}
-        },
+        "retweeted_status_result": {"result": {"legacy": {"screen_name": "original_author"}}},
     }
 
     assert x_module._resolve_post_screen_name(tweet_obj) is None
@@ -1686,9 +1662,7 @@ def test_resolve_post_screen_name_ignores_quoted_status_result():
     tweet_obj = {
         "full_text": "hi",
         "id_str": "1",
-        "quoted_status_result": {
-            "result": {"legacy": {"screen_name": "quoted_author"}}
-        },
+        "quoted_status_result": {"result": {"legacy": {"screen_name": "quoted_author"}}},
     }
 
     assert x_module._resolve_post_screen_name(tweet_obj) is None
@@ -1720,9 +1694,7 @@ async def test_retweeted_status_result_not_emitted_as_separate_item_and_not_misa
                 "rest_id": "999",
                 "legacy": _legacy_tweet("999", "the original tweet text"),
                 "core": {
-                    "user_results": {
-                        "result": {"legacy": {"screen_name": "original_author"}}
-                    }
+                    "user_results": {"result": {"legacy": {"screen_name": "original_author"}}}
                 },
             }
         },
@@ -1758,11 +1730,7 @@ async def test_quoted_status_result_not_emitted_as_separate_item_and_not_misattr
             "result": {
                 "rest_id": "888",
                 "legacy": _legacy_tweet("888", "the quoted tweet text"),
-                "core": {
-                    "user_results": {
-                        "result": {"legacy": {"screen_name": "quoted_author"}}
-                    }
-                },
+                "core": {"user_results": {"result": {"legacy": {"screen_name": "quoted_author"}}}},
             }
         },
     )
@@ -1805,37 +1773,25 @@ def test_is_valid_tweet_id_boundaries():
 
 
 async def test_notification_invalid_screen_name_format_skipped_with_warning(caplog):
-    page = (
-        _page()
-        .add("n1", 100, tweet_id="100", text="hi", screen_name="bad name!")
-        .build()
-    )
+    page = _page().add("n1", 100, tweet_id="100", text="hi", screen_name="bad name!").build()
     client = FakeXClient(pages=[page])
 
     with caplog.at_level("WARNING", logger="digest.collectors.x"):
         result = await collect(client, cursors={"notifications": "0"})
 
     assert result.items == []
-    assert any(
-        "malformed screen_name/tweet_id" in r.message for r in caplog.records
-    )
+    assert any("malformed screen_name/tweet_id" in r.message for r in caplog.records)
 
 
 async def test_notification_invalid_tweet_id_format_skipped_with_warning(caplog):
-    page = (
-        _page()
-        .add("n1", 100, tweet_id="abc123", text="hi", screen_name="alice")
-        .build()
-    )
+    page = _page().add("n1", 100, tweet_id="abc123", text="hi", screen_name="alice").build()
     client = FakeXClient(pages=[page])
 
     with caplog.at_level("WARNING", logger="digest.collectors.x"):
         result = await collect(client, cursors={"notifications": "0"})
 
     assert result.items == []
-    assert any(
-        "malformed screen_name/tweet_id" in r.message for r in caplog.records
-    )
+    assert any("malformed screen_name/tweet_id" in r.message for r in caplog.records)
 
 
 async def test_post_invalid_screen_name_format_skipped_with_warning(monkeypatch, caplog):
@@ -1844,9 +1800,7 @@ async def test_post_invalid_screen_name_format_skipped_with_warning(monkeypatch,
 
     monkeypatch.setattr(x_module.asyncio, "sleep", fake_sleep)
 
-    page = (
-        _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "bad!name"}).build()
-    )
+    page = _page().add_bell("n1", 500, from_user_ids=["1"], screen_names={"1": "bad!name"}).build()
     gql = FakeGqlClient({"1": _user_tweets_response([_legacy_tweet("900001", "hi")])})
     client = FakeXClient(pages=[page], gql=gql)
 
@@ -1854,9 +1808,7 @@ async def test_post_invalid_screen_name_format_skipped_with_warning(monkeypatch,
         result = await collect(client, cursors={"notifications": "0", "posts:1": "0"})
 
     assert result.items == []
-    assert any(
-        "malformed screen_name/tweet_id" in r.message for r in caplog.records
-    )
+    assert any("malformed screen_name/tweet_id" in r.message for r in caplog.records)
 
 
 async def test_post_invalid_tweet_id_format_skipped_with_warning(monkeypatch, caplog):
@@ -1879,9 +1831,7 @@ async def test_post_invalid_tweet_id_format_skipped_with_warning(monkeypatch, ca
         result = await collect(client, cursors={"notifications": "0", "posts:1": "0"})
 
     assert result.items == []
-    assert any(
-        "malformed screen_name/tweet_id" in r.message for r in caplog.records
-    )
+    assert any("malformed screen_name/tweet_id" in r.message for r in caplog.records)
 
 
 # --- Two-run permanence tests (Codex review): each of these proves a
@@ -1890,9 +1840,7 @@ async def test_post_invalid_tweet_id_format_skipped_with_warning(monkeypatch, ca
 # instead makes it retryable/collectible on a follow-up run. ---
 
 
-async def test_account_truncated_at_page_cap_then_followup_collects_only_newer(
-    monkeypatch, caplog
-):
+async def test_account_truncated_at_page_cap_then_followup_collects_only_newer(monkeypatch, caplog):
     """Run 1: the account posted at least `_POSTS_PER_USER` times since its
     (old) cursor -- only the newest page is fetched, so the oldest of the
     fetched posts is still newer than the cursor -- triggering the
@@ -1931,8 +1879,7 @@ async def test_account_truncated_at_page_cap_then_followup_collects_only_newer(
     assert len(run1_result.items) == x_module._POSTS_PER_USER
     assert run1_result.failed is False
     assert any(
-        "posted more than the" in r.message and "page cap" in r.message
-        for r in caplog.records
+        "posted more than the" in r.message and "page cap" in r.message for r in caplog.records
     )
     assert run1_result.cursor_updates[("x", "posts:1")] == str(newest_run1_ts)
 

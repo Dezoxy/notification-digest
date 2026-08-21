@@ -346,9 +346,7 @@ def allocate_by_source(
     -- lane pressure should be Loki-visible on every run, not only
     oversubscribed ones, or a quiet-window positions burst is invisible.)
     """
-    positions_prefixes = tuple(
-        f"https://t.me/{channel.lower()}/" for channel in positions_channels
-    )
+    positions_prefixes = tuple(f"https://t.me/{channel.lower()}/" for channel in positions_channels)
 
     lanes: dict[str, list[Item]] = {}
     for item in items:
@@ -393,9 +391,9 @@ def allocate_by_source(
     # priority), then any unknown lanes in first-seen order. "positions" is
     # excluded -- its quota is a hard cap (see docstring), so it never grows
     # past its reservation no matter how much budget is left over.
-    lane_order = [
-        lane for lane in _SOURCE_QUOTAS if lane in lanes and lane != "positions"
-    ] + [lane for lane in lanes if lane not in _SOURCE_QUOTAS]
+    lane_order = [lane for lane in _SOURCE_QUOTAS if lane in lanes and lane != "positions"] + [
+        lane for lane in lanes if lane not in _SOURCE_QUOTAS
+    ]
     while spent < budget:
         progressed = False
         for lane in lane_order:
@@ -415,10 +413,7 @@ def allocate_by_source(
     logger.info(
         "allocation %s",
         json.dumps(
-            {
-                lane: {"taken": taken[lane], "available": len(lanes[lane])}
-                for lane in sorted(lanes)
-            },
+            {lane: {"taken": taken[lane], "available": len(lanes[lane])} for lane in sorted(lanes)},
             sort_keys=True,
         ),
     )
@@ -1267,9 +1262,7 @@ def format_recent_arcs(arc_keys: list[tuple[str, int]]) -> str:
 # it must still match every inline form python-markdown's default
 # renderer turns into a real `<a href>` anchor, since a form we don't
 # match is a form we silently let through with its raw URL intact.
-_MARKDOWN_LINK_RE = re.compile(
-    r"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(\"[^\"]*\"|'[^']*'))?\s*\)"
-)
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+(\"[^\"]*\"|'[^']*'))?\s*\)")
 # CommonMark autolink form: `<scheme:destination>` -- a bare URI wrapped in
 # angle brackets, with no link text of its own. Per the CommonMark grammar
 # an autolink's scheme is not limited to http/https: any URI scheme works
@@ -2216,8 +2209,6 @@ def summarize(
     # renumber_citations' own docstring.
     output = renumber_citations(strip_tldr_citations(output))
     if failed_sources:
-        banner = "".join(
-            f"⚠ {source} collection failed this run\n" for source in failed_sources
-        )
+        banner = "".join(f"⚠ {source} collection failed this run\n" for source in failed_sources)
         return banner + "\n" + output, deltas, arc_keys
     return output, deltas, arc_keys

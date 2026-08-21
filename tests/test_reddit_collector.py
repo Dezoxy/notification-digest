@@ -68,8 +68,7 @@ def _me_response(username: str = "the_owner") -> bytes:
 
 def _sub_url(subreddit: str, posts_per_sub: int = 10) -> str:
     return (
-        f"{reddit_module._BASE_URL}/r/{subreddit}/top.json?t=day"
-        f"&limit={posts_per_sub}&raw_json=1"
+        f"{reddit_module._BASE_URL}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
     )
 
 

@@ -18,6 +18,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from digest.collectors import hackernews as hackernews_collector
+from digest.collectors import patreon as patreon_collector
 from digest.collectors import polymarket as polymarket_collector
 from digest.collectors import reddit as reddit_collector
 from digest.collectors import rss as rss_collector
@@ -30,6 +31,7 @@ from digest.context import generate_arc_context
 from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
 from digest.emailer import archive
+from digest.patreon import summarize_post
 from digest.publish import derive_topics, map_deltas_to_slugs
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
@@ -51,6 +53,10 @@ from digest.state import (
     get_unsummarized_items,
     get_window_digests_since,
     init_db,
+    known_source_ids,
+    mark_digest_sent,
+    mark_digest_site_published,
+    mark_digest_telegram_sent,
     prune_delivered_items,
     prune_stale_unsummarized,
     write_arc_context,
@@ -346,7 +352,6 @@ def _deliver(
         logger.info("no unsummarized items, nothing to send")
         return all_ok
 
-
     # "Recently covered" continuity context (digest/summarize.py's
     # format_recent_coverage): every digest created in the last
     # _RECENT_COVERAGE_WINDOW, INCLUDING an unsent one still awaiting the
@@ -458,7 +463,15 @@ def _deliver(
     item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
     done = {"email": False, "site": False, "telegram": False}
     ok = deliver_channels(
-        conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+        conn,
+        cfg,
+        digest_id,
+        body_md,
+        item_count,
+        created_at,
+        done,
+        telegram_state,
+        body_md_hu,
         kind=kind,
         # Only THIS run's own fresh digest is hidden. The `deliver_pending`
         # pass above deliberately does not get `hidden`: a digest still
@@ -508,9 +521,7 @@ def _warn_on_stale_backlog(conn: sqlite3.Connection, cfg: Config) -> None:
         f"https://t.me/{channel.lower()}/" for channel in cfg.positions_tg_channels
     )
     try:
-        stale = count_stale_unsummarized_by_source(
-            conn, cutoff.isoformat(), positions_prefixes
-        )
+        stale = count_stale_unsummarized_by_source(conn, cutoff.isoformat(), positions_prefixes)
     except sqlite3.Error:
         logger.exception("stale-backlog check failed; digest already delivered")
         return
@@ -522,8 +533,7 @@ def _warn_on_stale_backlog(conn: sqlite3.Connection, cfg: Config) -> None:
             {
                 "threshold_hours": cfg.stale_backlog_warn_hours,
                 "sources": {
-                    source: {"count": count, "oldest": oldest}
-                    for source, count, oldest in stale
+                    source: {"count": count, "oldest": oldest} for source, count, oldest in stale
                 },
             },
             sort_keys=True,
@@ -605,9 +615,7 @@ def _run_news_collector(cfg: Config) -> CollectResult:
         return CollectResult(failed=True)
 
 
-def _run_polymarket_collector(
-    conn: sqlite3.Connection, cfg: Config
-) -> PolymarketCollectResult:
+def _run_polymarket_collector(conn: sqlite3.Connection, cfg: Config) -> PolymarketCollectResult:
     """Run one Polymarket swing-detection pass, if `cfg.polymarket_enabled`.
 
     No-ops entirely (returns a fresh, unfailed PolymarketCollectResult)
@@ -1241,7 +1249,15 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
         item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
         done = {"email": False, "site": False, "telegram": False}
         ok = deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            done,
+            telegram_state,
+            body_md_hu,
             kind=kind,
             extra_allowed_urls=delivery_allowed_urls,
         )
@@ -1466,7 +1482,15 @@ def run_weekly(cfg: Config) -> bool:
         item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
         done = {"email": False, "site": False, "telegram": False}
         ok = deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            done,
+            telegram_state,
+            body_md_hu,
             kind=kind,
         )
         result = all_ok and ok
@@ -1490,6 +1514,162 @@ def run_weekly(cfg: Config) -> bool:
         return result
     finally:
         conn.close()
+
+
+# Patreon posts go to Telegram ONLY. Hardcoded, not configurable: the site
+# channel is a PUBLIC news site, and these summaries are of paywalled posts
+# the creator sells. Publishing them would redistribute purchased content to
+# people who did not buy it -- a line that should not be one env var away
+# from being crossed. Email is disabled on the real VM anyway, but it is
+# named here so enabling it later cannot quietly opt Patreon back in.
+_PATREON_HIDDEN_CHANNELS = frozenset({"email", "site"})
+
+
+def run_patreon(cfg: Config) -> bool:
+    """Collect new Patreon posts, summarize each, and deliver one message per post.
+
+    Invoked by `python -m digest patreon` -- its own hourly systemd timer on
+    the homelab side (see CLAUDE.md's Deploy note), independent of the
+    every-6-hours window cycle. Synchronous: the collector is one plain
+    HTTP request, with no async collector to await.
+
+    Disabled-by-config is SUCCESS, not failure: an unset PATREON_CAMPAIGN_ID
+    means the collector is not in use (Config's empty-means-disabled shape),
+    and a timer firing against a deliberately unconfigured collector must
+    not alert.
+
+    Shape, and why it differs from every other run_* here:
+
+    1. Collect one page. `known_source_ids` supplies the dedup set, and it
+       counts only items ALREADY ATTACHED TO A DIGEST -- so a post committed
+       by a run that then died before summarizing is offered again rather
+       than lost.
+    2. Commit `seeded` first-run posts and stamp them into ONE digest row
+       marked delivered on every channel. They are recorded as seen without
+       ever being sent -- see `_absorb_seeded`.
+    3. For each new post: summarize, create its OWN digest row, deliver.
+       One post, one digest, one message.
+
+    A single post failing to summarize does NOT abort the rest: its item
+    keeps `digest_id IS NULL`, so the next hourly run retries it, and the
+    other posts still go out. The run reports failure so the OnFailure alert
+    fires, but the reader still gets what worked.
+    """
+    if not cfg.patreon_campaign_id:
+        logger.info("patreon collector not configured, nothing to do")
+        return True
+
+    conn = connect(cfg.state_db_path)
+    try:
+        init_db(conn)
+        result = patreon_collector.collect(
+            cfg.patreon_campaign_id,
+            cfg.patreon_session_cookie,
+            lambda ids: known_source_ids(conn, "patreon", ids),
+        )
+        if result.failed:
+            return False
+
+        seeded = getattr(result, "seeded", [])
+        if seeded:
+            _absorb_seeded(conn, seeded)
+
+        if not result.items:
+            logger.info("patreon: no new posts")
+            return True
+
+        commit_new_items(conn, list(result.items), {})
+
+        telegram_state = TelegramRunState()
+        ok = True
+        # Oldest first, so a burst of posts arrives in the topic in the
+        # order they were written rather than newest-first.
+        for item in reversed(result.items):
+            if not _deliver_one_post(conn, cfg, item, telegram_state):
+                ok = False
+        return ok
+    finally:
+        conn.close()
+
+
+def _absorb_seeded(conn, seeded: list) -> None:
+    """Record first-run posts as seen WITHOUT ever delivering them.
+
+    `known_source_ids` counts an item as known only once it carries a
+    `digest_id`, so seeded items need a digest row to point at -- but they
+    must never be sent. This creates ONE row for the whole batch and marks
+    it delivered on all three channels immediately, so `get_pending_digests`
+    never picks it up and no channel can fire.
+
+    The alternative considered and rejected: leave them with `digest_id
+    IS NULL` and exclude patreon from `prune_stale_unsummarized`. That works
+    until the prune's 14-day cutoff, after which the rows vanish, the API's
+    25-deep page still lists those posts, and a month-old backlog gets
+    delivered as if brand new.
+
+    The row is an honest, auditable record rather than a fiction: it says
+    exactly what happened, and its item_count is the real number absorbed.
+    """
+    commit_new_items(conn, list(seeded), {})
+    digest_id = create_digest(
+        conn,
+        "## Patreon: korábbi bejegyzések\n\n"
+        f"Az első futás {len(seeded)} korábbi bejegyzést vett nyilvántartásba "
+        "kézbesítés nélkül, hogy a topik ne induljon egy hónapnyi visszamenőleges "
+        "üzenettel.",
+        list(seeded),
+        kind="patreon",
+    )
+    mark_digest_sent(conn, digest_id)
+    mark_digest_site_published(conn, digest_id)
+    mark_digest_telegram_sent(conn, digest_id)
+    logger.info(
+        "patreon: absorbed %d older post(s) into seed digest %d, undelivered",
+        len(seeded),
+        digest_id,
+    )
+
+
+def _deliver_one_post(conn, cfg: Config, item, telegram_state) -> bool:
+    """Summarize and deliver ONE post. Returns False if this post did not go out.
+
+    Isolated per post so one bad post cannot take the others down with it.
+    When `summarize_post` raises, no digest row is created -- which is what
+    leaves the item's `digest_id` NULL and makes the next run retry it.
+    """
+    try:
+        body_md = summarize_post(item, cfg.anthropic_model, cfg.claude_timeout_seconds)
+    except SummarizeError as exc:
+        logger.error("patreon: summarizing post %s failed: %s", item.source_id, exc)
+        return False
+
+    digest_id = create_digest(conn, body_md, [item], kind="patreon")
+    created_at = digest_meta(conn, digest_id)[1]
+
+    # Resolve the suppressed channels' flags UNCONDITIONALLY, before
+    # delivery. `hidden` alone is not enough: deliver_channels only marks a
+    # hidden channel's flag when that channel is ENABLED, and email is
+    # disabled on the real VM -- so these rows would keep `email_sent = 0`
+    # forever. get_pending_digests ignores a disabled channel's flag, which
+    # makes that harmless today and a burst tomorrow: flip EMAIL_ENABLED to
+    # true and every Patreon digest ever stored becomes pending at once,
+    # mailing out summaries of paywalled posts. Writing the flags now means
+    # the suppression survives a later config change.
+    mark_digest_sent(conn, digest_id)
+    mark_digest_site_published(conn, digest_id)
+
+    return deliver_channels(
+        conn,
+        cfg,
+        digest_id,
+        body_md,
+        1,
+        created_at,
+        {"email": True, "site": True, "telegram": False},
+        telegram_state,
+        kind="patreon",
+        hidden=_PATREON_HIDDEN_CHANNELS,
+    )
 
 
 def main() -> None:
@@ -1525,7 +1705,9 @@ def main() -> None:
     # weekly briefs are the deliverables the whole cascade exists to produce,
     # so there is no sensible reason to hide one, and silently accepting a
     # `hide:` alongside `daily` would suggest otherwise.
-    if len(sys.argv) > 1 and sys.argv[1] == "daily":
+    if len(sys.argv) > 1 and sys.argv[1] == "patreon":
+        ok = run_patreon(cfg)
+    elif len(sys.argv) > 1 and sys.argv[1] == "daily":
         ok = run_daily(cfg, force="--force" in sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "weekly":
         ok = run_weekly(cfg)

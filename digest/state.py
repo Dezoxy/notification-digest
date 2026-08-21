@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS items (
     author      TEXT,
     text        TEXT,
     url         TEXT NOT NULL,
+    -- A secondary link the item carries in its own right -- today a
+    -- YouTube/Vimeo video a Patreon post embeds (Patreon states it
+    -- structurally in `attributes.embed`, so it is read, never regexed out
+    -- of body text). Nullable and additive: every source that has no such
+    -- concept leaves it NULL, and no backfill is needed.
+    embed_url   TEXT,
     fetched_at  TEXT NOT NULL,
     digest_id   INTEGER REFERENCES digests(id),
     UNIQUE (source, source_id)
@@ -218,7 +224,21 @@ WEEKLY_LOOKBACK_WINDOW = timedelta(days=7)
 # no CHECK constraint (see _SCHEMA's comment on items.source and
 # commit_new_items's docstring) -- adding a new source is a one-line edit
 # here instead of a full-table rebuild migration.
-_KNOWN_SOURCES = frozenset({"telegram", "x", "news", "polymarket", "reddit", "hackernews"})
+_KNOWN_SOURCES = frozenset(
+    {"telegram", "x", "news", "polymarket", "reddit", "hackernews", "patreon"}
+)
+
+# Sources that run their OWN delivery pipeline rather than feeding the
+# window digest's unsummarized-items sweep. Their items must never be
+# picked up by get_unsummarized_items: a Patreon post belongs in its own
+# topic as its own message, and letting it also land in the 06:00/12:00
+# briefing would deliver it twice, in two different topics.
+#
+# This is a structural guarantee rather than a timing one. Without it the
+# invariant would depend on the patreon run stamping a digest_id before the
+# next window run started -- true almost always, and false exactly when a
+# crash lands in between.
+_SELF_DELIVERED_SOURCES = frozenset({"patreon"})
 
 
 @dataclass(frozen=True)
@@ -239,6 +259,11 @@ class Item:
     # working unchanged. None for chats where the entity carries no title
     # (e.g. a DM) and for rows collected before this field existed.
     chat_title: str | None = None
+    # Secondary link this item carries (see items.embed_url). None for every
+    # source with no such concept. LAST with a default so every existing
+    # keyword-based Item(...) construction keeps working unchanged, exactly
+    # as chat_title above was added.
+    embed_url: str | None = None
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -281,7 +306,9 @@ def connect(db_path: str) -> sqlite3.Connection:
 #
 # Version 4 (PLAN.md §11.6, "context mode"): adds the `arc_context` table --
 # see `_migrate_add_arc_context_table` and init_db's `if version < 4:` step.
-_LATEST_SCHEMA_VERSION = 4
+# The Patreon collector's embedded-video link: see `_migrate_add_embed_url_column`
+# and init_db's `if version < 5:` step.
+_LATEST_SCHEMA_VERSION = 5
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -392,6 +419,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         # before this feature existed).
         _migrate_add_arc_context_table(conn)
 
+    if version < 5:
+        # The Patreon collector's `items.embed_url`. Unlike the version-2/3/4
+        # steps above this is NOT a no-op on an existing database: _SCHEMA's
+        # `CREATE TABLE IF NOT EXISTS` never alters a table that already
+        # exists, so a live state.db reaches this point still missing the
+        # column, and every commit_new_items INSERT would fail without it.
+        _migrate_add_embed_url_column(conn)
+
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
 
@@ -461,6 +496,26 @@ def _migrate_add_telegram_sent_column(conn: sqlite3.Connection) -> None:
     if "telegram_sent" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN telegram_sent INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+
+
+def _migrate_add_embed_url_column(conn: sqlite3.Connection) -> None:
+    """Add `items.embed_url` to a database predating the Patreon collector.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_body_md_hu_column` below. The duplicate-column OperationalError
+    is swallowed because this runs unconditionally for any database below
+    version 5, including one already carrying the column from a _SCHEMA
+    execution on a fresh create.
+
+    The column is nullable with no default, so every pre-existing row is
+    correctly NULL -- no source before Patreon had a secondary link, so
+    there is nothing to backfill.
+    """
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN embed_url TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def _migrate_add_body_md_hu_column(conn: sqlite3.Connection) -> None:
@@ -1039,6 +1094,44 @@ def get_polymarket_probs(conn: sqlite3.Connection, market_ids: Sequence[str]) ->
     return {market_id: probability for market_id, probability in rows}
 
 
+def known_source_ids(
+    conn: sqlite3.Connection, source: str, candidate_ids: Sequence[str]
+) -> set[str]:
+    """Which of `candidate_ids` this source has ALREADY stored.
+
+    Every other collector can skip this: they fetch an item's full content
+    in the same request that reveals the item exists, so letting
+    `commit_new_items`' INSERT..ON CONFLICT DO NOTHING silently drop a
+    re-seen row costs nothing.
+
+    `collectors/patreon.py` is the exception. There, the listing page
+    yields only (id, title, url) -- the post BODY needs a separate browser
+    page load each, against a rate-limited, ToS-sensitive, session-based
+    site sharing one Chromium with another job. Discovering "already seen"
+    at commit time would mean paying for ~22 page loads an hour to throw
+    almost all of them away. This lets that collector filter to genuinely
+    new ids BEFORE it fetches anything.
+
+    Only items ALREADY ATTACHED TO A DIGEST count as known. Mere presence in
+    the table is not enough: an item committed by a run that then crashed
+    before creating its digest was never delivered, and treating it as seen
+    would lose it silently and permanently. Requiring `digest_id IS NOT
+    NULL` makes that case self-healing -- the next run simply re-offers it.
+
+    Empty `candidate_ids` -> empty set without touching the database, same
+    no-op shape as `polymarket_probs_for` above.
+    """
+    if not candidate_ids:
+        return set()
+    placeholders = ",".join("?" for _ in candidate_ids)
+    rows = conn.execute(
+        f"SELECT source_id FROM items "
+        f"WHERE source = ? AND digest_id IS NOT NULL AND source_id IN ({placeholders})",
+        (source, *candidate_ids),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def commit_new_items(
     conn: sqlite3.Connection,
     items: list[Item],
@@ -1134,8 +1227,9 @@ def commit_new_items(
             cur.execute(
                 """
                 INSERT INTO items
-                    (source, source_id, chat_id, chat_title, author, text, url, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (source, source_id, chat_id, chat_title, author, text, url,
+                     embed_url, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (source, source_id) DO NOTHING
                 """,
                 (
@@ -1146,6 +1240,7 @@ def commit_new_items(
                     item.author,
                     item.text,
                     item.url,
+                    item.embed_url,
                     item.fetched_at,
                 ),
             )
@@ -1187,9 +1282,7 @@ def commit_new_items(
         raise
 
 
-def get_unsummarized_items(
-    conn: sqlite3.Connection, limit: int | None = None
-) -> list[Item]:
+def get_unsummarized_items(conn: sqlite3.Connection, limit: int | None = None) -> list[Item]:
     """Return items not yet attached to a digest, ordered by fetched_at ascending.
 
     `limit`, when given, caps the number of rows returned to the `limit`
@@ -1198,17 +1291,24 @@ def get_unsummarized_items(
     lets a caller drain a large backlog in bounded batches across multiple
     runs instead of loading everything at once (see digest/main.py's
     _MAX_ITEMS_PER_DIGEST).
+
+    `_SELF_DELIVERED_SOURCES` are excluded outright -- see that constant.
+    Their items are delivered by their own pipeline into their own topic,
+    and sweeping them in here would deliver each one a second time inside
+    the window briefing.
     """
-    query = """
-        SELECT source, source_id, chat_id, chat_title, author, text, url, fetched_at
+    excluded = tuple(sorted(_SELF_DELIVERED_SOURCES))
+    placeholders = ",".join("?" for _ in excluded)
+    query = f"""
+        SELECT source, source_id, chat_id, chat_title, author, text, url, fetched_at, embed_url
         FROM items
-        WHERE digest_id IS NULL
+        WHERE digest_id IS NULL AND source NOT IN ({placeholders})
         ORDER BY fetched_at ASC
         """
-    params: tuple[int, ...] = ()
+    params: tuple[object, ...] = excluded
     if limit is not None:
         query += " LIMIT ?"
-        params = (limit,)
+        params = (*excluded, limit)
     rows = conn.execute(query, params).fetchall()
     return [
         Item(
@@ -1220,6 +1320,7 @@ def get_unsummarized_items(
             text=row[5],
             url=row[6],
             fetched_at=row[7],
+            embed_url=row[8],
         )
         for row in rows
     ]
@@ -1227,9 +1328,7 @@ def get_unsummarized_items(
 
 def count_unsummarized_items(conn: sqlite3.Connection) -> int:
     """Return the total number of items not yet attached to a digest."""
-    return conn.execute(
-        "SELECT COUNT(*) FROM items WHERE digest_id IS NULL"
-    ).fetchone()[0]
+    return conn.execute("SELECT COUNT(*) FROM items WHERE digest_id IS NULL").fetchone()[0]
 
 
 def count_stale_unsummarized_by_source(
@@ -1383,9 +1482,7 @@ def create_digest(
             )
             stamped += cur.rowcount
         if stamped != len(items):
-            raise ValueError(
-                f"digest stamping affected {stamped} of {len(items)} items"
-            )
+            raise ValueError(f"digest stamping affected {stamped} of {len(items)} items")
         conn.commit()
         return digest_id
     except Exception:
@@ -1650,9 +1747,7 @@ def get_arc_context(conn: sqlite3.Connection, key: str) -> str | None:
     return row[0] if row is not None else None
 
 
-def get_arc_keys_needing_context(
-    conn: sqlite3.Connection, since_iso: str, limit: int
-) -> list[str]:
+def get_arc_keys_needing_context(conn: sqlite3.Connection, since_iso: str, limit: int) -> list[str]:
     """Return up to `limit` arc keys due a background primer, oldest-first-seen (PLAN.md §11.6).
 
     A key QUALIFIES when both are true:
@@ -1835,9 +1930,7 @@ def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:
     called, on both the fresh-digest and pending-resend paths. So this
     query works identically for both.
     """
-    rows = conn.execute(
-        "SELECT url FROM items WHERE digest_id = ?", (digest_id,)
-    ).fetchall()
+    rows = conn.execute("SELECT url FROM items WHERE digest_id = ?", (digest_id,)).fetchall()
     return {row[0] for row in rows}
 
 
@@ -2294,6 +2387,32 @@ def prune_stale_unsummarized(conn: sqlite3.Connection) -> int:
     except Exception:
         conn.rollback()
         raise
+
+
+def get_digest_post_link(conn: sqlite3.Connection, digest_id: int) -> tuple[str, str | None]:
+    """Return `(url, embed_url)` for a one-post digest's single item.
+
+    Only meaningful for `kind = 'patreon'`, the one kind where a digest maps
+    to exactly ONE item (digest/patreon.py's module docstring explains why).
+    Every other kind summarizes many items, so "the digest's link" is not a
+    question with an answer there -- which is why this is a narrow helper
+    rather than a general accessor.
+
+    Ordering by `id` and taking the first row is defensive rather than
+    expected: a patreon digest is created with a single-item snapshot, so
+    there is only ever one. Deterministic selection just means a hand-
+    repaired database cannot make delivery non-reproducible.
+
+    Raises LookupError when the digest has no items at all -- the caller
+    must not fall back to sending a message whose button points nowhere.
+    """
+    row = conn.execute(
+        "SELECT url, embed_url FROM items WHERE digest_id = ? ORDER BY id LIMIT 1",
+        (digest_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"digest {digest_id} has no items to link to")
+    return row[0], row[1]
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:

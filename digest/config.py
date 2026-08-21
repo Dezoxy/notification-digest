@@ -201,6 +201,19 @@ class Config:
     # newly added field, so it gets the protection from day one rather than
     # inheriting the older fields' gap.
     polymarket_proxy_key: str | None = field(default=None, repr=False)
+    # Patreon collector (see digest/collectors/patreon.py). Enabled iff
+    # BOTH of the next two are set -- mirroring news_feeds'
+    # empty-means-disabled shape rather than adding a PATREON_ENABLED flag.
+    # This is deliberate beyond consistency: digest.env is rendered by the
+    # homelab Ansible role, so an unrendered/reverted file must degrade to
+    # "collector off", never to a crash or a run that fails every hour.
+    patreon_campaign_id: str = ""
+    # SECRET: the owner's `session_id` cookie for patreon.com -- a live
+    # credential to a PAID account, valid roughly a year from issue.
+    # repr=False for the same reason polymarket_proxy_key has it. Verified
+    # sufficient on its own: no Cloudflare (__cf_bm/_cfuvid) or device
+    # cookie is needed, so nothing else from the browser jar is stored.
+    patreon_session_cookie: str = field(default="", repr=False)
     polymarket_top_n: int = 30
     polymarket_swing_threshold: float = 0.15
     # Delivery channels (see digest/deliver.py's deliver_channels and
@@ -278,6 +291,12 @@ class Config:
     # root while other channels go to topics), and that must be
     # distinguishable from "not configured at all".
     telegram_weekly_thread_id: int | None = None
+    # Forum topic for the Patreon kind, same shape and fallback as
+    # telegram_daily_thread_id/telegram_weekly_thread_id directly above --
+    # 0 is a legitimate "no topic" value, so None is the only honest
+    # "unset" sentinel and main.py falls back to telegram_notify_thread_id
+    # with an INFO log.
+    telegram_patreon_thread_id: int | None = None
     # Reddit collector (digest/collectors/reddit.py). Like x_enabled/
     # polymarket_enabled, this is an explicit on/off flag rather than an
     # empty-means-disabled sentinel -- REDDIT_SUBREDDITS has no natural
@@ -417,26 +436,18 @@ class Config:
             x_cookies_path, x_cookies = _require_exactly_one_x_cookie_source()
         anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
         archive_dir = os.environ.get("ARCHIVE_DIR", "./archive")
-        claude_timeout_seconds = _optional_positive_int(
-            "CLAUDE_TIMEOUT_SECONDS", default=300
-        )
+        claude_timeout_seconds = _optional_positive_int("CLAUDE_TIMEOUT_SECONDS", default=300)
         claude_effort = _optional_choice(
             "CLAUDE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES
         )
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
         positions_tg_channels = _optional_tg_channel_tuple("POSITIONS_TG_CHANNELS")
-        stale_backlog_warn_hours = _optional_positive_int(
-            "STALE_BACKLOG_WARN_HOURS", default=24
-        )
+        stale_backlog_warn_hours = _optional_positive_int("STALE_BACKLOG_WARN_HOURS", default=24)
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
         translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
-        translate_model_fallback = os.environ.get(
-            "TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6"
-        )
-        translate_timeout_seconds = _optional_positive_int(
-            "TRANSLATE_TIMEOUT_SECONDS", default=300
-        )
+        translate_model_fallback = os.environ.get("TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6")
+        translate_timeout_seconds = _optional_positive_int("TRANSLATE_TIMEOUT_SECONDS", default=300)
 
         verify_daily_enabled = _parse_bool(os.environ.get("VERIFY_DAILY_ENABLED", "false"))
         verify_daily_timeout_seconds = _optional_positive_int(
@@ -507,6 +518,13 @@ class Config:
         )
         telegram_daily_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_DAILY_THREAD_ID")
         telegram_weekly_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_WEEKLY_THREAD_ID")
+        telegram_patreon_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_PATREON_THREAD_ID")
+        patreon_campaign_id = os.environ.get("PATREON_CAMPAIGN_ID", "").strip()
+        patreon_session_cookie = _optional_secret("PATREON_SESSION_COOKIE") or ""
+        if patreon_campaign_id and not patreon_session_cookie:
+            raise ConfigError("PATREON_SESSION_COOKIE is required when PATREON_CAMPAIGN_ID is set")
+        if patreon_session_cookie and not patreon_campaign_id:
+            raise ConfigError("PATREON_CAMPAIGN_ID is required when PATREON_SESSION_COOKIE is set")
 
         # site_public_base is validated against the TELEGRAM channel (not the
         # site channel): its only consumer is send_telegram_tldr's reader
@@ -581,6 +599,9 @@ class Config:
             telegram_notify_thread_id=telegram_notify_thread_id,
             telegram_daily_thread_id=telegram_daily_thread_id,
             telegram_weekly_thread_id=telegram_weekly_thread_id,
+            telegram_patreon_thread_id=telegram_patreon_thread_id,
+            patreon_campaign_id=patreon_campaign_id,
+            patreon_session_cookie=patreon_session_cookie,
         )
 
 
@@ -727,9 +748,7 @@ def _optional_choice(name: str, *, default: str, choices: tuple[str, ...]) -> st
         return default
     value = raw.strip()
     if value not in choices:
-        raise ConfigError(
-            f"{name} must be one of {', '.join(choices)}, got {value!r}"
-        )
+        raise ConfigError(f"{name} must be one of {', '.join(choices)}, got {value!r}")
     return value
 
 

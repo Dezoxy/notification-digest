@@ -108,9 +108,7 @@ def test_binary_market_swing_emits_item_with_expected_text_and_url(
     )
     _patch_urlopen(monkeypatch, json.dumps([market]).encode())
 
-    result = collect(
-        "https://gamma-api.polymarket.com", None, 30, 0.15, lambda ids: {"m1": 0.40}
-    )
+    result = collect("https://gamma-api.polymarket.com", None, 30, 0.15, lambda ids: {"m1": 0.40})
 
     assert result.failed is False
     assert len(result.items) == 1

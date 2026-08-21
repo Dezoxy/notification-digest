@@ -11,8 +11,12 @@ _VALID_OUTPUT = (
 )
 
 
-def _row(digest_id: int = 1, created_at: str = "2026-01-15T08:00:00+00:00",
-         item_count: int = 1, body_md: str = "body") -> tuple[int, str, int, str]:
+def _row(
+    digest_id: int = 1,
+    created_at: str = "2026-01-15T08:00:00+00:00",
+    item_count: int = 1,
+    body_md: str = "body",
+) -> tuple[int, str, int, str]:
     return (digest_id, created_at, item_count, body_md)
 
 
@@ -151,9 +155,7 @@ def test_summarize_daily_raises_on_refusal_output(monkeypatch):
     monkeypatch.setattr(daily_mod, "run_claude", lambda *a, **k: "I can't help with that.")
 
     try:
-        summarize_daily(
-            [_row()], allowed_urls=set(), model="m", timeout_seconds=60, effort="high"
-        )
+        summarize_daily([_row()], allowed_urls=set(), model="m", timeout_seconds=60, effort="high")
         raise AssertionError("expected SummarizeError")
     except SummarizeError:
         pass
@@ -166,9 +168,7 @@ def test_summarize_daily_propagates_run_claude_failure(monkeypatch):
     monkeypatch.setattr(daily_mod, "run_claude", boom)
 
     try:
-        summarize_daily(
-            [_row()], allowed_urls=set(), model="m", timeout_seconds=60, effort="high"
-        )
+        summarize_daily([_row()], allowed_urls=set(), model="m", timeout_seconds=60, effort="high")
         raise AssertionError("expected SummarizeError")
     except SummarizeError:
         pass
@@ -225,9 +225,7 @@ def test_summarize_daily_passes_allowed_urls_through_unmodified(monkeypatch):
     monkeypatch.setattr(daily_mod, "enforce_link_allowlist", spy_enforce)
 
     urls = {"https://known.example/a", "https://known.example/b"}
-    summarize_daily(
-        [_row()], allowed_urls=urls, model="m", timeout_seconds=60, effort="high"
-    )
+    summarize_daily([_row()], allowed_urls=urls, model="m", timeout_seconds=60, effort="high")
 
     assert captured["allowed_urls"] == urls
 

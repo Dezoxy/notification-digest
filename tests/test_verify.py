@@ -62,10 +62,7 @@ def test_normalize_url_leaves_root_path_trailing_slash_alone():
 
 
 def test_normalize_url_leaves_query_param_values_and_order_untouched():
-    assert (
-        normalize_url("https://example.com/a?b=2&a=1")
-        == "https://example.com/a?b=2&a=1"
-    )
+    assert normalize_url("https://example.com/a?b=2&a=1") == "https://example.com/a?b=2&a=1"
 
 
 @pytest.mark.parametrize(
@@ -129,9 +126,7 @@ def _assistant_tool_use(name, tool_input, tool_use_id="toolu_1"):
         "type": "assistant",
         "message": {
             "role": "assistant",
-            "content": [
-                {"type": "tool_use", "id": tool_use_id, "name": name, "input": tool_input}
-            ],
+            "content": [{"type": "tool_use", "id": tool_use_id, "name": name, "input": tool_input}],
         },
     }
 
@@ -275,9 +270,7 @@ def test_parse_verify_transcript_assistant_message_not_a_dict_raises():
 
 
 def test_parse_verify_transcript_assistant_content_not_a_list_raises():
-    stdout = _jsonl(
-        {"type": "assistant", "message": {"content": "not a list"}}, _result("text")
-    )
+    stdout = _jsonl({"type": "assistant", "message": {"content": "not a list"}}, _result("text"))
 
     with pytest.raises(VerificationUnavailable):
         parse_verify_transcript(stdout)
@@ -287,9 +280,7 @@ def test_parse_verify_transcript_webfetch_input_not_a_dict_raises():
     stdout = _jsonl(
         {
             "type": "assistant",
-            "message": {
-                "content": [{"type": "tool_use", "name": "WebFetch", "input": "oops"}]
-            },
+            "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": "oops"}]},
         },
         _result("text"),
     )
@@ -299,9 +290,7 @@ def test_parse_verify_transcript_webfetch_input_not_a_dict_raises():
 
 
 def test_parse_verify_transcript_webfetch_missing_url_raises():
-    stdout = _jsonl(
-        _assistant_tool_use("WebFetch", {"prompt": "no url key here"}), _result("text")
-    )
+    stdout = _jsonl(_assistant_tool_use("WebFetch", {"prompt": "no url key here"}), _result("text"))
 
     with pytest.raises(VerificationUnavailable):
         parse_verify_transcript(stdout)
@@ -417,9 +406,7 @@ def test_run_claude_verify_nonzero_exit_raises_verification_unavailable_without_
     monkeypatch,
 ):
     def fake_run(cmd, **kwargs):
-        return _fake_completed(
-            returncode=1, stdout="", stderr="SECRET_STDERR_MARKER_12345"
-        )
+        return _fake_completed(returncode=1, stdout="", stderr="SECRET_STDERR_MARKER_12345")
 
     monkeypatch.setattr(verify_mod.subprocess, "run", fake_run)
 
@@ -506,7 +493,11 @@ def test_verify_daily_propagates_verification_unavailable(monkeypatch):
 
     with pytest.raises(VerificationUnavailable):
         verify_daily(
-            "## Draft\n", allowed_urls=set(), model="m", timeout_seconds=60, effort="high",
+            "## Draft\n",
+            allowed_urls=set(),
+            model="m",
+            timeout_seconds=60,
+            effort="high",
             max_web_ops=20,
         )
 
@@ -518,7 +509,11 @@ def test_verify_daily_propagates_summarize_error_on_contract_failure(monkeypatch
 
     with pytest.raises(SummarizeError):
         verify_daily(
-            "## Draft\n", allowed_urls=set(), model="m", timeout_seconds=60, effort="high",
+            "## Draft\n",
+            allowed_urls=set(),
+            model="m",
+            timeout_seconds=60,
+            effort="high",
             max_web_ops=20,
         )
 
@@ -549,12 +544,17 @@ def test_verify_daily_widened_allowlist_permits_a_verifier_cited_url(monkeypatch
     # citation to a URL the transcript says was fetched must survive.
     output = "## Arc\n\nCorroborated[¹](https://fetched.example/report).\n"
     monkeypatch.setattr(
-        verify_mod, "run_claude_verify",
+        verify_mod,
+        "run_claude_verify",
         lambda *a, **k: (output, ["https://fetched.example/report"]),
     )
 
     text, widened = verify_daily(
-        "## Draft\n", allowed_urls=set(), model="m", timeout_seconds=60, effort="high",
+        "## Draft\n",
+        allowed_urls=set(),
+        model="m",
+        timeout_seconds=60,
+        effort="high",
         max_web_ops=20,
     )
 
@@ -564,12 +564,17 @@ def test_verify_daily_widened_allowlist_permits_a_verifier_cited_url(monkeypatch
 
 def test_verify_daily_reverses_backtick_escape_in_output(monkeypatch):
     monkeypatch.setattr(
-        verify_mod, "run_claude_verify",
+        verify_mod,
+        "run_claude_verify",
         lambda *a, **k: ("## Section\n\nSome \\u0060code\\u0060 snippet.\n", []),
     )
 
     text, _widened = verify_daily(
-        "## Draft\n", allowed_urls=set(), model="m", timeout_seconds=60, effort="high",
+        "## Draft\n",
+        allowed_urls=set(),
+        model="m",
+        timeout_seconds=60,
+        effort="high",
         max_web_ops=20,
     )
 

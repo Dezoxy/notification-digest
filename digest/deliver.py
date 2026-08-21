@@ -24,10 +24,12 @@ from zoneinfo import ZoneInfo
 from digest.config import Config
 from digest.emailer import localize_tldr_label_hu, render_body_html, send_digest
 from digest.publish import (
+    TelegramPartialSend,
     TelegramSendError,
     derive_topics,
     parse_failed_sources,
     publish_to_site,
+    send_telegram_post,
     send_telegram_tldr,
 )
 from digest.state import (
@@ -36,6 +38,7 @@ from digest.state import (
     get_daily_allowed_urls,
     get_deltas,
     get_digest_item_urls,
+    get_digest_post_link,
     get_digest_source_counts,
     get_pending_digests,
     get_weekly_allowed_urls,
@@ -393,7 +396,14 @@ def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
     always uses `cfg.telegram_notify_thread_id` unconditionally; there are
     only two non-default kinds to special-case today.
     """
-    if kind == "daily":
+    if kind == "patreon":
+        if cfg.telegram_patreon_thread_id is not None:
+            return cfg.telegram_patreon_thread_id
+        logger.info(
+            "TELEGRAM_PATREON_THREAD_ID unset, falling back to the window digest's "
+            "telegram thread for this patreon post"
+        )
+    elif kind == "daily":
         if cfg.telegram_daily_thread_id is not None:
             return cfg.telegram_daily_thread_id
         logger.info(
@@ -482,15 +492,61 @@ def _deliver_telegram(
         return False
 
     try:
-        send_telegram_tldr(
+        if kind == "patreon":
+            # A different message shape entirely, not a parameterization --
+            # see publish.send_telegram_post. Both buttons point OFF-site
+            # (the post, and its embedded video when it has one), so
+            # site_public_base has no role here.
+            post_url, embed_url = get_digest_post_link(conn, digest_id)
+            send_telegram_post(
+                body_md,
+                created_at,
+                post_url,
+                embed_url,
+                cfg.telegram_notify_bot_token,
+                cfg.telegram_notify_chat_id,
+                _telegram_thread_id_for_kind(cfg, kind),
+            )
+        else:
+            send_telegram_tldr(
+                digest_id,
+                body_md,
+                created_at,
+                cfg.telegram_notify_bot_token,
+                cfg.telegram_notify_chat_id,
+                _telegram_thread_id_for_kind(cfg, kind),
+                cfg.site_public_base,
+            )
+    except TelegramPartialSend as exc:
+        # Part 1 (at least) is already in the topic. Retrying would re-send
+        # it, so mark the digest done -- then still return False, so the run
+        # exits non-zero and OnFailure alerts a human to the gap.
+        #
+        # The breaker check mirrors the TelegramSendError branch below: a
+        # 429 mid-chain is the same "stop sending this run" signal as a 429
+        # on a whole message, and without this every later post in the run
+        # would keep firing into an already-rate-limited API.
+        if exc.status == 429:
+            telegram_state.rate_limited = True
+            logger.warning(
+                "telegram rate limited (429) mid-chain; skipping remaining telegram sends this run"
+            )
+        logger.error(
+            "patreon digest %d only partially sent (%d/%d parts); marking sent to "
+            "avoid duplicating the delivered parts on retry",
             digest_id,
-            body_md,
-            created_at,
-            cfg.telegram_notify_bot_token,
-            cfg.telegram_notify_chat_id,
-            _telegram_thread_id_for_kind(cfg, kind),
-            cfg.site_public_base,
+            exc.parts_sent,
+            exc.parts_total,
         )
+        mark_digest_telegram_sent(conn, digest_id)
+        return False
+    except LookupError:
+        # A patreon digest with no linked item cannot produce a button, and
+        # a post message whose button points nowhere is worse than a retry.
+        # Left telegram_sent = 0 so a later run picks it up, exactly like
+        # any other non-429 failure below.
+        logger.error("patreon digest %d has no item to link to; not sending", digest_id)
+        return False
     except TelegramSendError as exc:
         if exc.status == 429:
             telegram_state.rate_limited = True
@@ -686,16 +742,21 @@ def deliver_channels(
 
     if site_enabled and not site_done:
         site_done = _deliver_site(
-            conn, cfg, digest_id, body_md, item_count, created_at, allowed_urls, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            allowed_urls,
+            body_md_hu,
             kind=kind,
         )
         site_status = "sent" if site_done else "failed"
 
     if telegram_enabled and not telegram_done:
         if site_enabled and not site_done:
-            logger.info(
-                "digest %d: skipping telegram this run, site publish not done", digest_id
-            )
+            logger.info("digest %d: skipping telegram this run, site publish not done", digest_id)
             telegram_status = "skipped"
         else:
             telegram_done = _deliver_telegram(
@@ -772,7 +833,15 @@ def deliver_pending(
         logger.info("retrying delivery of digest %d (kind=%s)", digest_id, kind)
         item_count, created_at, body_md_hu, _kind = digest_meta(conn, digest_id)
         ok = deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            done,
+            telegram_state,
+            body_md_hu,
             kind=kind,
         )
         all_ok = all_ok and ok
