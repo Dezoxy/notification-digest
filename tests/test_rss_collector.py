@@ -39,6 +39,7 @@ def _never_really_sleep(monkeypatch):
     """
     monkeypatch.setattr(rss_module.time, "sleep", lambda _seconds: None)
 
+
 def _rfc822(dt: datetime) -> str:
     return dt.strftime("%a, %d %b %Y %H:%M:%S GMT")
 

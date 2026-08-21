@@ -419,9 +419,7 @@ def _extract_tweet_ref(notification: dict) -> str | None:
         return None
     template = notification.get("template")
     user_actions = template.get("aggregateUserActionsV1") if isinstance(template, dict) else None
-    target_objects = (
-        user_actions.get("targetObjects") if isinstance(user_actions, dict) else None
-    )
+    target_objects = user_actions.get("targetObjects") if isinstance(user_actions, dict) else None
     if not isinstance(target_objects, list) or not target_objects:
         return None
     first_target = target_objects[0]
@@ -1468,9 +1466,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
             api_cursor,
         ) = _extract_candidates(resp)
     except Exception as exc:
-        logger.warning(
-            "x notification page processing failed on page 1: %s", type(exc).__name__
-        )
+        logger.warning("x notification page processing failed on page 1: %s", type(exc).__name__)
         result.failed = True
         return result
 
@@ -1640,9 +1636,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
     try:
         new_items = []
         skipped_invalid_format = 0
-        for timestamp_ms, tweet_id, text, screen_name in sorted(
-            all_candidates, key=lambda c: c[0]
-        ):
+        for timestamp_ms, tweet_id, text, screen_name in sorted(all_candidates, key=lambda c: c[0]):
             # Codex review finding B: INCLUSIVE (>=), not strict (>) --
             # millisecond-resolution ties can't be told apart from the
             # timestamp alone, so a candidate exactly at the cursor is
@@ -1837,8 +1831,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
                     # build a url the emailer's anchor-provenance allowlist
                     # can't exact-match, silently degrading the deep link.
                     if not (
-                        _is_valid_screen_name(screen_name)
-                        and _is_valid_tweet_id(post.tweet_id)
+                        _is_valid_screen_name(screen_name) and _is_valid_tweet_id(post.tweet_id)
                     ):
                         skipped_post_invalid_format += 1
                         continue

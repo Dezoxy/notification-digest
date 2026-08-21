@@ -258,9 +258,7 @@ def _parse_binary_market(raw: Any) -> _ParsedMarket | None:
         return None
     if len(outcomes) != 2 or len(prices) != 2:
         return None
-    normalized_outcomes = tuple(
-        o.strip().lower() if isinstance(o, str) else None for o in outcomes
-    )
+    normalized_outcomes = tuple(o.strip().lower() if isinstance(o, str) else None for o in outcomes)
     if normalized_outcomes != _BINARY_OUTCOMES:
         return None
 

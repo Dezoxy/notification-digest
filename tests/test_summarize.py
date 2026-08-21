@@ -351,9 +351,7 @@ def test_run_claude_success_returns_stripped_stdout(monkeypatch):
 
     monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
 
-    result = run_claude(
-        "the prompt", model="claude-opus-5", timeout_seconds=300, effort="high"
-    )
+    result = run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
 
     assert result == "## Needs attention\nsome text"
     assert captured["cmd"] == [
@@ -817,14 +815,7 @@ def test_validate_output_four_backtick_fence_not_closed_by_three_backtick_line()
     # 3-backtick line inside a 4-backtick-opened fence is just content, not
     # a closer -- the fence never actually closes, so every "## " line
     # inside it stays hidden and this output has no real heading anywhere.
-    markdown_text = (
-        "````\n"
-        "```\n"
-        "## Needs attention\n"
-        "## Worth knowing\n"
-        "## Noise skipped\n"
-        "````\n"
-    )
+    markdown_text = "````\n```\n## Needs attention\n## Worth knowing\n## Noise skipped\n````\n"
 
     with pytest.raises(SummarizeError):
         validate_output(markdown_text)
@@ -841,14 +832,7 @@ def test_validate_output_four_backtick_fence_closed_by_four_backtick_line():
 def test_validate_output_closing_length_rule_applies_to_tildes_too():
     # Same closing-length rule for tilde fences: a 3-tilde line inside a
     # 4-tilde-opened fence is content, not a closer.
-    markdown_text = (
-        "~~~~\n"
-        "~~~\n"
-        "## Needs attention\n"
-        "## Worth knowing\n"
-        "## Noise skipped\n"
-        "~~~~\n"
-    )
+    markdown_text = "~~~~\n~~~\n## Needs attention\n## Worth knowing\n## Noise skipped\n~~~~\n"
 
     with pytest.raises(SummarizeError):
         validate_output(markdown_text)
@@ -860,19 +844,10 @@ def test_validate_output_closer_with_trailing_text_does_not_close_fence():
     # delimiter run is just fence content, not a closer, even though its
     # run length matches the opener. The fence never closes, so every
     # "## " line inside it stays hidden.
-    markdown_text = (
-        "```\n"
-        "```extra\n"
-        "## Needs attention\n"
-        "## Worth knowing\n"
-        "## Noise skipped\n"
-        "```\n"
-    )
+    markdown_text = "```\n```extra\n## Needs attention\n## Worth knowing\n## Noise skipped\n```\n"
 
     with pytest.raises(SummarizeError):
         validate_output(markdown_text)
-
-
 
 
 _MODEL_OUTPUT = "## Needs attention\n...\n## Worth knowing\n...\n## Noise skipped\n..."
@@ -978,8 +953,7 @@ def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypat
     )
 
     assert result == (
-        "⚠ telegram collection failed this run\n"
-        "⚠ x collection failed this run\n\n" + _MODEL_OUTPUT
+        "⚠ telegram collection failed this run\n⚠ x collection failed this run\n\n" + _MODEL_OUTPUT
     )
 
 
@@ -1084,9 +1058,7 @@ def test_extract_deltas_drops_malformed_entries_keeps_wellformed_ones(caplog):
 
 
 def test_extract_deltas_caps_at_max_entries():
-    entries = [
-        {"heading": f"Section {i}", "previously": "old", "now": "new"} for i in range(15)
-    ]
+    entries = [{"heading": f"Section {i}", "previously": "old", "now": "new"} for i in range(15)]
     body = "## Section\n\ntext\n\n```deltas\n" + json.dumps(entries) + "\n```\n"
 
     _result, deltas = extract_deltas(body)
@@ -1293,8 +1265,7 @@ def test_extract_arc_keys_two_fences_are_malformed_strips_both_discards_all(capl
 
 def test_extract_arc_keys_strips_whitespace_from_entry_fields():
     body = (
-        "## Section\n\ntext\n\n"
-        '```arcs\n[{"heading": "  Section  ", "key": " valid-key "}]\n```\n'
+        '## Section\n\ntext\n\n```arcs\n[{"heading": "  Section  ", "key": " valid-key "}]\n```\n'
     )
 
     _result, arc_keys = extract_arc_keys(body)
@@ -2256,9 +2227,7 @@ def test_allocate_by_source_one_source_cannot_fill_the_whole_budget():
 
 
 def test_allocate_by_source_preserves_input_order_and_prefers_oldest():
-    items = [_lane_item("telegram", i) for i in range(300)] + [
-        _lane_item("x", i) for i in range(5)
-    ]
+    items = [_lane_item("telegram", i) for i in range(300)] + [_lane_item("x", i) for i in range(5)]
 
     result = allocate_by_source(items, 100)
 
@@ -2277,10 +2246,7 @@ def test_allocate_by_source_positions_lane_reserved_both_ways():
     positions = ["ASI_Alliance", "fetchunofficial"]
     items = (
         # 100 items from the positions channels (public t.me urls)...
-        [
-            _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}")
-            for i in range(100)
-        ]
+        [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(100)]
         # ...plus 300 items of other telegram traffic.
         + [_lane_item("telegram", 1000 + i) for i in range(300)]
     )
@@ -2297,9 +2263,7 @@ def test_allocate_by_source_positions_lane_reserved_both_ways():
 
 
 def test_allocate_by_source_positions_matching_is_case_insensitive():
-    items = [
-        _lane_item("telegram", i, url=f"https://t.me/asi_alliance/{i}") for i in range(400)
-    ]
+    items = [_lane_item("telegram", i, url=f"https://t.me/asi_alliance/{i}") for i in range(400)]
 
     result = allocate_by_source(items, 250, ["ASI_Alliance"])
 
@@ -2312,9 +2276,9 @@ def test_allocate_by_source_positions_matching_is_case_insensitive():
 
 
 def test_allocate_by_source_without_positions_config_treats_channels_as_telegram():
-    items = [
-        _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(10)
-    ] + [_lane_item("x", i) for i in range(10)]
+    items = [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(10)] + [
+        _lane_item("x", i) for i in range(10)
+    ]
 
     # No positions channels configured -> plain telegram items; underfull
     # window passes through untouched either way.
@@ -2327,9 +2291,7 @@ def test_allocate_by_source_positions_lane_takes_newest_not_oldest():
     # digest to an ever-staler backlog. It must take the NEWEST items
     # instead -- the inverse of the general-lane rule asserted in
     # test_allocate_by_source_preserves_input_order_and_prefers_oldest.
-    items = [
-        _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(400)
-    ]
+    items = [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(400)]
 
     result = allocate_by_source(items, 250, ["ASI_Alliance"])
 
@@ -2362,9 +2324,9 @@ def test_allocate_by_source_positions_lane_winning_zero_slots_takes_nothing():
     # WHOLE list, so a newest-first lane allocated zero slots must be skipped
     # explicitly or it silently takes everything it has, breaking both its
     # own quota and the overall budget.
-    items = [
-        _lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(50)
-    ] + [_lane_item("news", i) for i in range(50)]
+    items = [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(50)] + [
+        _lane_item("news", i) for i in range(50)
+    ]
 
     # Budget 1 scales every quota to its floor of 1, and the first pass
     # spends that single slot on whichever lane it reaches first -- leaving
@@ -2416,9 +2378,7 @@ def test_select_balanced_items_for_prompt_shrinks_by_reallocating_not_tail_chopp
     ] + [dataclasses.replace(_lane_item("x", i), text="x" * 1500) for i in range(120)]
 
     # A cap that fits roughly half the batch.
-    cap = len(
-        build_prompt(items[:120], [], "(no prior briefings in the last 24 hours)").encode()
-    )
+    cap = len(build_prompt(items[:120], [], "(no prior briefings in the last 24 hours)").encode())
     result = select_balanced_items_for_prompt(
         items, 240, (), [], "(no prior briefings in the last 24 hours)", cap
     )
@@ -2469,9 +2429,7 @@ def test_format_recent_arcs_invalid_key_is_dropped_not_rendered_raw():
     # Defense in depth: a key that somehow reached storage without passing
     # _ARC_KEY_RE (a hand-edited row, a future storage bug) must never be
     # replayed into a future prompt verbatim.
-    result = format_recent_arcs(
-        [("valid-key", 2), ("Has-Uppercase", 3), ("has space", 4), ("", 5)]
-    )
+    result = format_recent_arcs([("valid-key", 2), ("Has-Uppercase", 3), ("has space", 4), ("", 5)])
 
     assert result == "- valid-key (covered in 2 briefings)"
 
@@ -2636,9 +2594,7 @@ def test_summarize_threads_recent_arcs_through_to_build_prompt(monkeypatch):
     monkeypatch.setattr(summarize_mod, "build_prompt", fake_build_prompt)
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: _MODEL_OUTPUT)
 
-    summarize(
-        [_item()], [], "", "claude-opus-5", 300, "high", recent_arcs="- hormuz"
-    )
+    summarize([_item()], [], "", "claude-opus-5", 300, "high", recent_arcs="- hormuz")
 
     assert calls["recent_arcs"] == "- hormuz"
 
@@ -2675,18 +2631,14 @@ def test_strip_tldr_citations_cleans_up_attached_and_space_separated_forms():
     result = strip_tldr_citations(markdown)
 
     tldr_paragraph = result.split("\n\n", 1)[0]
-    assert tldr_paragraph == (
-        "**TL;DR:** The 30-year yield hit 5.21%. It later moved to 5.30%."
-    )
+    assert tldr_paragraph == ("**TL;DR:** The 30-year yield hit 5.21%. It later moved to 5.30%.")
     # No " ." artifact and no doubled space left behind by either form.
     assert " ." not in tldr_paragraph
     assert "  " not in tldr_paragraph
 
 
 def test_strip_tldr_citations_leaves_prose_text_link_in_tldr_untouched():
-    markdown = (
-        "**TL;DR:** Check [this report](https://a.example) for details.\n\n## Body\n"
-    )
+    markdown = "**TL;DR:** Check [this report](https://a.example) for details.\n\n## Body\n"
 
     result = strip_tldr_citations(markdown)
 
@@ -2711,8 +2663,7 @@ def test_strip_tldr_citations_no_tldr_paragraph_returns_unchanged():
 
 def test_strip_tldr_citations_tldr_with_no_citations_returns_unchanged():
     markdown = (
-        "**TL;DR:** Nothing much happened today.\n\n"
-        "## Body\n\nDetail[¹](https://a.example).\n"
+        "**TL;DR:** Nothing much happened today.\n\n## Body\n\nDetail[¹](https://a.example).\n"
     )
 
     assert strip_tldr_citations(markdown) == markdown

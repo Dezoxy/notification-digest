@@ -186,9 +186,7 @@ def test_render_html_unwraps_anchor_with_nested_bracket_label_markdown_regex_wou
 def test_render_html_keeps_allowlisted_anchor_intact():
     body_md = "[see it](https://t.me/c/123/99)\n"
 
-    html = render_html(
-        body_md, allowed_urls={"https://t.me/c/123/99"}, generated_at_label=_WHEN
-    )
+    html = render_html(body_md, allowed_urls={"https://t.me/c/123/99"}, generated_at_label=_WHEN)
 
     assert '<a href="https://t.me/c/123/99" rel="noopener noreferrer">see it</a>' in html
 
@@ -386,9 +384,7 @@ def test_highlight_tldr_paragraph_skips_past_a_leading_banner_paragraph():
 
 
 def test_localize_tldr_label_hu_swaps_the_callout_label():
-    html = _highlight_tldr_paragraph(
-        "<p><strong>TL;DR:</strong> szia, nyugis nap.</p><h2>Sz</h2>"
-    )
+    html = _highlight_tldr_paragraph("<p><strong>TL;DR:</strong> szia, nyugis nap.</p><h2>Sz</h2>")
     assert 'class="tldr-label"' in html  # sanity: the callout was built
 
     result = localize_tldr_label_hu(html)
@@ -396,8 +392,8 @@ def test_localize_tldr_label_hu_swaps_the_callout_label():
     assert ">Röviden</span>" in result
     # The label span's visible text must no longer be the bare "TL;DR" --
     # only the swapped Hungarian label may sit inside it.
-    assert '>TL;DR</span>' not in result
-    assert '>Röviden</span>' in result
+    assert ">TL;DR</span>" not in result
+    assert ">Röviden</span>" in result
     assert "<h2>Sz</h2>" in result
 
 
@@ -909,9 +905,7 @@ def test_send_digest_swallows_quit_error_after_successful_send(monkeypatch, capl
     # queued server-side, and raising here would make the caller leave the
     # digest email_sent=0 and re-send a duplicate on the next run.
     quit_error = smtplib.SMTPResponseException(421, b"timeout")
-    monkeypatch.setattr(
-        emailer_mod.smtplib, "SMTP", _fake_smtp_cls(quit_error=quit_error)
-    )
+    monkeypatch.setattr(emailer_mod.smtplib, "SMTP", _fake_smtp_cls(quit_error=quit_error))
 
     with caplog.at_level("WARNING"):
         send_digest(

@@ -219,8 +219,21 @@ _HTML_TEMPLATE = """\
 # digest needs an image, and allowing it would let hostile markdown embed a
 # tracking pixel via `![x](https://attacker.example/pixel)`.
 _ALLOWED_TAGS = {
-    "h1", "h2", "h3", "p", "ul", "ol", "li", "a", "strong", "em", "code",
-    "pre", "blockquote", "br", "hr",
+    "h1",
+    "h2",
+    "h3",
+    "p",
+    "ul",
+    "ol",
+    "li",
+    "a",
+    "strong",
+    "em",
+    "code",
+    "pre",
+    "blockquote",
+    "br",
+    "hr",
 }
 _ALLOWED_ATTRIBUTES = {"a": {"href"}}
 _ALLOWED_URL_SCHEMES = {"http", "https"}

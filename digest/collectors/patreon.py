@@ -299,8 +299,12 @@ def _fetch_page(campaign_id: str, session_cookie: str) -> list[dict[str, object]
             "filter[is_draft]": "false",
             "sort": "-published_at",
             "page[count]": str(_PAGE_COUNT),
+            # `embed` is load-bearing, not decorative: without it in this
+            # list the API simply omits the key and every post looks like it
+            # has no video (caught by a live render, where a known
+            # video_embed post produced no button).
             "fields[post]": (
-                "title,content_json_string,published_at,url,post_type,current_user_can_view"
+                "title,content_json_string,published_at,url,post_type,current_user_can_view,embed"
             ),
         }
     )

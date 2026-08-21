@@ -686,16 +686,21 @@ def deliver_channels(
 
     if site_enabled and not site_done:
         site_done = _deliver_site(
-            conn, cfg, digest_id, body_md, item_count, created_at, allowed_urls, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            allowed_urls,
+            body_md_hu,
             kind=kind,
         )
         site_status = "sent" if site_done else "failed"
 
     if telegram_enabled and not telegram_done:
         if site_enabled and not site_done:
-            logger.info(
-                "digest %d: skipping telegram this run, site publish not done", digest_id
-            )
+            logger.info("digest %d: skipping telegram this run, site publish not done", digest_id)
             telegram_status = "skipped"
         else:
             telegram_done = _deliver_telegram(
@@ -772,7 +777,15 @@ def deliver_pending(
         logger.info("retrying delivery of digest %d (kind=%s)", digest_id, kind)
         item_count, created_at, body_md_hu, _kind = digest_meta(conn, digest_id)
         ok = deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            done,
+            telegram_state,
+            body_md_hu,
             kind=kind,
         )
         all_ok = all_ok and ok

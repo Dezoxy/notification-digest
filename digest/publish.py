@@ -985,6 +985,23 @@ def send_telegram_tldr(
     if thread_id:
         payload["message_thread_id"] = thread_id
 
+    _send_message(payload, bot_token, timeout_seconds)
+
+
+def _send_message(payload: dict[str, Any], bot_token: str, timeout_seconds: int) -> None:
+    """POST one already-built sendMessage payload. Raises TelegramSendError on failure.
+
+    Extracted so `send_telegram_tldr` and `send_telegram_post` cannot drift
+    apart on this specific path. The secrets posture below is the reason
+    that matters more than ordinary de-duplication would: the request URL
+    embeds the bot token (`.../bot{token}/sendMessage`) and a failure
+    response body can echo request content back, so NEITHER may ever reach
+    a log line or an exception message (CLAUDE.md's secrets-never-logged
+    hard rule). Every failure is caught here and re-raised carrying only a
+    status code (`HTTPError.code`) or the underlying exception's type name
+    -- never `str(exc)`, `exc.url`, or a response body read. Two copies of
+    that reasoning is one copy too many.
+    """
     data = json.dumps(payload).encode("utf-8")
     url = f"{_TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
     request = urllib.request.Request(
@@ -1004,3 +1021,123 @@ def send_telegram_tldr(
     except Exception as exc:
         logger.warning("telegram sendMessage failed: %s", type(exc).__name__)
         raise TelegramSendError(f"telegram sendMessage failed: {type(exc).__name__}") from None
+
+
+# Telegram's own hard cap is 4096 characters for a message. prompts/patreon.md
+# asks for ~150 words, so this is a backstop against a model that ignores the
+# budget, not an expected path -- truncating is strictly better than a 400
+# from the API, which would look like a delivery failure rather than a long post.
+_TELEGRAM_TEXT_LIMIT = 3800
+
+# Inline-keyboard button text is trimmed unpredictably by Telegram past
+# roughly this length (no fixed documented cutoff observed in practice), so
+# `send_telegram_tldr` already caps its section buttons at 30. Same number,
+# same reason.
+_BUTTON_TEXT_LIMIT = 30
+
+
+def render_post_text(body_md: str) -> str:
+    """Flatten one post's briefing markdown into the plain text Telegram receives.
+
+    Sent as PLAIN TEXT for the identical reason `send_telegram_tldr`
+    documents at length: Telegram's Markdown/MarkdownV2 parse modes reject
+    the WHOLE message over a single unescaped special character, and this
+    text is built from model output that was never asked to produce
+    Telegram-flavored markdown. A Hungarian post about a "**support**"
+    level at "$65,000" is exactly the shape that trips it. Plain text
+    cannot fail to parse.
+
+    So the markdown is reduced rather than escaped: the `## ` heading loses
+    its hashes (it becomes the message's first line, which reads as a title
+    without any markup), `**TL;DR:**` loses its asterisks but KEEPS the
+    marker text, `- ` bullets become `• `, and any inline markdown link
+    collapses to its visible text via `_plain_text` -- the prompt forbids
+    links, but a model that emits one anyway must not leak a bare URL into
+    a message whose whole point is that the links are buttons.
+    """
+    lines: list[str] = []
+    for raw in body_md.strip().splitlines():
+        line = raw.strip()
+        if not line:
+            lines.append("")
+            continue
+        if line.startswith("#"):
+            line = line.lstrip("#").strip()
+        elif line.startswith(("- ", "* ")):
+            line = "• " + line[2:].strip()
+        if _TLDR_PREFIX in line:
+            # The marker regex consumes the whitespace that followed it, so
+            # the replacement has to put a space back -- then collapse, in
+            # case a future regex change stops eating it.
+            line = _TLDR_MARKER_RE.sub("TL;DR: ", line, count=1)
+            line = re.sub(r"TL;DR:\s+", "TL;DR: ", line, count=1)
+        lines.append(_plain_text(line))
+
+    text = "\n".join(lines).strip()
+    # Collapse the runs of blank lines the reduction above can leave behind.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text[:_TELEGRAM_TEXT_LIMIT]
+
+
+def _button(text: str, url: str) -> dict[str, str]:
+    """One inline-keyboard button, with its label capped at Telegram's trim point."""
+    if len(text) > _BUTTON_TEXT_LIMIT:
+        text = text[: _BUTTON_TEXT_LIMIT - 1] + "…"
+    return {"text": text, "url": url}
+
+
+def send_telegram_post(
+    body_md: str,
+    created_at: str,
+    post_url: str,
+    embed_url: str | None,
+    bot_token: str,
+    chat_id: str,
+    thread_id: int,
+    timeout_seconds: int = 30,
+) -> None:
+    """POST one Patreon post's summary to Telegram. Raises TelegramSendError on failure.
+
+    A sibling of `send_telegram_tldr`, not a parameterization of it: that
+    function's whole keyboard is built from SITE anchors
+    (`{public_base}/d/{digest_id}#{anchor}`), because a window digest is
+    many stories whose home is the news site. A Patreon post's home is the
+    post itself, so both buttons here point OFF-site, and `public_base` has
+    no role at all.
+
+    Two rows, the second conditional:
+
+        [ Megnyitás a Patreonon → ]
+        [ ▶ <video title> ]            only when the post embeds a video
+
+    `embed_url` comes from `items.embed_url`, which the collector reads out
+    of Patreon's own `attributes.embed` rather than regexing body text --
+    so a missing button means the post genuinely has no video, not that a
+    pattern failed to match.
+
+    Unlike `send_telegram_tldr` this takes no `digest_id`: there is nothing
+    to link to by id, and the freshness guard that function's caller
+    applies lives in `deliver.py`, not here.
+    """
+    header = _local_header_label(created_at)
+    text = f"{header}\n\n{render_post_text(body_md)}"
+
+    keyboard: list[list[dict[str, str]]] = [[_button("Megnyitás a Patreonon →", post_url)]]
+    if embed_url:
+        keyboard.append([_button("▶ Videó megtekintése", embed_url)])
+
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        # A preview card for the Patreon URL would duplicate the button
+        # directly beneath it, and for a YouTube embed it would render a
+        # second, larger thumbnail of the same video.
+        "disable_web_page_preview": True,
+        "reply_markup": {"inline_keyboard": keyboard},
+    }
+    if thread_id:
+        # Explicit 0 is an invalid thread id to Telegram, not "no thread" --
+        # see send_telegram_tldr's own note. Omit the key entirely instead.
+        payload["message_thread_id"] = thread_id
+
+    _send_message(payload, bot_token, timeout_seconds)

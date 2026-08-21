@@ -57,9 +57,7 @@ def _hit(
         "points": points,
         "num_comments": num_comments,
         "author": author,
-        "created_at_i": (
-            created_at_i if created_at_i is not None else time.time() - 3600
-        ),
+        "created_at_i": (created_at_i if created_at_i is not None else time.time() - 3600),
     }
     if url is not None:
         data["url"] = url

@@ -282,9 +282,7 @@ def parse_verify_transcript(stdout: str) -> tuple[str, list[str]]:
         try:
             parsed = json.loads(line)
         except (json.JSONDecodeError, ValueError) as exc:
-            raise VerificationUnavailable(
-                "verify transcript: a line was not valid JSON"
-            ) from exc
+            raise VerificationUnavailable("verify transcript: a line was not valid JSON") from exc
         if not isinstance(parsed, dict):
             raise VerificationUnavailable("verify transcript: a line was not a JSON object")
         records.append(parsed)
@@ -292,8 +290,7 @@ def parse_verify_transcript(stdout: str) -> tuple[str, list[str]]:
     result_records = [r for r in records if r.get("type") == "result"]
     if len(result_records) != 1:
         raise VerificationUnavailable(
-            f"verify transcript: expected exactly one 'result' record, found "
-            f"{len(result_records)}"
+            f"verify transcript: expected exactly one 'result' record, found {len(result_records)}"
         )
     result_record = result_records[0]
 
@@ -442,9 +439,7 @@ def _toggle_trailing_slash(url: str) -> str:
     return url + "/"
 
 
-def widen_allowed_urls(
-    existing_urls: Collection[str], visited_urls: Collection[str]
-) -> set[str]:
+def widen_allowed_urls(existing_urls: Collection[str], visited_urls: Collection[str]) -> set[str]:
     """Build the widened link-provenance allowlist, per PLAN.md §11.4's locked formula.
 
     widened = existing_urls (verbatim, UNTOUCHED)

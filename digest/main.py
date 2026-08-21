@@ -346,7 +346,6 @@ def _deliver(
         logger.info("no unsummarized items, nothing to send")
         return all_ok
 
-
     # "Recently covered" continuity context (digest/summarize.py's
     # format_recent_coverage): every digest created in the last
     # _RECENT_COVERAGE_WINDOW, INCLUDING an unsent one still awaiting the
@@ -458,7 +457,15 @@ def _deliver(
     item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
     done = {"email": False, "site": False, "telegram": False}
     ok = deliver_channels(
-        conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+        conn,
+        cfg,
+        digest_id,
+        body_md,
+        item_count,
+        created_at,
+        done,
+        telegram_state,
+        body_md_hu,
         kind=kind,
         # Only THIS run's own fresh digest is hidden. The `deliver_pending`
         # pass above deliberately does not get `hidden`: a digest still
@@ -508,9 +515,7 @@ def _warn_on_stale_backlog(conn: sqlite3.Connection, cfg: Config) -> None:
         f"https://t.me/{channel.lower()}/" for channel in cfg.positions_tg_channels
     )
     try:
-        stale = count_stale_unsummarized_by_source(
-            conn, cutoff.isoformat(), positions_prefixes
-        )
+        stale = count_stale_unsummarized_by_source(conn, cutoff.isoformat(), positions_prefixes)
     except sqlite3.Error:
         logger.exception("stale-backlog check failed; digest already delivered")
         return
@@ -522,8 +527,7 @@ def _warn_on_stale_backlog(conn: sqlite3.Connection, cfg: Config) -> None:
             {
                 "threshold_hours": cfg.stale_backlog_warn_hours,
                 "sources": {
-                    source: {"count": count, "oldest": oldest}
-                    for source, count, oldest in stale
+                    source: {"count": count, "oldest": oldest} for source, count, oldest in stale
                 },
             },
             sort_keys=True,
@@ -605,9 +609,7 @@ def _run_news_collector(cfg: Config) -> CollectResult:
         return CollectResult(failed=True)
 
 
-def _run_polymarket_collector(
-    conn: sqlite3.Connection, cfg: Config
-) -> PolymarketCollectResult:
+def _run_polymarket_collector(conn: sqlite3.Connection, cfg: Config) -> PolymarketCollectResult:
     """Run one Polymarket swing-detection pass, if `cfg.polymarket_enabled`.
 
     No-ops entirely (returns a fresh, unfailed PolymarketCollectResult)
@@ -1241,7 +1243,15 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
         item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
         done = {"email": False, "site": False, "telegram": False}
         ok = deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            done,
+            telegram_state,
+            body_md_hu,
             kind=kind,
             extra_allowed_urls=delivery_allowed_urls,
         )
@@ -1466,7 +1476,15 @@ def run_weekly(cfg: Config) -> bool:
         item_count, created_at, body_md_hu, kind = digest_meta(conn, digest_id)
         done = {"email": False, "site": False, "telegram": False}
         ok = deliver_channels(
-            conn, cfg, digest_id, body_md, item_count, created_at, done, telegram_state, body_md_hu,
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            item_count,
+            created_at,
+            done,
+            telegram_state,
+            body_md_hu,
             kind=kind,
         )
         result = all_ok and ok

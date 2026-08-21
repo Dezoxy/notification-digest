@@ -74,9 +74,7 @@ def test_extract_tldr_strips_bold_emphasis_inside_the_tldr_sentence():
     # bold markdown INSIDE the TL;DR paragraph itself, not just as the
     # `**TL;DR:**` marker -- that inner `**...**` must not reach the site
     # excerpt or Telegram message as literal asterisks.
-    body_md = (
-        "**TL;DR:** Revenue could hit **$100B ARR by year end**, analysts say.\n\n## S\n\nx\n"
-    )
+    body_md = "**TL;DR:** Revenue could hit **$100B ARR by year end**, analysts say.\n\n## S\n\nx\n"
 
     result = extract_tldr(body_md)
 
@@ -211,11 +209,7 @@ def test_section_link_targets_backticked_heading_anywhere_returns_empty():
     # site with nested tags (no id, no number assigned) -- ANY such heading
     # anywhere desyncs every later anchor, so the fail-safe guard drops
     # section links for the whole digest, not just the offending heading.
-    body_md = (
-        "## Story one\n\ntext\n\n"
-        "## `Story two`\n\ntext\n\n"
-        "## Story three\n\ntext\n"
-    )
+    body_md = "## Story one\n\ntext\n\n## `Story two`\n\ntext\n\n## Story three\n\ntext\n"
 
     assert section_link_targets(body_md) == []
 
@@ -266,11 +260,7 @@ def test_parse_failed_sources_lookalike_not_at_head_is_ignored():
     # A banner-shaped line that shows up later in the body (e.g. inside the
     # model's own output) must never be picked up -- only the genuine,
     # code-generated block at the very START of body_md counts.
-    body_md = (
-        "**TL;DR:** hi\n\n"
-        "## Worth knowing\n\n"
-        "⚠ x collection failed this run\n"
-    )
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\n⚠ x collection failed this run\n"
 
     assert parse_failed_sources(body_md) == []
 
@@ -283,11 +273,7 @@ def test_parse_failed_sources_empty_body_returns_empty_list():
 
 
 def test_derive_topics_basic_multi_section_digest():
-    body_md = (
-        "**TL;DR:** hi\n\n"
-        "## Story one\n\ntext\n\n"
-        "## Story two\n\ntext\n"
-    )
+    body_md = "**TL;DR:** hi\n\n## Story one\n\ntext\n\n## Story two\n\ntext\n"
 
     assert derive_topics(body_md) == [
         {"slug": "story-one", "label": "Story one"},
@@ -309,10 +295,7 @@ def test_derive_topics_ignores_headings_inside_fenced_code_blocks():
 
 
 def test_derive_topics_excludes_needs_attention():
-    body_md = (
-        "## Needs attention\n\nurgent\n\n"
-        "## Story one\n\ntext\n"
-    )
+    body_md = "## Needs attention\n\nurgent\n\n## Story one\n\ntext\n"
 
     assert derive_topics(body_md) == [{"slug": "story-one", "label": "Story one"}]
 
@@ -390,8 +373,7 @@ def test_structural_rubric_headings_cover_every_prompt_mandated_heading():
     allowed = publish_mod._STRUCTURAL_RUBRIC_HEADINGS | {publish_mod._NEEDS_ATTENTION_HEADING}
     missing = {h: src for h, src in mandated.items() if h not in allowed}
     assert not missing, (
-        "prompt-mandated rubric headings missing from "
-        f"_STRUCTURAL_RUBRIC_HEADINGS: {missing}"
+        f"prompt-mandated rubric headings missing from _STRUCTURAL_RUBRIC_HEADINGS: {missing}"
     )
 
 
@@ -401,9 +383,7 @@ def test_structural_rubric_headings_has_no_stale_entries():
     # a section -- a stale entry silently suppresses a real story heading
     # that happens to match it.
     prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
-    corpus = "\n".join(
-        p.read_text(encoding="utf-8") for p in sorted(prompts_dir.glob("*.md"))
-    )
+    corpus = "\n".join(p.read_text(encoding="utf-8") for p in sorted(prompts_dir.glob("*.md")))
     collapsed = " ".join(corpus.split()).casefold()
 
     stale = [h for h in publish_mod._STRUCTURAL_RUBRIC_HEADINGS if f"## {h}" not in collapsed]
@@ -419,17 +399,13 @@ def test_derive_topics_structural_rubric_headings_case_insensitive():
 def test_derive_topics_diacritics_fold_to_ascii_slug():
     body_md = "## Középső árfolyam\n\ntext\n"
 
-    assert derive_topics(body_md) == [
-        {"slug": "kozepso-arfolyam", "label": "Középső árfolyam"}
-    ]
+    assert derive_topics(body_md) == [{"slug": "kozepso-arfolyam", "label": "Középső árfolyam"}]
 
 
 def test_derive_topics_punctuation_and_spacing_collapse():
     body_md = "## Fed — Watch & Rates!\n\ntext\n"
 
-    assert derive_topics(body_md) == [
-        {"slug": "fed-watch-rates", "label": "Fed — Watch & Rates!"}
-    ]
+    assert derive_topics(body_md) == [{"slug": "fed-watch-rates", "label": "Fed — Watch & Rates!"}]
 
 
 def test_derive_topics_slug_collision_dedupes_first_occurrence_wins():
@@ -477,9 +453,7 @@ def test_derive_topics_arc_keys_none_is_byte_identical_to_omitting_it():
 def test_derive_topics_arc_keys_empty_list_adds_no_keys():
     body_md = "## Story one\n\ntext\n"
 
-    assert derive_topics(body_md, arc_keys=[]) == [
-        {"slug": "story-one", "label": "Story one"}
-    ]
+    assert derive_topics(body_md, arc_keys=[]) == [{"slug": "story-one", "label": "Story one"}]
 
 
 def test_derive_topics_arc_keys_matching_heading_adds_key():
@@ -496,9 +470,7 @@ def test_derive_topics_arc_keys_no_matching_heading_omits_key():
     body_md = "## Real section\n\ntext\n"
     arc_keys = [{"heading": "A heading that does not exist", "key": "some-key"}]
 
-    assert derive_topics(body_md, arc_keys) == [
-        {"slug": "real-section", "label": "Real section"}
-    ]
+    assert derive_topics(body_md, arc_keys) == [{"slug": "real-section", "label": "Real section"}]
 
 
 def test_derive_topics_arc_keys_structural_rubric_heading_never_gets_a_key():
@@ -605,8 +577,13 @@ def test_publish_to_site_raises_on_http_error(monkeypatch):
 
     with pytest.raises(urllib.error.HTTPError):
         publish_to_site(
-            1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-            "https://news-site.example.workers.dev", "key",
+            1,
+            "body",
+            "<p>body</p>",
+            "2026-07-29T10:00:00+00:00",
+            1,
+            "https://news-site.example.workers.dev",
+            "key",
         )
 
 
@@ -618,8 +595,13 @@ def test_publish_to_site_raises_on_network_error(monkeypatch):
 
     with pytest.raises(urllib.error.URLError):
         publish_to_site(
-            1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-            "https://news-site.example.workers.dev", "key",
+            1,
+            "body",
+            "<p>body</p>",
+            "2026-07-29T10:00:00+00:00",
+            1,
+            "https://news-site.example.workers.dev",
+            "key",
         )
 
 
@@ -752,8 +734,13 @@ def test_publish_to_site_defaults_kind_to_window(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
     )
 
     assert captured["body"]["kind"] == "window"
@@ -769,8 +756,13 @@ def test_publish_to_site_forwards_explicit_daily_kind(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         kind="daily",
     )
 
@@ -790,8 +782,13 @@ def test_publish_to_site_includes_source_counts_and_failed_sources_when_given(mo
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 3,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        3,
+        "https://news-site.example.workers.dev",
+        "key",
         source_counts={"telegram": 2, "x": 1},
         failed_sources=["news"],
     )
@@ -810,8 +807,13 @@ def test_publish_to_site_omits_source_counts_and_failed_sources_when_none(monkey
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
     )
 
     assert "source_counts" not in captured["body"]
@@ -831,8 +833,13 @@ def test_publish_to_site_omits_source_counts_and_failed_sources_when_empty(monke
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         source_counts={},
         failed_sources=[],
     )
@@ -854,8 +861,13 @@ def test_publish_to_site_includes_topics_when_given(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         topics=[{"slug": "story-one", "label": "Story one"}],
     )
 
@@ -872,8 +884,13 @@ def test_publish_to_site_omits_topics_when_none(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
     )
 
     assert "topics" not in captured["body"]
@@ -892,8 +909,13 @@ def test_publish_to_site_omits_topics_when_empty(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         topics=[],
     )
 
@@ -910,14 +932,17 @@ def test_publish_to_site_includes_deltas_when_given(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         deltas=[{"slug": "story-one", "previously": "old", "now": "new"}],
     )
 
-    assert captured["body"]["deltas"] == [
-        {"slug": "story-one", "previously": "old", "now": "new"}
-    ]
+    assert captured["body"]["deltas"] == [{"slug": "story-one", "previously": "old", "now": "new"}]
 
 
 def test_publish_to_site_omits_deltas_when_none(monkeypatch):
@@ -930,8 +955,13 @@ def test_publish_to_site_omits_deltas_when_none(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
     )
 
     assert "deltas" not in captured["body"]
@@ -949,8 +979,13 @@ def test_publish_to_site_omits_deltas_when_empty(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         deltas=[],
     )
 
@@ -970,8 +1005,13 @@ def test_publish_to_site_includes_arc_contexts_when_given(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         arc_contexts=[{"key": "hormuz", "context_md": "Background about Hormuz."}],
     )
 
@@ -990,8 +1030,13 @@ def test_publish_to_site_omits_arc_contexts_when_none(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
     )
 
     assert "arc_contexts" not in captured["body"]
@@ -1011,8 +1056,13 @@ def test_publish_to_site_omits_arc_contexts_when_empty(monkeypatch):
     monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
 
     publish_to_site(
-        1, "body", "<p>body</p>", "2026-07-29T10:00:00+00:00", 1,
-        "https://news-site.example.workers.dev", "key",
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
         arc_contexts=[],
     )
 
@@ -1159,8 +1209,13 @@ def test_send_telegram_tldr_http_error_raises_sanitized_error_without_url_or_bod
 
     with pytest.raises(TelegramSendError) as exc_info:
         send_telegram_tldr(
-            7, "**TL;DR:** hi\n\n## S\n\nx\n", "2026-07-29T10:00:00+00:00",
-            "SECRET-TOKEN", "-100123", 0, "https://news.example.com/t/tok",
+            7,
+            "**TL;DR:** hi\n\n## S\n\nx\n",
+            "2026-07-29T10:00:00+00:00",
+            "SECRET-TOKEN",
+            "-100123",
+            0,
+            "https://news.example.com/t/tok",
         )
 
     message = str(exc_info.value)
@@ -1177,8 +1232,13 @@ def test_send_telegram_tldr_network_error_raises_sanitized_error(monkeypatch):
 
     with pytest.raises(TelegramSendError) as exc_info:
         send_telegram_tldr(
-            7, "**TL;DR:** hi\n\n## S\n\nx\n", "2026-07-29T10:00:00+00:00",
-            "SECRET-TOKEN", "-100123", 0, "https://news.example.com/t/tok",
+            7,
+            "**TL;DR:** hi\n\n## S\n\nx\n",
+            "2026-07-29T10:00:00+00:00",
+            "SECRET-TOKEN",
+            "-100123",
+            0,
+            "https://news.example.com/t/tok",
         )
 
     assert "SECRET-TOKEN" not in str(exc_info.value)
@@ -1196,8 +1256,13 @@ def test_send_telegram_tldr_status_matches_http_error_code_for_429_specifically(
 
     with pytest.raises(TelegramSendError) as exc_info:
         send_telegram_tldr(
-            7, "**TL;DR:** hi\n\n## S\n\nx\n", "2026-07-29T10:00:00+00:00",
-            "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+            7,
+            "**TL;DR:** hi\n\n## S\n\nx\n",
+            "2026-07-29T10:00:00+00:00",
+            "bot-token",
+            "-100123",
+            0,
+            "https://news.example.com/t/tok",
         )
 
     assert exc_info.value.status == 429
@@ -1214,8 +1279,13 @@ def test_send_telegram_tldr_header_uses_europe_budapest_local_time(monkeypatch):
 
     # 2026-07-29T10:00:00+00:00 UTC is 12:00 in Europe/Budapest (CEST, UTC+2).
     send_telegram_tldr(
-        7, "**TL;DR:** hi\n\n## S\n\nx\n", "2026-07-29T10:00:00+00:00",
-        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+        7,
+        "**TL;DR:** hi\n\n## S\n\nx\n",
+        "2026-07-29T10:00:00+00:00",
+        "bot-token",
+        "-100123",
+        0,
+        "https://news.example.com/t/tok",
     )
 
     assert "12:00" in captured["body"]["text"]
@@ -1242,8 +1312,13 @@ def test_send_telegram_tldr_keyboard_has_open_digest_plus_three_section_rows(mon
     )
 
     send_telegram_tldr(
-        7, body_md, "2026-07-29T10:00:00+00:00",
-        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+        7,
+        body_md,
+        "2026-07-29T10:00:00+00:00",
+        "bot-token",
+        "-100123",
+        0,
+        "https://news.example.com/t/tok",
     )
 
     rows = captured["body"]["reply_markup"]["inline_keyboard"]
@@ -1276,8 +1351,13 @@ def test_send_telegram_tldr_long_section_title_truncated_to_30_with_ellipsis(mon
     body_md = f"**TL;DR:** hi\n\n## {long_title}\n\ntext\n"
 
     send_telegram_tldr(
-        7, body_md, "2026-07-29T10:00:00+00:00",
-        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+        7,
+        body_md,
+        "2026-07-29T10:00:00+00:00",
+        "bot-token",
+        "-100123",
+        0,
+        "https://news.example.com/t/tok",
     )
 
     rows = captured["body"]["reply_markup"]["inline_keyboard"]
@@ -1302,8 +1382,13 @@ def test_send_telegram_tldr_zero_targets_keyboard_identical_to_today(monkeypatch
     body_md = "**TL;DR:** hi\n\njust some prose, no headings at all\n"
 
     send_telegram_tldr(
-        7, body_md, "2026-07-29T10:00:00+00:00",
-        "bot-token", "-100123", 0, "https://news.example.com/t/tok",
+        7,
+        body_md,
+        "2026-07-29T10:00:00+00:00",
+        "bot-token",
+        "-100123",
+        0,
+        "https://news.example.com/t/tok",
     )
 
     rows = captured["body"]["reply_markup"]["inline_keyboard"]

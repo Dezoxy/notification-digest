@@ -288,6 +288,23 @@ class TestFirstRunSeeding:
         assert len(out.items) == 2
         assert out.seeded == []
 
+    def test_the_embed_field_is_actually_requested_from_the_api(self, monkeypatch):
+        # Omitting it from fields[post] makes the API drop the key, so every
+        # post silently looks video-less. Caught by a live render.
+        seen = {}
+        monkeypatch.setattr(
+            patreon.urllib.request,
+            "urlopen",
+            lambda req, timeout: (_ for _ in ()).throw(
+                AssertionError(seen.setdefault("url", req.full_url))
+            ),
+        )
+        try:
+            patreon._fetch_page("7095842", "cookie")
+        except Exception:
+            pass
+        assert "embed" in seen.get("url", "")
+
     def test_limit_is_configurable(self, monkeypatch):
         self._patch(monkeypatch, [make_post(str(i)) for i in range(20)])
         out = collect("7095842", "cookie", lambda ids: set(), first_run_limit=2)
