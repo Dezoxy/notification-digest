@@ -303,3 +303,23 @@ class TestSendTelegramPostSplitting:
                 self._long_body(), POST.fetched_at, POST.url, None, "token", "-100123", 317
             )
         assert exc.value.parts_sent == 1
+
+    def test_a_mid_chain_429_keeps_its_status_for_the_breaker(self, monkeypatch):
+        # The per-run circuit breaker keys on exc.status == 429. A partial
+        # send that swallowed the status would let every later post in the
+        # same run keep firing into an already-rate-limited API -- quietly
+        # bypassing the flood-incident guard for multi-part posts only.
+        sent = []
+
+        def fake(payload, token, timeout):
+            if len(sent) == 1:
+                raise publish.TelegramSendError("rate limited", status=429)
+            sent.append(payload)
+            return 1000 + len(sent)
+
+        monkeypatch.setattr(publish, "_send_message", fake)
+        with pytest.raises(publish.TelegramPartialSend) as exc:
+            publish.send_telegram_post(
+                self._long_body(), POST.fetched_at, POST.url, None, "token", "-100123", 317
+            )
+        assert exc.value.status == 429

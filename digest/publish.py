@@ -1064,10 +1064,20 @@ class TelegramPartialSend(TelegramSendError):
 
     `parts_sent` / `parts_total` are carried for the log line, so the
     operational record says how much of the post actually landed.
+
+    `status` forwards the UNDERLYING failure's HTTP status, for the same
+    reason the base class carries it at all (see its docstring): the per-run
+    429 circuit breaker keys on `exc.status == 429`, and a partial send
+    caused by a 429 on part 2 is exactly as much a "stop sending this run"
+    signal as a 429 on a whole message. Dropping it here would let every
+    LATER post in the same run keep firing into an already-rate-limited API
+    -- quietly bypassing the flood-incident guard for multi-part posts only.
     """
 
-    def __init__(self, parts_sent: int, parts_total: int) -> None:
-        super().__init__(f"telegram post partially sent ({parts_sent}/{parts_total} parts)")
+    def __init__(self, parts_sent: int, parts_total: int, status: int | None = None) -> None:
+        super().__init__(
+            f"telegram post partially sent ({parts_sent}/{parts_total} parts)", status=status
+        )
         self.parts_sent = parts_sent
         self.parts_total = parts_total
 
@@ -1242,10 +1252,10 @@ def send_telegram_post(
 
         try:
             sent_id = _send_message(payload, bot_token, timeout_seconds)
-        except TelegramSendError:
+        except TelegramSendError as exc:
             if index == 0:
                 # Nothing landed -- an ordinary failure the caller can retry
                 # cleanly, with no risk of duplicating anything.
                 raise
-            raise TelegramPartialSend(index, len(parts)) from None
+            raise TelegramPartialSend(index, len(parts), status=exc.status) from None
         reply_to = sent_id

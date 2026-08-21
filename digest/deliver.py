@@ -521,6 +521,16 @@ def _deliver_telegram(
         # Part 1 (at least) is already in the topic. Retrying would re-send
         # it, so mark the digest done -- then still return False, so the run
         # exits non-zero and OnFailure alerts a human to the gap.
+        #
+        # The breaker check mirrors the TelegramSendError branch below: a
+        # 429 mid-chain is the same "stop sending this run" signal as a 429
+        # on a whole message, and without this every later post in the run
+        # would keep firing into an already-rate-limited API.
+        if exc.status == 429:
+            telegram_state.rate_limited = True
+            logger.warning(
+                "telegram rate limited (429) mid-chain; skipping remaining telegram sends this run"
+            )
         logger.error(
             "patreon digest %d only partially sent (%d/%d parts); marking sent to "
             "avoid duplicating the delivered parts on retry",

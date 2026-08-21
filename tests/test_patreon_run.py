@@ -245,3 +245,37 @@ class TestChannelSuppression:
         ).fetchall()
         assert rows and all(email == 1 and site == 1 for email, site in rows)
         conn.close()
+
+
+class TestPartialSendBreaker:
+    def test_a_mid_chain_429_trips_the_run_breaker(self, cfg, monkeypatch):
+        # deliver.py's partial handler must set telegram_state.rate_limited,
+        # mirroring the whole-message 429 branch -- so the posts AFTER the
+        # partially-sent one are skipped this run instead of piling into a
+        # rate-limited API.
+        from digest.deliver import TelegramRunState, _deliver_telegram
+        from digest.publish import TelegramPartialSend
+        from digest.state import connect, init_db
+
+        conn = connect(cfg.state_db_path)
+        init_db(conn)
+
+        def boom(conn_, digest_id):
+            return ("https://www.patreon.com/x", None)
+
+        monkeypatch.setattr("digest.deliver.get_digest_post_link", boom)
+
+        def partial(*a, **k):
+            raise TelegramPartialSend(1, 2, status=429)
+
+        monkeypatch.setattr("digest.deliver.send_telegram_post", partial)
+        monkeypatch.setattr("digest.deliver.mark_digest_telegram_sent", lambda c, d: None)
+
+        state = TelegramRunState()
+        ok = _deliver_telegram(
+            conn, cfg, 1, "## x", "2026-08-21T16:00:00+00:00", state, kind="patreon"
+        )
+
+        assert ok is False
+        assert state.rate_limited is True
+        conn.close()
