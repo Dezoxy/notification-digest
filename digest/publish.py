@@ -988,8 +988,13 @@ def send_telegram_tldr(
     _send_message(payload, bot_token, timeout_seconds)
 
 
-def _send_message(payload: dict[str, Any], bot_token: str, timeout_seconds: int) -> None:
+def _send_message(payload: dict[str, Any], bot_token: str, timeout_seconds: int) -> int | None:
     """POST one already-built sendMessage payload. Raises TelegramSendError on failure.
+
+    Returns the sent message's own id when Telegram reports one, so a caller
+    splitting a long post across several messages can chain each part as a
+    reply to the previous one. `None` on any unexpected response shape --
+    the send still succeeded, only the threading of a follow-up is lost.
 
     Extracted so `send_telegram_tldr` and `send_telegram_post` cannot drift
     apart on this specific path. The secrets posture below is the reason
@@ -1012,7 +1017,7 @@ def _send_message(payload: dict[str, Any], bot_token: str, timeout_seconds: int)
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            response.read()
+            body = response.read()
     except urllib.error.HTTPError as exc:
         logger.warning("telegram sendMessage failed with status %d", exc.code)
         raise TelegramSendError(
@@ -1021,6 +1026,17 @@ def _send_message(payload: dict[str, Any], bot_token: str, timeout_seconds: int)
     except Exception as exc:
         logger.warning("telegram sendMessage failed: %s", type(exc).__name__)
         raise TelegramSendError(f"telegram sendMessage failed: {type(exc).__name__}") from None
+
+    # The sent message's own id, so a caller can chain a reply to it. Parsed
+    # defensively and never raised over: a successful send whose response
+    # body is an unexpected shape is still a successful send, and the only
+    # thing lost is the threading of a follow-up part.
+    try:
+        parsed = json.loads(body)
+        message_id = parsed["result"]["message_id"]
+        return int(message_id) if isinstance(message_id, int | str) else None
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 # Telegram's own hard cap is 4096 characters for a message. prompts/patreon.md
@@ -1034,6 +1050,77 @@ _TELEGRAM_TEXT_LIMIT = 3800
 # `send_telegram_tldr` already caps its section buttons at 30. Same number,
 # same reason.
 _BUTTON_TEXT_LIMIT = 30
+
+
+class TelegramPartialSend(TelegramSendError):
+    """Some parts of a split post were delivered and a later one failed.
+
+    Distinct from a plain `TelegramSendError` because the CALLER'S CORRECT
+    ACTION IS THE OPPOSITE. An ordinary failure means nothing arrived, so
+    leaving `telegram_sent = 0` lets a later run retry cleanly. Here the
+    reader already has part 1 in the topic, and a retry would re-send it --
+    so the digest must be marked sent, and the run must still report
+    failure so the OnFailure alert fires and a human looks.
+
+    `parts_sent` / `parts_total` are carried for the log line, so the
+    operational record says how much of the post actually landed.
+    """
+
+    def __init__(self, parts_sent: int, parts_total: int) -> None:
+        super().__init__(f"telegram post partially sent ({parts_sent}/{parts_total} parts)")
+        self.parts_sent = parts_sent
+        self.parts_total = parts_total
+
+
+def split_for_telegram(text: str, limit: int = _TELEGRAM_TEXT_LIMIT) -> list[str]:
+    """Split `text` into chunks that each fit one Telegram message.
+
+    Splits on PARAGRAPH boundaries first, falling back to line boundaries,
+    and only then to a hard character cut. The ordering matters for
+    readability: this text is a bulleted summary, and a cut mid-bullet
+    reads as data loss even though the next part continues it.
+
+    Returns `[text]` unchanged when it already fits -- the common case at
+    the prompt's 350-600 word budget, so the single-send path (and its
+    flood protections) stays the normal one rather than the exception.
+
+    A single paragraph longer than `limit` is hard-cut rather than dropped:
+    losing the tail of one oversized bullet is strictly better than losing
+    the message.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for block in text.split("\n\n"):
+        candidate = f"{current}\n\n{block}" if current else block
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        if len(block) <= limit:
+            current = block
+            continue
+        # One oversized block: break it on lines, then hard-cut whatever is
+        # still too long on its own.
+        for line in block.split("\n"):
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate) <= limit:
+                current = candidate
+                continue
+            if current:
+                chunks.append(current)
+                current = ""
+            while len(line) > limit:
+                chunks.append(line[:limit])
+                line = line[limit:]
+            current = line
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def render_post_text(body_md: str) -> str:
@@ -1075,8 +1162,10 @@ def render_post_text(body_md: str) -> str:
 
     text = "\n".join(lines).strip()
     # Collapse the runs of blank lines the reduction above can leave behind.
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text[:_TELEGRAM_TEXT_LIMIT]
+    # Deliberately NOT truncated here: `split_for_telegram` turns an
+    # over-length summary into a reply chain, so cutting it at this layer
+    # would silently discard exactly the material splitting exists to keep.
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 def _button(text: str, url: str) -> dict[str, str]:
@@ -1120,24 +1209,43 @@ def send_telegram_post(
     applies lives in `deliver.py`, not here.
     """
     header = _local_header_label(created_at)
-    text = f"{header}\n\n{render_post_text(body_md)}"
+    parts = split_for_telegram(f"{header}\n\n{render_post_text(body_md)}")
 
     keyboard: list[list[dict[str, str]]] = [[_button("Megnyitás a Patreonon →", post_url)]]
     if embed_url:
         keyboard.append([_button("▶ Videó megtekintése", embed_url)])
 
-    payload: dict[str, Any] = {
-        "chat_id": chat_id,
-        "text": text,
-        # A preview card for the Patreon URL would duplicate the button
-        # directly beneath it, and for a YouTube embed it would render a
-        # second, larger thumbnail of the same video.
-        "disable_web_page_preview": True,
-        "reply_markup": {"inline_keyboard": keyboard},
-    }
-    if thread_id:
-        # Explicit 0 is an invalid thread id to Telegram, not "no thread" --
-        # see send_telegram_tldr's own note. Omit the key entirely instead.
-        payload["message_thread_id"] = thread_id
+    reply_to: int | None = None
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        text = part if len(parts) == 1 else f"{part}\n\n({index + 1}/{len(parts)})"
 
-    _send_message(payload, bot_token, timeout_seconds)
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            # A preview card for the Patreon URL would duplicate the button
+            # directly beneath it, and for a YouTube embed it would render a
+            # second, larger thumbnail of the same video.
+            "disable_web_page_preview": True,
+        }
+        # Buttons ride on the LAST part only: they are the call to action
+        # after reading, and repeating them mid-thread invites tapping away
+        # before the summary is finished.
+        if is_last:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        if thread_id:
+            # Explicit 0 is an invalid thread id to Telegram, not "no
+            # thread" -- see send_telegram_tldr's own note. Omit the key.
+            payload["message_thread_id"] = thread_id
+        if reply_to is not None:
+            payload["reply_to_message_id"] = reply_to
+
+        try:
+            sent_id = _send_message(payload, bot_token, timeout_seconds)
+        except TelegramSendError:
+            if index == 0:
+                # Nothing landed -- an ordinary failure the caller can retry
+                # cleanly, with no risk of duplicating anything.
+                raise
+            raise TelegramPartialSend(index, len(parts)) from None
+        reply_to = sent_id

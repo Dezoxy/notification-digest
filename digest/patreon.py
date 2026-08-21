@@ -49,10 +49,13 @@ _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "patreon.md"
 _PATREON_EFFORT = "medium"
 
 # Bounds what reaches the prompt. The collector already caps a post body at
-# _MAX_BODY_CHARS; this is the belt to that braces, covering a title long
-# enough to matter and any future caller that builds a prompt from an Item
-# this module did not collect.
-_MAX_PROMPT_TEXT_CHARS = 8000
+# its own _MAX_BODY_CHARS; this is the belt to that braces, covering a title
+# long enough to matter and any future caller that builds a prompt from an
+# Item this module did not collect. Kept ABOVE the collector's cap so this
+# never becomes the binding limit by accident -- when the two disagree, the
+# collector's is the one that should win, because it is the one documented
+# against measured post sizes.
+_MAX_PROMPT_TEXT_CHARS = 56_000
 
 
 def build_prompt(item: Item) -> str:

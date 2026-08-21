@@ -75,11 +75,18 @@ _TIMEOUT_SECONDS = 20
 # lookback that matters is the items table, not this number.
 _PAGE_COUNT = 25
 
-# Caps the body text handed to the summarizer. Bodies observed ran to ~37k
-# characters; the summarizer prompt has no use for the tail of a long post
-# and every character is prompt budget. Mirrors rss.py's _MAX_SUMMARY_CHARS,
-# larger because these are full articles rather than feed blurbs.
-_MAX_BODY_CHARS = 6000
+# Caps the body text handed to the summarizer. Sized to hold a WHOLE post:
+# measured across 25 real posts the median body is ~19k characters and the
+# largest is ~37k, so the previous 6k cap silently discarded roughly
+# two-thirds of a typical post BEFORE the model read a word -- 20 of those
+# 25 were truncated. That is invisible in the output (the summary of a
+# truncated post reads perfectly well; it is just missing the second half),
+# which is exactly what made it worth measuring rather than assuming.
+#
+# 48k leaves headroom above the observed maximum. This is a backstop against
+# a pathological post, not a budget knob -- the summary's length is governed
+# by prompts/patreon.md's own word budget, not by how much input it saw.
+_MAX_BODY_CHARS = 48_000
 
 
 # How many posts the FIRST run delivers. The API page is 25 deep and this

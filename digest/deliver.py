@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from digest.config import Config
 from digest.emailer import localize_tldr_label_hu, render_body_html, send_digest
 from digest.publish import (
+    TelegramPartialSend,
     TelegramSendError,
     derive_topics,
     parse_failed_sources,
@@ -516,6 +517,19 @@ def _deliver_telegram(
                 _telegram_thread_id_for_kind(cfg, kind),
                 cfg.site_public_base,
             )
+    except TelegramPartialSend as exc:
+        # Part 1 (at least) is already in the topic. Retrying would re-send
+        # it, so mark the digest done -- then still return False, so the run
+        # exits non-zero and OnFailure alerts a human to the gap.
+        logger.error(
+            "patreon digest %d only partially sent (%d/%d parts); marking sent to "
+            "avoid duplicating the delivered parts on retry",
+            digest_id,
+            exc.parts_sent,
+            exc.parts_total,
+        )
+        mark_digest_telegram_sent(conn, digest_id)
+        return False
     except LookupError:
         # A patreon digest with no linked item cannot produce a button, and
         # a post message whose button points nowhere is worse than a retry.
