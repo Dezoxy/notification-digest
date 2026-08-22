@@ -26,6 +26,19 @@ Report ONLY if the window contains at least one of these:
 - a substantive technical detail a holder could act on knowing
 - a genuine SHIFT in what informed holders are arguing about, where the
   argument itself is the news (not the daily bull/bear noise)
+- a real change in the HEALTH of the community itself: sustained sentiment
+  turning, contributors or moderators leaving, a support or scam problem the
+  team has not addressed, activity visibly drying up or surging. Report the
+  observable change and what it consists of, never a mood reading. "Three
+  regulars asked the same unanswered question about the migration" is a
+  fact; "the community seems nervous" is not.
+
+Some items reach you from GENERAL sources — a wide-audience crypto channel,
+a news feed, a subreddit — because they mention the project, not because
+they are about it. Judge those on the same bar. A major outlet covering a
+listing is real news; a passing mention in a market-roundup post is not, and
+neither is a price-movement note. If a general-source item is the ONLY thing
+in the window and it is a passing mention, that is NO-SIGNAL.
 
 If NONE of that is present — if the window was chatter, price reaction, and
 nothing else — respond with exactly this single line and nothing else:

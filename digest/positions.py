@@ -126,13 +126,40 @@ def positions_x_handles(accounts: Iterable[str]) -> frozenset[str]:
     )
 
 
-def is_positions_item(item: Item, tg_prefixes: Collection[str], x_handles: Collection[str]) -> bool:
+def positions_keyword_terms(keywords: Iterable[str]) -> tuple[str, ...]:
+    """Lowercase POSITIONS_KEYWORDS for case-insensitive substring matching.
+
+    The third membership axis, and the only CONTENT-based one: where the two
+    normalizers above identify whole channels and accounts, this reaches
+    into every other source, so a story about the project is claimed out of
+    a general news feed or an unrelated crypto channel rather than staying
+    in the window briefing.
+
+    No further normalization -- no stripping of `$`, no punctuation folding.
+    A cashtag's `$` is exactly what makes `$FET` precise where a bare `FET`
+    would be ruinous, so removing it would defeat the entry's own purpose.
+    Config length-floors these for the same reason
+    (Config.positions_keywords).
+    """
+    return tuple(keyword.strip().lower() for keyword in keywords if keyword.strip())
+
+
+def is_positions_item(
+    item: Item,
+    tg_prefixes: Collection[str],
+    x_handles: Collection[str],
+    keywords: Collection[str] = (),
+) -> bool:
     """True when this item belongs to the positions tracker rather than the window digest.
 
-    `tg_prefixes` and `x_handles` are the OUTPUT of the two normalizers
-    above, not raw config -- passing raw config here silently fails to match
-    anything whose casing differs, which is a data-loss bug that looks like
-    a quiet channel. Callers in digest/main.py normalize once per run.
+    `tg_prefixes`, `x_handles` and `keywords` are the OUTPUT of the three
+    normalizers above, not raw config -- passing raw config here silently
+    fails to match anything whose casing differs, which is a data-loss bug
+    that looks like a quiet channel. Callers in digest/main.py normalize
+    once per run.
+
+    `keywords` defaults to `()` so callers predating the keyword axis keep
+    working unchanged; digest/main.py always passes it.
 
     Must agree exactly with digest/state.py's `positions_match_sql`; see
     this module's docstring for why, and tests/test_positions.py for the
@@ -141,7 +168,10 @@ def is_positions_item(item: Item, tg_prefixes: Collection[str], x_handles: Colle
     url = (item.url or "").lower()
     if any(url.startswith(prefix) for prefix in tg_prefixes):
         return True
-    return item.source == "x" and (item.author or "").lower() in x_handles
+    if item.source == "x" and (item.author or "").lower() in x_handles:
+        return True
+    text = (item.text or "").lower()
+    return any(keyword in text for keyword in keywords)
 
 
 def build_prompt(items: list[Item], recent_coverage: str) -> str:
@@ -255,6 +285,7 @@ __all__ = [
     "build_prompt",
     "is_no_signal",
     "is_positions_item",
+    "positions_keyword_terms",
     "positions_tg_prefixes",
     "positions_x_handles",
     "select_items",

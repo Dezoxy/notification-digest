@@ -34,6 +34,7 @@ from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, 
 from digest.emailer import archive
 from digest.patreon import summarize_post
 from digest.positions import (
+    positions_keyword_terms,
     positions_tg_prefixes,
     positions_x_handles,
     summarize_positions,
@@ -370,6 +371,7 @@ def _deliver(
         limit=_MAX_ITEMS_FETCH_POOL,
         positions_tg_prefixes=positions_tg_prefixes(cfg.positions_tg_channels),
         positions_x_handles=tuple(positions_x_handles(cfg.positions_x_accounts)),
+        positions_keywords=positions_keyword_terms(cfg.positions_keywords),
     )
     if not items:
         logger.info("no unsummarized items, nothing to send")
@@ -1863,7 +1865,7 @@ def run_positions(cfg: Config) -> bool:
     caller would mean two processes racing the same pending rows for no
     latency the reader would notice.
     """
-    if not cfg.positions_tg_channels and not cfg.positions_x_accounts:
+    if not (cfg.positions_tg_channels or cfg.positions_x_accounts or cfg.positions_keywords):
         logger.info("positions tracker not configured, nothing to do")
         return True
 
@@ -1874,7 +1876,8 @@ def run_positions(cfg: Config) -> bool:
 
         tg_prefixes = positions_tg_prefixes(cfg.positions_tg_channels)
         x_handles = tuple(positions_x_handles(cfg.positions_x_accounts))
-        items = get_unsummarized_positions_items(conn, tg_prefixes, x_handles)
+        keywords = positions_keyword_terms(cfg.positions_keywords)
+        items = get_unsummarized_positions_items(conn, tg_prefixes, x_handles, keywords)
         if not items:
             logger.info("positions: no new items")
             return collected_ok

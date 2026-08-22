@@ -31,7 +31,7 @@ homelab repo, not here):
 | daily | `python -m digest daily` | 20:30 Budapest | that day's window digests | daily |
 | weekly | `python -m digest weekly` | Sun 21:45 Budapest | the week's daily briefs | weekly |
 | patreon | `python -m digest patreon` | hourly | one paid post each | patreon |
-| positions | `python -m digest positions` | every 4h | raw items from the tracked channels/accounts | positions |
+| positions | `python -m digest positions` | every 4h | raw items matching the tracked channels, accounts or keywords | positions |
 | backfill/ops | `scripts/*.py` | manual | — | — |
 
 The first three form a cascade: each rung consumes the one below, so the
@@ -91,6 +91,7 @@ deploy time and must never be committed or logged.
 | `HACKERNEWS_ENABLED` / `HACKERNEWS_TOP_N` | Hacker News front-page collector (`false`). |
 | `POSITIONS_TG_CHANNELS` | Telegram usernames (no `@`) claimed by the positions tracker instead of the window digest. |
 | `POSITIONS_X_ACCOUNTS` | X screen names (`@` optional) claimed the same way. **Requires post notifications (the bell) enabled for each account in the X app** — the collector only fetches an account's posts when a notification names it. |
+| `POSITIONS_KEYWORDS` | Free-text terms (min 4 chars) that claim an item from **any** source, so the project's news is pulled out of general channels and feeds too. Keep them distinctive — cashtags and proper names, never a bare `ASI`/`FET`; an over-broad term can make unrelated stories vanish from every channel. |
 
 **Summarization**
 

@@ -24,6 +24,7 @@ from digest.positions import (
     build_prompt,
     is_no_signal,
     is_positions_item,
+    positions_keyword_terms,
     positions_tg_prefixes,
     positions_x_handles,
     select_items,
@@ -45,6 +46,8 @@ TG_CHANNELS = ("ASI_Alliance", "fetchunofficial")
 X_ACCOUNTS = ("Fetch_ai", "ASI_Alliance")
 PREFIXES = positions_tg_prefixes(TG_CHANNELS)
 HANDLES = tuple(positions_x_handles(X_ACCOUNTS))
+KEYWORDS_RAW = ("$FET", "$ASI", "SingularityNET", "Fetch.ai")
+KEYWORDS = positions_keyword_terms(KEYWORDS_RAW)
 
 SUMMARY = "## Buyback vote opens\n\n**TL;DR:** It opened.\n\n**Where it stands:**\n- Live.\n"
 
@@ -179,6 +182,107 @@ class TestPartition:
 
         assert len(get_unsummarized_items(conn)) == len(self.ITEMS)
         assert get_unsummarized_positions_items(conn) == []
+
+
+class TestKeywordAxis:
+    """The content-based axis: claim the project's news out of OTHER sources.
+
+    Source routing only reaches the dedicated channels and accounts. An ASI
+    story in a general crypto channel or a news feed stays in the window
+    briefing without this.
+    """
+
+    @pytest.fixture
+    def conn(self, tmp_path):
+        conn = connect(str(tmp_path / "state.db"))
+        init_db(conn)
+        yield conn
+        conn.close()
+
+    def _news(self, source_id, text, source="news"):
+        return Item(
+            source=source,
+            source_id=source_id,
+            chat_id=None,
+            chat_title=None,
+            author=None,
+            text=text,
+            url=f"https://example.com/{source_id}",
+            fetched_at="2026-08-22T08:00:00+00:00",
+        )
+
+    def test_a_keyword_claims_an_item_from_an_untracked_source(self):
+        item = self._news("n1", "SingularityNET ships MeTTa 2.0")
+        assert is_positions_item(item, PREFIXES, HANDLES, KEYWORDS) is True
+
+    def test_a_keyword_claims_from_an_untracked_telegram_channel(self):
+        item = tg_item("1", channel="watcherguru")
+        item = Item(**{**item.__dict__, "text": "Binance lists $FET perps today"})
+        assert is_positions_item(item, PREFIXES, HANDLES, KEYWORDS) is True
+
+    def test_matching_is_case_insensitive(self):
+        item = self._news("n1", "singularitynet shipped it")
+        assert is_positions_item(item, PREFIXES, HANDLES, KEYWORDS) is True
+
+    @pytest.mark.parametrize(
+        ("source_id", "text"),
+        [
+            # "asi" is a substring of both of these...
+            ("n2", "Basic income trial expands in Asia"),
+            # ...and "fet" of both of these. Cashtag keywords are what keep
+            # these out; a bare ASI/FET keyword would claim all four, remove
+            # them from the briefing, and -- on an immaterial window --
+            # make them vanish from every channel.
+            ("n3", "Feta cheese prices climb"),
+            ("n4", "A fetching new design"),
+            ("n5", "Solana ETF decision due"),
+        ],
+    )
+    def test_ordinary_stories_are_not_claimed(self, source_id, text):
+        assert is_positions_item(self._news(source_id, text), PREFIXES, HANDLES, KEYWORDS) is False
+
+    def test_the_partition_still_holds_with_keywords(self, conn):
+        items = [
+            tg_item("1", "ASI_Alliance"),
+            self._news("n1", "SingularityNET ships MeTTa 2.0"),
+            self._news("n2", "Basic income trial expands in Asia"),
+            self._news("n3", "Solana ETF decision due"),
+        ]
+        commit_new_items(conn, items, {})
+
+        window = get_unsummarized_items(
+            conn,
+            positions_tg_prefixes=PREFIXES,
+            positions_x_handles=HANDLES,
+            positions_keywords=KEYWORDS,
+        )
+        positions = get_unsummarized_positions_items(conn, PREFIXES, HANDLES, KEYWORDS)
+
+        assert {i.source_id for i in positions} == {"1", "n1"}
+        assert {i.source_id for i in window} == {"n2", "n3"}
+        assert len(window) + len(positions) == len(items)
+
+    def test_a_keyword_containing_a_like_wildcard_is_matched_literally(self, conn):
+        # A keyword is free text and may contain `_` or `%`, both LIKE
+        # wildcards. Without ESCAPE, "ASI_One" would also claim "ASIxOne".
+        keywords = positions_keyword_terms(["ASI_One"])
+        items = [self._news("hit", "ASI_One launches"), self._news("miss", "ASIxOne launches")]
+        commit_new_items(conn, items, {})
+
+        claimed = get_unsummarized_positions_items(conn, (), (), keywords)
+
+        assert {i.source_id for i in claimed} == {"hit"}
+
+    def test_keywords_alone_are_enough_to_configure_the_tracker(self, conn):
+        # No channels, no accounts -- a keyword-only deployment must still
+        # claim, and must still be an exact complement.
+        commit_new_items(conn, [self._news("n1", "Fetch.ai ships"), self._news("n2", "other")], {})
+
+        claimed = get_unsummarized_positions_items(conn, (), (), KEYWORDS)
+        window = get_unsummarized_items(conn, positions_keywords=KEYWORDS)
+
+        assert {i.source_id for i in claimed} == {"n1"}
+        assert {i.source_id for i in window} == {"n2"}
 
 
 class TestNoSignalDetection:
@@ -445,6 +549,25 @@ class TestConfig:
 
         with pytest.raises(ConfigError, match="POSITIONS_X_ACCOUNTS"):
             Config.from_env()
+
+    def test_a_too_short_keyword_is_rejected_at_startup(self, tmp_path, monkeypatch):
+        # "asi" is inside "basic", "quasi" and "Asia". A keyword that short
+        # would pull unrelated stories out of the briefing and, on an
+        # immaterial window, delete them from every channel -- a silent,
+        # destructive failure, so it must surface at startup.
+        for key, value in {**BASE_ENV, "STATE_DB_PATH": str(tmp_path / "s.db")}.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("POSITIONS_KEYWORDS", "$FET,asi")
+
+        with pytest.raises(ConfigError, match="POSITIONS_KEYWORDS"):
+            Config.from_env()
+
+    def test_keywords_keep_the_case_the_owner_typed(self, tmp_path, monkeypatch):
+        for key, value in {**BASE_ENV, "STATE_DB_PATH": str(tmp_path / "s.db")}.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("POSITIONS_KEYWORDS", "$FET, SingularityNET")
+
+        assert Config.from_env().positions_keywords == ("$FET", "SingularityNET")
 
     def test_unset_means_no_x_half(self, tmp_path, monkeypatch):
         for key, value in {**BASE_ENV, "STATE_DB_PATH": str(tmp_path / "s.db")}.items():

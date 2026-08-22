@@ -1302,6 +1302,7 @@ def _like_escape(value: str) -> str:
 def positions_match_sql(
     positions_tg_prefixes: Sequence[str] = (),
     positions_x_handles: Sequence[str] = (),
+    positions_keywords: Sequence[str] = (),
 ) -> tuple[str, list[str]]:
     """Build the ONE SQL condition that defines "this item belongs to the positions tracker".
 
@@ -1317,14 +1318,22 @@ def positions_match_sql(
     unreported. digest/positions.py's `is_positions_item` is the in-memory
     twin of this condition, held to it by a test.
 
-    `positions_tg_prefixes` are lowercase `https://t.me/<username>/` forms
-    and `positions_x_handles` lowercase bare screen names -- exactly what
-    digest/positions.py's `positions_tg_prefixes`/`positions_x_handles`
-    normalizers produce. Raw config strings must not be passed here: casing
-    differences would match nothing, which presents as a permanently quiet
-    channel rather than as an error.
+    Three membership axes, OR-ed. `positions_tg_prefixes` are lowercase
+    `https://t.me/<username>/` forms, `positions_x_handles` lowercase bare
+    screen names, and `positions_keywords` lowercase free-text terms matched
+    as a substring of the item's own text -- exactly what
+    digest/positions.py's three normalizers produce. Raw config strings must
+    not be passed here: casing differences would match nothing, which
+    presents as a permanently quiet channel rather than as an error.
 
-    With BOTH empty (no positions feature configured) the condition is the
+    The first two axes are SOURCE-based and match whole channels/accounts.
+    The third is CONTENT-based and reaches into every other source, which is
+    what lets a story about the project be claimed out of a general news
+    feed or an unrelated crypto channel. It is also the only axis that can
+    misfire on an unrelated story, which is why config length-floors its
+    entries -- see Config.positions_keywords.
+
+    With ALL empty (no positions feature configured) the condition is the
     literal `0`. That is the correct degenerate case in both directions:
     `NOT (0)` leaves the window sweep matching everything exactly as it did
     before this feature existed, and `(0)` makes the positions claim match
@@ -1340,6 +1349,15 @@ def positions_match_sql(
         placeholders = ",".join("?" for _ in positions_x_handles)
         clauses.append(f"(source = 'x' AND lower(author) IN ({placeholders}))")
         params.extend(positions_x_handles)
+    for keyword in positions_keywords:
+        # Substring, not word-boundary: SQLite's LIKE has no \b, and the
+        # alternatives (GLOB, a REGEXP extension, padding the column) each
+        # fail on ordinary punctuation -- "$FET." and "($FET)" are exactly
+        # the forms these terms appear in. Precision is bought at the config
+        # layer instead, by requiring distinctive terms long enough not to
+        # occur inside ordinary words (Config.positions_keywords).
+        clauses.append("lower(text) LIKE ? ESCAPE '\\'")
+        params.append(f"%{_like_escape(keyword)}%")
     if not clauses:
         return "0", []
     return "(" + " OR ".join(clauses) + ")", params
@@ -1371,6 +1389,7 @@ def get_unsummarized_items(
     limit: int | None = None,
     positions_tg_prefixes: Sequence[str] = (),
     positions_x_handles: Sequence[str] = (),
+    positions_keywords: Sequence[str] = (),
 ) -> list[Item]:
     """Return items not yet attached to a digest, ordered by fetched_at ascending.
 
@@ -1397,7 +1416,7 @@ def get_unsummarized_items(
     excluded = tuple(sorted(_SELF_DELIVERED_SOURCES))
     placeholders = ",".join("?" for _ in excluded)
     positions_sql, positions_params = positions_match_sql(
-        positions_tg_prefixes, positions_x_handles
+        positions_tg_prefixes, positions_x_handles, positions_keywords
     )
     query = f"""
         SELECT {_ITEM_COLUMNS}
@@ -1418,6 +1437,7 @@ def get_unsummarized_positions_items(
     conn: sqlite3.Connection,
     positions_tg_prefixes: Sequence[str] = (),
     positions_x_handles: Sequence[str] = (),
+    positions_keywords: Sequence[str] = (),
 ) -> list[Item]:
     """Return unsummarized positions items only, oldest first -- the tracker's claim query.
 
@@ -1434,7 +1454,7 @@ def get_unsummarized_positions_items(
     silently make that choice the opposite way.
     """
     positions_sql, positions_params = positions_match_sql(
-        positions_tg_prefixes, positions_x_handles
+        positions_tg_prefixes, positions_x_handles, positions_keywords
     )
     rows = conn.execute(
         f"""

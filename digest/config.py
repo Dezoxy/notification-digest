@@ -188,6 +188,29 @@ class Config:
     # Empty tuple = no X half, exactly like positions_tg_channels' own
     # empty-means-unconfigured shape; the tracker runs on Telegram alone.
     positions_x_accounts: tuple[str, ...] = ()
+    # Free-text terms that pull an item into the positions tracker from ANY
+    # source -- the third and last membership axis, alongside the two
+    # source-based ones above. Matched as a case-insensitive SUBSTRING of an
+    # item's text, so a Watcher Guru message or an FT article about the
+    # project is claimed by the tracker even though that channel is not
+    # itself a positions source.
+    #
+    # THE ERROR COST HERE IS ASYMMETRIC, which is why entries must be
+    # DISTINCTIVE and are length-floored at _MIN_POSITIONS_KEYWORD_LEN. A
+    # false positive does not merely misfile a story: the item leaves the
+    # window briefing, and if the tracker then judges that window immaterial
+    # it is absorbed as a quiet-window record -- so an over-broad keyword can
+    # make unrelated stories disappear from every channel silently. A false
+    # negative just leaves the story in the main briefing, which is where it
+    # already was.
+    #
+    # So: cashtags (`$FET`) and distinctive proper names (`SingularityNET`,
+    # `Fetch.ai`, `Artificial Superintelligence Alliance`) -- never a bare
+    # `ASI` or `FET`, which are substrings of ordinary words ("basic"
+    # contains "asi"; "feta" contains "fet").
+    #
+    # Empty tuple = no keyword axis; the tracker then claims by source only.
+    positions_keywords: tuple[str, ...] = ()
     # How old an unsummarized item must get before digest/main.py's `_deliver`
     # logs a `stale_backlog` WARNING naming its source. Purely a reporting
     # threshold -- nothing schedules, retries, or fails on it, and the run's
@@ -475,6 +498,7 @@ class Config:
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
         positions_tg_channels = _optional_tg_channel_tuple("POSITIONS_TG_CHANNELS")
         positions_x_accounts = _optional_x_handle_tuple("POSITIONS_X_ACCOUNTS")
+        positions_keywords = _optional_keyword_tuple("POSITIONS_KEYWORDS")
         stale_backlog_warn_hours = _optional_positive_int("STALE_BACKLOG_WARN_HOURS", default=24)
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
@@ -610,6 +634,7 @@ class Config:
             news_feeds=news_feeds,
             positions_tg_channels=positions_tg_channels,
             positions_x_accounts=positions_x_accounts,
+            positions_keywords=positions_keywords,
             stale_backlog_warn_hours=stale_backlog_warn_hours,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,
@@ -915,6 +940,45 @@ def _optional_x_handle_tuple(name: str) -> tuple[str, ...]:
                 "(letters, digits, underscore; 1-15 chars; a leading @ is allowed)"
             )
     return handles
+
+
+# Shortest accepted POSITIONS_KEYWORDS entry. Four, not three, and the
+# difference is not cosmetic: "asi" is a substring of "basic", "quasi" and
+# "Asia", and "fet" of "feta" and "fetch" -- a three-character keyword would
+# claim ordinary stories out of the briefing and, on an immaterial window,
+# make them vanish entirely (see Config.positions_keywords). Four still
+# admits the cashtag forms that matter ("$FET", "$ASI") while excluding
+# every bare-word form that does the damage.
+_MIN_POSITIONS_KEYWORD_LEN = 4
+
+
+def _optional_keyword_tuple(name: str) -> tuple[str, ...]:
+    """Read an optional comma-separated list of positions-tracker keywords.
+
+    Unset or blank -> `()`, meaning "claim by source only" (see
+    Config.positions_keywords). Entries keep their original case here;
+    matching lowercases both sides at the comparison boundary
+    (digest/positions.py's `positions_keyword_terms`), so config keeps
+    reporting back what the owner actually typed.
+
+    A comma is the separator, so a keyword cannot contain one -- no keyword
+    worth having does. Entries shorter than `_MIN_POSITIONS_KEYWORD_LEN` are
+    a ConfigError rather than a warning: the failure they cause is silent
+    and destructive (see that constant), so it has to surface at startup,
+    not as an unexplained gap in a briefing weeks later.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return ()
+    keywords = tuple(part.strip() for part in raw.split(",") if part.strip())
+    for keyword in keywords:
+        if len(keyword) < _MIN_POSITIONS_KEYWORD_LEN:
+            raise ConfigError(
+                f"{name} entries must be at least {_MIN_POSITIONS_KEYWORD_LEN} characters "
+                f"({keyword!r} is too short) -- short terms match inside ordinary words "
+                "and would silently pull unrelated stories out of the briefing"
+            )
+    return keywords
 
 
 def _optional_url(name: str, *, default: str) -> str:
