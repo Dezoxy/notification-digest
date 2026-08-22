@@ -84,14 +84,24 @@ reconstructing it from past messages>
   time, even when the window's news is small. It is what lets him follow
   the project without scrollback. Carry forward the still-true state from
   the "already reported" list above and update it with this window.
-- 250-500 words total. A single clean announcement can be much shorter.
+- 200-350 words total, and treat 350 as a ceiling rather than a target. A
+  single clean announcement should be much shorter. This budget is not
+  stylistic: the whole update is delivered as ONE Telegram message, and
+  past roughly 360 words with its source links it has to be split into a
+  numbered reply chain, which reads worse and doubles the delivery risk.
 
 ## Citations
 
-Link every claim to the item it came from, inline, using the item's own
-`url` and nothing else. Never construct, guess, or complete a URL. If an
-item has no url, attribute it in prose ("a moderator in the channel said")
-without a link.
+Link to the item a claim came from, inline, using the item's own `url` and
+nothing else. Never construct, guess, or complete a URL. If an item has no
+url, attribute it in prose ("a moderator in the channel said") without a
+link.
+
+Cite each SOURCE once — on the first claim that rests on it — not on every
+sentence that draws from it. The links are delivered in full inside the
+message text, so seven of them spend roughly 300 characters of the same
+budget the prose is competing for; repeating one adds cost and no
+information. A reader who wants the detail taps through once.
 
 ## Hard rules
 
