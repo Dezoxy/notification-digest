@@ -2242,98 +2242,22 @@ def test_allocate_by_source_preserves_input_order_and_prefers_oldest():
     assert all(f"x-{i}" in ids for i in range(5))
 
 
-def test_allocate_by_source_positions_lane_reserved_both_ways():
-    positions = ["ASI_Alliance", "fetchunofficial"]
-    items = (
-        # 100 items from the positions channels (public t.me urls)...
-        [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(100)]
-        # ...plus 300 items of other telegram traffic.
-        + [_lane_item("telegram", 1000 + i) for i in range(300)]
-    )
-
-    result = allocate_by_source(items, 250, positions)
-
-    positions_taken = sum(1 for i in result if i.url.startswith("https://t.me/ASI_Alliance/"))
-    # The positions quota is a hard cap, not a floor: exactly 30 of the 100
-    # available positions items are taken (never more, regardless of spare
-    # budget -- redistribution skips the lane), and the general telegram
-    # lane absorbs the rest of the budget. Reserved in BOTH directions.
-    assert positions_taken == 30
-    assert len(result) == 250
-
-
-def test_allocate_by_source_positions_matching_is_case_insensitive():
-    items = [_lane_item("telegram", i, url=f"https://t.me/asi_alliance/{i}") for i in range(400)]
-
-    result = allocate_by_source(items, 250, ["ASI_Alliance"])
-
-    # Every item lands in the positions lane despite the URL/config case
-    # difference, and the lane's hard cap holds: exactly its 30-slot quota
-    # is taken. (Had the match failed, these would be plain telegram items
-    # and the telegram lane + redistribution would fill all 250 -- so the
-    # count doubles as proof the case-insensitive match actually fired.)
-    assert len(result) == 30
-
-
-def test_allocate_by_source_without_positions_config_treats_channels_as_telegram():
-    items = [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(10)] + [
-        _lane_item("x", i) for i in range(10)
-    ]
-
-    # No positions channels configured -> plain telegram items; underfull
-    # window passes through untouched either way.
-    assert allocate_by_source(items, 250) is items
-
-
-def test_allocate_by_source_positions_lane_takes_newest_not_oldest():
-    # The positions lane is hard-capped, so once its channels sustainably
-    # out-post the cap its queue never drains and oldest-first would pin the
-    # digest to an ever-staler backlog. It must take the NEWEST items
-    # instead -- the inverse of the general-lane rule asserted in
-    # test_allocate_by_source_preserves_input_order_and_prefers_oldest.
+def test_allocate_by_source_treats_position_channel_items_as_plain_telegram():
+    # The reserved "positions" lane is gone: those items never reach this
+    # function any more (digest/state.py's positions_match_sql excludes them
+    # from the window sweep). Anything from those channels that DOES arrive
+    # here -- an unconfigured deployment, a channel the owner removed from
+    # POSITIONS_TG_CHANNELS -- is plain telegram traffic with no special
+    # quota, and must not be silently dropped.
     items = [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(400)]
 
-    result = allocate_by_source(items, 250, ["ASI_Alliance"])
+    result = allocate_by_source(items, 250)
 
-    ids = [item.source_id for item in result]
-    assert len(ids) == 30
-    # The 30 most recent (telegram-370..399), never the 30 oldest.
-    assert ids == [f"telegram-{i}" for i in range(370, 400)]
-    assert "telegram-0" not in ids
-
-
-def test_allocate_by_source_positions_newest_first_preserves_input_order():
-    # Choosing from the tail must not reorder the output: the return value
-    # is still a filter of `items` (oldest-first), which
-    # select_items_for_prompt and create_digest both rely on.
-    items = (
-        [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(100)]
-        + [_lane_item("x", i) for i in range(60)]
-        + [_lane_item("news", i) for i in range(60)]
-    )
-
-    result = allocate_by_source(items, 250, ["ASI_Alliance"])
-
-    ids = [item.source_id for item in result]
-    selected = set(ids)
-    assert ids == [item.source_id for item in items if item.source_id in selected]
-
-
-def test_allocate_by_source_positions_lane_winning_zero_slots_takes_nothing():
-    # Regression guard for the negative-slice trap: `lane_items[-0:]` is the
-    # WHOLE list, so a newest-first lane allocated zero slots must be skipped
-    # explicitly or it silently takes everything it has, breaking both its
-    # own quota and the overall budget.
-    items = [_lane_item("telegram", i, url=f"https://t.me/ASI_Alliance/{i}") for i in range(50)] + [
-        _lane_item("news", i) for i in range(50)
-    ]
-
-    # Budget 1 scales every quota to its floor of 1, and the first pass
-    # spends that single slot on whichever lane it reaches first -- leaving
-    # at least one lane, possibly positions, on zero.
-    result = allocate_by_source(items, 1, ["ASI_Alliance"])
-
-    assert len(result) == 1
+    # Telegram takes its own quota first, then redistribution hands it every
+    # remaining slot (no other lane has items), filling the budget -- and
+    # oldest-first, the general-lane rule, since the hard-capped
+    # newest-first exception went away with the lane.
+    assert [item.source_id for item in result] == [f"telegram-{i}" for i in range(250)]
 
 
 def test_allocate_by_source_reduced_budget_scales_quotas_proportionally():
@@ -2363,7 +2287,7 @@ def test_select_balanced_items_for_prompt_returns_allocation_when_it_fits():
     items = [_lane_item("telegram", i) for i in range(10)]
 
     result = select_balanced_items_for_prompt(
-        items, 250, (), [], "(no prior briefings in the last 24 hours)", 10_000_000
+        items, 250, [], "(no prior briefings in the last 24 hours)", 10_000_000
     )
 
     assert result == items
@@ -2380,7 +2304,7 @@ def test_select_balanced_items_for_prompt_shrinks_by_reallocating_not_tail_chopp
     # A cap that fits roughly half the batch.
     cap = len(build_prompt(items[:120], [], "(no prior briefings in the last 24 hours)").encode())
     result = select_balanced_items_for_prompt(
-        items, 240, (), [], "(no prior briefings in the last 24 hours)", cap
+        items, 240, [], "(no prior briefings in the last 24 hours)", cap
     )
 
     by_source: dict[str, int] = {}
@@ -2403,7 +2327,7 @@ def test_select_balanced_items_for_prompt_one_item_floor():
     items = [_lane_item("telegram", i) for i in range(300)]
 
     result = select_balanced_items_for_prompt(
-        items, 250, (), [], "(no prior briefings in the last 24 hours)", 1
+        items, 250, [], "(no prior briefings in the last 24 hours)", 1
     )
 
     assert len(result) == 1

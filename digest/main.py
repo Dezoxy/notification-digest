@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
 from telethon import TelegramClient
+from telethon import utils as telethon_utils
 from telethon.sessions import StringSession
 
 from digest.collectors import hackernews as hackernews_collector
@@ -32,6 +33,15 @@ from digest.daily import summarize_daily
 from digest.deliver import TelegramRunState, deliver_channels, deliver_pending, digest_meta
 from digest.emailer import archive
 from digest.patreon import summarize_post
+from digest.positions import (
+    positions_keyword_terms,
+    positions_tg_prefixes,
+    positions_x_handles,
+    summarize_positions,
+)
+from digest.positions import (
+    select_items as select_positions_items,
+)
 from digest.publish import derive_topics, map_deltas_to_slugs
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
@@ -50,7 +60,9 @@ from digest.state import (
     get_polymarket_probs,
     get_recent_arc_keys,
     get_recent_digests,
+    get_recent_positions_digests,
     get_unsummarized_items,
+    get_unsummarized_positions_items,
     get_window_digests_since,
     init_db,
     known_source_ids,
@@ -347,7 +359,20 @@ def _deliver(
     telegram_state = TelegramRunState()
     all_ok = deliver_pending(conn, cfg, telegram_state)
 
-    items = get_unsummarized_items(conn, limit=_MAX_ITEMS_FETCH_POOL)
+    # Positions items are claimed by `run_positions`, not here (see
+    # digest/positions.py's module docstring for the clean cut). Passing the
+    # normalized channel/handle forms is what makes the two pools exact
+    # complements -- get_unsummarized_positions_items negates the same
+    # condition. Omitting either argument would silently put those items
+    # back into the window briefing WHILE the positions run also claims
+    # them, delivering every ASI story twice in two different topics.
+    items = get_unsummarized_items(
+        conn,
+        limit=_MAX_ITEMS_FETCH_POOL,
+        positions_tg_prefixes=positions_tg_prefixes(cfg.positions_tg_channels),
+        positions_x_handles=tuple(positions_x_handles(cfg.positions_x_accounts)),
+        positions_keywords=positions_keyword_terms(cfg.positions_keywords),
+    )
     if not items:
         logger.info("no unsummarized items, nothing to send")
         return all_ok
@@ -380,8 +405,7 @@ def _deliver(
     # select_balanced_items_for_prompt): the candidate pool is deliberately
     # wider than one digest's budget (_MAX_ITEMS_FETCH_POOL vs
     # _MAX_ITEMS_PER_DIGEST, see both constants' comments); this turns it
-    # into a source-balanced batch -- per-lane quotas including the reserved
-    # "positions" lane for POSITIONS_TG_CHANNELS -- that ALSO fits the
+    # into a source-balanced batch -- per-source lane quotas -- that ALSO fits the
     # prompt's byte cap (_MAX_PROMPT_BYTES; when the byte cap binds, the
     # allocation budget shrinks so every lane gives up items in quota ratio,
     # never a tail-chop of whichever collectors ran last -- see that
@@ -394,7 +418,6 @@ def _deliver(
     items = select_balanced_items_for_prompt(
         items,
         _MAX_ITEMS_PER_DIGEST,
-        cfg.positions_tg_channels,
         failed_sources,
         recent_coverage,
         _MAX_PROMPT_BYTES,
@@ -1672,6 +1695,251 @@ def _deliver_one_post(conn, cfg: Config, item, telegram_state) -> bool:
     )
 
 
+# Positions updates go to Telegram ONLY, for a different reason than
+# _PATREON_HIDDEN_CHANNELS' redistribution one: this is a private tracker of
+# what the owner personally holds. Publishing it on the public news site
+# would broadcast his portfolio, and the email channel is named here for the
+# same forward-guard reason Patreon names it -- flipping EMAIL_ENABLED on
+# later must not quietly opt this kind back in.
+_POSITIONS_HIDDEN_CHANNELS = frozenset({"email", "site"})
+
+# How far back `run_positions` reads its OWN prior digests for the tracker's
+# "already reported" continuity block. Much longer than the window
+# briefing's 24 hours, and deliberately so: this kind stays SILENT through
+# quiet windows by design, so a 24h horizon can legitimately contain zero
+# prior digests and leave the tracker with no idea what it has already told
+# the reader -- which is exactly when it would re-explain a storyline from
+# the beginning. 72h spans at least one real update in any week the project
+# is alive. Bounded downstream regardless: format_recent_coverage caps the
+# rendered block at its own line limit, so a busy stretch cannot make this
+# grow without limit.
+_POSITIONS_COVERAGE_HOURS = 72
+
+# The `kind` recorded for a window the model judged to hold no news
+# (digest/positions.py's NO-SIGNAL outcome). A SEPARATE kind rather than a
+# marked "positions" row, because every consumer of "positions" wants these
+# excluded and none wants them included: `get_recent_positions_digests`
+# would otherwise feed "nothing happened" headings into the continuity block
+# as though they were coverage, and `_telegram_thread_id_for_kind` would
+# route a row that is never sent anywhere. It is a consumption RECORD, not a
+# digest -- it exists only because `items.digest_id` is a foreign key, so
+# marking items handled requires a row to point at.
+_POSITIONS_QUIET_KIND = "positions-quiet"
+
+
+async def _collect_positions_chats(cfg: Config, conn: sqlite3.Connection) -> bool:
+    """Collect the positions Telegram channels on this run's own schedule.
+
+    Returns True when collection completed without failure.
+
+    WHY THIS RUN COLLECTS AT ALL, when `run_patreon` and `run_daily` do not:
+    a tracker that only summarizes what the 6-hourly window run happened to
+    have collected is a 6-hourly tracker wearing a 4-hourly timer. Its own
+    cadence is only real if it fetches its own material.
+
+    WHY ONLY TELEGRAM, and never X: the X collector is an unofficial,
+    cookie-authenticated client whose ban risk is the single largest
+    operational hazard in this service (PLAN.md §8), and every extra
+    scheduled contact with X raises it. Positions X posts therefore ride
+    along on whatever the window run already collected -- so X material can
+    be up to one window (6h) stale here, while Telegram is at most one
+    positions interval (4h) stale. That asymmetry is deliberate and
+    accepted, not an oversight.
+
+    Sharing the `("telegram", <chat_id>)` cursor with the window run is
+    safe and is the point: whichever run reaches a chat first advances the
+    cursor and commits the items, the other sees nothing new, and the
+    UNIQUE(source, source_id) constraint makes a double-commit a no-op
+    regardless. Which run COLLECTED an item never decides which run DELIVERS
+    it -- `positions_match_sql` decides that, from the item's own url and
+    author.
+    """
+    if not cfg.positions_tg_channels:
+        return True
+
+    client = TelegramClient(StringSession(cfg.tg_session), cfg.tg_api_id, cfg.tg_api_hash)
+    try:
+        if not await _client_ready(client):
+            logger.warning("positions: telegram session not authorized / connect failed")
+            return False
+
+        chat_ids: list[int] = []
+        for username in cfg.positions_tg_channels:
+            try:
+                entity = await client.get_entity(username)
+            except Exception as exc:
+                # One unresolvable channel must not cost the others their
+                # window: a renamed, deleted, or newly-private channel is a
+                # config problem to fix, not a reason to stop tracking the
+                # rest. Logged by name (a public channel username is not a
+                # secret) so the fix is obvious from the journal.
+                logger.warning(
+                    "positions: cannot resolve telegram channel %s: %s",
+                    username,
+                    type(exc).__name__,
+                )
+                continue
+            chat_ids.append(telethon_utils.get_peer_id(entity))
+
+        if not chat_ids:
+            logger.warning("positions: no telegram channels resolved this run")
+            return False
+
+        result = await telegram_collector.collect(client, chat_ids, get_cursors(conn, "telegram"))
+    except Exception as exc:
+        logger.warning("positions: telegram collection crashed: %s", type(exc).__name__)
+        return False
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+
+    commit_new_items(conn, list(result.items), result.cursor_updates)
+    logger.info("positions: collected %d telegram item(s)", len(result.items))
+    return not result.failed
+
+
+def _absorb_quiet_window(conn: sqlite3.Connection, items: list) -> None:
+    """Consume a NO-SIGNAL window's items without ever delivering them.
+
+    THE DISPOSITION DECISION, stated plainly because the alternative is
+    tempting and wrong at this volume. The items COULD be left with
+    `digest_id IS NULL` so a later run sees the quiet window's chatter as
+    context alongside the eventual announcement. That was rejected: these
+    channels measure ~51 items per 4h interval, so a three-day quiet stretch
+    would carry ~900 items into one prompt, and the stale-backlog WARNING
+    (`_warn_on_stale_backlog`) would fire the whole time on items that are
+    working exactly as designed.
+
+    Continuity is preserved at the DIGEST level instead of the item level:
+    the tracker's "already reported" block is built from its own prior
+    digests (`get_recent_positions_digests`), which is what the delta rule
+    actually reads. Chatter that produced no digest had nothing to carry
+    forward by definition.
+
+    Marked delivered on all three channels immediately, exactly as
+    `_absorb_seeded` does and for the same reason: `get_pending_digests`
+    must never pick this row up, on any channel, ever.
+    """
+    digest_id = create_digest(
+        conn,
+        "## Quiet window\n\nNo material development in the tracked channels; "
+        f"{len(items)} item(s) recorded without delivery.",
+        items,
+        kind=_POSITIONS_QUIET_KIND,
+    )
+    mark_digest_sent(conn, digest_id)
+    mark_digest_site_published(conn, digest_id)
+    mark_digest_telegram_sent(conn, digest_id)
+    logger.info(
+        "positions: quiet window, absorbed %d item(s) into record %d, undelivered",
+        len(items),
+        digest_id,
+    )
+
+
+def run_positions(cfg: Config) -> bool:
+    """Collect, summarize and deliver one positions-tracker update.
+
+    Invoked by `python -m digest positions` -- its own 4-hourly systemd
+    timer on the homelab side (see CLAUDE.md's Deploy note), independent of
+    the 6-hourly window cycle.
+
+    Disabled-by-config is SUCCESS, not failure, matching `run_patreon`: an
+    owner with neither POSITIONS_TG_CHANNELS nor POSITIONS_X_ACCOUNTS set is
+    not using this feature, and a timer firing against it must not alert.
+
+    Three outcomes, all deliberately distinct:
+
+    1. Nothing new, or nothing MATERIAL (the NO-SIGNAL sentinel) -- deliver
+       nothing, consume the items, exit 0. Silence is the feature that lets
+       this run every 4 hours without becoming noise; see
+       `_absorb_quiet_window` for what happens to the items.
+    2. Real news -- one digest, one Telegram message to the tracker topic.
+    3. Summarization failed -- no digest row, so the items keep
+       `digest_id IS NULL` and the next run retries them. Reports failure so
+       the OnFailure alert fires.
+
+    No pending-delivery retry pass here, unlike `_run`/`run_daily`:
+    `deliver_pending` is kind-agnostic, so a positions digest that failed to
+    send is already retried by the next window run. Adding a second retry
+    caller would mean two processes racing the same pending rows for no
+    latency the reader would notice.
+    """
+    if not (cfg.positions_tg_channels or cfg.positions_x_accounts or cfg.positions_keywords):
+        logger.info("positions tracker not configured, nothing to do")
+        return True
+
+    conn = connect(cfg.state_db_path)
+    try:
+        init_db(conn)
+        collected_ok = asyncio.run(_collect_positions_chats(cfg, conn))
+
+        tg_prefixes = positions_tg_prefixes(cfg.positions_tg_channels)
+        x_handles = tuple(positions_x_handles(cfg.positions_x_accounts))
+        keywords = positions_keyword_terms(cfg.positions_keywords)
+        items = get_unsummarized_positions_items(conn, tg_prefixes, x_handles, keywords)
+        if not items:
+            logger.info("positions: no new items")
+            return collected_ok
+
+        now = datetime.now(UTC)
+        recent_coverage = format_recent_coverage(
+            get_recent_positions_digests(
+                conn, (now - timedelta(hours=_POSITIONS_COVERAGE_HOURS)).isoformat()
+            ),
+            now,
+        )
+
+        try:
+            body_md = summarize_positions(
+                select_positions_items(items),
+                recent_coverage,
+                cfg.anthropic_model,
+                cfg.claude_timeout_seconds,
+            )
+        except SummarizeError as exc:
+            logger.error("positions: summarization failed: %s", exc)
+            return False
+
+        if body_md is None:
+            _absorb_quiet_window(conn, items)
+            return collected_ok
+
+        # Stamps EVERY claimed item, not just the ones `select_positions_items`
+        # let into the prompt. An overflow drops the OLDEST items from the
+        # prompt; leaving those unstamped would make them the oldest again
+        # next run, dropped again, forever -- a permanent backlog that also
+        # keeps the stale-backlog WARNING lit. They were considered this
+        # window, so they are handled this window.
+        digest_id = create_digest(conn, body_md, items, kind="positions")
+        created_at = digest_meta(conn, digest_id)[1]
+
+        # Resolve the suppressed channels' flags unconditionally, before
+        # delivery -- see `_deliver_one_post`'s identical block for the full
+        # rationale: `hidden` alone only marks a channel that is ENABLED, so
+        # a host with email disabled today would leave these rows pending
+        # forever and mail out the owner's whole portfolio history the day
+        # EMAIL_ENABLED flips to true.
+        mark_digest_sent(conn, digest_id)
+        mark_digest_site_published(conn, digest_id)
+
+        delivered = deliver_channels(
+            conn,
+            cfg,
+            digest_id,
+            body_md,
+            len(items),
+            created_at,
+            {"email": True, "site": True, "telegram": False},
+            TelegramRunState(),
+            kind="positions",
+            hidden=_POSITIONS_HIDDEN_CHANNELS,
+        )
+        return delivered and collected_ok
+    finally:
+        conn.close()
+
+
 def main() -> None:
     load_dotenv()
 
@@ -1707,6 +1975,8 @@ def main() -> None:
     # `hide:` alongside `daily` would suggest otherwise.
     if len(sys.argv) > 1 and sys.argv[1] == "patreon":
         ok = run_patreon(cfg)
+    elif len(sys.argv) > 1 and sys.argv[1] == "positions":
+        ok = run_positions(cfg)
     elif len(sys.argv) > 1 and sys.argv[1] == "daily":
         ok = run_daily(cfg, force="--force" in sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "weekly":

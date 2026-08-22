@@ -17,6 +17,11 @@
      systemd timer (OnCalendar=*/6h)          systemd timer (OnCalendar=daily)
      `docker compose run --rm digest`         `docker compose run --rm digest daily`
      window mode                              daily mode
+       (also: `weekly` Sun, and two modes OUTSIDE this cascade --
+        `patreon` hourly and `positions` 4-hourly, each collecting,
+        summarizing and delivering its own items into its own Telegram
+        topic, and each excluded from the window sweep so nothing is
+        ever covered twice. See §4.15 and §4.16.)
                     │                                       │
                     └────────────────────┬──────────────────┘
                                           ▼
@@ -92,13 +97,18 @@ x_and_telegram-scrape/
 │   └── pre-push                  # blocks direct pushes to main (ALLOW_MAIN_PUSH=1 for bootstrap)
 ├── digest/
 │   ├── __init__.py
-│   ├── __main__.py               # `python -m digest [daily]` entrypoint, calls main.main()
-│   ├── main.py                   # orchestrates one run (window or daily mode), sets exit code
+│   ├── __main__.py               # `python -m digest [daily|weekly|patreon|positions]` entrypoint
+│   ├── main.py                   # orchestrates one run (any mode), sets exit code
 │   ├── config.py                 # loads/validates every env var into a typed Config object
 │   ├── state.py                  # SQLite: schema + migrations, item/cursor/digest persistence, prunes
 │   ├── deliver.py                # per-channel senders, pending-digest retry, Telegram 429 breaker
 │   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation
 │   ├── daily.py                  # daily-brief prompt build + `claude -p`, synthesizes window digests
+│   ├── weekly.py                 # weekly-report prompt build + `claude -p`, synthesizes daily briefs
+│   ├── patreon.py                # one paid post -> one digest -> one Telegram message
+│   ├── positions.py              # positions-tracker membership predicate, prompt build, NO-SIGNAL
+│   ├── context.py                # story-arc "60-second context" primers
+│   ├── verify.py                 # optional web-verification pass over the daily brief
 │   ├── translate.py              # optional Hungarian translation of a digest, soft-failing
 │   ├── emailer.py                # markdown→HTML render, smtplib send, archive-to-disk
 │   ├── publish.py                # site ingest PUT + Telegram Bot API sendMessage
@@ -113,9 +123,14 @@ x_and_telegram-scrape/
 ├── prompts/
 │   ├── digest.md                 # window-digest prompt template (BRIEFING output contract, §5)
 │   ├── daily.md                  # daily-brief synthesis prompt template
+│   ├── weekly.md                 # weekly-report synthesis prompt template
+│   ├── patreon.md                # one-post summary prompt template (Hungarian in, Hungarian out)
+│   ├── positions.md              # positions-tracker prompt template (NO-SIGNAL contract, §4.16)
+│   ├── verify-daily.md           # web-verification prompt template
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
+│   ├── list_telegram_topics.py   # one-off: print a forum group's topics + thread ids for TELEGRAM_*_THREAD_ID
 │   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
 │   ├── backfill_translate_hu.py  # one-shot: translate historical digests to Hungarian
 │   ├── pr_summary.py             # post-merge PR summary generator (also run by CI)
@@ -315,6 +330,12 @@ Every var below is read in `config.py`'s `Config.from_env`, except `CLAUDE_CONFI
 | `TELEGRAM_NOTIFY_CHAT_ID` | publish.py | target group/channel id, required when the bot token is set |
 | `TELEGRAM_NOTIFY_THREAD_ID` | publish.py, deliver.py | forum-topic thread id for window digests; `0` = group root (default `0`) |
 | `TELEGRAM_DAILY_THREAD_ID` | deliver.py | separate forum-topic thread id for daily briefs; unset falls back to `TELEGRAM_NOTIFY_THREAD_ID` with an INFO log |
+| `TELEGRAM_WEEKLY_THREAD_ID` | deliver.py | same, for the weekly report |
+| `TELEGRAM_PATREON_THREAD_ID` | deliver.py | same, for Patreon posts |
+| `TELEGRAM_POSITIONS_THREAD_ID` | deliver.py | same, for the positions tracker |
+| `POSITIONS_TG_CHANNELS` | main.py, positions.py, state.py | Telegram public-channel usernames (no `@`) claimed by the positions tracker instead of the window digest; empty = no Telegram half |
+| `POSITIONS_X_ACCOUNTS` | main.py, positions.py, state.py | X screen names (leading `@` optional) claimed the same way. Only ever matches if post notifications (the bell) are enabled for that account in the owner's X app — `collectors/x.py` fetches an account's timeline only when a notification names it, so a handle without the bell is an undetectable no-op |
+| `POSITIONS_KEYWORDS` | main.py, positions.py, state.py | free-text terms (min 4 chars, `_MIN_POSITIONS_KEYWORD_LEN`) matched case-insensitively as a substring of an item's text, claiming it from ANY source. The only membership axis that can misfire on an unrelated story, and the misfire is silent — see §4.16. **A `$` in a value must be doubled when the env file is read by Docker Compose**, which interpolates `env_file` values: `$FET` otherwise expands to empty and the keyword vanishes with no error (verified empirically; the homelab role's `digest.env.j2` does the doubling) |
 | `CLAUDE_CONFIG_DIR` | summarize.py (via `claude_subprocess_env`) | points the `claude` CLI at its persisted config/credentials dir so the Max-subscription login survives across runs; read directly from the process environment, not part of `Config` |
 
 ### 4.8 `collectors/rss.py` ("news")
@@ -344,6 +365,23 @@ Owns getting an already-recorded digest out across its three independent channel
 ### 4.14 `digest/publish.py`
 
 The site and Telegram channels, both thin stdlib-urllib HTTP calls, kept in one module since they share the same markdown-derived summary helpers (`extract_tldr`, `count_sections`, `has_needs_attention`). `publish_to_site` PUTs a digest (markdown, pre-rendered sanitized HTML, TL;DR, section count, `has_attention`, `kind`, plus the Hungarian fields when a translation exists) to `SITE_PUBLISH_URL`'s ingest endpoint, authenticated via `SITE_INGEST_KEY`. `send_telegram_tldr` posts a short plain-text TL;DR (never Telegram's Markdown parse mode — a single unescaped character there would 400 the whole message) plus an inline "Open the digest" button linking to `{SITE_PUBLIC_BASE}/d/{digest_id}`, to `TELEGRAM_NOTIFY_CHAT_ID` — thread-routed by digest `kind` (`TELEGRAM_NOTIFY_THREAD_ID` for window digests, `TELEGRAM_DAILY_THREAD_ID` for daily briefs, falling back to the window thread when unset). Both raise on failure and never retry internally — `deliver.py` is the retry boundary. Neither ever logs a bot token, ingest key, or response body — only a status code or exception type name.
+
+### 4.15 `digest/patreon.py`
+
+Builds the per-post prompt (`prompts/patreon.md`) and invokes `claude -p`, reusing `summarize.py`'s `run_claude`/`validate_output`. Two things diverge from every other kind. ONE POST, ONE DIGEST: every other kind summarizes many items into one document, this summarizes one post into one document, so a run produces as many digests as there were new posts — which is what makes "one Telegram message per post" fall out of the existing delivery loop instead of needing a parallel one. NO TRANSLATION PASS: the source is already Hungarian, so the prompt produces Hungarian directly. Like `summarize_daily` and unlike `translate_digest`, it does NOT soft-fail. Invoked by `main.py`'s `run_patreon` on its own hourly timer, outside the window → daily → weekly cascade. Its items are excluded from the window sweep structurally via `state.py`'s `_SELF_DELIVERED_SOURCES`.
+
+### 4.16 `digest/positions.py`
+
+The projects the owner holds a position in, tracked in their own Telegram topic on their own 4-hourly clock (`python -m digest positions`, `main.py`'s `run_positions`). Replaces what used to be a reserved 30-slot `positions` lane in `allocate_by_source` plus a standing portfolio rule in `prompts/digest.md`; both are gone, and those items no longer appear in the window, daily or weekly briefs at all.
+
+Three parts:
+
+- **Membership.** Three axes, OR-ed. `is_positions_item` claims an item whose url starts with one of `POSITIONS_TG_CHANNELS`' `https://t.me/<name>/` prefixes; or whose `source` is `x` and whose `author` is one of `POSITIONS_X_ACCOUNTS`; or whose text contains one of `POSITIONS_KEYWORDS` case-insensitively. The first two are SOURCE-based and take whole channels and accounts; the third is CONTENT-based and is what pulls the project's news out of a general crypto channel or a news feed rather than leaving it in the briefing. THE KEYWORD AXIS' ERROR COST IS ASYMMETRIC: a false positive removes a story from the window briefing, and if the tracker then judges that window immaterial the item is absorbed as a `positions-quiet` record — so an over-broad term makes unrelated stories vanish from every channel, silently. Precision is bought at the config layer, by length-flooring entries at 4 characters and documenting that they must be cashtags or distinctive proper names, never a bare `ASI` or `FET` (`basic` contains `asi`; `feta` contains `fet`). A false negative merely leaves the story in the briefing, where it already was. The SQL twin, `state.py`'s `positions_match_sql`, is the single source of truth: `get_unsummarized_items` negates it and `get_unsummarized_positions_items` asserts it, so the two pools are exact complements BY CONSTRUCTION. That property is load-bearing in both directions — an item matched by both is delivered twice into two topics, and an item matched by neither sits unread until `prune_stale_unsummarized` deletes it 14 days later. The LIKE prefixes carry an explicit `ESCAPE`, because `_` is a LIKE wildcard and Telegram usernames routinely contain one (`ASI_Alliance` would otherwise also match `asixalliance`).
+- **Silence.** `prompts/positions.md`'s first instruction is a materiality decision: announcements, delivery milestones, tokenomics/governance, listings, roadmap changes, or a genuine shift in what informed holders argue about — otherwise emit the bare `NO-SIGNAL` sentinel. `summarize_positions` returns `None` for that, and the run delivers nothing and exits 0. This is what makes a 4-hourly cadence over high-volume community chat readable rather than noise. A quiet window's items are still CONSUMED (`main.py`'s `_absorb_quiet_window`, `kind='positions-quiet'`): at ~51 items per interval, leaving them unclaimed would put ~900 items in one prompt after a three-day quiet stretch and keep the stale-backlog WARNING lit throughout. Continuity is preserved at digest level instead, via `get_recent_positions_digests` over a 72h window (longer than the briefing's 24h precisely because this kind is expected to stay silent).
+- **Length.** The prompt asks for 200-350 words and says why: the whole update is delivered as ONE Telegram message, and `split_for_telegram`'s 3800-char threshold (a margin under Telegram's own 4096 hard cap) is reached at roughly 360 words once the inline source links are counted — seven of them spend ~300 characters. Past that the message becomes a numbered reply chain, which reads worse and doubles the exposure to the 429 behaviour behind `docs/incidents/2026-08-06-telegram-flood.md`; a chain that fails partway is a `TelegramPartialSend`, marked sent to avoid duplicating the delivered parts and reported as a run failure. There is deliberately NO code-level word cap: `validate_output` stays structural-only, for the reason its own docstring gives at length — hard-gating stylistic compliance against a model that can legitimately vary its wording is the failure mode this repo already lived through once. `split_for_telegram` is the backstop, not the contract.
+- **Its own message shape.** The tracker is never published to the site — that would broadcast the owner's portfolio — so `publish.send_telegram_tracker` sends the WHOLE body into the topic with citations kept as inline urls, rather than `send_telegram_tldr`'s two sentences plus a button to a site page that was never created.
+
+The run collects its own Telegram channels (a tracker that only summarizes what the window run happened to fetch would be a 6-hourly tracker wearing a 4-hourly timer) but deliberately never collects X: every extra scheduled contact with the unofficial, cookie-authenticated client raises the ban risk of §8. X material can therefore be up to one window (6h) stale here while Telegram is at most one interval (4h) stale.
 
 ## 5. Summarization prompt design
 

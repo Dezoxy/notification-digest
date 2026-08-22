@@ -1282,34 +1282,89 @@ def commit_new_items(
         raise
 
 
-def get_unsummarized_items(conn: sqlite3.Connection, limit: int | None = None) -> list[Item]:
-    """Return items not yet attached to a digest, ordered by fetched_at ascending.
+def _like_escape(value: str) -> str:
+    """Escape LIKE's own wildcards so a prefix matches literally.
 
-    `limit`, when given, caps the number of rows returned to the `limit`
-    OLDEST unsummarized items (fetched_at ASC is unaffected -- the bound is
-    applied via `LIMIT ?` after ordering, not by changing the order). This
-    lets a caller drain a large backlog in bounded batches across multiple
-    runs instead of loading everything at once (see digest/main.py's
-    _MAX_ITEMS_PER_DIGEST).
+    Load-bearing, not hygiene theatre: Telegram usernames routinely contain
+    underscores (`ASI_Alliance`), and `_` is LIKE's single-character
+    wildcard. Without this, `lower(url) LIKE 'https://t.me/asi_alliance/%'`
+    also matches `https://t.me/asixalliance/123` -- a lookalike channel
+    whose items would be silently routed into the owner's positions tracker
+    and, by the complement rule in `positions_match_sql`, silently removed
+    from the window briefing at the same time.
 
-    `_SELF_DELIVERED_SOURCES` are excluded outright -- see that constant.
-    Their items are delivered by their own pipeline into their own topic,
-    and sweeping them in here would deliver each one a second time inside
-    the window briefing.
+    Callers must pair this with an explicit `ESCAPE '\\'` clause; the
+    backslash is not a default escape character in SQLite's LIKE.
     """
-    excluded = tuple(sorted(_SELF_DELIVERED_SOURCES))
-    placeholders = ",".join("?" for _ in excluded)
-    query = f"""
-        SELECT source, source_id, chat_id, chat_title, author, text, url, fetched_at, embed_url
-        FROM items
-        WHERE digest_id IS NULL AND source NOT IN ({placeholders})
-        ORDER BY fetched_at ASC
-        """
-    params: tuple[object, ...] = excluded
-    if limit is not None:
-        query += " LIMIT ?"
-        params = (*excluded, limit)
-    rows = conn.execute(query, params).fetchall()
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def positions_match_sql(
+    positions_tg_prefixes: Sequence[str] = (),
+    positions_x_handles: Sequence[str] = (),
+    positions_keywords: Sequence[str] = (),
+) -> tuple[str, list[str]]:
+    """Build the ONE SQL condition that defines "this item belongs to the positions tracker".
+
+    Returns `(condition_sql, params)`. THE SINGLE SOURCE OF TRUTH for
+    positions membership on the SQL side: `get_unsummarized_items` negates
+    it, `get_unsummarized_positions_items` asserts it, and the two are
+    therefore exact complements by construction rather than by two
+    hand-written predicates staying in sync. That property is load-bearing
+    in both directions -- an item matched by both queries is summarized
+    twice and delivered into two different Telegram topics, and an item
+    matched by neither sits with `digest_id IS NULL` until
+    `prune_stale_unsummarized` deletes it 14 days later, unread and
+    unreported. digest/positions.py's `is_positions_item` is the in-memory
+    twin of this condition, held to it by a test.
+
+    Three membership axes, OR-ed. `positions_tg_prefixes` are lowercase
+    `https://t.me/<username>/` forms, `positions_x_handles` lowercase bare
+    screen names, and `positions_keywords` lowercase free-text terms matched
+    as a substring of the item's own text -- exactly what
+    digest/positions.py's three normalizers produce. Raw config strings must
+    not be passed here: casing differences would match nothing, which
+    presents as a permanently quiet channel rather than as an error.
+
+    The first two axes are SOURCE-based and match whole channels/accounts.
+    The third is CONTENT-based and reaches into every other source, which is
+    what lets a story about the project be claimed out of a general news
+    feed or an unrelated crypto channel. It is also the only axis that can
+    misfire on an unrelated story, which is why config length-floors its
+    entries -- see Config.positions_keywords.
+
+    With ALL empty (no positions feature configured) the condition is the
+    literal `0`. That is the correct degenerate case in both directions:
+    `NOT (0)` leaves the window sweep matching everything exactly as it did
+    before this feature existed, and `(0)` makes the positions claim match
+    nothing, so an unconfigured deployment behaves as though this module's
+    queries were never added.
+    """
+    clauses: list[str] = []
+    params: list[str] = []
+    for prefix in positions_tg_prefixes:
+        clauses.append("lower(url) LIKE ? ESCAPE '\\'")
+        params.append(f"{_like_escape(prefix)}%")
+    if positions_x_handles:
+        placeholders = ",".join("?" for _ in positions_x_handles)
+        clauses.append(f"(source = 'x' AND lower(author) IN ({placeholders}))")
+        params.extend(positions_x_handles)
+    for keyword in positions_keywords:
+        # Substring, not word-boundary: SQLite's LIKE has no \b, and the
+        # alternatives (GLOB, a REGEXP extension, padding the column) each
+        # fail on ordinary punctuation -- "$FET." and "($FET)" are exactly
+        # the forms these terms appear in. Precision is bought at the config
+        # layer instead, by requiring distinctive terms long enough not to
+        # occur inside ordinary words (Config.positions_keywords).
+        clauses.append("lower(text) LIKE ? ESCAPE '\\'")
+        params.append(f"%{_like_escape(keyword)}%")
+    if not clauses:
+        return "0", []
+    return "(" + " OR ".join(clauses) + ")", params
+
+
+def _rows_to_items(rows: Sequence[Sequence[object]]) -> list[Item]:
+    """Map `_ITEM_COLUMNS` rows to Items. Shared by every unsummarized-item reader."""
     return [
         Item(
             source=row[0],
@@ -1324,6 +1379,93 @@ def get_unsummarized_items(conn: sqlite3.Connection, limit: int | None = None) -
         )
         for row in rows
     ]
+
+
+_ITEM_COLUMNS = "source, source_id, chat_id, chat_title, author, text, url, fetched_at, embed_url"
+
+
+def get_unsummarized_items(
+    conn: sqlite3.Connection,
+    limit: int | None = None,
+    positions_tg_prefixes: Sequence[str] = (),
+    positions_x_handles: Sequence[str] = (),
+    positions_keywords: Sequence[str] = (),
+) -> list[Item]:
+    """Return items not yet attached to a digest, ordered by fetched_at ascending.
+
+    `limit`, when given, caps the number of rows returned to the `limit`
+    OLDEST unsummarized items (fetched_at ASC is unaffected -- the bound is
+    applied via `LIMIT ?` after ordering, not by changing the order). This
+    lets a caller drain a large backlog in bounded batches across multiple
+    runs instead of loading everything at once (see digest/main.py's
+    _MAX_ITEMS_PER_DIGEST).
+
+    `_SELF_DELIVERED_SOURCES` are excluded outright -- see that constant.
+    Their items are delivered by their own pipeline into their own topic,
+    and sweeping them in here would deliver each one a second time inside
+    the window briefing.
+
+    Positions items are excluded on the SAME principle but through a
+    different mechanism: they are not a distinct `source` (a positions item
+    IS a telegram or x item -- see `positions_match_sql`), so they are
+    excluded by negating that shared condition rather than by source name.
+    Passing neither positions argument disables the exclusion entirely,
+    which is what every caller that predates the positions tracker relies
+    on; digest/main.py's window path always passes both.
+    """
+    excluded = tuple(sorted(_SELF_DELIVERED_SOURCES))
+    placeholders = ",".join("?" for _ in excluded)
+    positions_sql, positions_params = positions_match_sql(
+        positions_tg_prefixes, positions_x_handles, positions_keywords
+    )
+    query = f"""
+        SELECT {_ITEM_COLUMNS}
+        FROM items
+        WHERE digest_id IS NULL
+          AND source NOT IN ({placeholders})
+          AND NOT {positions_sql}
+        ORDER BY fetched_at ASC
+        """
+    params: tuple[object, ...] = (*excluded, *positions_params)
+    if limit is not None:
+        query += " LIMIT ?"
+        params = (*params, limit)
+    return _rows_to_items(conn.execute(query, params).fetchall())
+
+
+def get_unsummarized_positions_items(
+    conn: sqlite3.Connection,
+    positions_tg_prefixes: Sequence[str] = (),
+    positions_x_handles: Sequence[str] = (),
+    positions_keywords: Sequence[str] = (),
+) -> list[Item]:
+    """Return unsummarized positions items only, oldest first -- the tracker's claim query.
+
+    The exact complement of `get_unsummarized_items`' own exclusion (see
+    `positions_match_sql`), so the window briefing and the positions tracker
+    partition the unsummarized pool between them with no overlap and no gap.
+
+    No `limit` parameter, deliberately, unlike `get_unsummarized_items`: the
+    window digest's limit exists to drain a shared backlog in bounded
+    batches across many runs, whereas this pipeline has no competing lanes
+    to be fair to and a bounded prompt is enforced one level up, at prompt
+    build time, where dropping the OLDEST rather than the newest is the
+    right call (digest/positions.py's `select_items`). A `LIMIT` here would
+    silently make that choice the opposite way.
+    """
+    positions_sql, positions_params = positions_match_sql(
+        positions_tg_prefixes, positions_x_handles, positions_keywords
+    )
+    rows = conn.execute(
+        f"""
+        SELECT {_ITEM_COLUMNS}
+        FROM items
+        WHERE digest_id IS NULL AND {positions_sql}
+        ORDER BY fetched_at ASC
+        """,
+        positions_params,
+    ).fetchall()
+    return _rows_to_items(rows)
 
 
 def count_unsummarized_items(conn: sqlite3.Connection) -> int:
@@ -2476,6 +2618,45 @@ def get_recent_digests(conn: sqlite3.Connection, since_iso: str) -> list[tuple[s
     rows = conn.execute(
         "SELECT created_at, body_md FROM digests "
         "WHERE created_at >= ? AND kind = 'window' ORDER BY created_at DESC",
+        (since_iso,),
+    ).fetchall()
+    return [(row[0], row[1]) for row in rows]
+
+
+def get_recent_positions_digests(conn: sqlite3.Connection, since_iso: str) -> list[tuple[str, str]]:
+    """Return (created_at, body_md) for positions digests at/after `since_iso`, newest first.
+
+    The positions tracker's own continuity feed -- the same "running story
+    memory" `get_recent_digests` provides the window briefing, scoped to
+    `kind = 'positions'` and NOTHING else. The scoping is a correctness
+    constraint, not tidiness, in both directions:
+
+    - A window digest must never appear here. Since the clean cut (see
+      digest/positions.py's module docstring) the window briefing no longer
+      carries positions news at all, so treating its headings as "already
+      reported" would suppress a story the reader has genuinely never seen.
+    - A positions digest must never appear in `get_recent_digests`, which
+      is why that function's own `kind = 'window'` filter -- written for the
+      daily brief -- already excludes these rows for free.
+
+    Callers pass a LONGER lookback than the window briefing's 24 hours (see
+    digest/main.py's `_POSITIONS_COVERAGE_HOURS`). The tracker is expected
+    to stay silent through quiet windows, so a 24h horizon can easily
+    contain zero prior digests and leave it with no idea what it has
+    already told the reader -- exactly when the delta rule matters most.
+
+    Delivery state is deliberately ignored, matching `get_recent_digests`:
+    a row still pending resend either reaches the reader on the next run's
+    retry pass or already has, so its headings are just as much "already
+    covered" either way.
+    """
+    rows = conn.execute(
+        """
+        SELECT created_at, body_md
+        FROM digests
+        WHERE created_at >= ? AND kind = 'positions'
+        ORDER BY created_at DESC
+        """,
         (since_iso,),
     ).fetchall()
     return [(row[0], row[1]) for row in rows]

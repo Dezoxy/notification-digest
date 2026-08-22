@@ -932,7 +932,6 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     def fake_select_items_for_prompt(
         items,
         budget,
-        positions_channels,
         failed_sources,
         recent_coverage,
         max_prompt_bytes,

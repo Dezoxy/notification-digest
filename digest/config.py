@@ -170,6 +170,47 @@ class Config:
     # -- mirroring news_feeds' empty-means-disabled shape (there is no sane
     # default channel list), NOT a separate on/off flag.
     positions_tg_channels: tuple[str, ...] = ()
+    # X screen names whose posts belong to the positions tracker alongside
+    # positions_tg_channels above -- the X half of the same lane. Bare
+    # handles, with or without a leading `@` (POSITIONS_X_ACCOUNTS=Fetch_ai,
+    # @ASI_Alliance); matched case-insensitively against an item's `author`,
+    # which digest/collectors/x.py sets to the tweet author's screen_name.
+    #
+    # These accounts' posts only reach the database at all if the owner has
+    # POST NOTIFICATIONS (the bell) enabled for them on X: the X collector's
+    # phase 2 fetches an account's own timeline only when a content-
+    # aggregate notification names it (digest/collectors/x.py, "Phase 2").
+    # Listing an account here without the bell on is not an error and not
+    # detectable from inside this service -- it simply never matches
+    # anything. That is a deploy-time checklist item, recorded in
+    # .env.example beside this variable.
+    #
+    # Empty tuple = no X half, exactly like positions_tg_channels' own
+    # empty-means-unconfigured shape; the tracker runs on Telegram alone.
+    positions_x_accounts: tuple[str, ...] = ()
+    # Free-text terms that pull an item into the positions tracker from ANY
+    # source -- the third and last membership axis, alongside the two
+    # source-based ones above. Matched as a case-insensitive SUBSTRING of an
+    # item's text, so a Watcher Guru message or an FT article about the
+    # project is claimed by the tracker even though that channel is not
+    # itself a positions source.
+    #
+    # THE ERROR COST HERE IS ASYMMETRIC, which is why entries must be
+    # DISTINCTIVE and are length-floored at _MIN_POSITIONS_KEYWORD_LEN. A
+    # false positive does not merely misfile a story: the item leaves the
+    # window briefing, and if the tracker then judges that window immaterial
+    # it is absorbed as a quiet-window record -- so an over-broad keyword can
+    # make unrelated stories disappear from every channel silently. A false
+    # negative just leaves the story in the main briefing, which is where it
+    # already was.
+    #
+    # So: cashtags (`$FET`) and distinctive proper names (`SingularityNET`,
+    # `Fetch.ai`, `Artificial Superintelligence Alliance`) -- never a bare
+    # `ASI` or `FET`, which are substrings of ordinary words ("basic"
+    # contains "asi"; "feta" contains "fet").
+    #
+    # Empty tuple = no keyword axis; the tracker then claims by source only.
+    positions_keywords: tuple[str, ...] = ()
     # How old an unsummarized item must get before digest/main.py's `_deliver`
     # logs a `stale_backlog` WARNING naming its source. Purely a reporting
     # threshold -- nothing schedules, retries, or fails on it, and the run's
@@ -297,6 +338,20 @@ class Config:
     # "unset" sentinel and main.py falls back to telegram_notify_thread_id
     # with an INFO log.
     telegram_patreon_thread_id: int | None = None
+    # Forum topic for the positions tracker (digest/main.py's
+    # `run_positions`) -- the owner's dedicated "ASI Summary" topic. Same
+    # shape and fallback as the three thread ids directly above: 0 is a
+    # legitimate "post to the group root" value, so None is the only honest
+    # "unset" sentinel, and main.py falls back to telegram_notify_thread_id
+    # with an INFO log rather than a ConfigError.
+    #
+    # Falling back rather than erroring matters MORE here than for the other
+    # kinds: the positions tracker is the ONLY kind whose items are removed
+    # from the window briefing (see digest/positions.py). A ConfigError on a
+    # host that never set this would take the whole run down, and those
+    # items would sit unclaimed until the 14-day prune -- so an unset topic
+    # degrades to "delivered to the group root", never to "not delivered".
+    telegram_positions_thread_id: int | None = None
     # Reddit collector (digest/collectors/reddit.py). Like x_enabled/
     # polymarket_enabled, this is an explicit on/off flag rather than an
     # empty-means-disabled sentinel -- REDDIT_SUBREDDITS has no natural
@@ -442,6 +497,8 @@ class Config:
         )
         news_feeds = _optional_url_tuple("NEWS_FEEDS")
         positions_tg_channels = _optional_tg_channel_tuple("POSITIONS_TG_CHANNELS")
+        positions_x_accounts = _optional_x_handle_tuple("POSITIONS_X_ACCOUNTS")
+        positions_keywords = _optional_keyword_tuple("POSITIONS_KEYWORDS")
         stale_backlog_warn_hours = _optional_positive_int("STALE_BACKLOG_WARN_HOURS", default=24)
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
@@ -519,6 +576,9 @@ class Config:
         telegram_daily_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_DAILY_THREAD_ID")
         telegram_weekly_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_WEEKLY_THREAD_ID")
         telegram_patreon_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_PATREON_THREAD_ID")
+        telegram_positions_thread_id = _optional_nonnegative_int_or_none(
+            "TELEGRAM_POSITIONS_THREAD_ID"
+        )
         patreon_campaign_id = os.environ.get("PATREON_CAMPAIGN_ID", "").strip()
         patreon_session_cookie = _optional_secret("PATREON_SESSION_COOKIE") or ""
         if patreon_campaign_id and not patreon_session_cookie:
@@ -573,6 +633,8 @@ class Config:
             verify_daily_effort=verify_daily_effort,
             news_feeds=news_feeds,
             positions_tg_channels=positions_tg_channels,
+            positions_x_accounts=positions_x_accounts,
+            positions_keywords=positions_keywords,
             stale_backlog_warn_hours=stale_backlog_warn_hours,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,
@@ -600,6 +662,7 @@ class Config:
             telegram_daily_thread_id=telegram_daily_thread_id,
             telegram_weekly_thread_id=telegram_weekly_thread_id,
             telegram_patreon_thread_id=telegram_patreon_thread_id,
+            telegram_positions_thread_id=telegram_positions_thread_id,
             patreon_campaign_id=patreon_campaign_id,
             patreon_session_cookie=patreon_session_cookie,
         )
@@ -811,6 +874,15 @@ def _optional_url_tuple(name: str) -> tuple[str, ...]:
 
 
 _TG_CHANNEL_NAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+# X screen names: 1-15 characters, letters/digits/underscore only -- X's own
+# published constraint, and deliberately NARROWER than it looks safe to be,
+# for the reason _TG_CHANNEL_NAME_RE is: an entry that cannot possibly be a
+# real handle would otherwise match nothing at runtime and present as an
+# account that never posts. A leading "@" is stripped before matching (see
+# _optional_x_handle_tuple) rather than rejected -- the owner copies these
+# out of X, where they carry the @, and refusing that is friction with no
+# safety payoff.
+_X_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 
 
 def _optional_tg_channel_tuple(name: str) -> tuple[str, ...]:
@@ -838,6 +910,75 @@ def _optional_tg_channel_tuple(name: str) -> tuple[str, ...]:
                 "(letters, digits, underscore; 5-32 chars; no @ or t.me/ prefix)"
             )
     return names
+
+
+def _optional_x_handle_tuple(name: str) -> tuple[str, ...]:
+    """Read an optional comma-separated list of X screen names, `@` allowed and stripped.
+
+    Unset or blank -> `()`, meaning "no X half of the positions lane" (see
+    Config.positions_x_accounts' own comment). Validated at startup for the
+    same reason _optional_tg_channel_tuple validates its own entries: these
+    handles are compared against scraped item authors, so a malformed entry
+    (a URL, an email, a display name with a space) would never match
+    anything and would present as an account that simply never posts --
+    indistinguishable, from the outside, from a correctly configured account
+    having a quiet week.
+
+    Handles are returned as written apart from the stripped `@`; the
+    lowercasing that makes matching case-insensitive happens at the
+    comparison boundary in digest/positions.py's `positions_x_handles`, not
+    here, so config keeps reporting back what the owner actually typed.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return ()
+    handles = tuple(p.strip().lstrip("@") for p in raw.split(",") if p.strip().lstrip("@"))
+    for handle in handles:
+        if not _X_HANDLE_RE.match(handle):
+            raise ConfigError(
+                f"{name} entries must be bare X screen names "
+                "(letters, digits, underscore; 1-15 chars; a leading @ is allowed)"
+            )
+    return handles
+
+
+# Shortest accepted POSITIONS_KEYWORDS entry. Four, not three, and the
+# difference is not cosmetic: "asi" is a substring of "basic", "quasi" and
+# "Asia", and "fet" of "feta" and "fetch" -- a three-character keyword would
+# claim ordinary stories out of the briefing and, on an immaterial window,
+# make them vanish entirely (see Config.positions_keywords). Four still
+# admits the cashtag forms that matter ("$FET", "$ASI") while excluding
+# every bare-word form that does the damage.
+_MIN_POSITIONS_KEYWORD_LEN = 4
+
+
+def _optional_keyword_tuple(name: str) -> tuple[str, ...]:
+    """Read an optional comma-separated list of positions-tracker keywords.
+
+    Unset or blank -> `()`, meaning "claim by source only" (see
+    Config.positions_keywords). Entries keep their original case here;
+    matching lowercases both sides at the comparison boundary
+    (digest/positions.py's `positions_keyword_terms`), so config keeps
+    reporting back what the owner actually typed.
+
+    A comma is the separator, so a keyword cannot contain one -- no keyword
+    worth having does. Entries shorter than `_MIN_POSITIONS_KEYWORD_LEN` are
+    a ConfigError rather than a warning: the failure they cause is silent
+    and destructive (see that constant), so it has to surface at startup,
+    not as an unexplained gap in a briefing weeks later.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return ()
+    keywords = tuple(part.strip() for part in raw.split(",") if part.strip())
+    for keyword in keywords:
+        if len(keyword) < _MIN_POSITIONS_KEYWORD_LEN:
+            raise ConfigError(
+                f"{name} entries must be at least {_MIN_POSITIONS_KEYWORD_LEN} characters "
+                f"({keyword!r} is too short) -- short terms match inside ordinary words "
+                "and would silently pull unrelated stories out of the briefing"
+            )
+    return keywords
 
 
 def _optional_url(name: str, *, default: str) -> str:

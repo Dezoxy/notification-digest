@@ -155,6 +155,8 @@ _TLDR_MARKER_RE = re.compile(r"^\*\*TL;DR:?\*\*:?\s*", re.IGNORECASE)
 # never the fuller CommonMark forms that module's allowlist-enforcement
 # pass has to defend against on arbitrary model output.
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# Same shape, but CAPTURING the url, for _plain_text(keep_link_urls=True).
+_MARKDOWN_LINK_WITH_URL_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
 
 # Superscript-digit citation markers (prompts/digest.md's `[¹](url)` style
 # citations) -- identical character class to digest/emailer.py's
@@ -199,7 +201,7 @@ class TelegramSendError(Exception):
         self.status = status
 
 
-def _plain_text(text: str) -> str:
+def _plain_text(text: str, keep_link_urls: bool = False) -> str:
     """Reduce a short markdown snippet to plain text: links/emphasis stripped, citations dropped.
 
     `[text](url)` becomes `text`; a citation whose entire visible text is
@@ -227,11 +229,24 @@ def _plain_text(text: str) -> str:
     a regex that only matches a genuine `*...*` PAIR (never a lone `*`) is
     safe to apply unconditionally.
 
+    `keep_link_urls` (default False, i.e. every existing caller unchanged)
+    renders `[text](url)` as `text (url)` instead of dropping the url. Only
+    the positions tracker sets it: its prompt REQUIRES a citation on every
+    claim, where the Patreon and TL;DR contracts forbid links outright, so
+    for that one caller the url is the payload rather than noise to strip.
+
     Otherwise intentionally narrow, not a general markdown-to-plaintext
     converter, since the TL;DR sentence the prompt contract produces never
     contains anything else link- or emphasis-shaped beyond what's handled
     here.
     """
+    if keep_link_urls:
+        # `[text](url)` -> `text (url)`. Telegram auto-links a bare URL in
+        # plain text, so the citation stays tappable without a parse_mode --
+        # see render_post_text's `keep_link_urls` for who needs this and why.
+        text = _MARKDOWN_LINK_WITH_URL_RE.sub(
+            lambda m: f"{m.group(1)} ({m.group(2)})" if m.group(1).strip() else m.group(2), text
+        )
     text = _MARKDOWN_LINK_RE.sub(lambda m: m.group(1), text)
     text = text.replace("**", "").replace("__", "")
     text = _SINGLE_EMPHASIS_RE.sub(r"\1", text)
@@ -1133,7 +1148,7 @@ def split_for_telegram(text: str, limit: int = _TELEGRAM_TEXT_LIMIT) -> list[str
     return chunks
 
 
-def render_post_text(body_md: str) -> str:
+def render_post_text(body_md: str, keep_link_urls: bool = False) -> str:
     """Flatten one post's briefing markdown into the plain text Telegram receives.
 
     Sent as PLAIN TEXT for the identical reason `send_telegram_tldr`
@@ -1151,6 +1166,10 @@ def render_post_text(body_md: str) -> str:
     collapses to its visible text via `_plain_text` -- the prompt forbids
     links, but a model that emits one anyway must not leak a bare URL into
     a message whose whole point is that the links are buttons.
+
+    `keep_link_urls` (default False) flips that last rule for the positions
+    tracker, whose message has no buttons at all and whose prompt requires
+    a citation per claim: there the url is the point. See `_plain_text`.
     """
     lines: list[str] = []
     for raw in body_md.strip().splitlines():
@@ -1168,7 +1187,7 @@ def render_post_text(body_md: str) -> str:
             # case a future regex change stops eating it.
             line = _TLDR_MARKER_RE.sub("TL;DR: ", line, count=1)
             line = re.sub(r"TL;DR:\s+", "TL;DR: ", line, count=1)
-        lines.append(_plain_text(line))
+        lines.append(_plain_text(line, keep_link_urls))
 
     text = "\n".join(lines).strip()
     # Collapse the runs of blank lines the reduction above can leave behind.
@@ -1183,6 +1202,64 @@ def _button(text: str, url: str) -> dict[str, str]:
     if len(text) > _BUTTON_TEXT_LIMIT:
         text = text[: _BUTTON_TEXT_LIMIT - 1] + "…"
     return {"text": text, "url": url}
+
+
+def _send_as_reply_chain(
+    parts: list[str],
+    keyboard: list[list[dict[str, str]]] | None,
+    bot_token: str,
+    chat_id: str,
+    thread_id: int,
+    timeout_seconds: int,
+) -> None:
+    """Send `parts` as one reply chain, numbering them when there is more than one.
+
+    Shared by `send_telegram_post` and `send_telegram_tracker` -- both send a
+    WHOLE briefing into a topic (unlike `send_telegram_tldr`, which sends one
+    short paragraph plus a site link and so never chains). Extracted rather
+    than duplicated because the partial-send contract below is subtle enough
+    that two copies would drift.
+
+    `keyboard`, when given, rides on the LAST part only: buttons are the call
+    to action after reading, and repeating them mid-thread invites tapping
+    away before the summary is finished. `None` means no buttons at all --
+    the positions tracker's shape, where every citation is already an inline
+    url in the text and there is no off-message destination to offer.
+
+    Failure contract, load-bearing for the caller's retry decision: if the
+    FIRST part fails, `TelegramSendError` propagates -- nothing landed, so a
+    later run can retry the whole thing cleanly with no risk of duplication.
+    If a LATER part fails, `TelegramPartialSend` is raised instead, because
+    part 1 is already sitting in the topic and a retry would re-send it.
+    """
+    reply_to: int | None = None
+    for index, part in enumerate(parts):
+        text = part if len(parts) == 1 else f"{part}\n\n({index + 1}/{len(parts)})"
+
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            # A preview card would duplicate a button directly beneath it
+            # (Patreon), or blow one arbitrary citation up into a card at the
+            # end of the message (the tracker). Neither is wanted.
+            "disable_web_page_preview": True,
+        }
+        if keyboard and index == len(parts) - 1:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        if thread_id:
+            # Explicit 0 is an invalid thread id to Telegram, not "no
+            # thread" -- see send_telegram_tldr's own note. Omit the key.
+            payload["message_thread_id"] = thread_id
+        if reply_to is not None:
+            payload["reply_to_message_id"] = reply_to
+
+        try:
+            sent_id = _send_message(payload, bot_token, timeout_seconds)
+        except TelegramSendError as exc:
+            if index == 0:
+                raise
+            raise TelegramPartialSend(index, len(parts), status=exc.status) from None
+        reply_to = sent_id
 
 
 def send_telegram_post(
@@ -1225,37 +1302,46 @@ def send_telegram_post(
     if embed_url:
         keyboard.append([_button("▶ Videó megtekintése", embed_url)])
 
-    reply_to: int | None = None
-    for index, part in enumerate(parts):
-        is_last = index == len(parts) - 1
-        text = part if len(parts) == 1 else f"{part}\n\n({index + 1}/{len(parts)})"
+    _send_as_reply_chain(parts, keyboard, bot_token, chat_id, thread_id, timeout_seconds)
 
-        payload: dict[str, Any] = {
-            "chat_id": chat_id,
-            "text": text,
-            # A preview card for the Patreon URL would duplicate the button
-            # directly beneath it, and for a YouTube embed it would render a
-            # second, larger thumbnail of the same video.
-            "disable_web_page_preview": True,
-        }
-        # Buttons ride on the LAST part only: they are the call to action
-        # after reading, and repeating them mid-thread invites tapping away
-        # before the summary is finished.
-        if is_last:
-            payload["reply_markup"] = {"inline_keyboard": keyboard}
-        if thread_id:
-            # Explicit 0 is an invalid thread id to Telegram, not "no
-            # thread" -- see send_telegram_tldr's own note. Omit the key.
-            payload["message_thread_id"] = thread_id
-        if reply_to is not None:
-            payload["reply_to_message_id"] = reply_to
 
-        try:
-            sent_id = _send_message(payload, bot_token, timeout_seconds)
-        except TelegramSendError as exc:
-            if index == 0:
-                # Nothing landed -- an ordinary failure the caller can retry
-                # cleanly, with no risk of duplicating anything.
-                raise
-            raise TelegramPartialSend(index, len(parts), status=exc.status) from None
-        reply_to = sent_id
+def send_telegram_tracker(
+    body_md: str,
+    created_at: str,
+    bot_token: str,
+    chat_id: str,
+    thread_id: int,
+    timeout_seconds: int = 30,
+) -> None:
+    """POST one positions-tracker update to Telegram. Raises TelegramSendError on failure.
+
+    A third sibling of `send_telegram_tldr`/`send_telegram_post`, and for the
+    reason that pattern already establishes: WHERE THE CONTENT LIVES decides
+    the message shape.
+
+    - A window digest's home is the news site, so `send_telegram_tldr` sends
+      one paragraph and links there.
+    - A Patreon post's home is the post, so `send_telegram_post` sends the
+      summary with an off-site button.
+    - A positions update has NO home but this message. The tracker is never
+      published to the site (that would broadcast the owner's portfolio --
+      digest/main.py's `_POSITIONS_HIDDEN_CHANNELS`), so there is nothing to
+      link to and nothing to open. Sending a TL;DR-plus-button here would
+      hand the reader two sentences and a button to a page that does not
+      exist. The WHOLE body goes into the topic instead.
+
+    That is also exactly what the feature is for: the owner reads the
+    project's progress in the topic without opening X or Telegram's own
+    channels, so the message has to be self-contained.
+
+    Citations survive as inline urls (`render_post_text(keep_link_urls=True)`)
+    rather than becoming buttons: the tracker's prompt requires a source on
+    every claim, which is far more links than a keyboard can carry, and
+    Telegram auto-links a bare url in plain text. Plain text, no parse_mode,
+    for the identical reason its two siblings document at length -- a parse
+    mode rejects the whole message over one unescaped character in model
+    output that was never asked to produce Telegram-flavored markdown.
+    """
+    header = _local_header_label(created_at)
+    parts = split_for_telegram(f"{header}\n\n{render_post_text(body_md, keep_link_urls=True)}")
+    _send_as_reply_chain(parts, None, bot_token, chat_id, thread_id, timeout_seconds)
