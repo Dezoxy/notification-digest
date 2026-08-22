@@ -31,6 +31,7 @@ from digest.publish import (
     publish_to_site,
     send_telegram_post,
     send_telegram_tldr,
+    send_telegram_tracker,
 )
 from digest.state import (
     get_all_arc_contexts,
@@ -380,7 +381,7 @@ class TelegramRunState:
 
 
 def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
-    """Pick the Telegram forum-topic thread id for a digest's `kind` ("window"/"daily"/"weekly").
+    """Pick the Telegram forum-topic thread id for a digest's `kind`.
 
     A "daily" digest goes to `cfg.telegram_daily_thread_id` when the owner
     configured one -- a separate topic so daily briefs don't interleave with
@@ -392,9 +393,10 @@ def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
     topic every digest used before the daily-brief feature existed -- and
     logs an INFO line noting the fallback, since a single-topic deployment
     is a valid, unremarkable configuration, not a misconfiguration worth a
-    WARNING or ConfigError. Every other `kind` (currently only "window")
-    always uses `cfg.telegram_notify_thread_id` unconditionally; there are
-    only two non-default kinds to special-case today.
+    WARNING or ConfigError. A "positions" digest follows the identical
+    pattern via `cfg.telegram_positions_thread_id` -- the owner's dedicated
+    tracker topic. Every other `kind` (currently only "window") always uses
+    `cfg.telegram_notify_thread_id` unconditionally.
     """
     if kind == "patreon":
         if cfg.telegram_patreon_thread_id is not None:
@@ -416,6 +418,13 @@ def _telegram_thread_id_for_kind(cfg: Config, kind: str) -> int:
         logger.info(
             "TELEGRAM_WEEKLY_THREAD_ID unset, falling back to the window digest's "
             "telegram thread for this weekly brief"
+        )
+    elif kind == "positions":
+        if cfg.telegram_positions_thread_id is not None:
+            return cfg.telegram_positions_thread_id
+        logger.info(
+            "TELEGRAM_POSITIONS_THREAD_ID unset, falling back to the window digest's "
+            "telegram thread for this positions update"
         )
     return cfg.telegram_notify_thread_id
 
@@ -507,6 +516,19 @@ def _deliver_telegram(
                 cfg.telegram_notify_chat_id,
                 _telegram_thread_id_for_kind(cfg, kind),
             )
+        elif kind == "positions":
+            # No site page exists for this kind (it is hidden -- publishing
+            # the owner's portfolio tracker is the one thing this feature
+            # must not do), so the TL;DR-plus-site-button shape below would
+            # ship a button to a 404. The whole body goes to the topic
+            # instead; see publish.send_telegram_tracker.
+            send_telegram_tracker(
+                body_md,
+                created_at,
+                cfg.telegram_notify_bot_token,
+                cfg.telegram_notify_chat_id,
+                _telegram_thread_id_for_kind(cfg, kind),
+            )
         else:
             send_telegram_tldr(
                 digest_id,
@@ -532,7 +554,7 @@ def _deliver_telegram(
                 "telegram rate limited (429) mid-chain; skipping remaining telegram sends this run"
             )
         logger.error(
-            "patreon digest %d only partially sent (%d/%d parts); marking sent to "
+            "digest %d only partially sent (%d/%d parts); marking sent to "
             "avoid duplicating the delivered parts on retry",
             digest_id,
             exc.parts_sent,

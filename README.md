@@ -22,18 +22,28 @@ Hacker News         ─┘                   digests)                   │   di
                                                                     └─> markdown archive
 ```
 
-Four run modes, each its own systemd timer on the VM (scheduling lives in the
+Each run mode has its own systemd timer on the VM (scheduling lives in the
 homelab repo, not here):
 
-| Mode | Command | Cadence | Input |
-|---|---|---|---|
-| window | `python -m digest` | every 6h | raw items |
-| daily | `python -m digest daily` | 20:30 Budapest | that day's window digests |
-| weekly | `python -m digest weekly` | Sun 21:45 Budapest | the week's daily briefs |
-| backfill/ops | `scripts/*.py` | manual | — |
+| Mode | Command | Cadence | Input | Telegram topic |
+|---|---|---|---|---|
+| window | `python -m digest` | every 6h | raw items | TL;DR |
+| daily | `python -m digest daily` | 20:30 Budapest | that day's window digests | daily |
+| weekly | `python -m digest weekly` | Sun 21:45 Budapest | the week's daily briefs | weekly |
+| patreon | `python -m digest patreon` | hourly | one paid post each | patreon |
+| positions | `python -m digest positions` | every 4h | raw items from the tracked channels/accounts | positions |
+| backfill/ops | `scripts/*.py` | manual | — | — |
 
-Each rung consumes the one below: the daily never sees raw items, and the
-weekly never sees anything but daily briefs.
+The first three form a cascade: each rung consumes the one below, so the
+daily never sees raw items and the weekly never sees anything but daily
+briefs.
+
+`patreon` and `positions` are NOT part of that cascade. Each owns its items
+end to end — collected, summarized and delivered into its own topic, and
+structurally excluded from the window sweep so nothing is ever covered
+twice. `positions` additionally stays SILENT when the window held only
+chatter (see `prompts/positions.md`), which is what lets it run every 4
+hours without becoming noise.
 
 Runs as a one-shot container (`docker compose run --rm digest`) on a systemd
 timer, not a long-running service.
@@ -64,7 +74,7 @@ deploy time and must never be committed or logged.
 | `STATE_DB_PATH` | SQLite state database (`./state.db`). |
 | `ARCHIVE_DIR` | Where markdown digest copies are archived (`./archive`). |
 
-**Collectors** — each is off unless enabled; `NEWS_FEEDS` and `POSITIONS_TG_CHANNELS` use an empty-means-disabled shape instead of a flag.
+**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `POSITIONS_TG_CHANNELS` and `POSITIONS_X_ACCOUNTS` use an empty-means-disabled shape instead of a flag.
 
 | Variable | Description |
 |---|---|
@@ -79,7 +89,8 @@ deploy time and must never be committed or logged.
 | `POLYMARKET_API_BASE` / `POLYMARKET_PROXY_KEY` | Endpoint and its key. **(secret)** |
 | `POLYMARKET_TOP_N` / `POLYMARKET_SWING_THRESHOLD` | How many markets, and the probability move that makes one notable. |
 | `HACKERNEWS_ENABLED` / `HACKERNEWS_TOP_N` | Hacker News front-page collector (`false`). |
-| `POSITIONS_TG_CHANNELS` | Telegram usernames (no `@`) routed to the reserved `positions` selection lane. |
+| `POSITIONS_TG_CHANNELS` | Telegram usernames (no `@`) claimed by the positions tracker instead of the window digest. |
+| `POSITIONS_X_ACCOUNTS` | X screen names (`@` optional) claimed the same way. **Requires post notifications (the bell) enabled for each account in the X app** — the collector only fetches an account's posts when a notification names it. |
 
 **Summarization**
 
@@ -112,6 +123,7 @@ deploy time and must never be committed or logged.
 | `TELEGRAM_NOTIFY_CHAT_ID` | Target chat/group. |
 | `TELEGRAM_NOTIFY_THREAD_ID` | Forum topic for window digests. |
 | `TELEGRAM_DAILY_THREAD_ID` / `TELEGRAM_WEEKLY_THREAD_ID` | Separate topics for the daily and weekly briefs; unset means they land in the window topic. |
+| `TELEGRAM_PATREON_THREAD_ID` / `TELEGRAM_POSITIONS_THREAD_ID` | Same, for the Patreon posts and the positions tracker. `0` is a real value (post to the group root), so unset is the only "not configured" state. |
 
 **Operations**
 

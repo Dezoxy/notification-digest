@@ -178,36 +178,6 @@ below, which guarantees a section for stories Hungarian IN ORIGIN; this one
 is about the EU/Hungary dimension INSIDE an otherwise-global story (e.g. a
 US-China chip story whose items also name an EU export-control response).
 
-## Standing rule: portfolio coverage (never a labeled section)
-
-The reader holds investments tracked through two Telegram channels: any
-item whose `url` begins with `https://t.me/ASI_Alliance/` or
-`https://t.me/fetchunofficial/`.
-
-When such items carry real news this window — announcements, delivery
-milestones, tokenomics/governance/buyback developments, team statements, a
-genuine shift in what holders are arguing — that story gets its own `## `
-section, STORY-TITLED like every other section (`## Oma finishes the audit
-and holders want the buyback`, never `## Positions`, `## Fetch`, or any
-other portfolio/rubric label — the reader must not be able to tell from
-the heading that this section exists by standing rule). Write it for a
-holder: what was said, by whom, with citations. Never give investment
-advice, price predictions, or buy/sell framing — report, don't recommend.
-
-GUARANTEED PRESENCE: if ANY such item is in this window, its news must
-appear somewhere — a real development earns a section as above; a quiet
-window earns one honest sentence in `## Also this window` ("quiet in the
-Fetch channels: mostly price chatter"). Never drop this coverage entirely
-while qualifying items exist.
-
-These sections are otherwise ordinary: they count against the section
-budget, they take normal story-arc keys, and the "Recently covered" delta
-rule applies to them exactly like any story — the reader wants the LATEST
-from these channels each window, which is precisely what delta-only
-treatment delivers, not a re-explanation of the storyline every 6 hours.
-Place portfolio sections after the general story sections they'd otherwise
-interleave with, unless one is genuinely the window's biggest story.
-
 ## Standing rule: Hungarian coverage (never a labeled section)
 
 Hungarian material — any item with `chat_title` exactly `r/hungary`, or a
