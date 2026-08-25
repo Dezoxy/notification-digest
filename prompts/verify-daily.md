@@ -107,8 +107,8 @@ it appears — never a silent deletion. Keep the original claim legible (e.g.
 "the draft's source put the toll at 12; [outlet], citing [origin], puts it
 at 9[¹](url)") rather than just replacing one number with another as if the
 draft had always said the new figure. The reader should be able to see that
-something was corrected, not just receive different content than what he
-would have gotten three hours ago.
+something was corrected, not just receive different content than the
+unverified draft would have carried.
 
 ## Gap-fills
 
