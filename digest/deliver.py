@@ -5,11 +5,15 @@ Owns getting an already-recorded digest out the door across its three
 channels (email, site, Telegram) -- summarizing and durably persisting a
 digest in the first place is main.py's job (see its `_deliver`/`run_daily`),
 this module only ever operates on a `digest_id` that already exists in the
-`digests` table. main.py's two run modes (`_deliver` for the 6-hourly window
-cycle, `run_daily` for the once-a-day brief) both compose `deliver_pending`
-and `deliver_channels` from here after producing a digest, threading their
-own `TelegramRunState` instance through both calls in the same run (see that
-class's docstring for why one shared instance per run matters).
+`digests` table. Every one of main.py's run modes (`_deliver` for the 6-hourly window cycle,
+`run_daily`, `run_weekly`, `run_patreon`, `run_positions`) composes
+`deliver_pending` and `deliver_channels` from here after producing a digest,
+threading its own `TelegramRunState` instance through both calls in the same
+run (see that class's docstring for why one shared instance per run
+matters). A window run may additionally pass a set of HIDDEN channels
+through from its `hide:` argv (see main.py's `_parse_hidden_channels`):
+those channels are skipped for the digest that run produces, and nothing
+else about the digest changes.
 """
 
 from __future__ import annotations

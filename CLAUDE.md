@@ -2,11 +2,14 @@
 
 Personal notification-digest service. Every 6 hours it collects new items from
 the owner's own Telegram groups (Telethon, MTProto user session) and own
-X/Twitter notifications (twikit, cookie session, unofficial API — ToS risk
-accepted by the owner), plus RSS/Reddit/Polymarket collectors, tracks state in
-SQLite, summarizes new items with the Claude CLI headless (`claude -p`), and
-delivers a structured digest with deep links. See PLAN.md for the full plan and
-current phase status.
+X/Twitter notifications (twifork — a maintained twikit fork that still imports
+as `twikit` — cookie session, unofficial API, ToS risk accepted by the owner),
+plus RSS/Reddit/Polymarket/Hacker News collectors, tracks state in SQLite,
+summarizes new items with the Claude CLI headless (`claude -p`), and delivers a
+structured digest with deep links. Two lanes run outside that cascade on their
+own timers and into their own Telegram topics: `patreon` (one paid post per
+message) and `positions` (the tracked-project tracker, silent when nothing
+material happened). See PLAN.md for the full plan and current phase status.
 
 Delivery is multi-channel (PR #25). On the real VM the live channels are a
 **Telegram TL;DR ping** and the **news site**; **email is disabled**

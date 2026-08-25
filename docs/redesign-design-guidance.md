@@ -11,6 +11,15 @@ Distilled from the second Codex redesign brief (2026-08-10, "round 2").
 Triaged: not everything in that brief was adopted — this is the part that
 survived triage, reorganized as principles.
 
+**Status (2026-08-25): historical, read with care.** §11.1, §11.2, §11.3 and
+§11.6 have all shipped, and the site's visual identity has since been
+REPLACED by the Front Page print-poster redesign (toom-edge #144 and the
+pass that followed it). The "Identity to preserve" section below therefore
+describes the pre-#144 wire-desk look, not the live site — check the current
+design against toom-edge itself before treating any of it as a constraint.
+The scanning/hierarchy principles and the anti-patterns at the end are
+design judgment rather than a description of the site, and still hold.
+
 ## Identity to preserve
 
 The shipped site already has an identity: dark charcoal background, subtle

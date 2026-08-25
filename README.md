@@ -7,19 +7,24 @@ digest every six hours. Delivery is multi-channel: a Telegram TL;DR ping and
 a published news-site entry are the live channels, and email — the original
 and still-implemented channel — is disabled on the owner's deployment.
 Telegram collection uses the official MTProto API (Telethon). X collection
-uses `twikit`, an unofficial scraper driven by a cookie session — this
-carries ToS and account-ban risk, which the owner has explicitly accepted.
+uses `twifork` (a maintained fork of the dead `twikit`, still imported as
+`twikit`), an unofficial scraper driven by a cookie session — this carries
+ToS and account-ban risk, which the owner has explicitly accepted.
 
 ## Architecture
 
 ```
 Telegram (Telethon) ─┐                                              ┌─> Telegram TL;DR ping
-X/Twitter (twikit)   │                                              │
+X/Twitter (twifork)  │                                              │
 RSS / news feeds     ├─> collectors ─> SQLite state ─> Claude ──────┼─> news site (D1 Worker)
-Reddit               │                  (items,        summarize    │
-Polymarket           │                   cursors,      + translate  ├─> SMTP email (implemented,
-Hacker News         ─┘                   digests)                   │   disabled on the deployment)
+Reddit               │                  (items, cursors, summarize  │
+Polymarket           │                    digests, deltas, + trans- ├─> SMTP email (implemented,
+Hacker News         ─┘                    arc keys/context)  late   │   disabled on the deployment)
                                                                     └─> markdown archive
+
+Patreon (own collector) ─┐
+Telegram/X/keyword       ├─> own run ─> Claude ─> its own Telegram topic
+  position matches ──────┘             (never the site — see below)
 ```
 
 Each run mode has its own systemd timer on the VM (scheduling lives in the
@@ -27,11 +32,11 @@ homelab repo, not here):
 
 | Mode | Command | Cadence | Input | Telegram topic |
 |---|---|---|---|---|
-| window | `python -m digest` | every 6h | raw items | TL;DR |
+| window | `python -m digest` | every 6h (00/06/12/18 UTC) | raw items | TL;DR |
 | daily | `python -m digest daily` | 20:30 Budapest | that day's window digests | daily |
 | weekly | `python -m digest weekly` | Sun 21:45 Budapest | the week's daily briefs | weekly |
-| patreon | `python -m digest patreon` | hourly | one paid post each | patreon |
-| positions | `python -m digest positions` | every 4h | raw items matching the tracked channels, accounts or keywords | positions |
+| patreon | `python -m digest patreon` | hourly (:50) | one paid post each | patreon |
+| positions | `python -m digest positions` | every 4h (:25) | raw items matching the tracked channels, accounts or keywords | positions |
 | backfill/ops | `scripts/*.py` | manual | — | — |
 
 The first three form a cascade: each rung consumes the one below, so the
@@ -44,6 +49,33 @@ structurally excluded from the window sweep so nothing is ever covered
 twice. `positions` additionally stays SILENT when the window held only
 chatter (see `prompts/positions.md`), which is what lets it run every 4
 hours without becoming noise.
+
+### Run-mode arguments
+
+```
+python -m digest                       # window run, all channels
+python -m digest hide:telegram         # window run, no Telegram ping
+python -m digest hide:telegram,site    # window run, stored + archived only
+python -m digest daily --force         # bypass the daily duplicate-fire guard
+```
+
+`hide:<channel>` (`email`, `site`, `telegram`, comma-separated) produces and
+stores the digest exactly as normal — the row, its stamped items, the archive
+copy and every downstream consumer are untouched — and only suppresses the
+reader-facing channel. `hide:site` without `hide:telegram` is rejected at
+startup: the Telegram TL;DR links to the digest's own site page, so hiding
+only the site would ship a real ping pointing at a page that was never
+published. It is accepted on the window path only.
+
+Which runs use it is a homelab scheduling decision, not this repo's: the VM
+splits the 6-hourly window into three timers — 06/12 UTC plain, 00 UTC
+`hide:telegram` (no 2am Budapest ping, but the site still carries overnight
+news for morning readers), and 18 UTC `hide:telegram,site` (the 20:30 daily
+brief republishes that same window 30 minutes later).
+
+`--force` is the owner's manual escape hatch past `run_daily`'s duplicate-fire
+guard, for a deliberate second daily run on the same day. It is read only
+alongside `daily`.
 
 Runs as a one-shot container (`docker compose run --rm digest`) on a systemd
 timer, not a long-running service.
@@ -74,7 +106,7 @@ deploy time and must never be committed or logged.
 | `STATE_DB_PATH` | SQLite state database (`./state.db`). |
 | `ARCHIVE_DIR` | Where markdown digest copies are archived (`./archive`). |
 
-**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `POSITIONS_TG_CHANNELS` and `POSITIONS_X_ACCOUNTS` use an empty-means-disabled shape instead of a flag.
+**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `PATREON_*`, `POSITIONS_TG_CHANNELS`, `POSITIONS_X_ACCOUNTS` and `POSITIONS_KEYWORDS` use an empty-means-disabled shape instead of a flag.
 
 | Variable | Description |
 |---|---|
@@ -88,7 +120,8 @@ deploy time and must never be committed or logged.
 | `POLYMARKET_ENABLED` | Polymarket collector switch (`false`). |
 | `POLYMARKET_API_BASE` / `POLYMARKET_PROXY_KEY` | Endpoint and its key. **(secret)** |
 | `POLYMARKET_TOP_N` / `POLYMARKET_SWING_THRESHOLD` | How many markets, and the probability move that makes one notable. |
-| `HACKERNEWS_ENABLED` / `HACKERNEWS_TOP_N` | Hacker News front-page collector (`false`). |
+| `HACKERNEWS_ENABLED` / `HACKERNEWS_TOP_N` | Hacker News front-page collector (`false`) and how many front-page stories per run (`15`, range 1–30). No auth. |
+| `PATREON_CAMPAIGN_ID` / `PATREON_SESSION_COOKIE` | Patreon collector, used only by the `patreon` run mode. Enabled iff **both** are set — setting exactly one is a startup error, not a half-disabled collector. The cookie is the owner's own `session_id` for a paid account. **(secret)** |
 | `POSITIONS_TG_CHANNELS` | Telegram usernames (no `@`) claimed by the positions tracker instead of the window digest. |
 | `POSITIONS_X_ACCOUNTS` | X screen names (`@` optional) claimed the same way. **Requires post notifications (the bell) enabled for each account in the X app** — the collector only fetches an account's posts when a notification names it. |
 | `POSITIONS_KEYWORDS` | Free-text terms (min 4 chars) that claim an item from **any** source, so the project's news is pulled out of general channels and feeds too. Keep them distinctive — cashtags and proper names, never a bare `ASI`/`FET`; an over-broad term can make unrelated stories vanish from every channel. |
@@ -107,7 +140,7 @@ deploy time and must never be committed or logged.
 | `VERIFY_DAILY_TIMEOUT_SECONDS` / `VERIFY_DAILY_MAX_WEB_OPS` | Its budget (`600`) and its self-policed tool-call guidance (`20`). |
 | `VERIFY_DAILY_MODEL` / `VERIFY_DAILY_EFFORT` | Default to `ANTHROPIC_MODEL` / `CLAUDE_EFFORT`. |
 | `CONTEXT_ENABLED` | Story-arc context primers, generated after the daily brief ships (`false`). |
-| `CONTEXT_MAX_PER_RUN` / `CONTEXT_MODEL` / `CONTEXT_TIMEOUT_SECONDS` | Primer bounds (`sonnet`, `120`). |
+| `CONTEXT_MAX_PER_RUN` / `CONTEXT_MODEL` / `CONTEXT_TIMEOUT_SECONDS` | Primer bounds: calls per daily run (`3`), model (`sonnet`), timeout (`120`). |
 
 **Delivery** — the app refuses to start with every channel disabled.
 
@@ -193,8 +226,11 @@ Ansible role `myapps`, secrets wiring via Azure Key Vault) happens from there.
 
 ## Status
 
-In production on the owner's VM. The window, daily, and weekly modes all run
-on their own systemd timers; the live delivery channels are the Telegram
-TL;DR ping and the news site, with email implemented but disabled there.
+In production on the owner's VM. All five run modes — window (three timers,
+two of them `hide:`-suppressed), daily, weekly, patreon and positions — are on
+their own systemd timers; the live delivery channels are the Telegram TL;DR
+ping and the news site, with email implemented but disabled there. Hungarian
+translation, the daily verification pass and story-arc context primers are all
+enabled on that deployment, though each defaults off here.
 See PLAN.md for the phased plan and per-phase progress.
 `docs/pr-summaries/` is auto-generated on merge (see `.github/workflows/pr-summary.yml`) — don't hand-edit it.
