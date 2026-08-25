@@ -47,9 +47,16 @@ CREATE TABLE IF NOT EXISTS digests (
     telegram_sent   INTEGER NOT NULL DEFAULT 0,
     body_md         TEXT NOT NULL,
     body_md_hu      TEXT,
-    -- 'window' (the every-6-hours item digest, the only kind that ever
-    -- existed before the daily-brief feature) or 'daily' (the once-a-day
-    -- synthesis of a day's worth of window digests, digest/daily.py).
+    -- Which run produced this digest. 'window' (the every-6-hours item
+    -- digest, the only kind that existed when this column was added),
+    -- 'daily' (the once-a-day synthesis of a day's window digests,
+    -- digest/daily.py), 'weekly' (the once-a-week synthesis of the week's
+    -- daily briefs, digest/weekly.py), 'patreon' (ONE paid post, one
+    -- digest, digest/patreon.py), 'positions' (the tracked-project update,
+    -- digest/positions.py) and 'positions-quiet' (the bookkeeping row a
+    -- silent positions run writes to CONSUME an immaterial window's items
+    -- without delivering anything -- see digest/main.py's
+    -- `_absorb_quiet_window`).
     -- DEFAULT 'window' means every pre-existing row -- every digest this
     -- codebase ever created before this column existed -- is correctly
     -- classified as a window digest, with no separate backfill needed.

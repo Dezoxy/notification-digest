@@ -585,9 +585,10 @@ def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> st
     config.py), not `max`: the owner authenticates via a Max subscription
     (no per-token billing), so the real cost of a higher effort level isn't
     money, it's a bigger bite out of that subscription's shared usage
-    limits -- paid on every one of the 8 unattended runs this job makes per
-    day, forever, for a `max`-vs-`high` difference the A/B found was not
-    perceptible in the output. Timing is a non-issue either way: `high`
+    limits -- paid on every one of the unattended runs this job makes per
+    day (4 window runs, plus the daily, the weekly, and the hourly/4-hourly
+    patreon and positions lanes), forever, for a `max`-vs-`high` difference
+    the A/B found was not perceptible in the output. Timing is a non-issue either way: `high`
     measured ~81s against the 300s CLAUDE_TIMEOUT_SECONDS default, nowhere
     close to that budget. The value is still config-driven (CLAUDE_EFFORT)
     rather than hardcoded, so it can be turned up temporarily (e.g. to
@@ -914,15 +915,15 @@ _STANDING_RUBRIC_HEADINGS = frozenset({_NEEDS_ATTENTION_HEADING})
 # format_recent_coverage caps the number of "recently covered" lines it will
 # ever render, regardless of how many digests or headings are available.
 # This is a hard ceiling on how much of the prompt budget the coverage block
-# can consume: at 24h of history and an 8-section-ish briefing every 6 hours,
-# a healthy run produces on the order of 4 runs * ~8 headings = ~32 candidate
-# lines even before the "Needs attention" skip -- comfortably under this cap.
-# It was NOT comfortable while the timer ran 3-hourly: the same math gave
-# 8 runs * ~8 = ~64, which pressed against the cap on any ordinary day. The
-# cap deliberately stays 50 anyway, because what it defends against did not
-# get any rarer with the cadence -- an unusually busy day, or a pathological
-# run that emits far more headings than the prompt's own ~8-section budget
-# asks for, could still make this block grow open-endedly. 50 keeps the
+# can consume: at 24h of history and a ~10-section briefing every 6 hours, a
+# healthy run produces on the order of 4 runs * ~10 headings = ~40 candidate
+# lines even before the "Needs attention" skip -- under this cap, though not
+# by much. It was NOT comfortable while the timer ran 3-hourly: the same math
+# gave 8 runs * ~8 = ~64, which pressed against the cap on any ordinary day.
+# The cap deliberately stays 50 anyway, because what it defends against did
+# not get any rarer with the cadence -- an unusually busy day, or a
+# pathological run that emits far more headings than the prompt's own
+# ~10-section budget asks for, could still make this block grow open-endedly. 50 keeps the
 # coverage block bounded and cheap relative to _MAX_PROMPT_BYTES's other
 # consumers (items, collector status) without needing to special-case why a
 # particular day's history was unusually large.
