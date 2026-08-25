@@ -87,6 +87,26 @@ stores and serves whatever the app sends.
   their unfiltered appearance in the All view, badged the same way a daily
   row is.
 
+## Routes
+
+The URL grammar is `/t/:token/(hu/)?(daily/|weekly/)?(w/YYYY-Www/)?` for index and
+digest pages, plus the standalone `search`, `a/:slug`, and `about` endpoints. The
+language segment always comes first; `worker.js`'s file header is the authoritative
+list.
+
+| Route | Serves |
+| --- | --- |
+| `GET /robots.txt` | Disallow-everything. The only route needing no token. |
+| `PUT /ingest/:id` | Upsert a digest. Requires the `x-ingest-key` header. |
+| `GET /t/:token/` | Index, all kinds, newest first, grouped by day. `hu/` prefix for Hungarian chrome throughout. |
+| `GET /t/:token/daily/`, `/weekly/` | Same index filtered to that `kind` only; prev/next on digest pages stays within the kind. |
+| `GET /t/:token/w/2026-W32/` | One ISO week's ledger (Monday-start, Europe/Budapest). |
+| `GET /t/:token/d/:id` | A single digest. |
+| `GET /t/:token/search?q=` | FTS5 full-text search over the whole archive. Also backs the index filter box via `?fragment=1`. |
+| `GET /t/:token/a/:slug` | Story-arc page — every digest carrying that arc identity, reconstructed at request time. |
+| `GET /t/:token/about` | Static explainer for anyone the capability link is shared with. |
+| anything else | Plain `404`, wrong token included. |
+
 ## Deploy
 
 ```bash
@@ -145,6 +165,8 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | `0004-source-counts.sql` | `source_counts`, `failed_sources` (nullable) on `digests`, for the ingest v2 source-spectrum micro-bar and degraded-run badge. |
 | `0005-fts-search.sql` | `digests_fts`, an external-content FTS5 virtual table over `tldr`/`body_md`/`tldr_hu`/`body_md_hu` plus its sync triggers and a one-time `rebuild` backfill, for the archive search route. |
 | `0006-topics.sql` | `topics` (nullable) on `digests`, for the ingest v3 story-arc line. |
+| `0007-deltas.sql` | `deltas` (nullable) on `digests`, for ingest v4 delta persistence — the digest page's "What changed" block and the arc page's per-appearance previously/now line. |
+| `0008-arc-context.sql` | `arc_context`, a new table (not a column) holding one durable background primer per *arc identity*, pushed as an optional `arc_contexts` field on ingest. |
 
 ## Key rotation
 
@@ -466,3 +488,42 @@ Steps 1–7 (and the site side of step 8) shipped 2026-08-09: migrations
 public-endpoint smoke test passed. The digest-repo step merged as
 notification-digest PR #56 and rides that repo's own release train. Still deferred, unchanged:
 PWA/offline (the capability-token-in-persistent-storage wrinkle stands).
+
+## Since roadmap 4 (PLAN.md §11)
+
+Roadmaps 1–4 above are a closed historical record. Work after them is tracked in
+the digest service's `PLAN.md` (**that lives in the `notification-digest` repo,
+not here** — the `PLAN.md §11.x` citations in `schema.sql`, `worker.js`, and the
+`migrations/` headers all point there). What has shipped on the site side:
+
+- **Story arcs** (§11.1) — arc pages at `a/:slug` reconstructed at request time by
+  scanning `digests.topics` (JSON1 `json_each`); a `NOW` section on the
+  current-week index showing the top active arcs; inline per-section "story so
+  far" links from a digest's own headings into the arcs they continue. Briefs stay
+  the single source of truth — arcs are a read-time view, never stored.
+- **Stable arc identity** — topics gained an optional per-entry `key`. Identity is
+  `key` when present, else `slug`, applied everywhere a story is grouped, linked,
+  or counted. Rows stored before this keep their slug identity, so old `/a/<slug>`
+  URLs resolve forever; this is additive, not a migration.
+- **Delta persistence** (§11.3, migration `0007`) — an optional `deltas` array per
+  digest, rendering the "What changed" block on digest pages and the
+  previously/now line on each arc appearance. Deltas stay keyed on each digest's
+  own `slug`, deliberately, because the app matches a delta to a heading *within*
+  one digest, never across the arc.
+- **Context primers** (§11.6, migration `0008`) — one durable background explainer
+  per arc in the `arc_context` table, upserted alongside a normal ingest.
+  `context_md` is untrusted model output: this Worker has no markdown renderer and
+  renders it as escaped plain-text paragraphs, never HTML.
+- **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
+  fence's `localStorage` stamp.
+- **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
+  palette, j/k list navigation, and an Archive nav link.
+- **Settings and reading** — a settings bubble holding the three-state theme
+  toggle, text size, ledger density, and a Sans | Serif body-font toggle; a Front
+  Page print-poster stylesheet; an About page for anyone the capability link gets
+  shared with.
+
+The execution contract from roadmaps 1–4 still holds: single-file Worker, inline
+CSS, no external requests, EN/HU parity, both themes, a working no-JS baseline,
+and the trust-model headers stay load-bearing. Still deferred, unchanged:
+PWA/offline — the capability token would end up in a persisted, cached artifact.
