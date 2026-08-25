@@ -6,11 +6,16 @@ but `current_user_can_view` false and empty bodies), which is the case the
 collector exists to distinguish. No network is touched: `_fetch_page` is
 the module's only external edge and is monkeypatched, mirroring how
 CLAUDE.md requires the Telegram and X collectors to be mocked.
+
+The one field NOT copied verbatim from that observation is `published_at`
+-- see `_recent_published_at` below for why a fixture timestamp that feeds
+an age comparison has to move with the clock.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -40,6 +45,26 @@ BODY_DOC = json.dumps(
 )
 
 
+def _recent_published_at(days_ago: float = 1) -> str:
+    """A `published_at` `days_ago` in the past, in Patreon's own observed format.
+
+    `collect()` drops anything older than `_MAX_POST_AGE_DAYS` (30) measured
+    against `datetime.now(UTC)` at call time, so a fixed literal here is a
+    time bomb: every `collect()` test below would keep passing until the
+    literal aged past the cutoff and then fail together, for a reason that
+    has nothing to do with the behavior under test. The literal this
+    replaced ("2026-08-20T20:46:04.000+00:00") would have detonated on
+    2026-09-19.
+
+    The FORMAT is still copied verbatim from the real response -- the
+    millisecond `.000` and the explicit `+00:00` offset are part of what
+    these fixtures exist to pin, so they are reproduced rather than left to
+    `isoformat()`'s own rendering.
+    """
+    stamp = datetime.now(UTC) - timedelta(days=days_ago)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+
+
 def make_post(
     post_id="167226458", can_view=True, body=BODY_DOC, title="Megszólalt a kripto harang"
 ):
@@ -49,7 +74,7 @@ def make_post(
         "attributes": {
             "title": title,
             "content_json_string": body,
-            "published_at": "2026-08-20T20:46:04.000+00:00",
+            "published_at": _recent_published_at(),
             "url": f"https://www.patreon.com/kriptovadasz/posts/megszolalt-{post_id}",
             "post_type": "poll",
             "current_user_can_view": can_view,

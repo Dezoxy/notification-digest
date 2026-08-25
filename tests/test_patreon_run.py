@@ -8,6 +8,8 @@ and both are monkeypatched -- per CLAUDE.md, tests never reach the network.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from digest import main as digest_main
@@ -31,6 +33,22 @@ def make_item(source_id: str, embed_url: str | None = None) -> Item:
 
 
 SUMMARY = "## Cím\n\n**TL;DR:** Összefoglaló.\n\n- Pont egy.\n"
+
+
+def _recent_created_at(hours_ago: float = 1) -> str:
+    """An ISO8601 UTC created_at `hours_ago` in the past, relative to the real wall clock.
+
+    Never a fixed literal for a digest a test expects to be DELIVERED:
+    digest/deliver.py's `_deliver_telegram` GUARD 1 (`_TELEGRAM_MAX_AGE`,
+    24h) compares `created_at` against `datetime.now(UTC)` at call time, so
+    a literal silently ages out of the window and the test starts failing
+    for a reason unrelated to what it covers -- which is exactly what
+    happened here: a literal `2026-08-21T16:00:00+00:00` passed on the day
+    it was written and began failing 24 hours later, because the guard
+    returned True before the partial-send branch under test was ever
+    reached. Mirrors tests/test_main.py's helper of the same name.
+    """
+    return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
 
 
 @pytest.fixture
@@ -273,7 +291,7 @@ class TestPartialSendBreaker:
 
         state = TelegramRunState()
         ok = _deliver_telegram(
-            conn, cfg, 1, "## x", "2026-08-21T16:00:00+00:00", state, kind="patreon"
+            conn, cfg, 1, "## x", _recent_created_at(), state, kind="patreon"
         )
 
         assert ok is False
