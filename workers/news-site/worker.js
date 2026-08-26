@@ -281,7 +281,8 @@ export default {
     const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?d\/(\d+)$/);
     if (digestMatch && request.method === "GET") {
       const lang = digestMatch[2] ? "hu" : "en";
-      const view = digestMatch[3] === "daily/" ? "daily" : digestMatch[3] === "weekly/" ? "weekly" : "all";
+      const view =
+        digestMatch[3] === "daily/" ? "daily" : digestMatch[3] === "weekly/" ? "weekly" : "all";
       return handleDigestPage(env, digestMatch[1], digestMatch[4], url, lang, view);
     }
 
@@ -325,10 +326,13 @@ export default {
     // `w/YYYY-Www/` — the digest-page regex above stays untouched, digest
     // pages have no week address (prev/next crosses week boundaries
     // invisibly, unchanged). Root index (no w/ segment) = the current week.
-    const indexMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/);
+    const indexMatch = path.match(
+      /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/,
+    );
     if (indexMatch && request.method === "GET") {
       const lang = indexMatch[2] ? "hu" : "en";
-      const view = indexMatch[3] === "daily/" ? "daily" : indexMatch[3] === "weekly/" ? "weekly" : "all";
+      const view =
+        indexMatch[3] === "daily/" ? "daily" : indexMatch[3] === "weekly/" ? "weekly" : "all";
       let weekParam = null;
       if (indexMatch[4] !== undefined) {
         const year = Number(indexMatch[4]);
@@ -586,7 +590,6 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
     };
   }
 
-
   // NOW section (§11.1 PR B, "homepage becomes NOW"): only queried on the
   // page that will actually render it — the CURRENT-week ALL view, no w/
   // segment (weekParam === null implies effective === current, see above,
@@ -639,7 +642,7 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
       url.hostname,
       lang,
       view,
-        weekInfo,
+      weekInfo,
       nowArcs,
       nowMs,
       showCatchup,
@@ -703,8 +706,12 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
         // other renderer here applies (renderDegradedBadge, renderSourceKey);
         // a wrong-shaped entry must drop out, not render "undefined".
         const wellFormed = parsed.filter(
-          (t) => t !== null && typeof t === "object" && !Array.isArray(t) &&
-            typeof t.slug === "string" && typeof t.label === "string",
+          (t) =>
+            t !== null &&
+            typeof t === "object" &&
+            !Array.isArray(t) &&
+            typeof t.slug === "string" &&
+            typeof t.label === "string",
         );
         if (wellFormed.length > 0) topics = wellFormed;
       }
@@ -776,7 +783,8 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
   // SQLite row-value comparison ((created_at, id) < (?, ?)) does the tuple
   // compare/tiebreak in one expression — supported since SQLite 3.15, and
   // D1's SQLite is far newer.
-  const kindFilter = view === "daily" ? " AND kind = 'daily'" : view === "weekly" ? " AND kind = 'weekly'" : "";
+  const kindFilter =
+    view === "daily" ? " AND kind = 'daily'" : view === "weekly" ? " AND kind = 'weekly'" : "";
   const [older, newer] = await Promise.all([
     env.DB.prepare(
       `SELECT id, created_at FROM digests WHERE (created_at, id) < (?, ?)${kindFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -1091,11 +1099,7 @@ function validateDigestPayload(payload) {
   ) {
     return { ok: false, error: "created_at must be a valid date string" };
   }
-  if (
-    typeof tldr !== "string" ||
-    tldr.length === 0 ||
-    byteLength(tldr) > MAX_TLDR_BYTES
-  ) {
+  if (typeof tldr !== "string" || tldr.length === 0 || byteLength(tldr) > MAX_TLDR_BYTES) {
     return { ok: false, error: "tldr must be a non-empty string within size limits" };
   }
   if (!Number.isInteger(item_count) || item_count < 0) {
@@ -1104,11 +1108,7 @@ function validateDigestPayload(payload) {
   if (!Number.isInteger(section_count) || section_count < 0) {
     return { ok: false, error: "section_count must be a non-negative integer" };
   }
-  if (
-    typeof has_attention !== "boolean" &&
-    has_attention !== 0 &&
-    has_attention !== 1
-  ) {
+  if (typeof has_attention !== "boolean" && has_attention !== 0 && has_attention !== 1) {
     return { ok: false, error: "has_attention must be a boolean" };
   }
   if (
@@ -1147,8 +1147,7 @@ function validateDigestPayload(payload) {
   if (huFieldsPresent !== 0 && huFieldsPresent !== 3) {
     return {
       ok: false,
-      error:
-        "tldr_hu, body_html_hu, and body_md_hu must all be present or all absent",
+      error: "tldr_hu, body_html_hu, and body_md_hu must all be present or all absent",
     };
   }
   const huEnabled = huFieldsPresent === 3;
@@ -1326,7 +1325,10 @@ function validateTopics(value) {
     }
     const { slug, label, key, ...rest } = entry;
     if (Object.keys(rest).length > 0) {
-      return { ok: false, error: "each topics entry must have exactly slug, label, and the optional key" };
+      return {
+        ok: false,
+        error: "each topics entry must have exactly slug, label, and the optional key",
+      };
     }
     if (typeof slug !== "string" || !TOPIC_SLUG_RE.test(slug)) {
       return { ok: false, error: `topics has an invalid slug: "${slug}"` };
@@ -1418,7 +1420,10 @@ function validateDeltas(value) {
       now.trim().length < 1 ||
       now.trim().length > DELTA_TEXT_MAX_LEN
     ) {
-      return { ok: false, error: `deltas["${slug}"].now must be 1-${DELTA_TEXT_MAX_LEN} characters` };
+      return {
+        ok: false,
+        error: `deltas["${slug}"].now must be 1-${DELTA_TEXT_MAX_LEN} characters`,
+      };
     }
     normalized.push({ slug, previously: previously.trim(), now: now.trim() });
   }
@@ -1735,7 +1740,11 @@ function weekBoundsUtc(year, week) {
   const start = mondayOfIsoWeek(year, week);
   const end = mondayOfIsoWeek(year, week + 1);
   return {
-    startIso: budapestMidnightUtcIso(start.getUTCFullYear(), start.getUTCMonth() + 1, start.getUTCDate()),
+    startIso: budapestMidnightUtcIso(
+      start.getUTCFullYear(),
+      start.getUTCMonth() + 1,
+      start.getUTCDate(),
+    ),
     endIso: budapestMidnightUtcIso(end.getUTCFullYear(), end.getUTCMonth() + 1, end.getUTCDate()),
   };
 }
@@ -4113,9 +4122,7 @@ function pageChrome(
   // (owner follow-up); brandParts' rest/tld tail is unused here.
   const { first } = brandParts(host);
   const strings = STRINGS[lang];
-  const prefetchLinkHtml = prefetchHref
-    ? `<link rel="prefetch" href="${esc(prefetchHref)}">`
-    : "";
+  const prefetchLinkHtml = prefetchHref ? `<link rel="prefetch" href="${esc(prefetchHref)}">` : "";
   // Scroll-to-top FAB for every page that is not a digest (owner-requested:
   // "on a main page where there is no button I want an up button"). The
   // digest page renders its own .backfab — an arrow BACK to the index, which
@@ -6356,7 +6363,13 @@ function renderNowSection(nowArcs, strings, token, lang, nowMs) {
       // the arrow entirely on the null/dormant case rather than guessing —
       // same fail-safe contract as renderArcPage's own momentumSegment.
       const arrow =
-        arc.momentum === "up" ? "↑" : arc.momentum === "down" ? "↓" : arc.momentum === "same" ? "→" : "";
+        arc.momentum === "up"
+          ? "↑"
+          : arc.momentum === "down"
+            ? "↓"
+            : arc.momentum === "same"
+              ? "→"
+              : "";
       const meta = formatRelativeTime(new Date(arc.lastSeen), strings.locale, nowMs);
       // data-arc-slug / data-last-seen (§11.2): rendering attributes, not
       // server state — the catch-up banner's client script (the unread-fence
@@ -6427,7 +6440,11 @@ function renderIndexPage(
 ) {
   const strings = STRINGS[lang];
   const emptyMessage =
-    view === "daily" ? strings.noDailyBriefs : view === "weekly" ? strings.noWeeklyBriefs : strings.noDigests;
+    view === "daily"
+      ? strings.noDailyBriefs
+      : view === "weekly"
+        ? strings.noWeeklyBriefs
+        : strings.noDigests;
 
   // Current-week-only features (roadmap 3 step 3): the lead card, pulse
   // strip, and prefetch hint below all imply "this is what's happening
@@ -6555,13 +6572,7 @@ ${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}
   // when handleIndexPage ran the query (current-week all view — see there);
   // renderNowSection itself also fails safe to "" on an empty array, so this
   // stays a no-op on every other view/week without a second gate here.
-  const nowHtml = renderNowSection(
-    nowArcs,
-    strings,
-    token,
-    lang,
-    nowMs,
-  );
+  const nowHtml = renderNowSection(nowArcs, strings, token, lang, nowMs);
 
   // Catch-up banner (§11.2): a hidden shell, same "data-* carrier" contract
   // as paletteConfigHtml/the filter input above — no content
@@ -7181,8 +7192,14 @@ function renderArcPage(identity, appearances, token, host, lang, nowMs, contextM
       "{n}",
       String(appearances.length),
     ),
-    strings.arcFirstSeen.replace("{date}", formatShortDate(new Date(first.created_at), strings.locale)),
-    strings.arcUpdated.replace("{t}", formatRelativeTime(new Date(latest.created_at), strings.locale, nowMs)),
+    strings.arcFirstSeen.replace(
+      "{date}",
+      formatShortDate(new Date(first.created_at), strings.locale),
+    ),
+    strings.arcUpdated.replace(
+      "{t}",
+      formatRelativeTime(new Date(latest.created_at), strings.locale, nowMs),
+    ),
     momentumSegment,
   ]
     .filter(Boolean)
@@ -7348,10 +7365,9 @@ function renderSearchPage(results, q, token, host, lang) {
       // Count line reuses the existing `.empty` muted-metadata style — same
       // "borrow the closest existing thing" approach as the rest of this
       // feature, rather than adding a new CSS class for one line of text.
-      const countLabel = (results.length === 1 ? strings.searchResultsOne : strings.searchResults).replace(
-        "{n}",
-        String(results.length),
-      );
+      const countLabel = (
+        results.length === 1 ? strings.searchResultsOne : strings.searchResults
+      ).replace("{n}", String(results.length));
       const items = results.map((row) => renderSearchResult(row, token, lang)).join("\n");
       resultsHtml = `<p class="empty">${esc(countLabel)}</p>\n${items}`;
     }

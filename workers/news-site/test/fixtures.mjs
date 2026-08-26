@@ -90,10 +90,12 @@ export const DIGESTS = [
     section_count: 3,
     has_attention: 0,
     body_html: BODY_235,
-    body_md: "## Markets slide continues\nEquities extended losses.\n## EU agrees new package\nSigned overnight.\n## Chip export rules tighten\nNext quarter.",
+    body_md:
+      "## Markets slide continues\nEquities extended losses.\n## EU agrees new package\nSigned overnight.\n## Chip export rules tighten\nNext quarter.",
     tldr_hu: "A piacok második napja estek, az EU-csomag megszületett.",
     body_html_hu: BODY_235_HU,
-    body_md_hu: "## Folytatódik a piaci esés\nTovább estek.\n## Az EU új csomagot fogadott el\nÉjjel aláírva.\n## Szigorodnak a chipexport-szabályok\nJövő negyedévtől.",
+    body_md_hu:
+      "## Folytatódik a piaci esés\nTovább estek.\n## Az EU új csomagot fogadott el\nÉjjel aláírva.\n## Szigorodnak a chipexport-szabályok\nJövő negyedévtől.",
     kind: "window",
     source_counts: JSON.stringify({ telegram: 5, x: 4, rss: 3 }),
     failed_sources: JSON.stringify(["polymarket"]),
@@ -113,7 +115,8 @@ export const DIGESTS = [
     section_count: 2,
     has_attention: 0,
     body_html: BODY_234,
-    body_md: "## Markets slide, day two\nAccelerated into the close.\n## Energy prices steady\nAbove the seasonal norm.",
+    body_md:
+      "## Markets slide, day two\nAccelerated into the close.\n## Energy prices steady\nAbove the seasonal norm.",
     tldr_hu: null,
     body_html_hu: null,
     body_md_hu: null,

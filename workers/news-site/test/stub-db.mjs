@@ -13,8 +13,16 @@
 import { DIGESTS, ARC_CONTEXTS, ARC_IDENTITY } from "./fixtures.mjs";
 
 const LIST_COLUMNS = [
-  "id", "created_at", "tldr", "tldr_hu", "item_count", "section_count",
-  "has_attention", "kind", "source_counts", "failed_sources",
+  "id",
+  "created_at",
+  "tldr",
+  "tldr_hu",
+  "item_count",
+  "section_count",
+  "has_attention",
+  "kind",
+  "source_counts",
+  "failed_sources",
 ];
 
 function pick(row, cols) {
@@ -60,7 +68,10 @@ export function makeDb({ writes } = {}) {
     }
 
     if (/MIN\(created_at\)/.test(s)) {
-      const oldest = DIGESTS.reduce((m, d) => (m === null || d.created_at < m ? d.created_at : m), null);
+      const oldest = DIGESTS.reduce(
+        (m, d) => (m === null || d.created_at < m ? d.created_at : m),
+        null,
+      );
       return { first: async () => ({ oldest }) };
     }
 
@@ -87,7 +98,14 @@ export function makeDb({ writes } = {}) {
       for (const d of DIGESTS) {
         for (const t of parsedTopics(d)) {
           if (identityOf(t) === wanted) {
-            rows.push({ id: d.id, created_at: d.created_at, kind: d.kind, label: t.label, topicSlug: t.slug, deltas: d.deltas });
+            rows.push({
+              id: d.id,
+              created_at: d.created_at,
+              kind: d.kind,
+              label: t.label,
+              topicSlug: t.slug,
+              deltas: d.deltas,
+            });
           }
         }
       }
@@ -102,7 +120,12 @@ export function makeDb({ writes } = {}) {
       for (const d of DIGESTS) {
         if (d.created_at < since) continue;
         for (const t of parsedTopics(d)) {
-          rows.push({ label: t.label, identity: identityOf(t), created_at: d.created_at, id: d.id });
+          rows.push({
+            label: t.label,
+            identity: identityOf(t),
+            created_at: d.created_at,
+            id: d.id,
+          });
         }
       }
       rows.sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
@@ -112,14 +135,21 @@ export function makeDb({ writes } = {}) {
     if (/SELECT topics FROM digests/.test(s)) {
       const [startIso, endIso, excludeId] = binds;
       const rows = DIGESTS.filter(
-        (d) => d.topics !== null && d.created_at >= startIso && d.created_at < endIso && d.id !== Number(excludeId),
+        (d) =>
+          d.topics !== null &&
+          d.created_at >= startIso &&
+          d.created_at < endIso &&
+          d.id !== Number(excludeId),
       ).map((d) => ({ topics: d.topics }));
       return { all: async () => ({ results: rows }) };
     }
 
     if (/body_html FROM digests WHERE id IN/.test(s)) {
       const ids = new Set(binds.map(Number));
-      const rows = DIGESTS.filter((d) => ids.has(d.id)).map((d) => ({ id: d.id, body_html: d.body_html }));
+      const rows = DIGESTS.filter((d) => ids.has(d.id)).map((d) => ({
+        id: d.id,
+        body_html: d.body_html,
+      }));
       return { all: async () => ({ results: rows }) };
     }
 
@@ -156,7 +186,9 @@ export function makeDb({ writes } = {}) {
     }
     if (/FROM digests WHERE created_at >= \? AND created_at </.test(s)) {
       const [startIso, endIso] = binds;
-      const rows = DIGESTS.filter((d) => d.created_at >= startIso && d.created_at < endIso).sort(byCreatedDesc);
+      const rows = DIGESTS.filter((d) => d.created_at >= startIso && d.created_at < endIso).sort(
+        byCreatedDesc,
+      );
       return { all: async () => ({ results: rows.map((r) => pick(r, LIST_COLUMNS)) }) };
     }
 
@@ -178,7 +210,8 @@ export function makeDb({ writes } = {}) {
         },
         async first() {
           const arm = dispatch(sql, binds);
-          if (!arm.first) throw new Error(`stub-db: .first() on a .all()-shaped statement:\n${sql}`);
+          if (!arm.first)
+            throw new Error(`stub-db: .first() on a .all()-shaped statement:\n${sql}`);
           return arm.first();
         },
         async run() {

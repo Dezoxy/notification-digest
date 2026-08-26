@@ -20,7 +20,8 @@ const args = process.argv.slice(2);
 const update = args.includes("--update");
 const check = args.includes("--check");
 const bundleIx = args.indexOf("--bundle");
-const entry = bundleIx >= 0 ? new URL(args[bundleIx + 1], `file://${process.cwd()}/`).href : undefined;
+const entry =
+  bundleIx >= 0 ? new URL(args[bundleIx + 1], `file://${process.cwd()}/`).href : undefined;
 
 if (update === check) {
   console.error("usage: node test/golden.mjs --update | --check [--bundle dist/worker.js]");

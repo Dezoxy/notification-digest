@@ -12,8 +12,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  fetchPath, makeEnv, loadWorker, GOLDEN_PAGES, ORIGIN,
-  SITE_TOKEN, INGEST_KEY,
+  fetchPath,
+  makeEnv,
+  loadWorker,
+  GOLDEN_PAGES,
+  ORIGIN,
+  SITE_TOKEN,
+  INGEST_KEY,
 } from "./env.mjs";
 import { VALID_INGEST_PAYLOAD } from "./fixtures.mjs";
 
@@ -37,7 +42,11 @@ test("all seven golden pages render 200 with trust headers", async () => {
     for (const [h, v] of Object.entries(TRUST_HEADERS)) {
       assert.equal(res.headers.get(h), v, `${name} header ${h}`);
     }
-    assert.equal(res.headers.get("content-type"), "text/html; charset=utf-8", `${name} content-type`);
+    assert.equal(
+      res.headers.get("content-type"),
+      "text/html; charset=utf-8",
+      `${name} content-type`,
+    );
     assert.ok(html.includes("<!doctype html>"), `${name} is a full page`);
   }
 });
@@ -106,8 +115,9 @@ test("digest section ids are sequential and agree with the TOC", async () => {
   const { html } = await page("d/235");
   const ids = [...html.matchAll(/<h2 id="s(\d+)">/g)].map((m) => Number(m[1]));
   assert.deepEqual(ids, [1, 2, 3], "sequential #sN ids");
-  const tocTargets = [...html.matchAll(/class="toc"[\s\S]*?<\/nav>/g)]
-    .flatMap((m) => [...m[0].matchAll(/href="#s(\d+)"/g)].map((x) => Number(x[1])));
+  const tocTargets = [...html.matchAll(/class="toc"[\s\S]*?<\/nav>/g)].flatMap((m) =>
+    [...m[0].matchAll(/href="#s(\d+)"/g)].map((x) => Number(x[1])),
+  );
   assert.deepEqual(tocTargets, ids, "TOC hrefs match section ids");
 });
 
@@ -127,7 +137,10 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
   assert.match(html, /class="deltas"/, "what-changed block from deltas");
   assert.match(html, /class="sourcekey"/, "source key colophon");
   assert.match(html, /sk-failed/, "failed source pill in the source key");
-  assert.ok(!/<article[\s\S]*?style="color: red"[\s\S]*?<\/article>/.test(html), "inline style stripped from body");
+  assert.ok(
+    !/<article[\s\S]*?style="color: red"[\s\S]*?<\/article>/.test(html),
+    "inline style stripped from body",
+  );
   assert.match(html, /example\.com\/markets-report/, "citation link survives");
 });
 
