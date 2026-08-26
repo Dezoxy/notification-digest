@@ -9,7 +9,6 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 import {
   fetchPath,
@@ -67,35 +66,31 @@ test("wrong token is byte-identical to an unknown path (no existence hint)", asy
 
 // ── i18n parity ───────────────────────────────────────────────────────────
 
-test("STRINGS en/hu key sets are identical", () => {
-  // Until the module split exports STRINGS, extract key names from source:
-  // keys are the `identifier:` lines at one indent level inside `en: {` /
-  // `hu: {`. Brace-depth scanning keeps nested objects (none today) safe.
-  // TODO(split PR): replace with `import { STRINGS } from "../src/strings.js"`.
-  const src = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
-  const keysOf = (langTag) => {
-    const start = src.indexOf(`  ${langTag}: {`);
-    assert.ok(start > 0, `found ${langTag} block`);
-    let depth = 0;
-    let i = src.indexOf("{", start);
-    const keys = [];
-    for (; i < src.length; i++) {
-      const ch = src[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) break;
-      } else if (ch === "\n" && depth === 1) {
-        const m = src.slice(i + 1, src.indexOf("\n", i + 1)).match(/^\s*([A-Za-z_$][\w$]*):/);
-        if (m) keys.push(m[1]);
-      }
-    }
-    return keys;
-  };
-  const en = keysOf("en");
-  const hu = keysOf("hu");
+test("STRINGS en/hu key sets are identical", async () => {
+  const { STRINGS } = await import("../src/strings.js");
+  const en = Object.keys(STRINGS.en);
+  const hu = Object.keys(STRINGS.hu);
   assert.ok(en.length >= 80, `en has a plausible key count (${en.length})`);
   assert.deepEqual([...en].sort(), [...hu].sort(), "en/hu key parity");
+});
+
+// ── the two extracted string modules ─────────────────────────────────────
+
+test("CSS and CLIENT_SCRIPT literals stay embeddable", async () => {
+  // These two files hold the page's stylesheet and client script as
+  // template-literal exports (no build config that way). A future edit that
+  // introduces any of these sequences would corrupt the literal itself or
+  // the inline <style>/<script> embedding — fail here, not in production.
+  const { CSS } = await import("../src/css.js");
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  for (const [name, text, closer] of [
+    ["CSS", CSS, /<\/style/i],
+    ["CLIENT_SCRIPT", CLIENT_SCRIPT, /<\/script/i],
+  ]) {
+    assert.ok(!text.includes("`"), `${name}: no backticks`);
+    assert.ok(!text.includes("${"), `${name}: no template interpolation`);
+    assert.ok(!closer.test(text), `${name}: no closing tag`);
+  }
 });
 
 // ── self-containment ──────────────────────────────────────────────────────

@@ -228,11 +228,11 @@ for exactly one reader, and the design should encode that data/prose split
 instead of reading as a generic indigo dashboard. One PR per step below, in
 order, each squash-merged to `main` before the next step starts; after the
 last step merges, `wrangler deploy` ships the whole set at once. Every step
-must respect the owner-tuned decisions already documented in `worker.js`'s
+must respect the owner-tuned decisions already documented in `src/css.js`'s
 CSS comments — the 15px phone font, mobile masthead layout, FAB
 bubble-gutter anchoring, `scrollbar-gutter: stable`, and the desktop bubble
 card — none of that regresses. Every change ships in both languages (EN/HU)
-and both themes. This stays a single-file Worker with inline CSS and no
+and both themes. This stays a single-deployed-script Worker with inline CSS and no
 external requests (system font stacks only), and `Referrer-Policy:
 no-referrer` and its sibling headers (see "Trust model" above) stay
 load-bearing throughout.
@@ -291,7 +291,7 @@ data the site never sees, the reader's 8-pulses-a-day rhythm, and knowledge
 the pipeline computes but discards at render time. Same execution contract
 as roadmap 1: one squash-merged PR per step below, in order; the owner-tuned
 CSS decisions from roadmap 1 never regress; every change ships in EN/HU,
-both themes, and a working no-JS baseline; this stays a single-file Worker
+both themes, and a working no-JS baseline; this stays a single-deployed-script Worker
 with no external requests; and `Referrer-Policy: no-referrer` and the rest
 of the trust-model headers (see "Trust model" above) stay load-bearing
 throughout. Steps 1–8 are site-only and ship with one `wrangler deploy`; the
@@ -359,7 +359,7 @@ week URLs are permanent bookmarkable addresses, and these same `w/` pages
 are the foundation the deferred calendar heatmap will link into later. Same
 execution contract as roadmaps 1–2 (one squash-merged PR per step; owner-
 tuned decisions never regress; EN/HU, both themes, no-JS baseline; single-
-file Worker; trust headers stay load-bearing). No schema change and no
+deployed-script Worker; trust headers stay load-bearing). No schema change and no
 digest-repo involvement.
 
 The URL grammar gains one optional, always-LAST segment:
@@ -414,7 +414,7 @@ this pass gives it depth (heatmap, search, story arcs) and finishes the
 phone-first reading polish. Same execution contract as roadmaps 1–3: one
 squash-merged PR per step below, in order; owner-tuned CSS decisions never
 regress; every change ships in EN/HU, both themes, and a working no-JS
-baseline; single-file Worker, no external requests; `Referrer-Policy:
+baseline; single-deployed-script Worker, no external requests; `Referrer-Policy:
 no-referrer` and the trust-model headers (see "Trust model" above) stay
 load-bearing throughout. Steps 1–7 are site-only and ship with one
 `wrangler deploy`; step 8's site side ships first, backward-compatibly, and
@@ -493,7 +493,7 @@ PWA/offline (the capability-token-in-persistent-storage wrinkle stands).
 
 Roadmaps 1–4 above are a closed historical record. Work after them is tracked in
 the digest service's `PLAN.md` (**that lives in the `notification-digest` repo,
-not here** — the `PLAN.md §11.x` citations in `schema.sql`, `worker.js`, and the
+not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source, and the
 `migrations/` headers all point there). What has shipped on the site side:
 
 - **Story arcs** (§11.1) — arc pages at `a/:slug` reconstructed at request time by
@@ -523,7 +523,13 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, `worker.js`, and 
   Page print-poster stylesheet; an About page for anyone the capability link gets
   shared with.
 
-The execution contract from roadmaps 1–4 still holds: single-file Worker, inline
-CSS, no external requests, EN/HU parity, both themes, a working no-JS baseline,
-and the trust-model headers stay load-bearing. Still deferred, unchanged:
+The execution contract from roadmaps 1–4 still holds, with one clarified term:
+a single DEPLOYED script — the source is split across `worker.js` (entry:
+routes + dispatch) and `src/` modules (config, auth, http, dates, strings,
+hrefs, css, client, chrome, sections, ingest, handlers, render-*), which
+wrangler's built-in bundler folds back into one self-contained script at
+deploy time, no build configuration involved. Inline CSS, no external
+requests, EN/HU parity, both themes, a working no-JS baseline, and the
+trust-model headers stay load-bearing exactly as before. The golden tests
+under `test/` (npm test) hold every refactor to byte-identical output. Still deferred, unchanged:
 PWA/offline — the capability token would end up in a persisted, cached artifact.
