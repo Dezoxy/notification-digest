@@ -17,5 +17,3 @@ local-data/
 
 # session cookie jars (x-cookies.json etc.) — never in the build context
 *cookies*.json
-# The news-site Worker: deployed to Cloudflare, never into this image.
-workers
