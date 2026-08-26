@@ -57,6 +57,12 @@ true at the multi-channel cutover.
   only for bootstrap.
 - Repo: github.com/Dezoxy/notification-digest (private). Container image:
   `ghcr.io/dezoxy/notification-digest`.
+- Before opening or updating any PR, run /docs-sync
+  (`.claude/skills/docs-sync/SKILL.md`): audit the branch diff for
+  documentation it falsifies — README, PLAN.md's layout tree, this file and
+  its twin, the worker's READMEs and file header — and fix those docs in the
+  same branch, with the proof in the PR body. A PR that changes paths,
+  commands, or behavior without the matching doc adjustment is incomplete.
 - After opening or updating a PR, wait for the Codex review, then run
   `uv run python scripts/fetch-pr-review-threads.py <pr>` (ported from secmes;
   defaults to unresolved, actionable, Codex-only threads) and address every
