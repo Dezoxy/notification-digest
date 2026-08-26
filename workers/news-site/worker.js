@@ -243,6 +243,13 @@ const ARC_ANCHOR_BODIES = 24;
 // Route patterns, hoisted: a regex literal inside fetch() is re-created on
 // every request. The URL grammar itself is documented in the file header —
 // these are that table, in the dispatch order below.
+// The URL grammar's daily/weekly segment folded to a view name — the same
+// fold both index and digest dispatch need, and the exact inverse of
+// viewSeg() over in the href builders.
+function viewFromSeg(seg) {
+  return seg === "daily/" ? "daily" : seg === "weekly/" ? "weekly" : "all";
+}
+
 const ROUTE_INGEST = /^\/ingest\/(\d+)$/;
 const ROUTE_DIGEST = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?d\/(\d+)$/;
 const ROUTE_SEARCH = /^\/t\/([^/]+)\/(hu\/)?search$/;
@@ -291,8 +298,7 @@ export default {
     const digestMatch = path.match(ROUTE_DIGEST);
     if (digestMatch && request.method === "GET") {
       const lang = digestMatch[2] ? "hu" : "en";
-      const view =
-        digestMatch[3] === "daily/" ? "daily" : digestMatch[3] === "weekly/" ? "weekly" : "all";
+      const view = viewFromSeg(digestMatch[3]);
       return handleDigestPage(env, digestMatch[1], digestMatch[4], url, lang, view);
     }
 
@@ -339,8 +345,7 @@ export default {
     const indexMatch = path.match(ROUTE_INDEX);
     if (indexMatch && request.method === "GET") {
       const lang = indexMatch[2] ? "hu" : "en";
-      const view =
-        indexMatch[3] === "daily/" ? "daily" : indexMatch[3] === "weekly/" ? "weekly" : "all";
+      const view = viewFromSeg(indexMatch[3]);
       let weekParam = null;
       if (indexMatch[4] !== undefined) {
         const year = Number(indexMatch[4]);
@@ -506,6 +511,13 @@ async function handleIngest(request, env, idParam) {
   return json({ ok: true }, 200);
 }
 
+// The index/daily/weekly ledger row shape — one definition for the three
+// list queries below, which are the same SELECT contract with different
+// WHERE clauses. The digest PAGE query deliberately stays separate: it
+// fetches the body/topics/deltas columns this list never needs.
+const DIGEST_LIST_COLUMNS =
+  "id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources";
+
 async function handleIndexPage(env, token, url, lang, view, weekParam) {
   if (!(await tokenMatches(env, token))) return notFound();
 
@@ -541,7 +553,7 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
     // tldr_hu is always selected (cheap) even for the EN page — only the HU
     // renderer reads it.
     const { results: dailyResults } = await env.DB.prepare(
-      `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE kind = 'daily' ORDER BY created_at DESC, id DESC LIMIT 1000`,
+      `SELECT ${DIGEST_LIST_COLUMNS} FROM digests WHERE kind = 'daily' ORDER BY created_at DESC, id DESC LIMIT 1000`,
     ).all();
     results = dailyResults;
   } else if (view === "weekly") {
@@ -552,7 +564,7 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
     // than the daily view's ~365 rows a year, so real pagination is even
     // less warranted here.
     const { results: weeklyResults } = await env.DB.prepare(
-      `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE kind = 'weekly' ORDER BY created_at DESC, id DESC LIMIT 1000`,
+      `SELECT ${DIGEST_LIST_COLUMNS} FROM digests WHERE kind = 'weekly' ORDER BY created_at DESC, id DESC LIMIT 1000`,
     ).all();
     results = weeklyResults;
   } else {
@@ -567,7 +579,7 @@ async function handleIndexPage(env, token, url, lang, view, weekParam) {
     // this ordering to put each row in its correct day bucket.
     const { startIso, endIso } = weekBoundsUtc(effective.year, effective.week);
     const { results: weekResults } = await env.DB.prepare(
-      `SELECT id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources FROM digests WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC, id DESC LIMIT 1000`,
+      `SELECT ${DIGEST_LIST_COLUMNS} FROM digests WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC, id DESC LIMIT 1000`,
     )
       .bind(startIso, endIso)
       .all();
@@ -1091,6 +1103,13 @@ async function tokenMatches(env, token) {
 
 const TEXT_ENCODER = new TextEncoder();
 
+// The check every required-or-present text field of the ingest payload
+// shares: a real string, non-empty, within its byte cap. Byte length, not
+// code units — the caps are storage caps and UTF-8 is what D1 stores.
+function isNonEmptyString(value, maxBytes) {
+  return typeof value === "string" && value.length > 0 && byteLength(value) <= maxBytes;
+}
+
 function byteLength(str) {
   return TEXT_ENCODER.encode(str).length;
 }
@@ -1125,7 +1144,7 @@ function validateDigestPayload(payload) {
   ) {
     return { ok: false, error: "created_at must be a valid date string" };
   }
-  if (typeof tldr !== "string" || tldr.length === 0 || byteLength(tldr) > MAX_TLDR_BYTES) {
+  if (!isNonEmptyString(tldr, MAX_TLDR_BYTES)) {
     return { ok: false, error: "tldr must be a non-empty string within size limits" };
   }
   if (!Number.isInteger(item_count) || item_count < 0) {
@@ -1137,18 +1156,10 @@ function validateDigestPayload(payload) {
   if (typeof has_attention !== "boolean" && has_attention !== 0 && has_attention !== 1) {
     return { ok: false, error: "has_attention must be a boolean" };
   }
-  if (
-    typeof body_html !== "string" ||
-    body_html.length === 0 ||
-    byteLength(body_html) > MAX_BODY_FIELD_BYTES
-  ) {
+  if (!isNonEmptyString(body_html, MAX_BODY_FIELD_BYTES)) {
     return { ok: false, error: "body_html must be a non-empty string within size limits" };
   }
-  if (
-    typeof body_md !== "string" ||
-    body_md.length === 0 ||
-    byteLength(body_md) > MAX_BODY_FIELD_BYTES
-  ) {
+  if (!isNonEmptyString(body_md, MAX_BODY_FIELD_BYTES)) {
     return { ok: false, error: "body_md must be a non-empty string within size limits" };
   }
 
@@ -1179,25 +1190,13 @@ function validateDigestPayload(payload) {
   const huEnabled = huFieldsPresent === 3;
 
   if (huEnabled) {
-    if (
-      typeof tldr_hu !== "string" ||
-      tldr_hu.length === 0 ||
-      byteLength(tldr_hu) > MAX_TLDR_BYTES
-    ) {
+    if (!isNonEmptyString(tldr_hu, MAX_TLDR_BYTES)) {
       return { ok: false, error: "tldr_hu must be a non-empty string within size limits" };
     }
-    if (
-      typeof body_html_hu !== "string" ||
-      body_html_hu.length === 0 ||
-      byteLength(body_html_hu) > MAX_BODY_FIELD_BYTES
-    ) {
+    if (!isNonEmptyString(body_html_hu, MAX_BODY_FIELD_BYTES)) {
       return { ok: false, error: "body_html_hu must be a non-empty string within size limits" };
     }
-    if (
-      typeof body_md_hu !== "string" ||
-      body_md_hu.length === 0 ||
-      byteLength(body_md_hu) > MAX_BODY_FIELD_BYTES
-    ) {
+    if (!isNonEmptyString(body_md_hu, MAX_BODY_FIELD_BYTES)) {
       return { ok: false, error: "body_md_hu must be a non-empty string within size limits" };
     }
   }
@@ -2068,9 +2067,9 @@ const STRINGS = {
     // design guidance's "evidence over certainty" / "calm urgency" register
     // applies to interface labels too, not just status text.
     arcContextLabel: "Background",
-    // Big edition masthead issue line (Front Page redesign, index pages
-    // only — see pageChrome's bigMasthead param / renderIndexPage's
-    // buildIssueLine): "No. {n}" reuses the digest's own numeric `id` as
+    // Big edition masthead issue line (Front Page redesign — the issue line
+    // renders on pages that pass pageChrome a non-empty issueLineText; see
+    // renderIndexPage's buildIssueLine): "No. {n}" reuses the digest's own numeric `id` as
     // the edition number (an existing column, not new plumbing) — a
     // placeholder template, same {n} convention as arcRepeat/weekLabel
     // above. issueEditionsToday(One) is the "{n} editions today" segment,
@@ -2245,16 +2244,24 @@ const STRINGS = {
 // link into /hu/ and vice versa, all-view pages never link into daily/ or
 // weekly/ and vice versa, except via the two explicit switchers) ─────────
 
+// The two URL segments every builder below assembles: "" or "hu/", and ""
+// or "daily/"/"weekly/". One definition each — these used to be re-derived
+// inline in five builders (and the view fold's inverse lives in the router
+// as viewFromSeg).
+function langSeg(lang) {
+  return lang === "hu" ? "hu/" : "";
+}
+
+function viewSeg(view) {
+  return view === "daily" ? "daily/" : view === "weekly" ? "weekly/" : "";
+}
+
 function indexHref(token, lang, view) {
-  const langSeg = lang === "hu" ? "hu/" : "";
-  const viewSeg = view === "daily" ? "daily/" : view === "weekly" ? "weekly/" : "";
-  return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}`;
+  return `/t/${encodeURIComponent(token)}/${langSeg(lang)}${viewSeg(view)}`;
 }
 
 function digestHref(token, lang, view, id) {
-  const langSeg = lang === "hu" ? "hu/" : "";
-  const viewSeg = view === "daily" ? "daily/" : view === "weekly" ? "weekly/" : "";
-  return `/t/${encodeURIComponent(token)}/${langSeg}${viewSeg}d/${esc(id)}`;
+  return `/t/${encodeURIComponent(token)}/${langSeg(lang)}${viewSeg(view)}d/${esc(id)}`;
 }
 
 // Like indexHref, with the ISO week's URL segment appended (roadmap 3 step
@@ -2271,8 +2278,7 @@ function weekHref(token, lang, view, year, week) {
 // no `view` parameter: search has no daily/week variant (it spans the whole
 // archive, see the file-header comment), so there's no view to select.
 function searchHref(token, lang) {
-  const langSeg = lang === "hu" ? "hu/" : "";
-  return `/t/${encodeURIComponent(token)}/${langSeg}search`;
+  return `/t/${encodeURIComponent(token)}/${langSeg(lang)}search`;
 }
 
 // Like searchHref, to the arc detail page (§11.1 PR A) — no `view`
@@ -2282,16 +2288,14 @@ function searchHref(token, lang) {
 // here is the same "free safety, not redundant trust" posture as everywhere
 // else in this file rather than a defense against a real threat.
 function arcHref(token, lang, slug) {
-  const langSeg = lang === "hu" ? "hu/" : "";
-  return `/t/${encodeURIComponent(token)}/${langSeg}a/${esc(slug)}`;
+  return `/t/${encodeURIComponent(token)}/${langSeg(lang)}a/${esc(slug)}`;
 }
 
 // Like searchHref, to the about page — no `view` parameter either, same
 // reasoning: the about text doesn't belong to one view (see the file-header
 // comment).
 function aboutHref(token, lang) {
-  const langSeg = lang === "hu" ? "hu/" : "";
-  return `/t/${encodeURIComponent(token)}/${langSeg}about`;
+  return `/t/${encodeURIComponent(token)}/${langSeg(lang)}about`;
 }
 
 // `pageKind` ("index" | "digest") picks index vs. digest href — distinct
@@ -2437,10 +2441,12 @@ const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"
 <rect x="14" y="42" width="20" height="6" rx="3" fill="#ffffff" opacity="0.7"/>
 </svg>`;
 
-function brandParts(host) {
+// The first host label is the whole brand ("NEWS") — the .tld tail this
+// used to also return died with the two-tone wordmark and nothing ever
+// consumed it since.
+function brandFirst(host) {
   const idx = host.indexOf(".");
-  if (idx === -1) return { first: host, rest: "" };
-  return { first: host.slice(0, idx), rest: host.slice(idx) };
+  return idx === -1 ? host : host.slice(0, idx);
 }
 
 const CSS = `
@@ -4208,9 +4214,9 @@ function pageChrome(
   showTopFab = true,
 ) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
-  // Only the first host label renders now — the brand is just "NEWS"
-  // (owner follow-up); brandParts' rest/tld tail is unused here.
-  const { first } = brandParts(host);
+  // Only the first host label renders — the brand is just "NEWS" (owner
+  // follow-up; see brandFirst).
+  const first = brandFirst(host);
   const strings = STRINGS[lang];
   const prefetchLinkHtml = prefetchHref ? `<link rel="prefetch" href="${esc(prefetchHref)}">` : "";
   // Scroll-to-top FAB for every page that is not a digest (owner-requested:
@@ -5922,6 +5928,18 @@ ${prefetchScriptHtml}
 
 // ── page bodies ──────────────────────────────────────────────────────────
 
+// One day-bucketed ledger shape — a sticky .dayhead per group, then that
+// day's rows — shared by the index (twice: lead-card split and archive
+// week) and the arc page's timeline, which differ only in the row renderer.
+function renderDayLedger(groups, renderRow) {
+  return groups
+    .map(
+      (group) => `<div class="dayhead">${esc(group.label)}</div>
+${group.items.map(renderRow).join("\n")}`,
+    )
+    .join("\n");
+}
+
 function groupByDay(rows, locale) {
   const groups = [];
   let currentLabel = null;
@@ -6561,24 +6579,14 @@ function renderIndexPage(
     const [lead, ...rest] = rows;
     leadRow = lead;
     const groups = groupByDay(rest, strings.locale);
-    const ledger = groups
-      .map(
-        (group) => `<div class="dayhead">${esc(group.label)}</div>
-${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}`,
-      )
-      .join("\n");
+    const ledger = renderDayLedger(groups, (row) => renderIndexEntry(row, token, lang, view));
     body = `${renderLeadCard(lead, token, lang, view)}\n${ledger}`;
   } else {
     // Archive week (roadmap 3 step 3): no lead card — every row, including
     // rows[0], goes through the plain day-grouped ledger, same as the
     // "rest" branch above minus the exclusion.
     const groups = groupByDay(rows, strings.locale);
-    body = groups
-      .map(
-        (group) => `<div class="dayhead">${esc(group.label)}</div>
-${group.items.map((row) => renderIndexEntry(row, token, lang, view)).join("\n")}`,
-      )
-      .join("\n");
+    body = renderDayLedger(groups, (row) => renderIndexEntry(row, token, lang, view));
   }
 
   // Unified search (owner UX pass): the container the bottom script's
@@ -6923,6 +6931,13 @@ function deltasRenderableIn(lang) {
   return lang === "en";
 }
 
+// The previously -> now line itself, shared verbatim by the digest page's
+// "what changed" block and the arc page's per-appearance delta (the two
+// renderers' comments already declared the shapes "shared"; now they are).
+function renderDeltaLine(previously, now) {
+  return `<p class="deltatext"><span class="deltaprev">${esc(previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(now)}</span></p>`;
+}
+
 function renderDeltas(deltas, topicArcs, strings, token, lang) {
   if (!deltas || deltas.length === 0 || !deltasRenderableIn(lang)) return "";
   const labelBySlug = new Map((topicArcs ?? []).map((t) => [t.slug, t.label]));
@@ -6930,7 +6945,7 @@ function renderDeltas(deltas, topicArcs, strings, token, lang) {
     .map(
       (d) => `<a class="delta" href="${arcHref(token, lang, d.slug)}">
     <span class="deltalabel">${esc(labelBySlug.get(d.slug) ?? d.slug)}</span>
-    <p class="deltatext"><span class="deltaprev">${esc(d.previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(d.now)}</span></p>
+    ${renderDeltaLine(d.previously, d.now)}
   </a>`,
     )
     .join("");
@@ -7234,7 +7249,7 @@ function renderArcAppearance(row, token, lang) {
   // that function's comment for why and for the deltas_hu hook.
   const deltaHtml =
     row.delta && deltasRenderableIn(lang)
-      ? `<p class="deltatext"><span class="deltaprev">${esc(row.delta.previously)}</span><span class="deltaarrow">→</span><span class="deltanow">${esc(row.delta.now)}</span></p>`
+      ? renderDeltaLine(row.delta.previously, row.delta.now)
       : "";
   return `<a class="entry" href="${href}" data-created="${esc(row.created_at)}">
     <span class="meta"><span class="time">${esc(time)}</span>${badgeHtml}</span>
@@ -7310,12 +7325,7 @@ function renderArcPage(identity, appearances, token, host, lang, nowMs, contextM
   // the ledger). `appearances` itself stays ASC (oldest first) throughout
   // this function — only this local copy is reversed, for display only.
   const groups = groupByDay(appearances.slice().reverse(), strings.locale);
-  const timelineHtml = groups
-    .map(
-      (group) => `<div class="dayhead">${esc(group.label)}</div>
-${group.items.map((row) => renderArcAppearance(row, token, lang)).join("\n")}`,
-    )
-    .join("\n");
+  const timelineHtml = renderDayLedger(groups, (row) => renderArcAppearance(row, token, lang));
 
   // .archead (§11.2, optional "follow list" feature): a flex row wrapping
   // the h1 so the bottom script can inject a text-control follow toggle
