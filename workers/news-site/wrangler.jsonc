@@ -1,0 +1,25 @@
+// news-site: private digest archive Worker for the notification-digest
+// service (github.com/Dezoxy/notification-digest). See README.md for the
+// capability-link trust model and full deploy steps.
+//
+// database_id below is a PLACEHOLDER. Before the first `wrangler deploy`:
+//   1. wrangler d1 create news-digests
+//   2. paste the returned database_id here
+//   3. wrangler d1 execute news-digests --file schema.sql
+{
+  "name": "news-site",
+  "main": "worker.js",
+  "compatibility_date": "2026-08-05",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "news-digests",
+      "database_id": "aeece7b2-2bfd-4871-b325-9a4673641640"
+    }
+  ]
+}
