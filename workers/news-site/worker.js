@@ -1798,6 +1798,10 @@ const STRINGS = {
     noWeeklyBriefs: "No weekly briefs yet — the first one lands Sunday at 21:00.",
     tldrLabel: "TL;DR:",
     backFabLabel: "Back to all digests",
+    // The digest page's FAB goes BACK to the index; every other page has
+    // nowhere to go back to, so its FAB scrolls UP instead. Two labels,
+    // one button shape — see .backfab in the CSS.
+    topFabLabel: "Back to top",
     enOnlyNote: null,
     dailyBrief: "daily brief",
     weeklyBrief: "weekly report",
@@ -2007,6 +2011,8 @@ const STRINGS = {
     noWeeklyBriefs: "Még nincs heti összefoglaló — az első vasárnap 21:00-kor érkezik.",
     tldrLabel: "Röviden:",
     backFabLabel: "Vissza a hírlevelekhez",
+    // Owner: please review — new HU string.
+    topFabLabel: "Vissza az elejére",
     enOnlyNote: "Csak angolul elérhető",
     dailyBrief: "napi összefoglaló",
     // Owner: please review — new HU string, mirrors dailyBrief's pattern.
@@ -2347,6 +2353,13 @@ const CSS = `
      counts, datelines, citation chips, mono eyebrows). Time is this site's
      primary key; the typography should say so. */
   :root {
+    /* The floating action button's size and its inset from the viewport
+       corner. Custom properties rather than literals because .resumechip
+       has to steer around this exact lane (see its bottom offset) and the
+       two rules sit hundreds of lines apart — a 48px changed in one place
+       and not the other is a silent overlap, not a visible error. */
+    --fab-size: 48px;
+    --fab-inset: 1.1rem;
     /* Owner-reported white flash when stepping between pages: every page
        is a fresh no-store document, and in the network gap before its
        first paint the browser shows its OWN canvas — which defaults to
@@ -3445,9 +3458,9 @@ const CSS = `
      the page background as the arrow color works in both themes. */
   .backfab {
     position: fixed;
-    right: max(1.1rem, env(safe-area-inset-right));
-    bottom: calc(1.1rem + env(safe-area-inset-bottom));
-    width: 48px; height: 48px; border-radius: 50%;
+    right: max(var(--fab-inset), env(safe-area-inset-right));
+    bottom: calc(var(--fab-inset) + env(safe-area-inset-bottom));
+    width: var(--fab-size); height: var(--fab-size); border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     background: var(--accent); color: var(--bg);
     text-decoration: none; font-size: 1.35em; font-weight: 700;
@@ -3821,7 +3834,16 @@ const CSS = `
   .resumechip {
     position: fixed;
     left: 50%; transform: translateX(-50%);
-    bottom: calc(1.1rem + env(safe-area-inset-bottom));
+    /* One FAB-height above the corner button rather than beside it. The
+       chip is centred and the FAB is right-aligned, so on a wide viewport
+       they never met — but the chip is only as narrow as its label, and the
+       Hungarian one ("↓ ÚJ A LEGUTÓBBI LÁTOGATÁSOD ÓTA", 261px) overlapped
+       the FAB by 9px at 375px once every non-digest page gained one. Capping
+       the chip's width instead would mean truncating that label, and it is
+       nowrap on purpose (see below); stacking costs nothing and is the
+       conventional arrangement anyway — a transient chip rides above a
+       persistent action button, never under it. */
+    bottom: calc(var(--fab-inset) + var(--fab-size) + 0.55rem + env(safe-area-inset-bottom));
     font-family: var(--font-data); font-size: 0.72em;
     text-transform: uppercase; letter-spacing: 0.08em;
     background: var(--bg); color: var(--accent);
@@ -3994,6 +4016,7 @@ function pageChrome(
   title = null,
   prefetchHref = null,
   issueLineText = "",
+  showTopFab = true,
 ) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   // Only the first host label renders now — the brand is just "NEWS"
@@ -4002,6 +4025,28 @@ function pageChrome(
   const strings = STRINGS[lang];
   const prefetchLinkHtml = prefetchHref
     ? `<link rel="prefetch" href="${esc(prefetchHref)}">`
+    : "";
+  // Scroll-to-top FAB for every page that is not a digest (owner-requested:
+  // "on a main page where there is no button I want an up button"). The
+  // digest page renders its own .backfab — an arrow BACK to the index, which
+  // is the more useful action there — and opts out via showTopFab, so no page
+  // ever shows two.
+  //
+  // Same .backfab class as that one on purpose, not a new one: the class is
+  // the FAB *primitive* here (shape, placement, the scroll-past-320px reveal
+  // in wirePage(), the safe-area insets, the print rule, the <noscript>
+  // always-visible fallback). Reusing it means this button inherits all of
+  // that and needs no CSS or JS of its own — wirePage() re-queries .backfab
+  // on every soft-nav pass, so it rebinds across navigations for free.
+  //
+  // href="#top" rather than a JS scroll handler: with no element of that id,
+  // HTML defines "#top" as the top of the document, so it works with JS off,
+  // and html { scroll-behavior: smooth } (already reduced-motion-gated)
+  // animates it. It also survives the soft-nav interceptor untouched — that
+  // handler explicitly bails on a same-path link carrying a hash, handing it
+  // back to the browser instead of re-fetching the page.
+  const topFabHtml = showTopFab
+    ? `<a class="backfab" href="#top" aria-label="${esc(strings.topFabLabel)}">↑</a>`
     : "";
   const prefetchScriptHtml = prefetchHref
     ? `<script type="speculationrules">${JSON.stringify({ prefetch: [{ urls: [prefetchHref] }] })}</script>`
@@ -4066,6 +4111,7 @@ ${prefetchScriptHtml}
   </header>
   ${paletteConfigHtml}
   ${bodyHtml}
+  ${topFabHtml}
 </div>
 <noscript><style>.backfab { opacity: 1; pointer-events: auto; }</style></noscript>
 <script>
@@ -6809,6 +6855,10 @@ ${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</n
     // number and full date (the date the edhead eyebrow deliberately
     // dropped lives here now, one line, one place).
     `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
+    // showTopFab false — the ONLY page that opts out: it renders its own
+    // .backfab above (← to the index, the more useful action here), and two
+    // floating buttons would stack in the same corner.
+    false,
   );
 }
 
