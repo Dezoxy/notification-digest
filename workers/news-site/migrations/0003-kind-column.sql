@@ -1,0 +1,12 @@
+-- Adds the "kind" column to an EXISTING deployed digests table, distinguishing
+-- the once-daily 20:00 synthesis ("daily") from the regular 3-hourly window
+-- digest ("window"). Fresh installs don't need this file — schema.sql already
+-- includes this column for a brand-new database.
+--
+-- Apply to the deployed D1 database with:
+--   wrangler d1 execute news-digests --remote --file migrations/0003-kind-column.sql
+--
+-- DEFAULT 'window' backfills every existing row (all window digests so far)
+-- as part of the ALTER itself, and the current app version's ingest payload
+-- (no kind field) keeps working unchanged.
+ALTER TABLE digests ADD COLUMN kind TEXT NOT NULL DEFAULT 'window';

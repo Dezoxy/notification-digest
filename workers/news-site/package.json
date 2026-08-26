@@ -1,0 +1,14 @@
+{
+  "name": "news-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs && node test/golden.mjs --check && npm run -s format:check",
+    "golden": "node test/golden.mjs --update",
+    "format": "prettier --write worker.js src/*.js test/*.mjs",
+    "format:check": "prettier --check worker.js src/*.js test/*.mjs"
+  },
+  "devDependencies": {
+    "prettier": "3.8.2"
+  }
+}
