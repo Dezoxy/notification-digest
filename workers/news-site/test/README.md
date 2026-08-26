@@ -56,6 +56,34 @@ stub does not recognise, it raises instead of returning an empty result —
 otherwise a query change would quietly render an emptier page and the golden
 would be regenerated with the loss baked in.
 
+## Goldens are environment-coupled — the ICU trap
+
+Byte-comparison assumes the same input renders the same bytes anywhere. That
+is true of this Worker's own code, and NOT automatically true of anything it
+delegates to `Intl`.
+
+`Intl` output comes from ICU, and different ICU builds disagree. Three are in
+play for this project: the machine that runs `npm run golden`, the Linux
+image Workers Builds verifies in, and **workerd**, which is what readers
+actually see. They are not the same version and do not update together.
+
+This has already bitten once. `Intl.DateTimeFormat.formatRange` renders the
+week-rail label as `24-30 Aug` on ICU 77 and `24 - 30 Aug` (spaces around the
+dash) on newer builds. Goldens generated on a laptop, verified in CI, failed
+the first git-connected build on nothing but a toolchain difference — and the
+same drift was silently deciding what the live site displayed.
+
+The fix was not to regenerate the goldens on the right machine, which only
+moves the problem: it was to stop letting an ICU version choose user-visible
+text. `formatWeekRangeLabel` now normalizes the separator spacing, keeping
+ICU's locale intelligence (field order, month abbreviation, which parts
+collapse) and pinning the one thing that drifts.
+
+**If a golden fails only in CI and the diff looks like punctuation,
+whitespace, or a separator — suspect ICU before suspecting the code.** The
+remedy is to make the string deterministic in `src/`, not to loosen the
+comparison.
+
 ## Verification recipes
 
 ### Byte-check a bundled artifact, not just the module graph
