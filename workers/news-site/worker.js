@@ -2321,7 +2321,11 @@ function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek = null)
   // comment), same reasoning as why the "digest" branch below uses
   // digestHref instead of the index href.
   const otherLangHref = (otherLang) => {
-    if (pageKind === "index") return otherLangIndexHref(otherLang);
+    // "plain" = the ledger-less pages (search, about): their language hop
+    // targets the other language's root index, exactly like "index" — the
+    // deliberate lose-the-query simplification documented at their call
+    // sites. The kinds differ only in what renderSwitchers gates on them.
+    if (pageKind === "index" || pageKind === "plain") return otherLangIndexHref(otherLang);
     if (pageKind === "arc") return arcHref(token, otherLang, id);
     return digestHref(token, otherLang, view, id);
   };
@@ -2407,6 +2411,9 @@ function renderSwitchers(token, lang, view, pageKind, id, archiveWeek = null, sh
   // Density toggle (roadmap 4 step 4): index pages only — it governs the
   // ledger's .entry padding/clamp, which a digest page has none of, so the
   // row would be a dead control there.
+  // Index only: density compacts the .entry ledger, and the index is the
+  // only pageKind that has one — "plain" (search/about) used to ride in as
+  // "index" for the lang-hop and got a working toggle that affected nothing.
   const densityRow =
     pageKind === "index"
       ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
@@ -2712,7 +2719,7 @@ const CSS = `
      heavy 4px rule underneath (rule weight matches .digest h2's own top
      rule and the colophon's — one "heavy rule = structural divider"
      vocabulary across the page). Desktop is one nowrap row; the ≤40em
-     block below rewraps the capsule onto its own centered second line. */
+     block below keeps it one line at phone sizes too. */
   header.mast {
     display: flex; align-items: center;
     gap: 0.6em 1em; padding: 1.1em 0 0.9em;
@@ -2720,9 +2727,8 @@ const CSS = `
   }
   /* True centering: the two side zones get equal flex-grow from a zero
      basis, so the capsule centers on the ROW's midpoint, not on whatever
-     space the brand happens to leave over. Desktop keeps one nowrap row;
-     the phone block below rewraps the tabs onto their own centered second
-     line instead of squeezing three zones into 375px. */
+     space the brand happens to leave over (the phone block below swaps
+     this for content-width zones — see its own comment). */
   .mast .mastleft { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
   /* 800-weight, tight-tracked display type (print-poster identity) in place
      of the old 700/-0.01em body-adjacent wordmark — the brand is now styled
@@ -2830,12 +2836,12 @@ const CSS = `
   @media (max-width: 40em) and (prefers-reduced-motion: reduce) {
     header.mast { transition: none; }
   }
-  .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
-  .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
-  .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
+  .mast .langswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
+  .mast .langswitch a { text-decoration: none; }
+  .mast .langswitch strong { color: var(--text); }
 
-  /* Big edition masthead (index pages only — pageChrome's bigMasthead
-     param, owner follow-up): the mono issue line sits ABOVE the masthead
+  /* Big edition masthead ("mast-big", hardcoded on every page since the
+     one-masthead follow-up): the mono issue line sits ABOVE the masthead
      as its own quiet block, and the masthead itself is the SAME three-zone
      row as every other page — brand left, view-tab capsule centered by the
      equal-growth side zones, search/settings right — just with the brand
@@ -7475,7 +7481,7 @@ function renderSearchPage(results, q, token, host, lang) {
     }
   }
 
-  // Switchers: pageKind "index" (not a dedicated "search" kind) — the
+  // Switchers: pageKind "plain" (index-style language hop, no ledger) — the
   // language switch on this page goes to the OTHER language's root index,
   // not to that language's own search results for the same query. Losing
   // the query string on a language hop is an accepted, deliberate
@@ -7493,7 +7499,7 @@ function renderSearchPage(results, q, token, host, lang) {
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "index"),
+    renderSwitchers(token, lang, "all", "plain"),
     `${formHtml}${resultsHtml}`,
     strings.searchLabel,
   );
@@ -7533,7 +7539,7 @@ function renderAboutPage(token, host, lang) {
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "index"),
+    renderSwitchers(token, lang, "all", "plain"),
     bodyHtml,
     strings.aboutLabel,
   );

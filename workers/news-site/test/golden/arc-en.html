@@ -281,7 +281,7 @@
      heavy 4px rule underneath (rule weight matches .digest h2's own top
      rule and the colophon's — one "heavy rule = structural divider"
      vocabulary across the page). Desktop is one nowrap row; the ≤40em
-     block below rewraps the capsule onto its own centered second line. */
+     block below keeps it one line at phone sizes too. */
   header.mast {
     display: flex; align-items: center;
     gap: 0.6em 1em; padding: 1.1em 0 0.9em;
@@ -289,9 +289,8 @@
   }
   /* True centering: the two side zones get equal flex-grow from a zero
      basis, so the capsule centers on the ROW's midpoint, not on whatever
-     space the brand happens to leave over. Desktop keeps one nowrap row;
-     the phone block below rewraps the tabs onto their own centered second
-     line instead of squeezing three zones into 375px. */
+     space the brand happens to leave over (the phone block below swaps
+     this for content-width zones — see its own comment). */
   .mast .mastleft { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
   /* 800-weight, tight-tracked display type (print-poster identity) in place
      of the old 700/-0.01em body-adjacent wordmark — the brand is now styled
@@ -399,12 +398,12 @@
   @media (max-width: 40em) and (prefers-reduced-motion: reduce) {
     header.mast { transition: none; }
   }
-  .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
-  .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
-  .mast .langswitch strong, .mast .viewswitch strong { color: var(--text); }
+  .mast .langswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
+  .mast .langswitch a { text-decoration: none; }
+  .mast .langswitch strong { color: var(--text); }
 
-  /* Big edition masthead (index pages only — pageChrome's bigMasthead
-     param, owner follow-up): the mono issue line sits ABOVE the masthead
+  /* Big edition masthead ("mast-big", hardcoded on every page since the
+     one-masthead follow-up): the mono issue line sits ABOVE the masthead
      as its own quiet block, and the masthead itself is the SAME three-zone
      row as every other page — brand left, view-tab capsule centered by the
      equal-growth side zones, search/settings right — just with the brand
