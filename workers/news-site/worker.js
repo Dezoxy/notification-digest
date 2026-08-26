@@ -3404,7 +3404,27 @@ const CSS = `
     margin: 2.2em 0 0.7em; text-wrap: balance;
     /* So a TOC-jumped-to heading isn't flush against the viewport edge. */
     scroll-margin-top: 0.8em;
+    /* Sticky section headings, the same idea as .dayhead on the index: while
+       you read a section its heading stays on screen. Opaque background for
+       the same reason — the article scrolls UNDERNEATH it. The padding-bottom
+       is taken back out of the margin so the background covers the gap the
+       body text would otherwise slide through just below the heading.
+
+       Sticky SIBLINGS all pin at the same offset and overlap rather than
+       pushing one another out — with headings of different heights (one line
+       vs three) the taller previous one juts out below the current one. The
+       usual cure is a wrapper element per section, but this article is
+       pre-sanitized HTML the Worker inserts verbatim, and the numbering
+       counter is scoped to .digest > h2 as a DIRECT child; wrapping would
+       mean restructuring that HTML and rewiring the counter. So wirePage
+       reproduces the push in script instead — see the sticky-headings block
+       there — and the <noscript> block turns this off entirely, since
+       without that script the overlap is exactly what you would get. */
+    position: sticky; top: var(--mast-h, 0px); z-index: 1;
+    background: var(--bg);
+    padding-bottom: 0.35em; margin-bottom: 0.35em;
   }
+  html.masthid .digest > h2 { top: 0; }
   /* The rest of the sticky-masthead feature (its main block is up in the
      masthead phone rules). These two are here, BELOW the .dayhead and
      .digest > h2 rules they override, because at equal specificity that is
@@ -4183,7 +4203,11 @@ ${prefetchScriptHtml}
   ${bodyHtml}
   ${topFabHtml}
 </div>
-<noscript><style>.backfab { opacity: 1; pointer-events: auto; }</style></noscript>
+<noscript><style>.backfab { opacity: 1; pointer-events: auto; }
+  /* The sticky section headings need wirePage's push loop to stop them
+     stacking on top of one another; with no script they go back to being
+     ordinary headings rather than a pile at the top of the viewport. */
+  .digest > h2 { position: static; }</style></noscript>
 <script>
   // Animated preference swap (owner-requested), shared by the theme and
   // text-size minisegs below: run a page-state mutation inside a
@@ -4287,6 +4311,52 @@ ${prefetchScriptHtml}
     // Show the floating back button only after the header nav has scrolled
     // away. Passive listener; runs once immediately so a mid-page reload
     // (browser scroll restoration) starts in the right state.
+    // Sticky section headings inside a digest (see .digest > h2 in the CSS).
+    // A sticky element normally stops sticking at the bottom of its
+    // containing block, which is what makes stacked section headers push each
+    // other out of the way. These headings are flat siblings of one article,
+    // so they share one containing block and would instead pin on top of each
+    // other. This reproduces the missing constraint: each heading is shifted
+    // up by exactly the amount the NEXT heading has encroached on it, so it
+    // is eased out of view precisely as its successor arrives.
+    (function () {
+      var heads = [].slice.call(document.querySelectorAll(".digest > h2"));
+      if (heads.length < 2) return;
+      var root = document.documentElement;
+      // What we last shifted each heading by. Kept so a heading's natural
+      // position can be recovered from its live rect without clearing the
+      // transform first, which would force a reflow on every scroll event.
+      var shifted = [];
+      var onHeads = function () {
+        // Where the headings pin: below the masthead while it is on screen,
+        // at the viewport edge once it has slid away. Matches the CSS.
+        var line = root.classList.contains("masthid")
+          ? 0
+          : parseFloat(getComputedStyle(root).getPropertyValue("--mast-h")) || 0;
+        var tops = [];
+        for (var i = 0; i < heads.length; i++) {
+          tops[i] = heads[i].getBoundingClientRect().top + (shifted[i] || 0);
+        }
+        for (var j = 0; j < heads.length; j++) {
+          var push = 0;
+          if (j + 1 < heads.length) {
+            var h = heads[j].offsetHeight;
+            // Room left between the pin line and the next heading. Once that
+            // is smaller than this heading, the difference is the overlap.
+            var room = tops[j + 1] - line;
+            push = Math.min(h, Math.max(0, h - room));
+          }
+          if (push !== (shifted[j] || 0)) {
+            heads[j].style.transform = push ? "translateY(" + -push + "px)" : "";
+            shifted[j] = push;
+          }
+        }
+      };
+      addEventListener("scroll", onHeads, { passive: true, signal: signal });
+      addEventListener("resize", onHeads, { passive: true, signal: signal });
+      onHeads();
+    })();
+
     // Sticky masthead on the phone (see header.mast in the CSS): hide while
     // the reader scrolls DOWN, bring it back the moment they scroll UP.
     (function () {
@@ -4300,8 +4370,12 @@ ${prefetchScriptHtml}
         if (!mq.matches) {
           // Desktop: the masthead is static again, so leave no state behind
           // — a stale masthid class would translate a non-sticky header off
-          // the top of the page.
+          // the top of the page, and a stale --mast-h would push the sticky
+          // day headers and section headings down by a phone masthead's
+          // height on a viewport that has none.
           root.classList.remove("masthid");
+          root.style.removeProperty("--mast-h");
+          lastH = -1;
           return;
         }
         var h = mast.offsetHeight;
