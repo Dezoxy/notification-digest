@@ -2658,22 +2658,72 @@ const CSS = `
        written HERE loses on source order. That is the same trap the
        .gearicon note above documents, and it had already eaten this rule's
        own padding, font-size and letter-spacing resets silently. */
-    /* Masthead phone posture (true-centering revision): three zones don't
-       fit at 375px, so the capsule takes its own SECOND line, centered.
-       The line break must be FORCED, not hoped for: the side zones carry
-       min-width: 0 / flex-basis 0, so flex would happily crush them to
-       nothing and cram all three items onto one overlapping line
-       (observed live at 375px) — a zero-height, full-basis pseudo-item at
-       order 3 breaks the line deterministically instead. Line one is then
-       brand left + gear right (the gear can never end up alone under the
-       tabs); the order-4 capsule lands on line two, auto side margins
-       centering it while it keeps its fit-content width — flex-basis:100%
-       on the capsule itself would have stretched its border full-bleed.
-       .mastright stays a real box (the settings bubble never depended on
-       it — details.settings is its own anchor, see that comment below). */
-    header.mast { flex-wrap: wrap; }
-    header.mast::before { content: ""; flex-basis: 100%; order: 3; }
-    .mast .viewtabs { order: 4; margin-left: auto; margin-right: auto; }
+    /* Masthead phone posture: ONE line — brand, capsule, search, settings —
+       the same row the desktop shows (owner-requested). It used to take two,
+       with a forced break (a full-basis ::before pseudo-item at order 3)
+       dropping the capsule onto its own centered second line, because the
+       three zones genuinely did not fit at 375px and the side zones' flex:
+       1 1 0 meant flex would crush them into an overlapping single line
+       rather than wrap.
+
+       What makes one line fit now is the sizing below, not a layout trick:
+       the capsule's segments lose horizontal padding, the row gap tightens,
+       and the toolbar icons come down to the wordmark's own height (see the
+       toolbar block further down). The brand keeps its display scale — it
+       turned out not to need shrinking once the other three gave ground.
+       Measured at 375px that is ~303px of content in a 337.5px box; at 360px
+       (the narrowest phone still worth designing for) ~20px still spare, and
+       at ~320px it wraps rather than overflows.
+
+       The forced break is GONE but flex-wrap: wrap stays, now as a genuine
+       safety net rather than a mechanism: the zones are flex: 0 0 auto here,
+       so they cannot be crushed, which means a viewport too narrow to hold
+       them (~320px, an SE-1 class device) WRAPS instead of overlapping —
+       the failure the forced break originally existed to prevent, handled by
+       the wrap itself now that nothing can shrink below its content. */
+    header.mast { flex-wrap: wrap; gap: 0.45em 0.5em; justify-content: space-between; }
+    /* No flex: 1 1 0 growth here — that is the desktop's true-centering
+       trick, and on the phone it is exactly what would crush these back into
+       an overlap. Content width, no grow, no shrink. */
+    .mast .mastleft, .mast .mastright, .mast .viewtabs { flex: 0 0 auto; }
+    /* The capsule is the widest item in the row, so it pays the most: the
+       segments keep their type size and lose horizontal padding only. */
+    .mast .viewtab { padding: 0.5em 0.8em; }
+
+    /* Sticky masthead (owner-requested: "I don't have to scroll up to see
+       the settings, all, daily"). It HIDES on scroll down and comes back on
+       scroll up rather than sitting there permanently — on a phone the row
+       is ~65px of an ~812px viewport, and a reader scrolling down is reading,
+       not navigating. Scrolling up is the gesture that means "I want to get
+       somewhere", which is exactly when the controls should appear. wirePage
+       toggles html.masthid; see that block for the direction logic.
+
+       Needs an opaque background: the page scrolls UNDER a sticky element,
+       so without it the ledger would read straight through the masthead.
+
+       z-index 30 is deliberate — above .dayhead (1), the FAB and resume chip
+       (10) and the settings/search popovers (20, which are children of this
+       element and so ride in its stacking context), but BELOW the ⌘K palette
+       overlay (40), which is a modal and must cover the masthead. */
+    header.mast {
+      position: sticky; top: 0; z-index: 30;
+      background: var(--bg);
+      transition: transform 0.2s ease;
+    }
+    html.masthid header.mast { transform: translateY(-100%); }
+    /* Two more rules belong to this feature — .dayhead's sticky offset and
+       .digest > h2's scroll-margin — but they CANNOT live here: both base
+       rules are defined further down this stylesheet at equal specificity,
+       so an override written here loses on source order (the same trap the
+       .gearicon and toolbar-button notes above document — and it did bite:
+       .dayhead measured top: 0px in both states until they moved). They sit
+       in their own phone block just after .digest > h2 instead. */
+  }
+  /* Reduced motion: the masthead still hides and returns, it just does not
+     slide. Written as its own query rather than nested so it reads the same
+     way as every other motion gate in this file. */
+  @media (max-width: 40em) and (prefers-reduced-motion: reduce) {
+    header.mast { transition: none; }
   }
   .mast .langswitch, .mast .viewswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
   .mast .langswitch a, .mast .viewswitch a { text-decoration: none; }
@@ -3355,6 +3405,24 @@ const CSS = `
     /* So a TOC-jumped-to heading isn't flush against the viewport edge. */
     scroll-margin-top: 0.8em;
   }
+  /* The rest of the sticky-masthead feature (its main block is up in the
+     masthead phone rules). These two are here, BELOW the .dayhead and
+     .digest > h2 rules they override, because at equal specificity that is
+     the only place they win. */
+  @media (max-width: 40em) {
+    /* The day headers are sticky too (top: 0, z-index 1), so with a sticky
+       masthead above them they would pin UNDERNEATH it and vanish. They
+       stick below it instead — and drop back to the top edge in lockstep
+       when the masthead hides, because a fixed offset would leave a band of
+       page content scrolling through the gap the masthead used to fill.
+       --mast-h is measured and published by wirePage, since the compact and
+       big mastheads are different heights. */
+    .dayhead { top: var(--mast-h, 0px); }
+    html.masthid .dayhead { top: 0; }
+    /* A TOC jump must clear the masthead, not land under it. Falls back to
+       the same 0.8em as the rule above when --mast-h is unset. */
+    .digest > h2 { scroll-margin-top: calc(var(--mast-h, 0px) + 0.8em); }
+  }
   .digest > h2::before {
     content: counter(secnum, decimal-leading-zero) "  ";
     font-family: var(--font-data); font-size: 0.62em; font-weight: 400;
@@ -3627,24 +3695,26 @@ const CSS = `
          text-transform/letter-spacing are the mono chip's, and on a lone
          glyph the tracking is a TRAILING gap that shoves it ~3px off-centre
          in a fixed box. */
-      width: 2.2rem; height: 2.2rem; padding: 0; border: none;
+      width: 2rem; height: 2rem; padding: 0; border: none;
       line-height: 0; letter-spacing: 0;
       display: inline-flex; align-items: center; justify-content: center;
     }
-    /* Sized off the GLYPH's ink, not its em box: this mono ⚙ inks ~0.60em
-       tall, so 2.75rem of font-size lands ~26px of actual gear — the same
-       optical size as the search mark below, which inks ~0.82 of its box.
-       Matching font-size to svg-size would have left the gear visibly the
-       smaller of the two. */
-    summary.gear { font-size: 2.75rem; }
-    .searchicon { width: 2rem; height: 2rem; }
+    /* Both marks are sized to the WORDMARK, not to each other or to their
+       own boxes (owner-requested: "same size as the NEWS text"). "NEWS" inks
+       16.5px tall at its phone size, so that is the number all three of these
+       resolve to — and each glyph needs a different multiplier to get there,
+       which is why this cannot just be one shared font-size:
+         · the mono ⚙ inks ~0.603 of its font-size -> 1.7rem  ≈ 16.4px
+         · the magnifier inks ~0.82 of its svg box -> 1.25rem ≈ 16.4px
+       The 2rem button box is then just tap target around them, not a size. */
+    summary.gear { font-size: 1.7rem; }
+    .searchicon { width: 1.25rem; height: 1.25rem; }
     /* The magnifier is drawn on a 16-unit viewBox at stroke-width 1.6, tuned
-       for the old 13px icon (~1.3px of stroke). Scaled to 2rem that same
-       stroke renders ~3.2px and reads as a marker sketch next to this page's
-       hairline chrome, so it thins to hold ~2px — icon-weight, not
-       blown-up-weight. CSS beats the SVG presentation attribute, so the
-       desktop icon keeps its original 1.6 untouched. */
-    .searchicon circle, .searchicon path { stroke-width: 1.1; }
+       for the old 13px icon (~1.3px of stroke). At 1.25rem the original 1.6
+       would render ~2px, heavy for a mark this size next to the page's
+       hairline chrome, so it thins to hold ~1.6px. CSS beats the SVG
+       presentation attribute, so the desktop icon keeps its 1.6 untouched. */
+    .searchicon circle, .searchicon path { stroke-width: 1.3; }
   }
   .searchpanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
@@ -4217,6 +4287,43 @@ ${prefetchScriptHtml}
     // Show the floating back button only after the header nav has scrolled
     // away. Passive listener; runs once immediately so a mid-page reload
     // (browser scroll restoration) starts in the right state.
+    // Sticky masthead on the phone (see header.mast in the CSS): hide while
+    // the reader scrolls DOWN, bring it back the moment they scroll UP.
+    (function () {
+      var mast = document.querySelector("header.mast");
+      if (!mast) return;
+      var root = document.documentElement;
+      var mq = matchMedia("(max-width: 40em)");
+      var lastY = window.scrollY;
+      var lastH = -1;
+      var onMastScroll = function () {
+        if (!mq.matches) {
+          // Desktop: the masthead is static again, so leave no state behind
+          // — a stale masthid class would translate a non-sticky header off
+          // the top of the page.
+          root.classList.remove("masthid");
+          return;
+        }
+        var h = mast.offsetHeight;
+        if (h !== lastH) {
+          // offsetHeight ignores the transform, so this stays correct while
+          // the masthead is translated out of view.
+          root.style.setProperty("--mast-h", h + "px");
+          lastH = h;
+        }
+        var y = window.scrollY;
+        // Never hide while one of the masthead's own disclosures is open —
+        // the reader would lose the panel they just tapped open.
+        if (y <= h || mast.querySelector("details[open]")) root.classList.remove("masthid");
+        else if (y > lastY + 4) root.classList.add("masthid");
+        else if (y < lastY - 4) root.classList.remove("masthid");
+        lastY = y;
+      };
+      addEventListener("scroll", onMastScroll, { passive: true, signal: signal });
+      mq.addEventListener("change", onMastScroll, { signal: signal });
+      onMastScroll();
+    })();
+
     (function () {
       var fab = document.querySelector(".backfab");
       if (!fab) return;
