@@ -10,6 +10,60 @@ Live at: `https://news.toomhorvath.com/t/<SITE_TOKEN>/` and
 D1 database via Cloudflare Workers Custom Domains — see `news_site.tf` at the
 repo root).
 
+## Source layout
+
+One deployed script, several source files. `worker.js` is the entry —
+the authoritative file-header doc, the route patterns, the dispatch — and
+everything else lives in `src/`, which wrangler's bundler folds back into a
+single self-contained script at deploy time. **No build step and no build
+configuration**: `wrangler.jsonc` still just names `worker.js` as `main`.
+
+| | |
+| --- | --- |
+| `src/config.js` | tunable caps, shape regexes, the arc-identity fold |
+| `src/auth.js` | `keyMatches`/`tokenMatches` — timing-safe secret compare |
+| `src/http.js` | response constructors and `esc()` |
+| `src/dates.js` | Europe/Budapest formatting, ISO-week arithmetic |
+| `src/strings.js` | the EN/HU chrome vocabulary (key-for-key parity, tested) |
+| `src/hrefs.js` | URL-grammar builders + the language/view switchers |
+| `src/sections.js` | the `#sN` anchor contract (`buildSectionToc` et al) |
+| `src/css.js` | the stylesheet, one static string |
+| `src/client.js` | the client-side script, one static string |
+| `src/chrome.js` | `pageChrome` — the shell every page renders into |
+| `src/ingest.js` | `PUT /ingest`: handler plus every validator |
+| `src/handlers.js` | the GET page handlers |
+| `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
+
+Two rules worth knowing before editing:
+
+- **`css.js` and `client.js` are template-literal exports.** Neither string
+  may contain a backtick, a `${` sequence, or its own closing tag — any of
+  the three corrupts the literal or the inline embedding. `npm test`
+  enforces it, but it is easier to simply not write one.
+- **Every phone override lives in ONE `max-width: 40em` block** near the end
+  of `css.js`, after every base rule it overrides. (Grep finds a second
+  match: its `and (prefers-reduced-motion: reduce)` twin, immediately after.
+  Print is last.) Scattered phone blocks used to lose silently to
+  equal-specificity base rules defined later in the file — that cost six
+  separate rules over this file's history. Add phone rules to that block,
+  not next to the feature they modify.
+
+## Tests
+
+```bash
+npm test          # invariants + golden byte-check + prettier check
+npm run golden    # regenerate the golden pages (only when output should change)
+```
+
+No dependencies — `node --test` plus a byte-comparison script, against a
+stubbed D1 and a frozen clock. A refactor that should not change output must
+pass with a **zero** golden diff; a change that should alter output
+regenerates the goldens, and that diff is the review artifact.
+
+See `test/README.md` for the fixture/branch contract and the verification
+recipes (bundled-artifact check, the CSS computed-style matrix, driving the
+real router in a browser).
+
 ## Trust model: capability links, not login
 
 There is **no login form and no Cloudflare Access** in front of this site —
@@ -116,8 +170,9 @@ cd workers/news-site
 wrangler d1 create news-digests
 # -> paste the returned database_id into wrangler.jsonc
 
-# 2. Apply the schema
-wrangler d1 execute news-digests --file schema.sql
+# 2. Apply the schema (--remote: the deployed database, not a local replica.
+#    wrangler v4 requires one of --remote/--local and will not guess.)
+wrangler d1 execute news-digests --remote --file schema.sql
 
 # 3. Deploy the Worker
 wrangler deploy
@@ -184,6 +239,11 @@ compromised. They're independent — rotating one never affects the other.
    silent window where old or new key both work.
 
 ## Smoke test
+
+Most of what used to be checked by hand is now covered offline by `npm test`
+(every route, both languages, the 404 indistinguishability, ingest auth and
+each validator rejection). The curl pass below is what that cannot prove:
+that the **deployed** Worker, its real secrets, and the real D1 agree.
 
 ```bash
 TOKEN="<SITE_TOKEN>"

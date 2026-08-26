@@ -16,7 +16,7 @@
  *   - INGEST_KEY — a machine credential the digest VM sends as `x-ingest-key`
  *     to push new digests. Never exposed to readers.
  *   Both are compared timing-safely (hash-then-timingSafeEqual — see
- *   keyMatches below), the same pattern as the sibling polymarket-proxy
+ *   keyMatches in src/auth.js), the same pattern as the sibling polymarket-proxy
  *   Worker. Neither secret lives in source or wrangler.jsonc; both are set
  *   with `wrangler secret put`.
  *
@@ -61,7 +61,7 @@
  * are just a read-time view over them (§11.1 guardrail: no storyline-first
  * storage inversion). The slug-stability contract this depends on
  * (`_slugify`, notification-digest repo) and the digest-HTML-to-#sN-anchor
- * coupling (buildSectionToc below) are now PUBLIC URL/link contracts, not
+ * coupling (buildSectionToc in src/sections.js) are now PUBLIC URL/link contracts, not
  * just internal join keys — see findArcSectionAnchor's comment for how a
  * deep link degrades safely (never wrongly) when that coupling can't be
  * resolved unambiguously.
@@ -114,6 +114,27 @@
  * are stored/served verbatim — they are the only fields ever inserted into
  * a response without HTML-escaping, and only ever into the <article> slot.
  * Every other D1-sourced value goes through esc().
+ *
+ * Source layout: THIS file is the entry — the header you are reading, the
+ * route patterns, and the dispatch. Everything else lives in src/, which
+ * wrangler's bundler folds back into one deployed script (no build config):
+ *
+ *   config.js     tunable caps, shape regexes, the arc-identity fold
+ *   auth.js       keyMatches/tokenMatches (timing-safe secret compare)
+ *   http.js       response constructors + esc()
+ *   dates.js      Europe/Budapest formatting, ISO-week arithmetic
+ *   strings.js    the EN/HU chrome vocabulary
+ *   hrefs.js      URL-grammar builders + the language/view switchers
+ *   sections.js   the #sN anchor contract (buildSectionToc et al)
+ *   css.js        the stylesheet, one static string
+ *   client.js     the client-side script, one static string
+ *   chrome.js     pageChrome — the shell every page renders into
+ *   ingest.js     PUT /ingest: handler + every validator
+ *   handlers.js   the GET page handlers
+ *   render-*.js   per-page renderers (shared helpers in render-shared.js)
+ *
+ * `npm test` (node --test, no dependencies) holds all of it to byte-identical
+ * output against committed golden pages — see test/README.md.
  */
 
 import { notFound } from "./src/http.js";
