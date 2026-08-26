@@ -287,7 +287,22 @@ export function formatWeekRangeLabel(year, week, locale) {
   // only difference, and a composite cache key would be the only composite
   // key in the file for two entries' worth of savings.
   const fmt = spansCalendarYearBoundary ? weekRangeYearFmt(locale) : weekRangeFmt(locale);
-  return fmt.formatRange(monday, sunday);
+  // formatRange picks the range separator AND its spacing from ICU's locale
+  // data, and that spacing is not stable across ICU versions: ICU 77 renders
+  // "24-30 Aug", newer builds render "24 - 30 Aug" (with spaces). Three
+  // different ICU builds are in play for this one string — the laptop that
+  // generates the golden pages, the Linux image that verifies them, and
+  // workerd, which is what readers actually see — so leaving the choice to
+  // ICU makes a user-visible label depend on which runtime happened to
+  // render it, and makes the golden comparison fail on nothing but a
+  // toolchain difference (it did: the first CI build died here).
+  //
+  // Normalizing the spacing keeps every bit of ICU's locale intelligence —
+  // field order, month abbreviation, which parts collapse when the range
+  // shares a month — and pins only the one thing that drifts. Tight is the
+  // documented intent: see the "3-9 Aug" shape this label is specified as
+  // above.
+  return fmt.formatRange(monday, sunday).replace(/\s*([\u2013\u2014])\s*/g, "$1");
 }
 
 // "Last updated" relative label (arc pages only). Intl.RelativeTimeFormat
