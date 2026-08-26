@@ -94,6 +94,17 @@ HTML response are load-bearing, not cosmetic:
   survivable across profiles, or any CDN layer that isn't already scoped to
   this one requester.
 
+One place the token deliberately DOES come to rest: Workers Observability.
+Logs and traces record request URLs, so the capability token lands in
+retained observability data (`redact_query_string` is no help — the token
+is in the path, not the query string). That is an accepted tradeoff, not an
+oversight: the account has one operator, and the debugging value is real.
+The lever if that ever stops being true is `head_sampling_rate` in
+`wrangler.jsonc`, which records only a fraction of requests. Every
+observability setting is declared in that file rather than toggled in the
+dashboard, because the file overwrites the dashboard on every deploy — and
+deploys are automatic now.
+
 Also set on every HTML response: `X-Robots-Tag: noindex, nofollow` (belt and
 suspenders against a crawler that ignores `robots.txt`) and
 `Content-Type: text/html; charset=utf-8`. `GET /robots.txt` itself needs no

@@ -11,9 +11,32 @@
   "main": "worker.js",
   "compatibility_date": "2026-08-05",
   "workers_dev": true,
+  // Declared in full because the DASHBOARD and this file drift, and this
+  // file wins on every deploy — which now happens automatically on each
+  // push to main, so a toggle flipped in the UI would be silently reverted
+  // by the next merge with nothing to point at. If you want an observability
+  // setting, it belongs here.
+  //
+  // TRADEOFF, specific to this Worker: the capability token is part of the
+  // URL PATH (/t/<SITE_TOKEN>/...), and both logs and traces record request
+  // URLs, so the reader-facing secret ends up in retained observability
+  // data. redact_query_string does not help — the token is not in the query
+  // string. Accepted here because the account has exactly one operator and
+  // the debugging value is real; the lever if that ever changes is
+  // head_sampling_rate, which records only a fraction of requests.
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    },
+    // Spans per invocation — the D1 query vs. render split. Worth having:
+    // the perf work in this Worker was tuned against a 5-row fixture, and
+    // this is the only way to see what a real index render costs.
+    "traces": {
+      "enabled": true
+    }
   },
   "d1_databases": [
     {
