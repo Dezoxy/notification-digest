@@ -6,3 +6,5 @@
 # destined for Worker secrets + the digest service secret store). Never commit.
 .site-token.local
 .ingest-key.local
+node_modules/
+dist/
