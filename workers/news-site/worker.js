@@ -2636,17 +2636,15 @@ const CSS = `
        this reveal needs the extra summary.gear ancestor to outweigh it. */
     .gearlabel { display: none; }
     summary.gear .gearicon { display: inline; }
-    /* The two toolbar toggles become EQUAL circles (owner follow-up: the
-       gear must match the search icon's size). Fixed rem box on both — the
-       gear's mono chip type and the search svg have different natural
-       metrics, so equal padding alone never lines them up. letter-spacing
-       reset: the mono chip tracking adds a trailing gap that shoves a
-       single glyph off-center in a fixed box. */
-    summary.gear, summary.searchtoggle {
-      width: 1.9rem; height: 1.9rem; padding: 0;
-      display: inline-flex; align-items: center; justify-content: center;
-    }
-    summary.gear { font-size: 0.9em; letter-spacing: 0; }
+    /* The two toolbar toggles are EQUAL boxes on the phone (owner follow-up:
+       the gear must match the search icon's size) — but their rules do NOT
+       live here. They sit in the phone block AFTER summary.gear and
+       summary.searchtoggle's own rules further down this stylesheet, which
+       is the only place they survive: those base rules set border, padding,
+       font-size and letter-spacing at the same specificity, so an override
+       written HERE loses on source order. That is the same trap the
+       .gearicon note above documents, and it had already eaten this rule's
+       own padding, font-size and letter-spacing resets silently. */
     /* Masthead phone posture (true-centering revision): three zones don't
        fit at 375px, so the capsule takes its own SECOND line, centered.
        The line break must be FORCED, not hoped for: the side zones carry
@@ -2700,9 +2698,12 @@ const CSS = `
      anchor choice stays — it was never wrong, and moving it buys nothing.) */
   details.settings { position: relative; }
   /* "Print poster" controls: 1px var(--rule-heavy) border, mono uppercase
-     label — the toolbtn recipe shared by summary.gear and
-     summary.searchtoggle below (kept as two rules, not merged, since the
-     search trigger is icon-only and carries no text baseline to match).
+     label — the toolbtn recipe shared with summary.searchtoggle below on the
+     DESKTOP, where both are text chips ("SEARCH", "SETTINGS"). Still two
+     rules rather than one merged selector, because the PHONE pulls them
+     apart again: there both collapse to bare, borderless, oversized icons,
+     and they get there from different starting metrics (a mono glyph vs an
+     svg). See the phone block below summary.searchtoggle.
      Pill-rounded (owner-requested exception to the redesign's otherwise
      square-cornered rule): every INTERACTIVE control — buttons, segmented
      capsules, the FAB — keeps the old 999px pill shape; panels, chips,
@@ -3546,23 +3547,92 @@ const CSS = `
      is a second, unrelated disclosure that must not collide with either
      lookup. */
   details.searchpop { position: relative; }
-  /* Icon-only (owner-requested): sized off the icon itself, so the pill
-     collapses to a round tap target instead of keeping the old text
-     control's horizontal padding. line-height 0 keeps the SVG from
-     inheriting a text box taller than itself. */
+  /* Two-faced, the same way summary.gear is: a TEXT chip on the desktop
+     ("SEARCH"/"KERESÉS", owner-requested — it reads as a matched pair with
+     the SETTINGS chip beside it) and a bare oversized magnifier on the
+     phone. Both halves are in the markup (see renderSearchBubble) and each
+     breakpoint hides one; this rule is the DESKTOP half and deliberately
+     duplicates summary.gear's pill recipe declaration for declaration, so
+     the two chips share a border, type, tracking and padding.
+
+     Unlike .gearicon/.gearlabel, the reveal below needs NO specificity
+     boost: the phone block sits BELOW this rule, so source order already
+     carries it. That is the whole reason it lives down there. */
   summary.searchtoggle {
     list-style: none; display: inline-flex; align-items: center; justify-content: center;
     background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
-    color: var(--text); line-height: 0;
-    padding: 0.45em; cursor: pointer;
+    color: var(--text); font-family: var(--font-data); font-size: 0.62em;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.4em 0.75em; cursor: pointer;
   }
-  /* Quiet hover / filled open — same split as summary.gear above. */
+  /* Desktop half-swap: the word shows, the magnifier hides. Reversed in the
+     phone block below. */
+  .searchicon { display: none; }
+  /* Quiet hover / filled open — the same split as summary.gear above. */
   summary.searchtoggle:hover { border-color: var(--accent); color: var(--accent); }
   summary.searchtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
   details.searchpop[open] > summary.searchtoggle {
     background: var(--accent); border-color: var(--accent); color: var(--bg);
   }
   summary.searchtoggle::-webkit-details-marker { display: none; }
+
+  /* Phone toolbar buttons: borderless, icon-scale (owner-requested — "remove
+     the circle, make the icon as big as the circle was"). The ring around the
+     search and gear toggles comes off and the marks inside grow to roughly the
+     diameter that ring used to occupy, so the icon IS the control instead of a
+     small glyph floating in a lot of empty circle.
+
+     Phone-scoped in full: on the desktop BOTH controls are bordered mono
+     text chips ("SEARCH", "SETTINGS") and neither has an icon to scale. This
+     block is where they become icons instead — it reverses both half-swaps
+     and strips the pill recipe those two rules above set.
+
+     This block must stay BELOW summary.gear and summary.searchtoggle above —
+     it overrides their border/padding/font-size/letter-spacing at equal
+     specificity, so it only wins on source order. Putting it back up in the
+     masthead media block is the one edit that silently reverts it. */
+  @media (max-width: 40em) {
+    /* Reverse both half-swaps: icons in, words out. .searchicon/.searchlabel
+       need no specificity boost (this block is BELOW their rules); .gearicon
+       does, because ITS desktop rule sits below the masthead block that
+       reveals it — see the note up there. */
+    .searchlabel { display: none; }
+    .searchicon { display: inline-block; }
+    summary.gear, summary.searchtoggle {
+      /* Box grows 1.9rem -> 2.2rem: with the border gone the control reads
+         LIGHTER than before even slightly larger, and the icons need the room.
+         Still a single fixed rem box on both — the gear's mono glyph and the
+         search svg have different natural metrics, so equal padding alone
+         never lines them up.
+
+         line-height 0 matters on both: each control's desktop rule leaves a
+         normal text line box (they are TEXT chips there), and at these font
+         sizes that box is taller than the button — 44px inside 35.2px for the
+         gear. The glyph itself fits; its line box does not, and the open
+         state's accent fill is painted on the BUTTON, so an overflowing line
+         box leaves the mark hanging out of its own filled pill (caught live).
+         text-transform/letter-spacing are the mono chip's, and on a lone
+         glyph the tracking is a TRAILING gap that shoves it ~3px off-centre
+         in a fixed box. */
+      width: 2.2rem; height: 2.2rem; padding: 0; border: none;
+      line-height: 0; letter-spacing: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    /* Sized off the GLYPH's ink, not its em box: this mono ⚙ inks ~0.60em
+       tall, so 2.75rem of font-size lands ~26px of actual gear — the same
+       optical size as the search mark below, which inks ~0.82 of its box.
+       Matching font-size to svg-size would have left the gear visibly the
+       smaller of the two. */
+    summary.gear { font-size: 2.75rem; }
+    .searchicon { width: 2rem; height: 2rem; }
+    /* The magnifier is drawn on a 16-unit viewBox at stroke-width 1.6, tuned
+       for the old 13px icon (~1.3px of stroke). Scaled to 2rem that same
+       stroke renders ~3.2px and reads as a marker sketch next to this page's
+       hairline chrome, so it thins to hold ~2px — icon-weight, not
+       blown-up-weight. CSS beats the SVG presentation attribute, so the
+       desktop icon keeps its original 1.6 untouched. */
+    .searchicon circle, .searchicon path { stroke-width: 1.1; }
+  }
   .searchpanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     z-index: 20;
@@ -5828,15 +5898,24 @@ function renderLeadCard(row, token, lang, view) {
 // week-rail row itself) and directly from renderIndexPage on the daily/
 // weekly views, which have no week rail to live in — see that call site.
 function renderSearchBubble(token, lang, strings) {
-  // Icon, not the word (owner-requested): an inline SVG magnifier rather
-  // than a glyph character — U+2315/U+26B2 render inconsistently across
-  // platforms and the emoji magnifier drags its own colour into a
-  // deliberately muted palette. currentColor + the 1.6 stroke keeps it in
-  // the same weight register as the ⚙ gear beside it. The label survives
-  // as the accessible name (aria-label), so nothing is lost to a screen
-  // reader or the ⌘K palette's own DOM scrape.
+  // BOTH halves ship, and CSS hides one per breakpoint — the same
+  // icon/label half-swap summary.gear already uses (.gearicon/.gearlabel).
+  // Desktop shows the WORD ("SEARCH"/"KERESÉS"), matching the SETTINGS chip
+  // beside it (owner-requested); the phone shows the bare magnifier, where
+  // the masthead has no room for two words. See summary.searchtoggle in the
+  // CSS for which half wins where.
+  //
+  // The icon is an inline SVG rather than a glyph character: U+2315/U+26B2
+  // render inconsistently across platforms and the emoji magnifier drags its
+  // own colour into a deliberately muted palette. currentColor + the stroke
+  // keeps it in the same weight register as the ⚙ gear beside it.
+  //
+  // aria-label stays on the summary even now that a visible label exists: it
+  // is the ONLY accessible name at the phone breakpoint, and on the desktop
+  // it is the same string as the visible text, so the two never disagree.
+  // The ⌘K palette's own DOM scrape reads it too.
   const icon = `<svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
-  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}" title="${esc(strings.searchToggleLabel)}">${icon}</summary><div class="searchpanel"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
+  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}" title="${esc(strings.searchToggleLabel)}">${icon}<span class="searchlabel">${esc(strings.searchToggleLabel)}</span></summary><div class="searchpanel"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
 }
 
 // Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
