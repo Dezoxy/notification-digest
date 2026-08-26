@@ -16,7 +16,7 @@ ToS and account-ban risk, which the owner has explicitly accepted.
 ```
 Telegram (Telethon) ─┐                                              ┌─> Telegram TL;DR ping
 X/Twitter (twifork)  │                                              │
-RSS / news feeds     ├─> collectors ─> SQLite state ─> Claude ──────┼─> news site (D1 Worker)
+RSS / news feeds     ├─> collectors ─> SQLite state ─> Claude ──────┼─> news site (workers/news-site/)
 Reddit               │                  (items, cursors, summarize  │
 Polymarket           │                    digests, deltas, + trans- ├─> SMTP email (implemented,
 Hacker News         ─┘                    arc keys/context)  late   │   disabled on the deployment)
@@ -217,12 +217,39 @@ docker volume rm digest-data
 it is *not* project-prefixed — the commands above address the exact volume
 the service uses).
 
+## The news site (`workers/news-site/`)
+
+One of the delivery channels lives in this repo as source: the Cloudflare
+Worker that receives each finished digest over `PUT /ingest/:id` and serves
+the private archive readers actually browse. It moved here from the
+`Dezoxy/toom-edge` infra repo (with its full history) because it is a
+component of this service, not of that estate — what stays there is the
+Terraform that binds the two hostnames (`news_site.tf`).
+
+It is a separate program with a separate toolchain and a separate deploy:
+
+| | This service | The Worker |
+|---|---|---|
+| Language | Python 3.12 (uv) | JavaScript (no build step) |
+| Tests | `uv run pytest` | `cd workers/news-site && npm ci && npm test` |
+| Ships via | git tag -> GHCR image -> homelab | `wrangler deploy` from `workers/news-site` |
+
+The two are coupled only by the ingest contract (`INGEST_KEY`, the payload
+shape validated in `workers/news-site/src/ingest.js`) and by the `#sN`
+section-anchor numbering both sides derive independently — see that repo
+directory's `README.md`, which is the authoritative document for the site.
+
 ## Deployment
 
 Not deployed from this repo. A git tag triggers `.github/workflows/release.yml`,
 which builds and publishes the image to GHCR; Renovate in the separate
 `~/developer/homelab` repo bumps the pinned tag, and deploy (systemd timer,
 Ansible role `myapps`, secrets wiring via Azure Key Vault) happens from there.
+
+The Worker deploys on its own track and is not part of that chain: a tag
+here ships the Python service only. Deploying the site is `wrangler deploy`
+from `workers/news-site` (see its README) — cutting a release tag does not
+touch it, and vice versa.
 
 ## Status
 

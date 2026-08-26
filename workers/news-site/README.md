@@ -1,9 +1,14 @@
 # news-site
 
-The private digest archive for the notification-digest service
-(github.com/Dezoxy/notification-digest). Every ~3 hours the digest VM POSTs
-(technically PUTs) a newly generated digest into this Worker, which stores it
-in D1 and serves it back as a small, readable HTML site.
+The private digest archive for the notification-digest service — and it now
+lives IN that service's repo, which is where you are. Every ~3 hours a digest
+run PUTs a newly generated digest into this Worker, which stores it in D1 and
+serves it back as a small, readable HTML site.
+
+It moved here (with its full history) from `Dezoxy/toom-edge`, the Cloudflare
+infra repo. What stayed there is the Terraform that binds the two hostnames
+to this Worker's service name — `news_site.tf`. So a hostname/Access change
+is still a toom-edge change; everything about the Worker itself is here.
 
 Live at: `https://news.toomhorvath.com/t/<SITE_TOKEN>/` and
 `https://news.tomhorvath.me/t/<SITE_TOKEN>/` (both point at the same Worker +
@@ -51,12 +56,15 @@ Two rules worth knowing before editing:
 ## Tests
 
 ```bash
+npm ci            # once per clone: installs prettier (the only devDependency)
 npm test          # invariants + golden byte-check + prettier check
 npm run golden    # regenerate the golden pages (only when output should change)
 ```
 
-No dependencies — `node --test` plus a byte-comparison script, against a
-stubbed D1 and a frozen clock. A refactor that should not change output must
+The tests themselves need nothing installed — `node --test` plus a
+byte-comparison script, against a stubbed D1 and a frozen clock. `npm ci` is
+only for the prettier check `npm test` ends with; skip it and that last step
+fails with `prettier: command not found` on a fresh clone. A refactor that should not change output must
 pass with a **zero** golden diff; a change that should alter output
 regenerates the goldens, and that diff is the review artifact.
 
@@ -164,7 +172,7 @@ list.
 ## Deploy
 
 ```bash
-cd workers/news-site
+cd workers/news-site   # in the notification-digest repo
 
 # 1. Create the D1 database
 wrangler d1 create news-digests

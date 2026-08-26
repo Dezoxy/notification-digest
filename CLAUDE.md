@@ -23,6 +23,10 @@ true at the multi-channel cutover.
 
 - Python 3.12, dependency management via uv (`uv sync`, `uv run ...`).
 - Lint and format with ruff; run tests with pytest.
+- Those two rules cover the Python service. `workers/news-site/` is a
+  Cloudflare Worker (JavaScript, no build step) with its own conventions:
+  npm, prettier, `node --test`. Don't apply ruff/pytest expectations to it,
+  and don't add Python tooling that walks into it.
 - Type hints on all public functions.
 - Small modules, no speculative abstractions — this is a single-owner, single-
   deployment service, not a library.
@@ -85,6 +89,20 @@ uv run ruff check . && uv run pytest
 
 If `Dockerfile` or `compose.yml` changed, also confirm `docker build .`
 succeeds.
+
+If anything under `workers/news-site/` changed, that subtree has its OWN
+toolchain and its own bar — Node, not Python:
+
+```
+cd workers/news-site && npm ci && npm test
+```
+
+`npm test` = invariant tests + a byte-comparison against committed golden
+pages + a prettier check. The contract there is stricter than "tests pass":
+a change that should not alter rendered output must produce a ZERO golden
+diff, and a change that should alter it regenerates the goldens
+(`npm run golden`) so the diff itself is the review artifact. See
+`workers/news-site/test/README.md`.
 
 ## Deploy note
 
