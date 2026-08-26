@@ -240,6 +240,16 @@ const ARC_ANCHOR_BODIES = 24;
 
 // ── entry point ─────────────────────────────────────────────────────────
 
+// Route patterns, hoisted: a regex literal inside fetch() is re-created on
+// every request. The URL grammar itself is documented in the file header —
+// these are that table, in the dispatch order below.
+const ROUTE_INGEST = /^\/ingest\/(\d+)$/;
+const ROUTE_DIGEST = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?d\/(\d+)$/;
+const ROUTE_SEARCH = /^\/t\/([^/]+)\/(hu\/)?search$/;
+const ROUTE_ARC = /^\/t\/([^/]+)\/(hu\/)?a\/([a-z0-9-]{1,64})$/;
+const ROUTE_ABOUT = /^\/t\/([^/]+)\/(hu\/)?about$/;
+const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -265,7 +275,7 @@ export default {
       });
     }
 
-    const ingestMatch = path.match(/^\/ingest\/(\d+)$/);
+    const ingestMatch = path.match(ROUTE_INGEST);
     if (ingestMatch) {
       if (request.method !== "PUT") return notFound();
       return handleIngest(request, env, ingestMatch[1]);
@@ -278,7 +288,7 @@ export default {
     // language×view combination — see handleIndexPage/handleDigestPage,
     // which take `lang` and `view` as plain parameters rather than being
     // duplicated per combination.
-    const digestMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?d\/(\d+)$/);
+    const digestMatch = path.match(ROUTE_DIGEST);
     if (digestMatch && request.method === "GET") {
       const lang = digestMatch[2] ? "hu" : "en";
       const view =
@@ -290,7 +300,7 @@ export default {
     // index/digest grammar below — no "daily/"/"weekly/" or "w/" variant
     // (search spans the whole archive, see the file-header comment). Query
     // text comes from url.searchParams, never the path.
-    const searchMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?search$/);
+    const searchMatch = path.match(ROUTE_SEARCH);
     if (searchMatch && request.method === "GET") {
       const lang = searchMatch[2] ? "hu" : "en";
       return handleSearchPage(env, searchMatch[1], url, lang);
@@ -304,7 +314,7 @@ export default {
     // reaches handleArcPage, so a malformed slug 404s before touching the
     // DB by construction, not by a separate guard the handler has to
     // remember to run first.
-    const arcMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?a\/([a-z0-9-]{1,64})$/);
+    const arcMatch = path.match(ROUTE_ARC);
     if (arcMatch && request.method === "GET") {
       const lang = arcMatch[2] ? "hu" : "en";
       return handleArcPage(env, arcMatch[1], arcMatch[3], url, lang);
@@ -316,7 +326,7 @@ export default {
     // came from. Reuses the exact same token-gate/404 contract as every
     // other route here (see handleAboutPage) — a wrong token 404s
     // byte-identically to a wrong token anywhere else.
-    const aboutMatch = path.match(/^\/t\/([^/]+)\/(hu\/)?about$/);
+    const aboutMatch = path.match(ROUTE_ABOUT);
     if (aboutMatch && request.method === "GET") {
       const lang = aboutMatch[2] ? "hu" : "en";
       return handleAboutPage(env, aboutMatch[1], url, lang);
@@ -326,9 +336,7 @@ export default {
     // `w/YYYY-Www/` — the digest-page regex above stays untouched, digest
     // pages have no week address (prev/next crosses week boundaries
     // invisibly, unchanged). Root index (no w/ segment) = the current week.
-    const indexMatch = path.match(
-      /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/,
-    );
+    const indexMatch = path.match(ROUTE_INDEX);
     if (indexMatch && request.method === "GET") {
       const lang = indexMatch[2] ? "hu" : "en";
       const view =
@@ -764,12 +772,15 @@ async function handleDigestPage(env, token, idParam, url, lang, view) {
     // stays available for renderDeltas' own slug-keyed label lookup (deltas
     // are the deliberate exception to arc identity — see ARC_IDENTITY_SQL's
     // comment) — neither renderer has to recompute what the other needs.
-    topicArcs = topics.map((t) => ({
-      slug: t.slug,
-      label: t.label,
-      identity: arcIdentity(t),
-      count: priorIdentitySets.filter((set) => set.has(arcIdentity(t))).length + 1,
-    }));
+    topicArcs = topics.map((t) => {
+      // One fold per topic — the old inline form re-ran arcIdentity(t) inside
+      // the per-prior-set filter, O(topics x priors) recomputations of the
+      // same value.
+      const identity = arcIdentity(t);
+      let priors = 0;
+      for (const set of priorIdentitySets) if (set.has(identity)) priors++;
+      return { slug: t.slug, label: t.label, identity, count: priors + 1 };
+    });
   }
 
   // In the daily or weekly view, prev/next stay within that same kind so a
@@ -978,6 +989,9 @@ async function handleArcPage(env, token, identity, url, lang) {
     env.DB.prepare("SELECT context_md FROM arc_context WHERE key = ?1").bind(identity).first(),
   ]);
   const bodyById = new Map((bodyRows ?? []).map((r) => [r.id, r.body_html]));
+  // One section scan per fetched body (see sectionsOfBody) — every
+  // appearance of that digest then does a plain array match against it.
+  const sectionsById = new Map(Array.from(bodyById, ([id, body]) => [id, sectionsOfBody(body)]));
   const contextMd = contextRow?.context_md ?? null;
 
   // Reversed to ASC (oldest first): renderArcPage's first/latest handling
@@ -1001,7 +1015,9 @@ async function handleArcPage(env, token, identity, url, lang) {
       created_at: row.created_at,
       kind: row.kind,
       label: row.label,
-      anchor: bodyById.has(row.id) ? findArcSectionAnchor(bodyById.get(row.id), row.label) : null,
+      anchor: sectionsById.has(row.id)
+        ? findArcSectionAnchor(sectionsById.get(row.id), row.label)
+        : null,
       delta,
     };
   });
@@ -1033,8 +1049,16 @@ async function handleArcPage(env, token, identity, url, lang) {
 // null, which renders as a fragment-less link to the digest page itself
 // (see renderArcAppearance) rather than a guess that might land on the
 // wrong section.
-function findArcSectionAnchor(bodyHtml, label) {
-  const { sections } = buildSectionToc(stripInlineStyles(bodyHtml));
+// Split in two so the expensive half runs once per BODY and the cheap half
+// once per APPEARANCE: sectionsOfBody is the full stripInlineStyles ->
+// buildSectionToc regex pipeline over a body that can be megabytes, and an
+// arc revisiting the same digest under several labels used to re-run it for
+// every appearance (up to ARC_ANCHOR_BODIES times per page view).
+function sectionsOfBody(bodyHtml) {
+  return buildSectionToc(stripInlineStyles(bodyHtml)).sections;
+}
+
+function findArcSectionAnchor(sections, label) {
   const trimmed = label.trim();
   const exact = sections.filter((s) => s.title === trimmed);
   if (exact.length === 1) return exact[0].id;
@@ -1065,8 +1089,10 @@ async function tokenMatches(env, token) {
 
 // ── validation ──────────────────────────────────────────────────────────
 
+const TEXT_ENCODER = new TextEncoder();
+
 function byteLength(str) {
-  return new TextEncoder().encode(str).length;
+  return TEXT_ENCODER.encode(str).length;
 }
 
 function validateDigestPayload(payload) {
@@ -1488,10 +1514,11 @@ async function keyMatches(provided, expected) {
   // Hash both sides first: crypto.subtle.timingSafeEqual requires
   // equal-length inputs, and comparing digests leaks nothing about the
   // secret's length or content.
-  const enc = new TextEncoder();
+  // TEXT_ENCODER is the module-level instance — this runs on every request
+  // (tokenMatches), and byteLength reuses it on every ingest field.
   const [a, b] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(provided)),
-    crypto.subtle.digest("SHA-256", enc.encode(expected)),
+    crypto.subtle.digest("SHA-256", TEXT_ENCODER.encode(provided)),
+    crypto.subtle.digest("SHA-256", TEXT_ENCODER.encode(expected)),
   ]);
   return crypto.subtle.timingSafeEqual(a, b);
 }
@@ -1548,8 +1575,14 @@ const HTML_ESCAPES = {
   "'": "&#39;",
 };
 
+// Hoisted: esc() runs ~120 static call sites x per-row on the index, and a
+// regex literal inside the function body is recompiled on every call.
+// String.replace resets lastIndex on a /g/ regex, so one shared instance is
+// safe across calls.
+const ESC_RE = /[&<>"']/g;
+
 function esc(value) {
-  return String(value).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+  return String(value).replace(ESC_RE, (c) => HTML_ESCAPES[c]);
 }
 
 // ── time formatting (Europe/Budapest hardcoded, per project convention:
@@ -1560,40 +1593,75 @@ function esc(value) {
 // EN/HU formatting work (weekday/month names, date ordering) once given the
 // right locale tag; this file never hand-builds a Hungarian date string.
 
+// One Intl formatter per (options x locale), built on first use and reused
+// forever after: Intl constructors are the expensive half of formatting (ICU
+// data lookup), and the index page used to construct one PER ROW — with the
+// daily/weekly views' LIMIT 1000, that is up to ~2,000 constructions per
+// render, all of exactly two distinct formatters. Lazy (nothing built at
+// isolate startup), and module-level, so the cache also survives across
+// requests for as long as the isolate does. Only two locales ever exist
+// (STRINGS.en.locale / STRINGS.hu.locale), so the Maps stay tiny.
+function memoIntl(build) {
+  const cache = new Map();
+  return (locale) => {
+    let fmt = cache.get(locale);
+    if (!fmt) {
+      fmt = build(locale);
+      cache.set(locale, fmt);
+    }
+    return fmt;
+  };
+}
+
+const dayHeaderFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: TIMEZONE,
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }),
+);
+
 function formatDayHeader(date, locale) {
   // en-GB: "Wednesday, 5 August 2026" · hu-HU: "2026. augusztus 6., csütörtök"
-  return new Intl.DateTimeFormat(locale, {
-    timeZone: TIMEZONE,
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(date);
+  return dayHeaderFmt(locale).format(date);
 }
 
 function formatTime(date, locale) {
   // "18:00" in both locales (hour12: false makes the locale irrelevant here,
   // but it's threaded through for consistency/future-proofing).
-  return new Intl.DateTimeFormat(locale, {
-    timeZone: TIMEZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  return timeFmt(locale).format(date);
 }
+
+const timeFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }),
+);
 
 function formatShortDate(date, locale) {
   // A compact form for <title> (see pageChrome's `title` param): en-GB
   // "Fri 8 Aug" · hu-HU "aug. 8., P" — same fields as formatDayHeader, just
   // abbreviated, so a browser tab/history entry stays legible without
   // eating the whole title budget.
-  return new Intl.DateTimeFormat(locale, {
-    timeZone: TIMEZONE,
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-  }).format(date);
+  return shortDateFmt(locale).format(date);
 }
+
+const shortDateFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: TIMEZONE,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    }),
+);
 
 // Budapest's UTC offset, in minutes, AT the given instant — the numeric
 // generalization of tzAbbr's CET/CEST lookup below, also reused by
@@ -1604,11 +1672,16 @@ function formatShortDate(date, locale) {
 // string; Europe/Budapest only ever has these two (whole-hour) offsets, so
 // the parse is exact. Locale-independent numeric parse (not user-facing
 // text), so it stays on "en-GB" regardless of the page's language.
+const offsetFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: TIMEZONE,
+      timeZoneName: "shortOffset",
+    }),
+);
+
 function budapestOffsetMinutes(date) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: TIMEZONE,
-    timeZoneName: "shortOffset",
-  }).formatToParts(date);
+  const parts = offsetFmt("en-GB").formatToParts(date);
   const offset = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
   // Match "+2" AND "+02" (ICU emits "GMT+2" for shortOffset today, but a
   // runtime that ever hands back the padded "GMT+02:00" long form must not
@@ -1638,13 +1711,18 @@ function tzAbbr(date) {
 // Intl.formatToParts rather than a fixed offset — DST-correct year-round.
 // Locale is irrelevant here (parts are picked by `type`, not parsed as
 // text), so "en-GB" is used unconditionally, same reasoning as tzAbbr.
+const ymdFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }),
+);
+
 function budapestDateParts(date) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
+  const parts = ymdFmt("en-GB").formatToParts(date);
   const get = (type) => Number(parts.find((p) => p.type === type).value);
   return { y: get("year"), m: get("month"), d: get("day") };
 }
@@ -1769,17 +1847,29 @@ function adjacentWeek(year, week, delta) {
 // ISO year edges (ISO week 1 can start in late December) — show the year in
 // that one case so the range isn't ambiguous about which year each date
 // falls in; the common case omits it, matching the plain "3–9 Aug" shape.
+const weekRangeFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, { timeZone: TIMEZONE, day: "numeric", month: "short" }),
+);
+const weekRangeYearFmt = memoIntl(
+  (locale) =>
+    new Intl.DateTimeFormat(locale, {
+      timeZone: TIMEZONE,
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }),
+);
+
 function formatWeekRangeLabel(year, week, locale) {
   const monday = mondayOfIsoWeek(year, week);
   const sunday = new Date(monday);
   sunday.setUTCDate(sunday.getUTCDate() + 6);
   const spansCalendarYearBoundary = monday.getUTCFullYear() !== sunday.getUTCFullYear();
-  const fmt = new Intl.DateTimeFormat(locale, {
-    timeZone: TIMEZONE,
-    day: "numeric",
-    month: "short",
-    year: spansCalendarYearBoundary ? "numeric" : undefined,
-  });
+  // Two memoized variants, not one keyed on the flag: the year field is the
+  // only difference, and a composite cache key would be the only composite
+  // key in the file for two entries' worth of savings.
+  const fmt = spansCalendarYearBoundary ? weekRangeYearFmt(locale) : weekRangeFmt(locale);
   return fmt.formatRange(monday, sunday);
 }
 
@@ -7098,9 +7188,11 @@ function computeArcMomentum(appearances, nowMs) {
 // rather than read here, same "inject the current instant" convention
 // isoWeekOf/handleIndexPage already use elsewhere in this file — keeps this
 // function a pure, stub-testable computation.
+const relTimeFmt = memoIntl((locale) => new Intl.RelativeTimeFormat(locale, { numeric: "auto" }));
+
 function formatRelativeTime(date, locale, nowMs) {
   const diffMs = date.getTime() - nowMs; // negative here: always a past appearance
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const rtf = relTimeFmt(locale);
   const minutes = Math.round(diffMs / 60000);
   if (Math.abs(minutes) < 60) return rtf.format(minutes, "minute");
   const hours = Math.round(diffMs / 3600000);
