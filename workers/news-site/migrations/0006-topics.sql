@@ -1,0 +1,15 @@
+-- Adds the optional topics column to an EXISTING deployed digests table
+-- (ingest v3 story arcs, roadmap 4 step 8). Fresh installs don't need this
+-- file — schema.sql already includes this column for a brand-new database.
+--
+-- Apply to the deployed D1 database with:
+--   wrangler d1 execute news-digests --remote --file migrations/0006-topics.sql
+--
+-- Nullable and defaults to NULL, so existing rows (all pre-v3 payloads) come
+-- through unaffected, and the current app version's ingest payload (no
+-- topics field) keeps working unchanged.
+--
+-- digests_fts (0005-fts-search.sql) and its sync triggers are untouched
+-- here — topics is not an indexed text column, so the FTS table's own
+-- schema and triggers need no corresponding change.
+ALTER TABLE digests ADD COLUMN topics TEXT;

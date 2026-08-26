@@ -1,0 +1,3409 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- theme-color must track the CSS palette blocks' --bg values above (light
+     #ffffff / dark #131418 — "print poster" redesign) so mobile browser
+     chrome (URL bar/status bar tint) melts into the page instead of showing
+     a stock color. The prefers-color-scheme media attrs cover the automatic
+     (Auto) case; a manual Light/Dark override from the theme miniseg (see
+     the bottom script) updates both metas' content directly, since a
+     media-query meta can't react to a data-theme attribute switch on its
+     own — and clicking back to Auto restores each meta to its own
+     media-appropriate value. -->
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131418">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="prefetch" href="/t/goldentesttoken/hu/d/235">
+<title>news.toomhorvath.com</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.font=localStorage.getItem("font")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
+<style>
+  /* Two type roles, both zero-byte system stacks ("print poster" redesign):
+     PROSE for the sit-back-and-read register (article body, TL;DR/leader,
+     excerpts) — now the SAME sans stack as chrome, not a separate serif, so
+     the whole site reads as one heavy-display/tight-tracked voice instead of
+     newspaper-serif-vs-sans — and DATA for anything keyed on time (times,
+     counts, datelines, citation chips, mono eyebrows). Time is this site's
+     primary key; the typography should say so. */
+  :root {
+    /* The floating action button's size and its inset from the viewport
+       corner. Custom properties rather than literals because .resumechip
+       has to steer around this exact lane (see its bottom offset) and the
+       two rules sit hundreds of lines apart — a 48px changed in one place
+       and not the other is a silent overlap, not a visible error. */
+    --fab-size: 48px;
+    --fab-inset: 1.1rem;
+    /* Owner-reported white flash when stepping between pages: every page
+       is a fresh no-store document, and in the network gap before its
+       first paint the browser shows its OWN canvas — which defaults to
+       WHITE unless the page declares color-scheme. (The navigation
+       crossfade usually hides the gap; a slow response outruns the
+       snapshot, which is why the flash was only intermittent.) light dark
+       lets the UA pick the canvas by OS preference — the Auto case; the
+       data-theme override blocks below pin it to one scheme, keeping the
+       between-pages canvas in lockstep with the manual theme choice. */
+    color-scheme: light dark;
+    /* "Print poster" redesign: retired the serif stack — every prose rule
+       below (.digest p, .tldr/leader, .entry .excerpt, arc/delta text, …)
+       flips to the same heavy sans voice as chrome just by this
+       redefinition, no selector changes needed. */
+    --font-prose: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --font-data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --bg: #ffffff; /* paper */
+    --page-bg: #ffffff; /* same as --bg: the purple desktop "bubble" background is retired — flat paper everywhere, see the >=52em block below */
+    --text: #101215; /* ink */
+    --muted: #5b6270;
+    --accent: #0e3fa9; /* press blue */
+    --accent-strong: #0a2f80; /* darker blue — hover/strong state */
+    --tldr-bg: #eaf0fc;
+    --tldr-text: #16234f;
+    --chip-bg: #eef1f7;
+    --chip-text: #0e3fa9; /* = --accent: cite chips read as press-blue text */
+    --hairline: #d8dbe2;
+    --h2-border: #0e3fa9; /* = --accent */
+    --attention-bg: #fef3c7;
+    --attention-text: #78350f;
+    /* New tokens (print poster): a heavier rule than --hairline for the
+       masthead/section rules, the highlighter mark used inside headlines,
+       and a faint mono tone one step quieter than --muted (folios,
+       eyebrows). --mark-ink is deliberately identical in every theme copy —
+       the mark itself is always a light chip, so its text always wants dark
+       ink, never the theme's own --text. */
+    --rule-heavy: #101215;
+    --mark: #ffe14d;
+    --mark-ink: #101215;
+    --faint: #8a90a0;
+    /* Article body tone (owner follow-up: headline/body/rule all at full
+       ink read as one undifferentiated wall, especially dark) — one step
+       quieter than --text, clearly brighter than --muted; strong/em inside
+       prose stay full --text so the stats pop against it. */
+    --prose: #3d4350;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131418;
+      --page-bg: #131418;
+      --text: #ecedf0;
+      --muted: #9aa1af;
+      --accent: #7d9bff;
+      --accent-strong: #a8bdff;
+      --tldr-bg: #1c2740;
+      --tldr-text: #d7e2ff;
+      --chip-bg: #1f2127;
+      --chip-text: #7d9bff;
+      --hairline: #2b2e36;
+      --h2-border: #7d9bff;
+      --attention-bg: #4d3800;
+      --attention-text: #ffe69c;
+      --rule-heavy: #ecedf0;
+      --mark: #f5cf3a;
+      --mark-ink: #101215;
+      --faint: #767d8b;
+      --prose: #c3c9d4;
+    }
+  }
+
+  /* Manual theme override (roadmap step 6): a data-theme attribute on <html>,
+     set by the early head script from localStorage, has to beat BOTH the
+     base :root above and the prefers-color-scheme:dark block above it —
+     regardless of which way the OS is set. CSS has no way to reference a
+     media block's resolved values from outside it, so with no build step the
+     only option is a third, explicit copy of each palette. Three copies is
+     the price of a manual override without a build step, and the palette
+     changes rarely. Deliberately only the COLOR variables are duplicated —
+     --font-prose/--font-data are identical in every theme and stay defined
+     once, above. */
+  :root[data-theme="dark"] {
+    /* Pin the UA canvas too — see the color-scheme comment in :root. */
+    color-scheme: dark;
+    --bg: #131418;
+    --page-bg: #131418;
+    --text: #ecedf0;
+    --muted: #9aa1af;
+    --accent: #7d9bff;
+    --accent-strong: #a8bdff;
+    --tldr-bg: #1c2740;
+    --tldr-text: #d7e2ff;
+    --chip-bg: #1f2127;
+    --chip-text: #7d9bff;
+    --hairline: #2b2e36;
+    --h2-border: #7d9bff;
+    --attention-bg: #4d3800;
+    --attention-text: #ffe69c;
+    --rule-heavy: #ecedf0;
+    --mark: #f5cf3a;
+    --mark-ink: #101215;
+    --faint: #767d8b;
+    --prose: #c3c9d4;
+  }
+  :root[data-theme="light"] {
+    /* Pin the UA canvas too — see the color-scheme comment in :root. */
+    color-scheme: light;
+    --bg: #ffffff;
+    --page-bg: #ffffff;
+    --text: #101215;
+    --muted: #5b6270;
+    --accent: #0e3fa9;
+    --accent-strong: #0a2f80;
+    --tldr-bg: #eaf0fc;
+    --tldr-text: #16234f;
+    --chip-bg: #eef1f7;
+    --chip-text: #0e3fa9;
+    --hairline: #d8dbe2;
+    --h2-border: #0e3fa9;
+    --attention-bg: #fef3c7;
+    --attention-text: #78350f;
+    --rule-heavy: #101215;
+    --mark: #ffe14d;
+    --mark-ink: #101215;
+    --faint: #8a90a0;
+    --prose: #3d4350;
+  }
+
+  * { box-sizing: border-box; }
+  /* The hidden attribute must actually hide, whatever else is styled.
+     Author rules beat the UA stylesheet's own hidden-means-display-none
+     rule regardless of specificity, so ANY element this file gives an
+     explicit display to stayed VISIBLE when the scripts below set
+     el.hidden = true. That silently broke two features: the unread fence
+     (patched at the time with a one-off selector) and then the index
+     filter, where .entry's own display: block meant a filtered-out entry
+     was marked hidden in the DOM and still painted on screen — typing in
+     the filter appeared to do nothing at all (owner-reported). One global
+     override kills the whole class of bug instead of one selector at a
+     time, and !important is what makes it beat the author display rules it
+     exists to correct (normalize.css ships the same rule for the same
+     reason). Everything toggled by the hidden attribute — the filter
+     input, the theme toggle, entries, day headers, the
+     fence — is covered by this one line. NOTE: no backticks in this
+     comment; the whole CSS block is a JS template literal. */
+  [hidden] { display: none !important; }
+  /* Reserve the scrollbar's gutter even when the page is too short to
+     scroll: the All view scrolls, a near-empty Daily view doesn't, and
+     without this the viewport width changes on switch — sliding the
+     centered bubble sideways by half a scrollbar (owner-reported). A
+     no-op on overlay-scrollbar platforms, which never had the shift. */
+  html { scrollbar-gutter: stable; }
+  /* Second layer of the anti-flash fix (see :root's color-scheme comment):
+     an explicit root background so overscroll and any pre-body-paint gap
+     show the theme's own paper/ink, never the UA default. The desktop
+     bubble layout overrides this to the purple page background below. */
+  html { background: var(--bg); }
+  /* A single unbreakable token wider than a phone screen (production
+     digests carry them — a defanged URL from the link allowlist is one
+     long word) widens the LAYOUT viewport past the visual one. On iOS
+     Safari that detaches position:fixed elements from the screen edge
+     (the back button floats mid-page) and opens pannable blank space
+     past the footer (owner-reported, 2026-08-09). Two guards:
+     overflow-wrap (inherited everywhere from body) breaks such tokens at
+     the container edge, and overflow-x: clip caps the layout viewport at
+     device width even if some future shape still overflows — clip, not
+     hidden, so html doesn't become a scroll container. */
+  html { overflow-x: clip; }
+  /* Smooth-scroll the TOC's #sN anchor jumps (roadmap step 5), gated behind
+     prefers-reduced-motion so motion-sensitive readers get the instant jump
+     instead. */
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+    /* MPA view transitions (roadmap 2 step 7): one at-rule turns on the
+       browser's default crossfade between full-page navigations on this
+       origin; browsers without support (most, today) simply ignore an
+       at-rule they don't recognize — progressive, no fallback needed. No
+       custom ::view-transition-* choreography — ambient feel, not a show
+       (restraint, matching the "keep the default crossfade" decision). A
+       crossfade IS motion, so it gets the exact same reduced-motion gate as
+       scroll-behavior above, not a separate one. */
+    @view-transition {
+      navigation: auto;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    font-size: 17px;
+    overflow-wrap: break-word; /* inherited: see the overflow-x note above */
+  }
+  /* Text size (owner upgrade): S/M/L scales the READING text only — the
+     article body (.digest, which carries the TL;DR callout and section
+     h2s proportionally inside it) and the index/search excerpts. The
+     first cut scaled the whole body instead and the owner immediately
+     flagged it: the entire UI zoomed, which reads as a broken viewport,
+     not a text-size preference — chrome (masthead, tabs, pills, meta
+     rows) must hold its owner-tuned rhythm while only the prose moves.
+     em factors, not px, so the 17px/15px desktop/phone bases scale
+     without a second media-scoped set of rules. M stays the ABSENCE of
+     data-fontsize: the defaults above remain the single source of truth,
+     s/l are offsets from them, never a competing "normal". The
+     .entry-lead .excerpt variants exist because these :root-prefixed
+     rules outrank the lead card's own base font-size — without them,
+     compact S would shrink the lead below its deliberate extra weight. */
+  /* Body-font toggle (owner-requested; a friend lobbied for the serif):
+     Serif resurrects the retired "private wire desk" prose stack by
+     re-pointing the ONE variable every prose rule reads — headlines,
+     eyebrows, and mono data are untouched, so the print-poster identity
+     keeps its display voice either way. Sans is the default, expressed as
+     the ABSENCE of data-font, same convention as data-fontsize's M. */
+  :root[data-font="serif"] {
+    --font-prose: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+  :root[data-fontsize="s"] .digest { font-size: 0.94em; }
+  :root[data-fontsize="l"] .digest { font-size: 1.12em; }
+  :root[data-fontsize="s"] .entry .excerpt { font-size: 0.87em; }
+  :root[data-fontsize="l"] .entry .excerpt { font-size: 1.04em; }
+  :root[data-fontsize="s"] .entry-lead .excerpt { font-size: 0.96em; }
+  :root[data-fontsize="l"] .entry-lead .excerpt { font-size: 1.14em; }
+  a { color: var(--accent); }
+  /* overflow-x: clip HERE, on a non-root element, is the actual guarantee
+     against the phone layout-viewport bug (owner-reported twice,
+     2026-08-09): root-level clip demonstrably does NOT stop wide content
+     from expanding the layout viewport (measured: one long pre line took a
+     375px viewport to 1500px with the html rule in place), which detaches
+     fixed elements and opens pannable dead space past the footer on iOS.
+     Clipping inside .wrap means overflow can never widen the page geometry
+     again, whatever content shape causes it next. Sticky day headers keep
+     working (clip creates no scroll container) and the fixed back button is
+     unaffected (no containing-block change). */
+  .wrap { max-width: 42em; margin: 0 auto; padding: 0 1.25em 4em; overflow-x: clip; }
+
+  /* Masthead ("print poster" redesign): brand zone left, the view-tab
+     capsule as the mast's own MIDDLE flex child, gear zone right (see
+     pageChrome). The two side zones carry flex: 1 1 0 so they grow equally
+     from nothing — that equal growth is what centers the capsule on the
+     row's true midpoint instead of on the leftover space after a wider
+     brand. ONE masthead for every page (owner follow-up — it must not
+     change shape between the index and a digest page; see pageChrome):
+     display-scale brand left, tabs centered, search/settings right, a
+     heavy 4px rule underneath (rule weight matches .digest h2's own top
+     rule and the colophon's — one "heavy rule = structural divider"
+     vocabulary across the page). Desktop is one nowrap row; the ≤40em
+     block below keeps it one line at phone sizes too. */
+  header.mast {
+    display: flex; align-items: center;
+    gap: 0.6em 1em; padding: 1.1em 0 0.9em;
+    border-bottom: 4px solid var(--rule-heavy); margin-bottom: 1.6em;
+  }
+  /* True centering: the two side zones get equal flex-grow from a zero
+     basis, so the capsule centers on the ROW's midpoint, not on whatever
+     space the brand happens to leave over (the phone block below swaps
+     this for content-width zones — see its own comment). */
+  .mast .mastleft { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
+  /* 800-weight, tight-tracked display type (print-poster identity) in place
+     of the old 700/-0.01em body-adjacent wordmark — the brand is now styled
+     the same register as every other headline on the site, just at chrome
+     scale. Uppercase, matching the big masthead's brand below (.mast-big
+     .brand) at a fraction of the size, so the two masthead sizes read as
+     one family, not two different logotypes. */
+  .mast .brand { font-weight: 800; font-size: 0.95em; letter-spacing: -0.02em; text-transform: uppercase; text-decoration: none; color: var(--text); }
+  /* The settings gear (language/theme/size/density, collapsed into one
+     details.settings disclosure — see renderSwitchers) sits top-right in
+     the masthead via .mastright, right-aligned — same markup at both
+     breakpoints and in both masthead layouts (compact and .mast-big both
+     use the identical three-zone row, see pageChrome). */
+  .mastright {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 0.55em; flex: 1 1 0;
+  }
+
+  .mast .langswitch { font-size: 0.85em; font-variant-numeric: tabular-nums; }
+  .mast .langswitch a { text-decoration: none; }
+  .mast .langswitch strong { color: var(--text); }
+
+  /* Big edition masthead ("mast-big", hardcoded on every page since the
+     one-masthead follow-up): the mono issue line sits ABOVE the masthead
+     as its own quiet block, and the masthead itself is the SAME three-zone
+     row as every other page — brand left, view-tab capsule centered by the
+     equal-growth side zones, search/settings right — just with the brand
+     at display scale ("NEWS", the bare first host label; the .tld tail was
+     dropped with the two-tone treatment). One structure, one CSS block,
+     two brand sizes. */
+  .issueline {
+    font-family: var(--font-data); font-size: 0.66em;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--muted);
+    padding-top: 1.4em;
+  }
+  /* Slimmer top padding only when an issue line sits above (index/digest);
+     a page without one (arc, search) keeps the base masthead padding so the
+     brand never crowds the viewport edge. */
+  .issueline + header.mast { padding-top: 0.5em; }
+  .mast-big { padding-bottom: 0.7em; }
+  .mast-big .brand {
+    font-size: clamp(1.5em, 4.5vw, 2.1em);
+    letter-spacing: -0.03em; line-height: 0.98;
+  }
+
+  /* Settings bubble (owner redesign): the gear button collapses language,
+     theme, and density into one disclosure. details.settings — NOT
+     .mastright — is the positioning anchor for .settingspanel below.
+     (Historically load-bearing: the phone block used to erase .mastright
+     as a box via display: contents, so only the <details> could anchor the
+     absolute panel. The masthead compaction removed that collapse, but the
+     anchor choice stays — it was never wrong, and moving it buys nothing.) */
+  details.settings { position: relative; }
+  /* "Print poster" controls: 1px var(--rule-heavy) border, mono uppercase
+     label — the toolbtn recipe shared with summary.searchtoggle below on the
+     DESKTOP, where both are text chips ("SEARCH", "SETTINGS"). Still two
+     rules rather than one merged selector, because the PHONE pulls them
+     apart again: there both collapse to bare, borderless, oversized icons,
+     and they get there from different starting metrics (a mono glyph vs an
+     svg). See the phone block below summary.searchtoggle.
+     Pill-rounded (owner-requested exception to the redesign's otherwise
+     square-cornered rule): every INTERACTIVE control — buttons, segmented
+     capsules, the FAB — keeps the old 999px pill shape; panels, chips,
+     badges and rules stay square, so the poster identity lives in the
+     surfaces while the controls stay obviously pressable. */
+  summary.gear {
+    list-style: none;
+    background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
+    color: var(--text); font-family: var(--font-data); font-size: 0.62em;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.4em 0.75em; cursor: pointer;
+  }
+  /* iOS Safari draws its own disclosure triangle on <summary> even with
+     list-style: none — this is the belt-and-suspenders rule that actually
+     suppresses it. */
+  summary.gear::-webkit-details-marker { display: none; }
+  /* Desktop shows the gear WITH its text label ("Settings"/"Beállítások" —
+     owner-requested); the phone masthead is tight, so the label collapses
+     there and the icon stands alone (see the mobile block below). */
+  /* Desktop: text-only trigger (owner follow-up) — the glyph half of the
+     summary is hidden here and shown by the phone block below, where the
+     LABEL half hides instead. */
+  .gearicon { display: none; }
+  /* Quiet hover (owner: no full fill that "highlights all the text" — just
+     a light ring around it): the pill border and text pick up the accent,
+     background stays put. Same recipe on every toolbar control below
+     (searchtoggle/densitytoggle/searchbtn). The OPEN state keeps a solid
+     accent fill — that's a state, not a hover, and it matches the active
+     view tab. */
+  summary.gear:hover { border-color: var(--accent); color: var(--accent); }
+  summary.gear:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  details.settings[open] > summary.gear { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .settingspanel {
+    position: absolute; right: 0; top: calc(100% + 0.5em);
+    /* Must clear the sticky day headers (.dayhead, z-index: 1) or the panel
+       would open underneath the ledger once the reader has scrolled. */
+    z-index: 20;
+    /* Simple soft bubble (owner follow-up: the 2px ink border + hard offset
+       shadow read too heavy, especially in dark mode) — hairline border,
+       soft drop shadow, card radius. Same recipe as .searchpanel below. */
+    background: var(--bg); border: 1px solid var(--hairline);
+    border-radius: 14px;
+    padding: 1em 1.1em;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    display: flex; flex-direction: column; gap: 0.7em;
+    /* Size to CONTENT, not to the anchor (owner-reported bug: the panel is
+       absolutely positioned off the tiny details.settings anchor, so
+       shrink-to-fit bottomed out at the old min-width — 13em — which the
+       body-font row outgrew: "BODY FONT" wrapped to two lines and the
+       CLASSIC segment clipped at the panel edge on desktop, where the em
+       base is larger. max-content lets the widest row set the panel;
+       min-width keeps short-rowed panels (HU has fewer long rows) from
+       looking skeletal; the viewport cap keeps phones safe, with the
+       label allowed to wrap again only in that capped case. */
+    width: max-content; min-width: 13em; max-width: calc(100vw - 2.5em);
+  }
+  .settingsrow { display: flex; justify-content: space-between; align-items: baseline; gap: 1.2em; }
+  /* No-JS resilience: theme/text-size/density controls are server-rendered
+     with the hidden attribute and revealed by the bottom script (the
+     progressive-enhancement contract, see renderSwitchers). Without JS the
+     row was a label next to an EMPTY pill border — a bright "dot" once the
+     border went --rule-heavy (owner-reported from a scripts-blocked
+     preview). Hide any settings row with no visible control at all: the
+     language row keeps its plain <a> links and stays; rows whose only
+     controls are still [hidden] disappear until the script reveals them.
+     Browsers without :has() just keep the old harmless empty-pill look. */
+  .settingsrow:not(:has(a, button:not([hidden]))) { display: none; }
+  .settingslabel {
+    font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--faint);
+  }
+
+  /* Settings bubble open/close animation (owner-requested). details/summary
+     has no transition of its own to hook, so this is a fresh keyframe pair
+     rather than a transition. A NEW prefers-reduced-motion: no-preference
+     gate — not the global one near the top of this stylesheet, which is
+     scroll/view-transition territory and unrelated to this feature.
+     Opening plays on details.settings[open] .settingspanel directly (native
+     open needs no JS). Closing plays on a "panelclosing" class the
+     settings-close IIFE below adds before it sets details.open = false
+     itself — <details> snaps shut instantly with no hook to intercept, so
+     the class is what buys the mirrored animation time to play before
+     removal. Named "panelclosing", not the shorter "closing" the owner's
+     brief used, because .closing already exists on this page (the digest
+     article's closing-line paragraph, below) — reusing that name would
+     have leaked its border/italic/spacing styling onto the settings panel
+     for the animation's duration. The close rule below repeats the [open]
+     prefix (not just .settingspanel.panelclosing) SPECIFICALLY so it
+     outranks the open rule above on specificity: the "panelclosing" class
+     is added while open is still true — the JS only flips open to false at
+     the end of the delay — so both rules target the same element at once,
+     and without the matching prefix the open rule's animation would win by
+     cascade order and the close animation would never actually play. */
+  @media (prefers-reduced-motion: no-preference) {
+    details.settings[open] .settingspanel { animation: settingsopen 160ms ease-out; }
+    details.settings[open] .settingspanel.panelclosing { animation: settingsclose 120ms ease-in; }
+    @keyframes settingsopen {
+      from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes settingsclose {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(-4px) scale(0.98); }
+    }
+  }
+
+  /* Density toggle (roadmap 4 step 4): small pill button living inside the
+     settings bubble's panel (see .settingspanel above). hidden by default,
+     un-hidden by the bottom script — no JS, no button, same progressive-
+     enhancement contract as the index filter input below. Theme and text
+     size (owner upgrade) moved off this single-pill look onto the miniseg
+     control just below — density stays a pill since it's genuinely binary
+     (compact/comfortable), not a 3-way choice. */
+  .densitytoggle {
+    background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
+    color: var(--text); font-family: var(--font-data); font-size: 0.75em; padding: 0.15em 0.55em; cursor: pointer;
+  }
+  .densitytoggle:hover { border-color: var(--accent); color: var(--accent); }
+  .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Mini segmented control (three-state theme, S/M/L text size) — the view
+     tabs' segmented language (.viewtabs/.viewtab above) miniaturized to
+     panel scale, same pill-capsule/bordered recipe, so the settings bubble
+     reads as one family with the site's primary navigation instead of
+     inventing a new shape. */
+  .miniseg {
+    display: inline-flex; border: 1px solid var(--rule-heavy);
+    /* Pill capsule (owner-requested, see summary.gear's comment); overflow
+       hidden clips the active segment's fill to the rounded ends. */
+    border-radius: 999px; overflow: hidden;
+  }
+  /* Belt and suspenders for the capsule ends (owner-reported from Safari:
+     an active END segment's fill poked square corners past the capsule's
+     curve — Safari doesn't reliably clip children to a rounded inline-flex
+     container). The end segments carry their own matching radii, so the
+     fill is rounded at the source and no longer depends on the parent's
+     overflow clip. Same treatment on .viewtab below. */
+  .minisegbtn:first-child { border-radius: 999px 0 0 999px; }
+  .minisegbtn:last-child { border-radius: 0 999px 999px 0; }
+  .minisegbtn {
+    background: none; border: none; color: var(--muted);
+    font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.3em 0.65em; cursor: pointer;
+  }
+  .minisegbtn + .minisegbtn { border-left: 1px solid var(--hairline); }
+  .minisegbtn.active { background: var(--accent); color: var(--bg); }
+  .minisegbtn:not(.active):hover { background: var(--tldr-bg); }
+  .minisegbtn:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+
+  /* ⌘K command palette (§11.1 PR C): markup is injected at runtime (see the
+     palette IIFE in pageChrome, below) — no server-rendered dialog HTML, so
+     everything it needs lives here. Deliberately NOT a card — one dialog,
+     thin hairlines, mono input, no drop-shadow-heavy chrome (design
+     guidance: "no card soup"). Dark-first like the rest of the site: it
+     reads off the same --bg/--text/--muted/--hairline/--accent tokens as
+     everything else, so it never needs its own light/dark handling. Hidden
+     via the plain [hidden] attribute (see the global rule above), same
+     progressive-enhancement contract as the filter input/theme toggle. */
+  .cmdpalette-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 12vh 1em 0;
+  }
+  .cmdpalette {
+    width: min(34em, 100%); max-height: 70vh;
+    /* Simple soft bubble, same family as .settingspanel/.searchpanel (owner
+       follow-up) — deeper shadow than the small panels since it floats over
+       a dimmed backdrop, not beside its trigger. */
+    background: var(--bg); border: 1px solid var(--hairline);
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .cmdpalette { animation: cmdpaletteopen 120ms ease-out; }
+    @keyframes cmdpaletteopen {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+  .cmdpalette-input {
+    font-family: var(--font-data); font-size: 1em; color: var(--text);
+    background: none; border: none; border-bottom: 1px solid var(--hairline);
+    padding: 0.85em 1em; outline: none;
+  }
+  .cmdpalette-input::placeholder { color: var(--muted); }
+  .cmdpalette-list { overflow-y: auto; padding: 0.35em 0; }
+  .cmdpalette-item {
+    padding: 0.55em 1em; font-size: 0.93em; color: var(--text);
+    font-family: var(--font-prose); cursor: pointer;
+    display: flex; justify-content: space-between; gap: 1em;
+  }
+  .cmdpalette-item .cmdpalette-group {
+    font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted); align-self: center;
+  }
+  .cmdpalette-item.active { background: var(--tldr-bg); }
+  .cmdpalette-empty { padding: 0.85em 1em; font-size: 0.9em; color: var(--muted); }
+
+  /* Ledger grid ("print poster" redesign, index pages): the <section> the
+     lead card + day-grouped entries render inside (see renderIndexPage)
+     becomes a two-column grid — single column at/under 640px. Day headers,
+     the lead card, and the two client-inserted elements that can land as
+     the ledger's own DOM siblings (.unreadfence, the lazily-created
+     .empty "nothing matches" message — see the filter IIFE) all carry
+     grid-column: 1 / -1 below so they span both columns as full-width
+     dividers/rows regardless of where CSS auto-placement would otherwise
+     put them; harmless (a no-op) on every OTHER page these same classes
+     render on, none of which puts them inside a grid parent. Nothing here
+     changes DOM structure or sibling order, so the unread-fence/filter
+     IIFEs' own sibling-walking logic (nextElementSibling chains) is
+     completely unaffected — see pageChrome's bottom script. */
+  section[data-unread-label] {
+    display: grid; grid-template-columns: 1fr 1fr; column-gap: 2.2em;
+  }
+  /* One-card-per-row views (owner-reported: "the text has just half the
+     width"). Two columns only pay for themselves where the ledger is dense
+     enough to fill both — the ALL view's ~8 window digests a day. The daily
+     view carries at most ONE brief per day and the weekly view one per week,
+     so there every single row placed a ~26em card in column 1 against a
+     permanently empty column 2. Those views drop to a single column and let
+     each card use the full ~55em measure — the same measure the digest page's
+     own prose already runs at, per the owner's "desktop text should be wider
+     about 30 percent" call recorded in the .wrap block below. Keyed off
+     data-ledger rather than a media query because this is a function of how
+     many cards the VIEW yields, not of viewport width. */
+  section[data-ledger="single"] { grid-template-columns: 1fr; }
+  .dayhead {
+    grid-column: 1 / -1;
+    font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.11em;
+    color: var(--faint); margin: 1.8em 0 0.3em; font-weight: 400;
+    font-family: var(--font-data); /* mono uppercase eyebrow = the wire look */
+    /* Sticky so mid-scroll position is always visible (roadmap step 4).
+       var(--bg) background keeps entry text from showing through as it
+       scrolls underneath. */
+    position: sticky; top: 0; background: var(--bg); padding: 0.35em 0;
+    z-index: 1;
+  }
+  .entry {
+    display: block; text-decoration: none; color: inherit;
+    padding: 1.1em 0 1.3em; border-bottom: 1px solid var(--hairline);
+  }
+  /* Headline ("print poster" redesign): every index card — lead and grid —
+     gets a derived display headline (see deriveHeadline), heavy/tight like
+     every other headline on the site. The hero's own h2.headline-lead runs
+     larger (set below, alongside .entry-lead); a bare h3.headline is the
+     grid-card size. mark (highlighter accent) is wired up here even though
+     the mechanical deriveHeadline() never emits one today — see the
+     function's own comment. */
+  .headline {
+    margin: 0 0 0.4em; font-weight: 800; letter-spacing: -0.02em;
+    line-height: 1.15; color: var(--text); text-wrap: balance;
+  }
+  .headline mark { background: var(--mark); color: var(--mark-ink); padding: 0 0.14em; }
+  /* Quiet card hover (owner follow-up: recoloring the WHOLE card — headline
+     AND excerpt — on hover read as a giant highlight, and stuck after taps
+     on touch): body text never changes; only the headline picks up a thin
+     accent underline, and only where a real hover pointer exists — the
+     hover: hover gate keeps touch taps from painting a sticky hover state
+     at all. Keyboard focus gets the same underline OUTSIDE the gate (a
+     keyboard is not a hover pointer) on top of the outline below. */
+  @media (hover: hover) {
+    .entry:hover .headline {
+      text-decoration: underline; text-decoration-color: var(--accent);
+      text-decoration-thickness: 0.06em; text-underline-offset: 0.12em;
+    }
+  }
+  .entry:focus-visible .headline {
+    text-decoration: underline; text-decoration-color: var(--accent);
+    text-decoration-thickness: 0.06em; text-underline-offset: 0.12em;
+  }
+  .entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  /* Lead card (the newest digest in the current view): a full-width hero
+     spanning both grid columns, mono eyebrow + big headline + deck excerpt
+     on the left, an items/sections facts column on the right (task spec:
+     "if cheap" — both counts are already selected columns, no extra
+     query). Single column under 640px, facts row moves below the deck. */
+  .entry-lead {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: 1fr auto; gap: 2em; align-items: start;
+    padding: 1.3em 0 1.6em; border-bottom: 1px solid var(--rule-heavy);
+  }
+  .entry-lead .headline-lead { font-size: clamp(1.5em, 4.2vw, 2.1em); line-height: 1.08; }
+  .entry-lead .eyebrow-text {
+    font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.1em;
+    color: var(--accent); text-transform: uppercase;
+  }
+  .leadfacts { border-left: 1px solid var(--hairline); padding-left: 1.6em; align-self: start; }
+  .leadfacts dt {
+    font-family: var(--font-data); font-size: 0.6em; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--faint); margin-top: 0.9em;
+  }
+  .leadfacts dt:first-child { margin-top: 0; }
+  .leadfacts dd { margin: 0; font-size: 1.3em; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .entry .meta {
+    display: flex; align-items: baseline; gap: 0.7em; margin-bottom: 0.4em;
+    font-variant-numeric: tabular-nums;
+  }
+  /* 0.85em, not 0.95: mono runs wide, so the time nudges down to keep its
+     old visual weight in the meta row now that it's set in --font-data. */
+  .entry .time { font-weight: 700; font-size: 0.85em; font-family: var(--font-data); }
+  /* Daily-brief entries carry the accent on their time instead of the
+     default text color — the "slightly heavier presence" this one entry
+     type gets in an otherwise undifferentiated list. */
+  .entry .time.time-accent { color: var(--accent); }
+  /* 0.75em, not 0.8: same mono-runs-wide compensation as .entry .time. */
+  .entry .count { color: var(--muted); font-size: 0.75em; font-family: var(--font-data); }
+  .entry .flag {
+    font-size: 0.68em; font-weight: 400; font-family: var(--font-data); letter-spacing: 0.04em;
+    /* Rounded tag (owner follow-up — tags join the rounded family with the
+       controls; only rules/panels/structural chrome stay square). */
+    padding: 0.15em 0.55em; border-radius: 99px;
+    background: var(--attention-bg); color: var(--attention-text);
+    /* Two-word badges ("weekly report", "daily brief") were wrapping into
+       two-line pills in the lead card's meta row (owner-reported from the
+       first live weekly). A badge is a tag, not a paragraph — one line,
+       always. The meta row itself stays nowrap: the pill's min-content
+       width just wins, and the eyebrow text (which wraps internally)
+       absorbs the squeeze; .wrap's overflow-x clip guards the extreme. */
+    white-space: nowrap;
+  }
+  /* Neutral/muted variant, reused by two chips: the "EN" fallback note on
+     untranslated HU index entries, and the degraded-run badge (roadmap 2
+     step 8, renderDegradedBadge) — neither is a warning-colored call to
+     action, just metadata about the entry; the degraded badge's own ⚠
+     prefix (baked into the string, not CSS) is what tells the two apart.
+     Reuses .flag's shape/sizing. */
+  .entry .flag.flag-muted, .entry .flag.flag-degraded { background: var(--chip-bg); color: var(--chip-text); }
+  /* Daily-brief badge — same chip-bg/chip-text tokens as .flag-muted, but
+     filled/inverted (solid, not the soft pastel) so it reads as its own
+     distinct badge rather than the muted EN language note, and stays
+     clearly apart from the amber attention pill. */
+  .entry .flag.flag-daily { background: var(--chip-text); color: var(--chip-bg); }
+  .entry .excerpt {
+    margin: 0; color: var(--muted); font-size: 0.88em;
+    font-family: var(--font-prose); line-height: 1.55;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  /* Daily-brief entries summarize a whole day, not a 3-hour window — one
+     extra clamped line of excerpt room. */
+  .entry .excerpt.excerpt-daily { -webkit-line-clamp: 4; }
+  .entry .excerpt strong { color: var(--text); }
+  /* Placed after .entry .excerpt (same specificity, later wins the cascade)
+     so the lead card's excerpt actually loses its clamp instead of being
+     silently overridden back to 3 lines. */
+  .entry-lead .excerpt {
+    font-size: 0.98em; display: block; -webkit-line-clamp: unset; overflow: visible;
+  }
+
+  /* Ledger density toggle (roadmap 4 step 4): compact tightens the ledger's
+     .entry padding and excerpt clamp when data-density="compact" is set
+     (persisted in localStorage, applied pre-paint by the head script, same
+     pattern as data-theme). Scoped to .entry:not(.entry-lead) — the lead
+     card is the day's headline, not ledger noise, and compaction is for the
+     ledger only; without :not() this compact clamp would win on specificity
+     over .entry-lead .excerpt's own un-clamp above, since both come later in
+     the cascade than plain .entry .excerpt. */
+  :root[data-density="compact"] .entry:not(.entry-lead) { padding: 0.55em 0; }
+  :root[data-density="compact"] .entry:not(.entry-lead) .excerpt { -webkit-line-clamp: 2; }
+  :root[data-density="compact"] .entry:not(.entry-lead) .excerpt.excerpt-daily { -webkit-line-clamp: 3; }
+
+  /* The whole nav is prev/next times plus the "all digests" link — one word
+     — so the entire block goes mono rather than singling out the times.
+     "Crumbs" in the print-poster redesign (task spec's digest-page nav):
+     same markup/hrefs, just mono uppercase with a hairline bottom rule in
+     place of the old bare flex row. */
+  nav.digestnav {
+    display: flex; justify-content: space-between; gap: 1em;
+    font-size: 0.68em; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.6em 0; margin-bottom: 1.8em; border-bottom: 1px solid var(--hairline);
+    font-family: var(--font-data);
+  }
+  nav.digestnav a { text-decoration: none; color: var(--muted); }
+  nav.digestnav a:hover, nav.digestnav a:focus-visible { color: var(--accent); outline: none; }
+  nav.digestnav .spacer { flex: 1; }
+  /* Bottom mirror of the same nav, after </article> (roadmap step 2) — reads
+     as a continuation of the article's closing line, not a new nav block:
+     same top-hairline + padding treatment as .closing, font-size/behavior
+     otherwise identical to the top nav above. */
+  nav.digestnav.digestnav-bottom {
+    margin-top: 2.5em; padding-top: 1em; border-top: 1px solid var(--hairline); border-bottom: 0;
+  }
+  /* Edition eyebrow (digest page): kind · time · items · sections, mono
+     uppercase, --accent — sits directly above the derived h1 headline (see
+     renderDigestPage/deriveHeadline). font-variant-numeric dropped: --font-
+     data is monospace, so digits are already fixed-width. */
+  .stamp {
+    color: var(--accent); font-size: 0.66em; margin: 0 0 0.6em; font-family: var(--font-data);
+    text-transform: uppercase; letter-spacing: 0.1em; font-weight: 400;
+  }
+  /* Derived h1 headline (digest page) — same heavy/tight display voice as
+     .headline (index cards), just bigger; kept as its own rule rather than
+     reusing .headline's class since h1 needs no hover-color coupling to a
+     parent .entry link the way index cards do. */
+  .edhead h1 {
+    margin: 0 0 0.8em; font-size: clamp(1.6em, 5vw, 2.3em); font-weight: 800;
+    letter-spacing: -0.03em; line-height: 1.08; text-wrap: balance; color: var(--text);
+  }
+  .edhead h1 mark { background: var(--mark); color: var(--mark-ink); padding: 0 0.14em; }
+  .edhead { margin-bottom: 1.2em; }
+  /* Index empty-state message — its own class, NOT .stamp: the stamp is now
+     the digest page's uppercase wire eyebrow above, and "No digests yet."
+     must stay quiet muted prose, not a shouted header. */
+  .empty { grid-column: 1 / -1; color: var(--muted); font-size: 0.85em; margin: 2em 0; }
+  /* HU digest page, no body_html_hu on file: shown above the article,
+     falling back to the English body. */
+  .en-only-note { color: var(--muted); font-size: 0.85em; font-style: italic; margin: 0 0 1em; }
+  /* Arc page title (§11.1 PR A, renderArcPage) — like the digest page's own
+     derived h1 (.edhead h1 above), an editorial per-page headline rather
+     than the masthead brand link every OTHER page (index, search) still
+     uses in place of a real h1. Same heavy/tight display voice as the rest
+     of the "print poster" redesign, not a separate serif register. */
+  .archead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.7em; }
+  .arctitle {
+    font-weight: 800; letter-spacing: -0.025em; font-size: 1.7em;
+    line-height: 1.15; margin: 0 0 0.5em; text-wrap: balance;
+  }
+  /* Follow toggle (§11.2, optional feature): client-injected into .archead,
+     next to the arc title — see the follow-toggle IIFE in pageChrome. Text
+     control per the design guidance, deliberately no button chrome (no
+     border/background/pill) — same restraint as the design guidance's
+     "calm urgency" principle applied to a control instead of a status. Mono
+     metadata register (matches .nowmeta/.catchup) rather than the h1's
+     editorial serif, so it visually reads as interface, not headline. */
+  .followtoggle {
+    background: none; border: 0; padding: 0; margin: 0 0 0.5em;
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    cursor: pointer;
+  }
+  .followtoggle:hover, .followtoggle:focus-visible { color: var(--accent); }
+  .followtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Background primer disclosure (§11.6 context mode, renderArcContext):
+     native <details>/<summary>, collapsed by default, sitting directly under
+     the title/metadata line and above the appearances timeline. No card
+     (design guidance) — a thin bottom hairline is the only separator, same
+     "typography, not chrome" recipe as .deltas just below. Summary text is
+     in the mono metadata register (matches .archivelabel/.followtoggle), NOT
+     the h1's editorial serif — this is an interface control revealing
+     prose, not a second headline. Body paragraphs reuse .digest p's own
+     serif/line-height but in --muted rather than --text: durable background
+     reads one register quieter than the article itself (design guidance:
+     "prose register matching the article body, muted"). */
+  .arccontext { margin: 0 0 1.6em; padding-bottom: 1.2em; border-bottom: 1px solid var(--hairline); }
+  .arccontext summary {
+    cursor: pointer; font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .arccontext summary:hover, .arccontext summary:focus-visible { color: var(--accent); }
+  .arccontext summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .arccontextbody { margin-top: 0.9em; }
+  .arccontextbody p {
+    margin: 0 0 0.9em; font-family: var(--font-prose); font-size: 0.95em;
+    line-height: 1.65; color: var(--muted);
+  }
+  .arccontextbody p:last-child { margin-bottom: 0; }
+  /* Section index ("in this edition", roadmap step 5 / print-poster
+     redesign): a numbered two-column grid built from the article's own
+     <h2>s at render time (see buildSectionToc/renderToc) — replaces the old
+     pill-chip row. Each entry is now "NN  Title", the number in
+     .toclabel, --accent, mono — same numbering voice as .digest h2's own
+     CSS-counter badges below, so the index and the article agree on how
+     each section is numbered without the two having to share markup. */
+  .toc {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em 2em;
+    padding: 1em 0; margin: 0 0 1.6em;
+    border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline);
+  }
+  .toc a {
+    display: flex; gap: 0.7em; align-items: baseline;
+    font-size: 0.85em; font-weight: 650; letter-spacing: -0.01em;
+    color: var(--text); text-decoration: none; background: transparent;
+  }
+  .toc a .tocnum {
+    font-family: var(--font-data); font-size: 0.72em; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .toc a:hover, .toc a:focus-visible { color: var(--accent); outline: none; }
+  @media (max-width: 34em) {
+    .toc { grid-template-columns: 1fr; }
+  }
+
+  /* Story-arc line (roadmap 4 step 8, renderArcs): chips in the mono data
+     voice, same family as .sourcekey's .sk swatches below. Each chip is a
+     LINK to that slug's arc page (§11.1 PR A) — text-decoration: none plus
+     the explicit hover/focus rules below are what keep it reading as a
+     provenance chip stating which thread this briefing continues, not as a
+     button; see renderArcs. */
+  .arcs { display: flex; flex-wrap: wrap; gap: 0.45em; margin: 0 0 1.2em; }
+  .arcs .arc {
+    font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
+    /* Rounded tag — same owner follow-up as .entry .flag above. */
+    letter-spacing: 0.06em; padding: 0.22em 0.8em; border-radius: 999px;
+    background: var(--chip-bg); color: var(--chip-text); text-decoration: none;
+    /* Topics derive from section headings, which run headline-length in
+       production (owner-reported, 2026-08-09) — cap the chip at one line.
+       Only the LABEL ellipsizes (its own span, min-width: 0 so flex lets
+       it shrink); the count is the chip's actual information and must
+       never be the part the ellipsis eats. The label's tail is always
+       recoverable one scroll down in the TOC. */
+    max-width: 100%; display: inline-flex; align-items: baseline;
+  }
+  .arcs .arc .arclabel {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .arcs .arc .arccount { font-weight: 700; margin-left: 0.45em; flex: none; }
+  /* Interactivity signal lives on the LABEL only (an underline on hover),
+     not on the chip's shape/color — the chip must not start looking like a
+     button just because it became clickable. */
+  .arcs .arc:hover .arclabel { text-decoration: underline; }
+  .arcs .arc:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Inline per-section arc link (this feature, addInlineArcLinks): a small
+     link directly under a RECURRING section heading (count >= 2, same
+     threshold as the .arcs chips just above), letting a reader already
+     mid-section jump straight to that story's arc page instead of
+     scrolling back to the top chip line. Same mono data voice as .arcs/
+     .toc, deliberately quieter (muted, not a tinted chip) — this is the
+     below-the-fold echo of the chip line, not a second competing signal. */
+  .secarc {
+    display: block; font-family: var(--font-data); font-size: 0.7em;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    text-decoration: none; margin: 0.35em 0 0;
+  }
+  .secarc:hover { color: var(--accent); text-decoration: underline; }
+  .secarc:focus-visible {
+    color: var(--accent); text-decoration: underline;
+    outline: 2px solid var(--text); outline-offset: 2px;
+  }
+
+  /* "What changed" block (§11.3 delta persistence, ingest v4, renderDeltas):
+     typography-led per the design guidance — no cards, a hairline between
+     rows (same recipe as .now/.nowlist just below in the file), not a
+     colored box. Each row is a link (like .now's .nowrow) to that delta's
+     arc page. .deltatext/.deltaprev/.deltaarrow/.deltanow are shared with
+     the arc page's own per-appearance line (renderArcAppearance) — same
+     quiet register in both places, one set of rules for both. */
+  .deltas { display: flex; flex-direction: column; margin: 0 0 1.6em; }
+  .deltas .delta {
+    display: flex; flex-direction: column; gap: 0.3em;
+    text-decoration: none; color: inherit;
+    padding: 0.6em 0; border-bottom: 1px solid var(--hairline);
+  }
+  .deltas .delta:last-child { border-bottom: none; }
+  .deltalabel {
+    font-family: var(--font-data); font-size: 0.72em; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--accent);
+  }
+  .deltas .delta:hover .deltalabel,
+  .deltas .delta:focus-visible .deltalabel { text-decoration: underline; }
+  .deltas .delta:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .deltatext {
+    margin: 0; font-family: var(--font-prose); font-size: 0.95em; line-height: 1.55;
+  }
+  .deltaprev { color: var(--muted); }
+  .deltaarrow {
+    font-family: var(--font-data); color: var(--muted); margin: 0 0.5em;
+  }
+  .deltanow { color: var(--text); }
+
+  .attention {
+    background: var(--attention-bg); color: var(--attention-text);
+    padding: 0.8em 1em; margin: 0 0 1.4em;
+  }
+  .attention h2 { margin: 0 0 0.3em; border: 0; padding: 0; font-size: 0.95em; }
+  .attention p { margin: 0; font-size: 0.95em; font-family: var(--font-prose); }
+
+  /* The TL;DR callout ("print poster" redesign): no longer a tinted box —
+     restyled as the digest page's LEADER paragraph, sitting directly under
+     the derived h1 headline (see renderDigestPage's edhead/deriveHeadline).
+     It's still the exact same server-rendered element (the emailer's own
+     tldr div from body_html, see the file-header comment on
+     stripInlineStyles) — only the presentation changed, so there is no
+     second, duplicate TL;DR anywhere on the page. */
+  .tldr {
+    /* Emphasized bubble (owner follow-up — the plain leader paragraph
+       under-sold the one block that summarizes the whole briefing):
+       tinted background in the soft-bubble family (14px, like the
+       popovers), no border, text in the tint's own readable pair. Still
+       the same single server-rendered element from body_html — see the
+       stripInlineStyles comment. */
+    background: var(--tldr-bg); color: var(--tldr-text);
+    padding: 1em 1.2em; border-radius: 14px;
+    margin: 0 0 2em; font-weight: 400; font-size: 1.02em;
+    font-family: var(--font-prose); line-height: 1.65;
+  }
+  /* The emailer's callout markup carries small eyebrow label spans
+     (tldr-label / attention-label) and a ⚠ collection-failed banner
+     paragraph, all previously presented by INLINE email styles the site now
+     strips at render time (see stripInlineStyles) — these rules are their
+     site-side, theme-aware replacements. Eyebrows in the mono data voice,
+     matching the wire dateline. */
+  .tldr .tldr-label, .attention .attention-label {
+    display: block; font-family: var(--font-data); font-size: 0.68em;
+    font-weight: 400; text-transform: uppercase; letter-spacing: 0.13em;
+    margin-bottom: 0.5em;
+  }
+  .tldr .tldr-label { color: var(--accent); }
+  .digest .banner {
+    background: var(--attention-bg); color: var(--attention-text);
+    padding: 0.6em 1em; margin: 0 0 1.2em;
+    font-size: 0.92em;
+  }
+  /* Article section headings ("print poster" redesign): heavy 800-weight,
+     tight-tracked display type with a NUMBERED badge — "01", "02", …, in
+     --accent mono — and a 2px top rule in place of the old left accent bar,
+     matching the numbered "in this edition" TOC above (.toc a .tocnum). The
+     number comes from a CSS counter, not markup, so buildSectionToc (which
+     only injects #sN ids for anchor targets) needs no change: counter-reset
+     lives on .digest itself, incremented once per DIRECT-CHILD h2 — scoped
+     to the .digest > h2 combinator specifically so the .attention callout's
+     own nested h2 (one level deeper, see .attention h2 above) is never
+     counted or numbered, same "never becomes a TOC entry" rule
+     buildSectionToc already enforces for the index. */
+  .digest { counter-reset: secnum; }
+  .digest > h2 {
+    counter-increment: secnum;
+    font-size: 1.3em; font-weight: 800; letter-spacing: -0.025em; line-height: 1.15;
+    /* Hairline, not --rule-heavy (owner follow-up): a bright 2px rule per
+       section glared in dark mode and flattened the hierarchy — the heavy
+       rule stays reserved for the masthead and colophon; inside the
+       article the white belongs to the headlines alone. */
+    border-top: 1px solid var(--hairline); padding-top: 0.8em;
+    margin: 2.2em 0 0.7em; text-wrap: balance;
+    /* So a TOC-jumped-to heading isn't flush against the viewport edge. */
+    scroll-margin-top: 0.8em;
+    /* Sticky section headings, the same idea as .dayhead on the index: while
+       you read a section its heading stays on screen. Opaque background for
+       the same reason — the article scrolls UNDERNEATH it. The padding-bottom
+       is taken back out of the margin so the background covers the gap the
+       body text would otherwise slide through just below the heading.
+
+       Sticky SIBLINGS all pin at the same offset and overlap rather than
+       pushing one another out — with headings of different heights (one line
+       vs three) the taller previous one juts out below the current one. The
+       usual cure is a wrapper element per section, but this article is
+       pre-sanitized HTML the Worker inserts verbatim, and the numbering
+       counter is scoped to .digest > h2 as a DIRECT child; wrapping would
+       mean restructuring that HTML and rewiring the counter. So wirePage
+       reproduces the push in script instead — see the sticky-headings block
+       there — and the <noscript> block turns this off entirely, since
+       without that script the overlap is exactly what you would get. */
+    position: sticky; top: var(--mast-h, 0px); z-index: 1;
+    background: var(--bg);
+    padding-bottom: 0.35em; margin-bottom: 0.35em;
+  }
+  html.masthid .digest > h2 { top: 0; }
+  .digest > h2::before {
+    content: counter(secnum, decimal-leading-zero) "  ";
+    font-family: var(--font-data); font-size: 0.62em; font-weight: 400;
+    letter-spacing: 0.08em; color: var(--accent); vertical-align: 0.15em;
+  }
+  /* Body prose one tonal step below the headlines (--prose, owner
+     follow-up: full-ink body next to full-ink h2s read as one wall);
+     strong/em snap back to full --text so bolded stats stand out AGAINST
+     the paragraph instead of vanishing into it. */
+  .digest p { margin: 0.7em 0; font-family: var(--font-prose); line-height: 1.65; color: var(--prose); }
+  .digest p strong, .digest p em { color: var(--text); }
+  /* Reading polish (roadmap 4 step 2): hyphenate the prose blocks.
+     html lang is already correct per page (en/hu, set by pageChrome) —
+     the browser picks the right hyphenation dictionary on its own, this is
+     just opting the prose in. Hungarian's long compounds are the motivating
+     case on the 15px phone column, where an unbroken word can overflow a
+     narrow line; -webkit- is what iOS Safari actually honors. Headings and
+     chrome stay un-hyphenated on purpose — this is for reading paragraphs,
+     not labels. */
+  .digest p, .tldr, .entry .excerpt, .attention p, .arccontextbody p {
+    hyphens: auto; -webkit-hyphens: auto;
+  }
+  /* nh3 allows pre/code through (digest repo, emailer.py's _ALLOWED_TAGS),
+     and pre's own white-space: pre is immune to the body's inherited
+     overflow-wrap — a fenced code block in a digest was exactly what
+     re-triggered the phone layout bug (see .wrap's comment). pre-wrap keeps
+     code readable while letting long lines break at the container edge. */
+  .digest pre { white-space: pre-wrap; overflow-wrap: break-word; }
+  /* Cite chips ("print poster" redesign): tiny mono domain tags — --accent
+     text on --chip-bg, 3px radius (chips/badges otherwise stay square;
+     interactive CONTROLS are the pill-rounded exception, see summary.gear's
+     comment), filling solid --accent with paper text on hover/focus. */
+  .cite {
+    font-size: 0.7em; vertical-align: super; text-decoration: none;
+    background: var(--chip-bg); color: var(--accent);
+    padding: 0 0.4em; border-radius: 3px; font-weight: 700; margin-left: 1px;
+    font-family: var(--font-data);
+  }
+  .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--bg); outline: none; }
+  /* Search hit highlighting (roadmap 4 step 7, markSnippet): reuses the
+     citation chip's own chip-bg/chip-text tokens rather than a new color —
+     it's the same "this is metadata the site added, not article content"
+     visual family as .cite. */
+  mark { background: var(--chip-bg); color: var(--chip-text); padding: 0 0.15em; }
+  /* Touch provenance (roadmap 4 step 2): on the phone — where this site is
+     mostly read — there's no hover, so the title attribute's domain never
+     surfaces; put it on the pill itself instead. Reuses the exact title
+     addCiteTitles already sets and the same attr(title) pattern the print
+     stylesheet below uses, so the chip reads "1 example.com" instead of a
+     bare number. Hover-capable devices are untouched and keep the bare chip
+     plus the native hover title. .cite[title], not bare .cite, so a chip
+     whose href failed to parse (no title) shows nothing extra — same
+     fail-safe as print. The bigger pill this produces is also a bigger,
+     easier-to-hit touch target. */
+  @media (hover: none) {
+    .cite[title]::after {
+      content: attr(title);
+      margin-left: 0.35em;
+      font-weight: 400;
+      letter-spacing: 0;
+      /* The prose hyphenation above inherits into the chip and was
+         auto-hyphenating the domain itself ("ex-ample1.com") — an inserted
+         hyphen inside a hostname reads as part of the hostname, which
+         misstates the provenance this feature exists to show. Long domains
+         still wrap (overflow-wrap), just never with an added hyphen. */
+      hyphens: none; -webkit-hyphens: none;
+    }
+  }
+  .closing {
+    font-style: italic; color: var(--muted); border-top: 1px solid var(--hairline);
+    padding-top: 1em; margin-top: 2.2em; font-size: 0.92em;
+  }
+
+  /* Source key (roadmap 2 step 8 follow-up): the digest page's colophon —
+     source_counts/failed_sources spelled out as concrete per-source numbers
+     with color swatches, sitting right after the article (renderSourceKey
+     renders nothing when both fields are absent — see the function for the
+     fail-safe JSON.parse contract shared with renderDegradedBadge). The
+     index page's own micro-bar counterpart (.spectrum, one <i> per source
+     sized by inline flex:N) was removed in the owner-requested index-
+     cleanup pass; this colophon is unaffected and still carries the full
+     provenance on the digest page. */
+  .sourcekey {
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; align-items: center;
+    margin: 1.6em 0 0;
+  }
+  .sklabel { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+  .sk { display: inline-flex; align-items: center; }
+  .sk i { display: inline-block; width: 9px; height: 9px; margin-right: 0.45em; }
+  /* .sk-failed gets no color override — muted stays muted, the ⚠ prefix
+     baked into the string (not CSS) is what marks it, same "color is not
+     the warning signal" decision as .flag-degraded on the index. */
+
+  /* Floating back-to-index button (digest pages only): fixed bottom-right
+     in one-thumb reach, clear of the iPhone home bar via safe-area insets.
+     Hidden until the reader scrolls past the top nav (the inline script in
+     pageChrome toggles .show), so it never duplicates the visible header
+     nav; with JS disabled the <noscript> style keeps it always visible
+     instead — the button must never be unreachable. Accent background with
+     the page background as the arrow color works in both themes. */
+  .backfab {
+    position: fixed;
+    right: max(var(--fab-inset), env(safe-area-inset-right));
+    bottom: calc(var(--fab-inset) + env(safe-area-inset-bottom));
+    width: var(--fab-size); height: var(--fab-size); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--bg);
+    text-decoration: none; font-size: 1.35em; font-weight: 700;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+    z-index: 10;
+  }
+  .backfab.show { opacity: 1; pointer-events: auto; }
+  .backfab:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; opacity: 1; pointer-events: auto; }
+  @media (prefers-reduced-motion: reduce) { .backfab { transition: none; } }
+
+  /* View tabs: the primary content navigation. Bigger than the corner
+     language toggle by design — switching between the full stream and
+     daily briefs is the main choice a reader makes. Owner-requested
+     2026-08-09: one connected segmented capsule instead of three detached
+     pills. The capsule (.viewtabs) carries the border, radius and
+     overflow: hidden; segments (.viewtab, unchanged below — same hrefs,
+     active-state fill, data-view attributes the ⌘K palette reads) are
+     borderless and share a hairline divider. Owner-requested masthead
+     compaction: this used to be centered on its own row below the masthead
+     (width: fit-content + auto side margins); it now rides inline in
+     .mastleft beside the brand (see pageChrome/the header.mast CSS above),
+     so there's no more row of its own to center on — width: fit-content
+     stays (the capsule still hugs its own content rather than stretching),
+     the centering margin is gone. The view selector remains the primary
+     navigation. */
+  .viewtabs {
+    display: flex; width: fit-content;
+    border: 1px solid var(--rule-heavy);
+    /* Pill capsule (owner-requested, see summary.gear's comment); overflow
+       hidden clips the active segment's fill to the rounded ends. */
+    border-radius: 999px; overflow: hidden;
+    font-family: var(--font-data); font-size: 0.68em; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .viewtab {
+    padding: 0.5em 1.1em;
+    font-weight: 400; text-decoration: none;
+    color: var(--text);
+  }
+  .viewtab + .viewtab { border-left: 1px solid var(--hairline); }
+  /* Same Safari capsule-clip insurance as .minisegbtn above. */
+  .viewtab:first-child { border-radius: 999px 0 0 999px; }
+  .viewtab:last-child { border-radius: 0 999px 999px 0; }
+  .viewtab.active {
+    background: var(--accent); color: var(--bg);
+  }
+  /* Segments have no border of their own to shift on hover anymore, so hint
+     hover with the same soft accent-tinted background the TL;DR block uses
+     (picked over an --accent-strong color shift — quieter against the
+     filled active segment sitting right next to it). */
+  .viewtab:not(.active):hover { background: var(--tldr-bg); }
+  /* Inset outline (negative offset): an outset ring would get clipped by
+     the capsule's overflow: hidden. */
+  .viewtab:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+
+  /* Week rail (roadmap 3 step 2): mono wire-style ← older · WEEK N · range ·
+     newer → nav, between the view tabs and the ledger, ALL-view index pages
+     only (see renderIndexPage/renderWeekRail). Classic 3-column centering
+     trick for the first three spans: rail-older/rail-newer share flex:1 (so
+     they're always equal width regardless of their own content length, even
+     when one side is an empty spacer), which keeps the center label
+     visually centered without needing to measure anything.
+     trick at all (flex: none, own rule below), it just claims its own
+     natural width at the row's right edge; the gap property below gives it
+     breathing room from rail-newer's "→" link on an archive week rather
+     than the two abutting directly. */
+  .weekrail {
+    display: flex; align-items: baseline; gap: 0.6em; margin: 0 0 1.2em;
+    font-family: var(--font-data); font-size: 0.78em;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .weekrail .rail-older, .weekrail .rail-newer { flex: 1; }
+  .weekrail .rail-older { text-align: left; }
+  .weekrail .rail-newer { text-align: right; }
+  .weekrail .rail-center { flex: 0 1 auto; color: var(--muted); }
+  .weekrail a { color: var(--accent); text-decoration: none; }
+
+  /* Archive sparkline (roadmap 4 step 6, renderWeekRail): the pulse strip's
+     visual language, sized down to live inside the rail's center span —
+     archive weeks only, see renderWeekRail. Zero-count days (.sd0) get their
+     height from THIS rule rather than an inline style like the nonzero bars
+     get, so the two never end up in a specificity fight over the same
+     property. */
+  .railspark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; margin-left: 0.7em; vertical-align: -2px; }
+  .railspark i { display: block; width: 4px; background: var(--chip-bg); }
+  .railspark i.sd0 { background: var(--hairline); height: 15%; }
+
+  /* Search bubble (owner-requested index cleanup): the week-rail's compact
+     trigger for what used to be the always-visible filterrow — same
+     details/summary disclosure pattern as the settings gear just above
+     (details.settings/summary.gear/.settingspanel), reusing its exact
+     border/elevation/open-animation recipe (the settingsopen keyframe,
+     defined above, is referenced again below rather than copied) under NEW
+     class names rather than the literal same ones: the settings-close IIFE
+     and the soft-nav click interceptor (see pageChrome's bottom script)
+     both assume exactly one details.settings element on the page, and this
+     is a second, unrelated disclosure that must not collide with either
+     lookup. */
+  details.searchpop { position: relative; }
+  /* Two-faced, the same way summary.gear is: a TEXT chip on the desktop
+     ("SEARCH"/"KERESÉS", owner-requested — it reads as a matched pair with
+     the SETTINGS chip beside it) and a bare oversized magnifier on the
+     phone. Both halves are in the markup (see renderSearchBubble) and each
+     breakpoint hides one; this rule is the DESKTOP half and deliberately
+     duplicates summary.gear's pill recipe declaration for declaration, so
+     the two chips share a border, type, tracking and padding.
+
+     Unlike .gearicon/.gearlabel, the reveal below needs NO specificity
+     boost: the phone block sits BELOW this rule, so source order already
+     carries it. That is the whole reason it lives down there. */
+  summary.searchtoggle {
+    list-style: none; display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
+    color: var(--text); font-family: var(--font-data); font-size: 0.62em;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.4em 0.75em; cursor: pointer;
+  }
+  /* Desktop half-swap: the word shows, the magnifier hides. Reversed in the
+     phone block below. */
+  .searchicon { display: none; }
+  /* Quiet hover / filled open — the same split as summary.gear above. */
+  summary.searchtoggle:hover { border-color: var(--accent); color: var(--accent); }
+  summary.searchtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  details.searchpop[open] > summary.searchtoggle {
+    background: var(--accent); border-color: var(--accent); color: var(--bg);
+  }
+  summary.searchtoggle::-webkit-details-marker { display: none; }
+
+  .searchpanel {
+    position: absolute; right: 0; top: calc(100% + 0.5em);
+    z-index: 20;
+    /* Simple soft bubble — same recipe as .settingspanel above (owner
+       follow-up), one popover family. */
+    background: var(--bg); border: 1px solid var(--hairline);
+    border-radius: 14px;
+    padding: 1em 1.1em;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    display: flex; flex-direction: column; gap: 0.7em; min-width: 16em;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    /* Reuses .settingspanel's own open keyframe (see above) — same visual
+       language, no need for a second identical @keyframes block. Opening
+       needs no JS, same as the settings bubble: native <details> flips
+       [open] the instant the summary is clicked, and this rule keys off
+       that attribute directly. No matching close animation here (unlike
+       settings' settingsclose/"panelclosing" dance) — this bubble has no
+       language-switcher-style reason to stay open across a navigation, and
+       the owner brief's only explicit behavioral ask was opening it with
+       focus, not mirroring the settings bubble's close polish too. */
+    details.searchpop[open] .searchpanel { animation: settingsopen 160ms ease-out; }
+  }
+  /* The SAME .filter input class the client-side filter IIFE and the
+     archive-search integration already look for (document.querySelector of
+     ".filter" — see pageChrome's bottom script), just styled for its new
+     home inside the panel instead of a standalone row. */
+  .searchpanel .filter {
+    display: block; font: inherit; font-size: 0.9em;
+    padding: 0.5em 0.9em;
+    /* Hairline + a little rounding (owner follow-up): the heavy ink border
+       double-boxed with the accent focus ring right on top of it. */
+    border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--bg); color: var(--text);
+  }
+  .searchpanel .filter::placeholder { color: var(--muted); }
+  .searchpanel .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Entry point into the standalone search page (roadmap 4 step 7) — the
+     no-JS fallback, still the row's only visible content when the filter
+     input above is hidden (see renderSearchBubble). Mono chrome voice, not
+     styled like the data field beside it, same as before this move. */
+  .searchlink {
+    font-family: var(--font-data); font-size: 0.78em;
+    text-decoration: none; letter-spacing: 0.06em; text-transform: uppercase;
+  }
+
+  /* Unified search results (owner UX pass): the index page's own box for
+     archive hits fetched in the background by the bottom script — see
+     renderIndexPage's archiveResultsHtml. .archivelabel is the file's mono
+     eyebrow recipe, kept as its own class rather than shared with any other
+     eyebrow — coupling unrelated features to one class just because they
+     currently render alike is the kind of thing that bites later, and this
+     class survived a neighbouring feature's removal untouched precisely
+     because it was never shared. .archiveresults[hidden] needs no rule of its
+     own: the global [hidden] override near the top of this stylesheet
+     already covers it, same as every other hide-by-attribute element here. */
+  .archivelabel {
+    font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.6em;
+  }
+  .archiveresults { margin-top: 1.6em; }
+
+  /* Catch-up banner (§11.2): one row above the NOW section, built entirely
+     by the unread-fence IIFE extension in the bottom script — see
+     renderIndexPage's catchupHtml for the hidden shell and why it always
+     sits above nowHtml regardless of whether NOW itself has content that
+     day. No card (design guidance), mono metadata register matching
+     .nowmeta/.archivelabel, a bottom hairline as the only separator — same
+     "typography, not chrome" recipe as .now just below. .catchuptext holds
+     the composed sentence (may include real <a> links to followed arcs, see
+     the script — that's why it's a plain span, not the row's own click
+     target: a button/link cannot legally contain another link). The jump
+     and dismiss controls are small icon-only buttons, deliberately NOT
+     styled like .resumechip's pill — this row is metadata-weight chrome,
+     not a floating call to action. */
+  .catchup {
+    display: flex; align-items: baseline; gap: 0.7em;
+    margin: 0 0 1.4em; padding-bottom: 1.1em;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--font-data); font-size: 0.78em; color: var(--muted);
+  }
+  .catchuptext { flex: 1 1 auto; min-width: 0; }
+  .catchuptext a { color: var(--accent); text-decoration: none; }
+  .catchuptext a:hover, .catchuptext a:focus-visible { text-decoration: underline; }
+  .catchupjump, .catchupdismiss {
+    flex: none; background: none; border: 0; padding: 0.1em 0.3em;
+    color: var(--muted); font: inherit; font-size: 1em; line-height: 1;
+    cursor: pointer;
+  }
+  .catchupjump:hover, .catchupdismiss:hover,
+  .catchupjump:focus-visible, .catchupdismiss:focus-visible { color: var(--text); }
+  .catchupjump:focus-visible, .catchupdismiss:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  /* NOW section (§11.1 PR B, renderNowSection): the situational-overview
+     block at the very top of the current-week all-view index, above the
+     rail/search row/ledger — see renderIndexPage. .archivelabel
+     is reused for the eyebrow (already shared by the arc timeline and this
+     file's own archive-search label above) rather than a fourth near-
+     identical mono-eyebrow class. Typography-led per the design guidance:
+     each arc is one row, not a card — a bottom hairline on the whole block
+     is the only separator between it and the ledger, no box/border around
+     the block itself. */
+  .now { margin: 0 0 1.8em; padding-bottom: 1.3em; border-bottom: 1px solid var(--hairline); }
+  /* Head row: the NOW eyebrow left, the search control right (owner-
+     requested placement) — the icon lands on the same right edge the arc
+     rows' relative-time meta below it aligns to. The eyebrow (.archivelabel)
+     carries its own bottom margin, so the row's own baseline stays where a
+     bare eyebrow used to sit; align-items center keeps the icon optically
+     on the eyebrow's line rather than riding its cap height. */
+  .nowlist { display: flex; flex-direction: column; }
+  .nowrow {
+    display: flex; align-items: baseline; gap: 0.7em;
+    text-decoration: none; color: inherit;
+    padding: 0.55em 0; border-bottom: 1px solid var(--hairline);
+  }
+  .nowlist .nowrow:last-child { border-bottom: none; }
+  .nowrow:hover .nowarclabel,
+  .nowrow:focus-visible .nowarclabel { color: var(--text); text-decoration: underline; }
+  .nowrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  /* Momentum arrow: mono, muted — a data-derived signal (design guidance:
+     "evidence over certainty"), not a colored/severity cue, so it carries no
+     color of its own beyond the row's normal muted register. Fixed width so
+     the label column stays aligned across rows regardless of which arrow (or
+     none, on the defense-in-depth null case) a given row has. */
+  .nowarrow {
+    font-family: var(--font-data); font-size: 0.85em; color: var(--muted);
+    flex: none; width: 1em; text-align: center;
+  }
+  .nowarclabel {
+    font-family: var(--font-prose); font-size: 0.97em; color: var(--muted);
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .nowmeta {
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    flex: none; white-space: nowrap;
+  }
+
+  /* Search page (roadmap 4 step 7): the form itself reuses .filter's input
+     styling (see above) — it's the SAME kind of control, just server-
+     functional here instead of a client-side enhancement (see
+     renderSearchPage). */
+  .searchform { display: flex; gap: 0.5em; margin: 0 0 1.6em; }
+  .searchform .filter {
+    flex: 1; font: inherit; font-size: 0.9em; padding: 0.5em 0.7em;
+    /* Hairline + rounding — same reasoning as .searchpanel .filter above. */
+    border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--bg); color: var(--text);
+  }
+  .searchform .filter::placeholder { color: var(--muted); }
+  .searchform .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Styled like .viewtab's outlined pill (own rule above), not a filled
+     button — a search submit is a secondary action next to the input, not
+     the page's primary call to action. */
+  .searchbtn {
+    border: 1px solid var(--rule-heavy); border-radius: 999px; color: var(--text);
+    font-family: var(--font-data); font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.5em 1.2em; background: none; cursor: pointer;
+  }
+  .searchbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .searchbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Unread fence (roadmap 2 step 2): one labeled hairline the bottom script
+     inserts between digests that arrived since the reader's last visit and
+     everything older — no-JS readers never see this class at all, so no
+     hidden-by-default dance is needed here (unlike .filter/.minisegbtn
+     above, which exist in the markup from the start). */
+  .unreadfence { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.7em; margin: 1.4em 0; }
+  .unreadfence .line { flex: 1 1 auto; height: 0; border-top: 1px solid var(--accent); }
+  .unreadfence .label {
+    flex: 0 0 auto; font-family: var(--font-data); font-size: 0.7em;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+  }
+  /* (The filter IIFE hides this via the hidden attribute while a query is
+     active — the global [hidden] rule near the top of this stylesheet is
+     what makes that actually take effect over the display: flex above.) */
+
+  /* Resume chip (roadmap 4 step 3): a floating "jump to the fence" button,
+     built entirely by the unread-fence IIFE below and only when a fence was
+     actually inserted — it inherits every one of that IIFE's guards for
+     free (no-JS, archive week, nothing new, everything new). No display
+     rule needed for hiding — the global [hidden] override near the top of
+     this stylesheet already handles that, same as .unreadfence above. */
+  .resumechip {
+    position: fixed;
+    left: 50%; transform: translateX(-50%);
+    /* One FAB-height above the corner button rather than beside it. The
+       chip is centred and the FAB is right-aligned, so on a wide viewport
+       they never met — but the chip is only as narrow as its label, and the
+       Hungarian one ("↓ ÚJ A LEGUTÓBBI LÁTOGATÁSOD ÓTA", 261px) overlapped
+       the FAB by 9px at 375px once every non-digest page gained one. Capping
+       the chip's width instead would mean truncating that label, and it is
+       nowrap on purpose (see below); stacking costs nothing and is the
+       conventional arrangement anyway — a transient chip rides above a
+       persistent action button, never under it. */
+    bottom: calc(var(--fab-inset) + var(--fab-size) + 0.55rem + env(safe-area-inset-bottom));
+    font-family: var(--font-data); font-size: 0.72em;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    background: var(--bg); color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px;
+    padding: 0.45em 1.1em; cursor: pointer;
+    /* One line, always: the body's inherited overflow-wrap breaks the
+       label across two lines well before the pill nears the viewport
+       edge, and a two-line floating pill reads as a banner, not a chip. */
+    white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    z-index: 10;
+  }
+  .resumechip:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+
+
+  /* Desktop ("print poster" redesign — the purple floating "bubble" card is
+     RETIRED): --page-bg now equals --bg (see the :root token block above),
+     so the page is flat paper at every width — this block only widens the
+     reading column's max-width a little past the 42em mobile measure and
+     keeps generous side whitespace; it no longer draws a separate card
+     (no border, no radius, no distinct background) on top of the page. */
+  /* Wide-viewport type scale (owner: "the resolution is too low" on a big
+     display). The honest lever for a prose-first site is SIZE, not width:
+     every dimension here is em-based off body, so stepping the base up
+     scales the column, the padding, the chrome and the text together, uses
+     more of a large screen, and leaves the character measure exactly where
+     it was (~82). Widening the column instead would have pushed the
+     measure past 100 characters, which is where reading actually degrades.
+     Breakpoint ems resolve against the 16px root, so these are 1200px and
+     1600px. The S/M/L preference in Settings still multiplies on top. */
+  @media (min-width: 75em) { body { font-size: 18px; } }
+  @media (min-width: 100em) { body { font-size: 19px; } }
+
+  @media (min-width: 52em) {
+    body { padding: 2.5em 1.5em; }
+    .wrap {
+      /* 61em (owner follow-up on the Front Page redesign: "desktop text
+         should be wider about 30 percent") — up from 48em, i.e. a ~55em
+         text measure after the 3em side padding, ~31% over the old 42em.
+         This supersedes the earlier size-not-width decision recorded
+         below for the SINGLE-column era: the Front Page index is a
+         two-column grid now, so the extra width goes to two honest ~26em
+         columns instead of one over-long line, and the digest page's
+         longer measure is the owner's explicit call. */
+      max-width: 61em;
+      padding: 0.4em 3em 3.5em;
+    }
+    /* NOTE — still no prose max-width clamp here, deliberately. A pass on
+       2026-08-10 tried widening the column while holding prose narrower,
+       on the theory that chrome should use width prose shouldn't. Live,
+       that read as a broken right edge rather than as hierarchy: the
+       TL;DR and every ledger excerpt stopped dead mid-column with nothing
+       beside them (owner-reported, twice). Whatever the column's width
+       is, text fills it: content box and text edge stay one and the same.
+       The wide-viewport font-size steps above still apply on top. */
+    /* Anchor the floating back button to the COLUMN, not the bare viewport
+       edge: the column is 61em centered, so its right edge sits at
+       50% + 30.5em — park the button 1rem past it. min() clamps back to
+       the viewport edge on narrow desktop windows so the button can never
+       be pushed off-screen. Mobile keeps the base viewport-corner
+       placement. */
+    .backfab {
+      /* em would resolve against the fab's own 1.35em font — overshooting
+         by ~150px (live-measured). rem resolves against the root: the
+         column is 61em of the 17px body = 1037px wide, half = 518px =
+         32.4rem at the 16px root default. */
+      left: min(calc(50% + 32.4rem + 1rem), calc(100vw - 48px - 1.1rem));
+      right: auto;
+    }
+  }
+
+  /* ── THE phone block ─────────────────────────────────────────────────
+     Every max-width-40em override lives HERE, at the end of the
+     stylesheet, after every base rule it overrides — so source order can
+     never silently disarm one again. That trap bit six separate rules
+     over this file's history (gear icon reveal, toolbar resets, sticky
+     day-header and section-heading offsets, a brand size override) —
+     each time a phone rule written next to its feature lost to an
+     equal-specificity base rule defined later in the file.
+
+     THE INVARIANT: do not add a max-width-40em block anywhere else in
+     this stylesheet. Add phone overrides to this block, in the section
+     matching their feature. (Other query TYPES — hover, reduced-motion,
+     min-width, print, the 34em narrow tweak — are not part of the trap:
+     their base rules never compete at equal specificity the same way.) */
+  @media (max-width: 40em) {
+    /* Mobile masthead + phone font size (owner-tuned). */
+    /* 15px: phone type ran large even at 16 (owner feedback, twice). The
+       S/M/L text-size rules need no phone twin — they're em factors off
+       this base, see the data-fontsize block above. */
+    body { font-size: 15px; }
+    /* Icon-only gear on the phone — the desktop half-swap of .gearicon/
+       .gearlabel, reversed. The desktop .gearicon { display: none } rule
+       sits LATER in this stylesheet (source order beats equal specificity,
+       media block or not — live-caught as an empty settings circle), so
+       this reveal needs the extra summary.gear ancestor to outweigh it. */
+    .gearlabel { display: none; }
+    summary.gear .gearicon { display: inline; }
+    /* The two toolbar toggles are EQUAL boxes on the phone (owner follow-up:
+       the gear must match the search icon's size) — but their rules do NOT
+       live here. They sit in the phone block AFTER summary.gear and
+       summary.searchtoggle's own rules further down this stylesheet, which
+       is the only place they survive: those base rules set border, padding,
+       font-size and letter-spacing at the same specificity, so an override
+       written HERE loses on source order. That is the same trap the
+       .gearicon note above documents, and it had already eaten this rule's
+       own padding, font-size and letter-spacing resets silently. */
+    /* Masthead phone posture: ONE line — brand, capsule, search, settings —
+       the same row the desktop shows (owner-requested). It used to take two,
+       with a forced break (a full-basis ::before pseudo-item at order 3)
+       dropping the capsule onto its own centered second line, because the
+       three zones genuinely did not fit at 375px and the side zones' flex:
+       1 1 0 meant flex would crush them into an overlapping single line
+       rather than wrap.
+
+       What makes one line fit now is the sizing below, not a layout trick:
+       the capsule's segments lose horizontal padding, the row gap tightens,
+       and the toolbar icons come down to the wordmark's own height (see the
+       toolbar block further down). The brand keeps its display scale — it
+       turned out not to need shrinking once the other three gave ground.
+       Measured at 375px that is ~303px of content in a 337.5px box; at 360px
+       (the narrowest phone still worth designing for) ~20px still spare, and
+       at ~320px it wraps rather than overflows.
+
+       The forced break is GONE but flex-wrap: wrap stays, now as a genuine
+       safety net rather than a mechanism: the zones are flex: 0 0 auto here,
+       so they cannot be crushed, which means a viewport too narrow to hold
+       them (~320px, an SE-1 class device) WRAPS instead of overlapping —
+       the failure the forced break originally existed to prevent, handled by
+       the wrap itself now that nothing can shrink below its content. */
+    header.mast { flex-wrap: wrap; gap: 0.45em 0.5em; justify-content: space-between; }
+    /* No flex: 1 1 0 growth here — that is the desktop's true-centering
+       trick, and on the phone it is exactly what would crush these back into
+       an overlap. Content width, no grow, no shrink. */
+    .mast .mastleft, .mast .mastright, .mast .viewtabs { flex: 0 0 auto; }
+    /* The capsule is the widest item in the row, so it pays the most: the
+       segments keep their type size and lose horizontal padding only. */
+    .mast .viewtab { padding: 0.5em 0.8em; }
+
+    /* Sticky masthead (owner-requested: "I don't have to scroll up to see
+       the settings, all, daily"). It HIDES on scroll down and comes back on
+       scroll up rather than sitting there permanently — on a phone the row
+       is ~65px of an ~812px viewport, and a reader scrolling down is reading,
+       not navigating. Scrolling up is the gesture that means "I want to get
+       somewhere", which is exactly when the controls should appear. wirePage
+       toggles html.masthid; see that block for the direction logic.
+
+       Needs an opaque background: the page scrolls UNDER a sticky element,
+       so without it the ledger would read straight through the masthead.
+
+       z-index 30 is deliberate — above .dayhead (1), the FAB and resume chip
+       (10) and the settings/search popovers (20, which are children of this
+       element and so ride in its stacking context), but BELOW the ⌘K palette
+       overlay (40), which is a modal and must cover the masthead. */
+    header.mast {
+      position: sticky; top: 0; z-index: 30;
+      background: var(--bg);
+      transition: transform 0.2s ease;
+    }
+    html.masthid header.mast { transform: translateY(-100%); }
+    /* Two more rules belong to this feature — .dayhead's sticky offset and
+       .digest > h2's scroll-margin — but they CANNOT live here: both base
+       rules are defined further down this stylesheet at equal specificity,
+       so an override written here loses on source order (the same trap the
+       .gearicon and toolbar-button notes above document — and it did bite:
+       .dayhead measured top: 0px in both states until they moved). They sit
+       in their own phone block just after .digest > h2 instead. */
+
+    /* Ledger: the two-column grid drops to one. */
+    section[data-unread-label] { grid-template-columns: 1fr; }
+
+    .entry-lead { grid-template-columns: 1fr; gap: 1.1em; }
+    .leadfacts {
+      border-left: 0; border-top: 1px solid var(--hairline); padding: 0.9em 0 0;
+      display: flex; gap: 1.6em;
+    }
+    .leadfacts dt { margin-top: 0; }
+
+    /* The sticky-masthead feature's dependent offsets: the day headers and
+       digest section headings pin below the masthead while it shows and at
+       the viewport edge once it hides (wirePage publishes --mast-h). */
+    /* The day headers are sticky too (top: 0, z-index 1), so with a sticky
+       masthead above them they would pin UNDERNEATH it and vanish. They
+       stick below it instead — and drop back to the top edge in lockstep
+       when the masthead hides, because a fixed offset would leave a band of
+       page content scrolling through the gap the masthead used to fill.
+       --mast-h is measured and published by wirePage, since the compact and
+       big mastheads are different heights. */
+    .dayhead { top: var(--mast-h, 0px); }
+    html.masthid .dayhead { top: 0; }
+    /* A TOC jump must clear the masthead, not land under it. Falls back to
+       the same 0.8em as the rule above when --mast-h is unset. */
+    .digest > h2 { scroll-margin-top: calc(var(--mast-h, 0px) + 0.8em); }
+
+    /* Phone toolbar buttons: borderless, icon-scale (owner-requested — "remove
+     the circle, make the icon as big as the circle was"). The ring around the
+     search and gear toggles comes off and the marks inside grow to roughly the
+     diameter that ring used to occupy, so the icon IS the control instead of a
+     small glyph floating in a lot of empty circle.
+
+     Phone-scoped in full: on the desktop BOTH controls are bordered mono
+     text chips ("SEARCH", "SETTINGS") and neither has an icon to scale. This
+     block is where they become icons instead — it reverses both half-swaps
+     and strips the pill recipe those two rules above set. */
+    /* Reverse both half-swaps: icons in, words out. .searchicon/.searchlabel
+       need no specificity boost (this block is BELOW their rules); .gearicon
+       does, because ITS desktop rule sits below the masthead block that
+       reveals it — see the note up there. */
+    .searchlabel { display: none; }
+    .searchicon { display: inline-block; }
+    summary.gear, summary.searchtoggle {
+      /* Box grows 1.9rem -> 2.2rem: with the border gone the control reads
+         LIGHTER than before even slightly larger, and the icons need the room.
+         Still a single fixed rem box on both — the gear's mono glyph and the
+         search svg have different natural metrics, so equal padding alone
+         never lines them up.
+
+         line-height 0 matters on both: each control's desktop rule leaves a
+         normal text line box (they are TEXT chips there), and at these font
+         sizes that box is taller than the button — 44px inside 35.2px for the
+         gear. The glyph itself fits; its line box does not, and the open
+         state's accent fill is painted on the BUTTON, so an overflowing line
+         box leaves the mark hanging out of its own filled pill (caught live).
+         text-transform/letter-spacing are the mono chip's, and on a lone
+         glyph the tracking is a TRAILING gap that shoves it ~3px off-centre
+         in a fixed box. */
+      width: 2rem; height: 2rem; padding: 0; border: none;
+      line-height: 0; letter-spacing: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    /* Both marks are sized to the WORDMARK, not to each other or to their
+       own boxes (owner-requested: "same size as the NEWS text"). "NEWS" inks
+       16.5px tall at its phone size, so that is the number all three of these
+       resolve to — and each glyph needs a different multiplier to get there,
+       which is why this cannot just be one shared font-size:
+         · the mono ⚙ inks ~0.603 of its font-size -> 1.7rem  ≈ 16.4px
+         · the magnifier inks ~0.82 of its svg box -> 1.25rem ≈ 16.4px
+       The 2rem button box is then just tap target around them, not a size. */
+    summary.gear { font-size: 1.7rem; }
+    .searchicon { width: 1.25rem; height: 1.25rem; }
+    /* The magnifier is drawn on a 16-unit viewBox at stroke-width 1.6, tuned
+       for the old 13px icon (~1.3px of stroke). At 1.25rem the original 1.6
+       would render ~2px, heavy for a mark this size next to the page's
+       hairline chrome, so it thins to hold ~1.6px. CSS beats the SVG
+       presentation attribute, so the desktop icon keeps its 1.6 untouched. */
+    .searchicon circle, .searchicon path { stroke-width: 1.3; }
+  }
+  /* Reduced motion: the masthead still hides and returns, it just does not
+     slide. Written as its own query rather than nested so it reads the same
+     way as every other motion gate in this file. */
+  @media (max-width: 40em) and (prefers-reduced-motion: reduce) {
+    header.mast { transition: none; }
+  }
+  /* Print (roadmap step 7 — polish): a printed digest page is a read-later/
+     archival copy of a briefing, not a screenshot of the site chrome — strip
+     everything that only makes sense on-screen and force plain black-on-
+     white text regardless of the reader's light/dark theme. The serif prose
+     already suits print as-is; day headers and the dateline stay mono
+     (--font-data is untouched here, only color is forced). */
+  @media print {
+    body { background: #fff; }
+    .wrap { max-width: none; padding: 0; border: 0; }
+    .mast, .mast-big, .issueline, .viewtabs, nav.digestnav, .backfab, .toc,
+    .searchpop, .miniseg, .densitytoggle, .resumechip,
+    .archiveresults, .catchup, .followtoggle {
+      display: none;
+    }
+    .digest, .digest p, .digest h2, .stamp, .edhead h1, .headline, .dayhead, .empty,
+    .en-only-note, .arctitle, .arccontext, .arccontextbody p {
+      color: #000;
+    }
+    /* "What changed" block (§11.3 delta persistence, ingest v4): CONTENT,
+       not chrome — it's the same "communicate what changed" information the
+       reader would otherwise have to reconstruct from the article prose, so
+       it stays visible and gets the same forced-ink treatment as .stamp/
+       .digest p above, not the .arcs/.toc/.catchup treatment (a navigation
+       aid, safe to omit; a story-thread chip, whose chip-bg/chip-text colors
+       are deliberately left un-forced elsewhere in this block since a chip
+       is decoration a reader can live without on paper). Every child span
+       (.deltaprev/.deltaarrow/.deltanow) gets its own explicit rule because
+       each already carries its own on-screen color (var(--muted)/
+       var(--text)) that would otherwise beat the ancestor's forced color. */
+    .deltalabel, .deltatext, .deltaprev, .deltaarrow, .deltanow {
+      color: #000;
+    }
+    /* Numbers are provenance and stay visible in print; the swatches print
+       gray (acceptable) but the text itself forces to ink like every other
+       digest-page text block above. */
+    .sourcekey { color: #000; }
+    /* TL;DR/attention are tinted boxes on screen — print swaps the fills
+       for thin bordered outlines: a colored background wastes ink and
+       won't reproduce reliably across printers anyway. */
+    .tldr, .attention {
+      background: none; border: 1px solid #999; color: #000;
+    }
+    .attention h2 { color: #000; }
+    /* Citation chips print as plain superscript text, no pill styling. */
+    .cite { background: none; color: #000; }
+    /* Print the destination DOMAIN (via the title attr addCiteTitles adds),
+       not the full URL — a full URL would bloat print lines; the domain is
+       enough provenance to look something up later. .cite[title], not
+       bare .cite, so a chip whose href failed to parse (no title) doesn't
+       print an empty " ()". */
+    .cite[title]::after {
+      content: " (" attr(title) ")";
+      font-size: 0.85em;
+      color: #333;
+    }
+  }
+</style>
+</head>
+<body>
+<script type="speculationrules">{"prefetch":[{"urls":["/t/goldentesttoken/hu/d/235"]}]}</script>
+<div class="wrap">
+  <div class="issueline">235. szám · 2026. augusztus 25., kedd · 2 kiadás ma</div>
+  <header class="mast mast-big">
+    <div class="mastleft">
+      <a class="brand" href="/t/goldentesttoken/hu/">news</a>
+    </div>
+    <nav class="viewtabs"><span class="viewtab active" data-view="all">Minden</span><a class="viewtab" data-view="daily" href="/t/goldentesttoken/hu/daily/">Napi</a><a class="viewtab" data-view="weekly" href="/t/goldentesttoken/hu/weekly/">Heti</a></nav>
+    <div class="mastright">
+      <details class="searchpop"><summary class="searchtoggle" aria-label="Keresés" title="Keresés"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Keresés</span></summary><div class="searchpanel"><input class="filter" type="search" placeholder="Szűrés…" aria-label="Szűrés…" hidden><a class="searchlink" href="/t/goldentesttoken/hu/search">Keresés ↗</a></div></details><details class="settings"><summary class="gear" aria-label="Beállítások"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Beállítások</span></summary><div class="settingspanel"><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Betűtípus</span><span class="miniseg miniseg-font" role="group" aria-label="Betűtípus"><button class="minisegbtn" data-set="sans" hidden>Modern</button><button class="minisegbtn" data-set="serif" hidden>Klasszikus</button></span></div><div class="settingsrow"><span class="settingslabel">Sűrűség</span><button class="densitytoggle" aria-label="Kompakt lista be/ki" hidden>▤</button></div><div class="settingsrow"><a href="/t/goldentesttoken/hu/about">Névjegy</a></div></div></details>
+    </div>
+  </header>
+  <span class="paletteconfig" hidden
+    data-label="Parancspaletta"
+    data-placeholder="Parancs vagy keresés…"
+    data-empty="Nincs találat."
+    data-cmd-top="Fel"
+    data-cmd-all="Teljes nézet"
+    data-cmd-daily="Napi nézet"
+    data-cmd-weekly="Heti nézet"
+    data-cmd-search="Keresés"
+    data-cmd-archive="Archívum"
+    data-cmd-switchlang="Nyelv váltása"
+    data-cmd-latest="Legfrissebb hírlevél"
+  ></span>
+  <div class="catchup" hidden data-prefix="Legutóbbi látogatásod óta:" data-tmpl-briefings="{n} hírlevél" data-tmpl-briefings-one="{n} hírlevél" data-tmpl-arcs="{m} történetfrissítés" data-tmpl-arcs-one="{m} történetfrissítés" data-tmpl-more="+{n} további"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="Ugrás oda, ahol abbahagytad">↓</button><button type="button" class="catchupdismiss" aria-label="Elrejtés">×</button></div><div class="now"><div class="archivelabel">Most</div><nav class="nowlist" aria-label="Most"><a class="nowrow" href="/t/goldentesttoken/hu/a/markets-slide" data-arc-slug="markets-slide" data-last-seen="2026-08-25T14:00:00Z"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">Markets slide continues</span><span class="nowmeta">4 órával ezelőtt</span></a></nav></div>
+<nav class="weekrail" aria-label="Heti navigáció"><span class="rail-older"><a href="/t/goldentesttoken/hu/w/2026-W34/">← W34</a></span><span class="rail-center">35. hét · aug. 24–30.</span><span class="rail-newer"></span></nav><section data-unread-label="új a legutóbbi látogatásod óta" data-empty-filtered="Nincs találat."><a class="entry entry-lead" href="/t/goldentesttoken/hu/d/235" data-created="2026-08-25T14:00:00Z" data-id="235">
+    <div class="leadmain">
+      <span class="meta"><span class="eyebrow-text">Legfrissebb · aug. 25., K · 16:00 CEST · 12 elem</span><span class="flag flag-degraded" title="polymarket">⚠ hiányos</span></span>
+      <h2 class="headline headline-lead">A piacok második napja estek, az EU-csomag megszületett.</h2>
+      <p class="excerpt"><strong>Röviden:</strong> A piacok második napja estek, az EU-csomag megszületett.</p>
+    </div>
+    <dl class="leadfacts">
+    <dt>elem</dt><dd>12</dd>
+    <dt>szakasz</dt><dd>3</dd>
+  </dl>
+  </a>
+<div class="dayhead">2026. augusztus 25., kedd</div>
+<a class="entry" href="/t/goldentesttoken/hu/d/234" data-created="2026-08-25T08:00:00Z" data-id="234">
+    <span class="meta"><span class="time">10:00</span><span class="count">9 elem · 2 szakasz</span><span class="flag flag-muted">EN</span></span>
+    <h3 class="headline">The sell-off began; two sections follow.</h3>
+    <p class="excerpt"><strong>Röviden:</strong> The sell-off began; two sections follow.</p>
+  </a>
+<div class="dayhead">2026. augusztus 24., hétfő</div>
+<a class="entry" href="/t/goldentesttoken/hu/d/233" data-created="2026-08-24T20:00:00Z" data-id="233">
+    <span class="meta"><span class="time time-accent">22:00</span><span class="count">6 elem · 1 szakasz</span><span class="flag flag-daily">napi összefoglaló</span></span>
+    <h3 class="headline">Hétfői napi összefoglaló.</h3>
+    <p class="excerpt excerpt-daily"><strong>Röviden:</strong> Hétfői napi összefoglaló.</p>
+  </a></section><div class="archiveresults" data-search-href="/t/goldentesttoken/hu/search" hidden></div>
+  <a class="backfab" href="#top" aria-label="Vissza az elejére">↑</a>
+</div>
+<noscript><style>.backfab { opacity: 1; pointer-events: auto; }
+  /* The sticky section headings need wirePage's push loop to stop them
+     stacking on top of one another; with no script they go back to being
+     ordinary headings rather than a pile at the top of the viewport. */
+  .digest > h2 { position: static; }</style></noscript>
+<script>
+  // Animated preference swap (owner-requested), shared by the theme and
+  // text-size minisegs below: run a page-state mutation inside a
+  // same-document View Transition so the whole page crossfades to the new
+  // state instead of snapping — the same-document sibling of the
+  // at-view-transition navigation crossfade this site already ships, and
+  // the same restraint applies: the browser's default crossfade, no custom
+  // choreography. Unsupported browsers and reduced-motion readers get the
+  // instant switch they always had — the mutation itself runs either way,
+  // so correctness never depends on the animation.
+  function withPageTransition(mutate) {
+    // The animation must never poison the mutation (owner-reported via the
+    // soft-nav rollout: startViewTransition rejects with InvalidStateError
+    // in hidden/render-suppressed documents, and that rejection cascaded
+    // into the soft-nav promise chain, whose catch-all dutifully fell back
+    // to a HARD navigation — the exact reload the soft path exists to
+    // avoid). Three layers: skip the API outright when the document is
+    // hidden (a snapshot of an invisible page is meaningless), try/catch
+    // the call so a synchronous throw degrades to an instant mutate, and
+    // swallow the transition's own promise rejections (they are cosmetic —
+    // per spec the update callback still runs even when the visual
+    // transition is skipped).
+    if (
+      document.startViewTransition &&
+      !document.hidden &&
+      !matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      try {
+        var t = document.startViewTransition(mutate);
+        if (t && t.finished && t.finished.catch) t.finished.catch(function () {});
+        if (t && t.ready && t.ready.catch) t.ready.catch(function () {});
+        return;
+      } catch (e) {
+        // fall through to the plain mutate below
+      }
+    }
+    mutate();
+  }
+
+  // j/k list-selection navigation (§11.1 PR C): the primary-link-list half
+  // of the "Keyboard navigation" IIFE inside wirePage() below — pulled out
+  // as its own top-level function (rather than nested inside that IIFE)
+  // since it needs no closure state of its own and stays identical across
+  // every wirePage() pass; defining it once here, not per pass, costs
+  // nothing and avoids re-creating an identical closure on every soft-nav.
+  // Queries .wrap fresh on every call — never caches the list — so it
+  // always reflects whatever page (and whatever the client-side filter has
+  // hidden — see the !el.hidden check) is currently showing. Selection is
+  // real DOM focus, not a separate highlight: the existing :focus-visible
+  // rule already lights up whichever anchor gets focused, so this needs no
+  // CSS of its own. No wrap-around (§11.1 spec: "stop at ends") — stepping
+  // past either end of the list is simply a no-op.
+  function moveNavSelection(delta) {
+    var list = Array.prototype.slice
+      .call(document.querySelectorAll(".wrap .nowrow, .wrap .entry"))
+      .filter(function (el) {
+        return !el.hidden;
+      });
+    if (list.length === 0) return;
+    var idx = list.indexOf(document.activeElement);
+    var next;
+    if (idx === -1) {
+      next = delta > 0 ? 0 : list.length - 1;
+    } else {
+      next = idx + delta;
+      if (next < 0 || next >= list.length) return; // no wrap-around — stop at the end
+    }
+    list[next].focus();
+  }
+
+  // Soft-navigation re-wiring: every feature below used to be a standalone,
+  // parse-time IIFE that ran once. A soft nav (see the module at the bottom
+  // of this script) swaps .wrap's content in place without a fresh document
+  // load, so all of it has to be re-runnable — wirePage() bundles every
+  // feature into one function, called once on initial load and again after
+  // each soft-nav swap.
+  //
+  // Listener lifecycle: one AbortController per wirePage() pass. Aborting
+  // the previous pass's controller before making a fresh one drops every
+  // listener that pass attached, in a single stroke — no duplicate-listener
+  // buildup across swaps. Every addEventListener below carries this pass's
+  // { signal: signal } for exactly that reason.
+  //
+  // Non-listener state (a running setInterval, a DOM node parked outside
+  // .wrap) doesn't go away just because its listeners did, so it gets its
+  // own explicit cleanup: teardown collects one closure per such case, and
+  // wirePage runs and clears the whole list before rewiring.
+  // ── one scroll listener for the whole page ─────────────────────────────
+  // Four features react to scroll (sticky section headings, the phone
+  // masthead, the back-to-top button, the resume chip). They used to attach
+  // four independent global listeners, and the index filter faked a scroll
+  // event to make them all recompute after it hid entries. One manager, a
+  // subscriber list: features subscribe per wirePage() pass (their abort
+  // signal unsubscribes them on soft-nav rewiring, same lifecycle their own
+  // listeners had), and the filter now asks for the recompute by name
+  // instead of forging an event.
+  var scrollSubs = [];
+  function notifyScrollSubs() {
+    for (var i = 0; i < scrollSubs.length; i++) scrollSubs[i]();
+  }
+  addEventListener("scroll", notifyScrollSubs, { passive: true });
+  function subscribeScroll(fn, signal) {
+    scrollSubs.push(fn);
+    signal.addEventListener("abort", function () {
+      var ix = scrollSubs.indexOf(fn);
+      if (ix !== -1) scrollSubs.splice(ix, 1);
+    });
+    // Every subscriber also runs once at subscribe time so a mid-page
+    // reload (browser scroll restoration) starts in the right state — the
+    // convention all four listeners already followed individually.
+    fn();
+  }
+
+  // Shared by the keyboard-nav and palette shortcuts: no single-key
+  // bindings while the reader is typing somewhere.
+  function isTypingTarget(t) {
+    var tag = t && t.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable);
+  }
+
+  // The followed-arcs list (catch-up banner + the arc page's follow
+  // toggle read it; the toggle writes it). Absent or unparsable -> [].
+  function readFollowedArcs() {
+    try {
+      return JSON.parse(localStorage.getItem("followedArcs") || "[]");
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // The three preference minisegs share one storage contract: the default
+  // value is expressed as ABSENCE (empty dataset attr, no localStorage
+  // key), so only a non-default choice is ever stored. The head script's
+  // || "" reads render absence as the default on the next load.
+  function setPref(datasetKey, storageKey, value, defaultValue) {
+    document.documentElement.dataset[datasetKey] = value === defaultValue ? "" : value;
+    try {
+      if (value === defaultValue) localStorage.removeItem(storageKey);
+      else localStorage.setItem(storageKey, value);
+    } catch (e) {}
+  }
+
+  // One miniseg wiring (theme/size/font share it exactly): unhide the
+  // buttons (progressive enhancement — no JS, no buttons), reflect the
+  // active segment, and on click apply inside a page crossfade. current()
+  // resolves the active value; apply(v) performs the swap (each segment's
+  // quirks — theme's meta sync, the absence-as-default fold — live in its
+  // own closure at the call site).
+  function wireMiniseg(name, signal, current, apply) {
+    var group = document.querySelector(".miniseg-" + name);
+    if (!group) return;
+    var buttons = group.querySelectorAll(".minisegbtn");
+    for (var i = 0; i < buttons.length; i++) buttons[i].hidden = false;
+    var reflect = function () {
+      var active = current();
+      for (var k = 0; k < buttons.length; k++) {
+        var isActive = buttons[k].dataset.set === active;
+        buttons[k].classList.toggle("active", isActive);
+        buttons[k].setAttribute("aria-pressed", String(isActive));
+      }
+    };
+    reflect();
+    for (var j = 0; j < buttons.length; j++) {
+      buttons[j].addEventListener(
+        "click",
+        function () {
+          var v = this.dataset.set;
+          withPageTransition(function () {
+            apply(v);
+            reflect();
+          });
+        },
+        { signal: signal },
+      );
+    }
+  }
+
+  var wireController = null;
+  var teardown = [];
+
+  function wirePage() {
+    if (wireController) wireController.abort();
+    wireController = new AbortController();
+    var signal = wireController.signal;
+
+    teardown.forEach(function (fn) {
+      fn();
+    });
+    teardown.length = 0;
+
+    // Show the floating back button only after the header nav has scrolled
+    // away. Passive listener; runs once immediately so a mid-page reload
+    // (browser scroll restoration) starts in the right state.
+    // Sticky section headings inside a digest (see .digest > h2 in the CSS).
+    // A sticky element normally stops sticking at the bottom of its
+    // containing block, which is what makes stacked section headers push each
+    // other out of the way. These headings are flat siblings of one article,
+    // so they share one containing block and would instead pin on top of each
+    // other. This reproduces the missing constraint: each heading is shifted
+    // up by exactly the amount the NEXT heading has encroached on it, so it
+    // is eased out of view precisely as its successor arrives.
+    (function () {
+      var heads = [].slice.call(document.querySelectorAll(".digest > h2"));
+      if (heads.length < 2) return;
+      var root = document.documentElement;
+      // What we last shifted each heading by. Kept so a heading's natural
+      // position can be recovered from its live rect without clearing the
+      // transform first, which would force a reflow on every scroll event.
+      var shifted = [];
+      var onHeads = function () {
+        // Where the headings pin: below the masthead while it is on screen,
+        // at the viewport edge once it has slid away. Matches the CSS.
+        var line = root.classList.contains("masthid")
+          ? 0
+          : parseFloat(getComputedStyle(root).getPropertyValue("--mast-h")) || 0;
+        var tops = [];
+        for (var i = 0; i < heads.length; i++) {
+          tops[i] = heads[i].getBoundingClientRect().top + (shifted[i] || 0);
+        }
+        for (var j = 0; j < heads.length; j++) {
+          var push = 0;
+          if (j + 1 < heads.length) {
+            var h = heads[j].offsetHeight;
+            // Room left between the pin line and the next heading. Once that
+            // is smaller than this heading, the difference is the overlap.
+            var room = tops[j + 1] - line;
+            push = Math.min(h, Math.max(0, h - room));
+          }
+          if (push !== (shifted[j] || 0)) {
+            heads[j].style.transform = push ? "translateY(" + -push + "px)" : "";
+            shifted[j] = push;
+          }
+        }
+      };
+      subscribeScroll(onHeads, signal);
+      addEventListener("resize", onHeads, { passive: true, signal: signal });
+    })();
+
+    // Sticky masthead on the phone (see header.mast in the CSS): hide while
+    // the reader scrolls DOWN, bring it back the moment they scroll UP.
+    (function () {
+      var mast = document.querySelector("header.mast");
+      if (!mast) return;
+      var root = document.documentElement;
+      var mq = matchMedia("(max-width: 40em)");
+      var lastY = window.scrollY;
+      var lastH = -1;
+      var onMastScroll = function () {
+        if (!mq.matches) {
+          // Desktop: the masthead is static again, so leave no state behind
+          // — a stale masthid class would translate a non-sticky header off
+          // the top of the page, and a stale --mast-h would push the sticky
+          // day headers and section headings down by a phone masthead's
+          // height on a viewport that has none.
+          root.classList.remove("masthid");
+          root.style.removeProperty("--mast-h");
+          lastH = -1;
+          return;
+        }
+        var h = mast.offsetHeight;
+        if (h !== lastH) {
+          // offsetHeight ignores the transform, so this stays correct while
+          // the masthead is translated out of view.
+          root.style.setProperty("--mast-h", h + "px");
+          lastH = h;
+        }
+        var y = window.scrollY;
+        // Never hide while one of the masthead's own disclosures is open —
+        // the reader would lose the panel they just tapped open.
+        if (y <= h || mast.querySelector("details[open]")) root.classList.remove("masthid");
+        else if (y > lastY + 4) root.classList.add("masthid");
+        else if (y < lastY - 4) root.classList.remove("masthid");
+        lastY = y;
+      };
+      subscribeScroll(onMastScroll, signal);
+      mq.addEventListener("change", onMastScroll, { signal: signal });
+    })();
+
+    (function () {
+      var fab = document.querySelector(".backfab");
+      if (!fab) return;
+      subscribeScroll(function () {
+        fab.classList.toggle("show", window.scrollY > 320);
+      }, signal);
+    })();
+
+    // Theme miniseg (owner upgrade: Light/Auto/Dark, replacing the old
+    // two-state toggle). The head script already applied any stored override
+    // to <html data-theme> before first paint, so this only wires the
+    // buttons. Auto is the ABSENCE of an override (see setPref) — the old
+    // toggle's missing third state.
+    //
+    // theme-color meta values: duplicated from the CSS palette's --bg
+    // light/dark values — the third-copy problem again (the palette already
+    // lives 3x in CSS for the no-build-step manual override), but it changes
+    // rarely and there's no build step here to share one source between CSS
+    // and JS. Light/Dark collapse both metas to the SAME value; Auto
+    // restores each meta to its OWN media-appropriate color (a meta whose
+    // media attr mentions "light" gets the light color) instead of leaving
+    // both stuck on whichever value the last manual click set.
+    var THEME_COLORS = { light: "#ffffff", dark: "#131418" };
+    var syncThemeColorMetas = function (theme) {
+      document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+        var color =
+          theme === "auto"
+            ? m.media.indexOf("light") !== -1
+              ? THEME_COLORS.light
+              : THEME_COLORS.dark
+            : THEME_COLORS[theme];
+        m.setAttribute("content", color);
+      });
+    };
+    // On load, if a stored override is already in effect, sync the metas to
+    // match. A momentary wrong chrome tint before this script runs is the
+    // accepted tradeoff — the head script's synchronous one-liner can't
+    // reach the metas and keep this logic in one place. Nothing to do for
+    // auto — the static per-meta content values already ARE the auto values.
+    var storedTheme = document.documentElement.dataset.theme;
+    if (storedTheme === "dark" || storedTheme === "light") syncThemeColorMetas(storedTheme);
+    wireMiniseg(
+      "theme",
+      signal,
+      function () {
+        return document.documentElement.dataset.theme || "auto";
+      },
+      function (v) {
+        setPref("theme", "theme", v, "auto");
+        syncThemeColorMetas(v);
+      },
+    );
+
+    // Text size miniseg: S/M/L. M is the default expressed as the ABSENCE
+    // of data-fontsize (see the CSS + setPref), so only s/l touch storage.
+    wireMiniseg(
+      "size",
+      signal,
+      function () {
+        var stored = document.documentElement.dataset.fontsize;
+        return stored === "s" || stored === "l" ? stored : "m";
+      },
+      function (v) {
+        setPref("fontsize", "fontsize", v, "m");
+      },
+    );
+
+    // Body-font miniseg (owner-requested serif toggle): Sans is the default
+    // expressed as the ABSENCE of data-font, so only serif touches storage.
+    // The head script applied any stored choice before first paint — no
+    // font flash.
+    wireMiniseg(
+      "font",
+      signal,
+      function () {
+        return document.documentElement.dataset.font === "serif" ? "serif" : "sans";
+      },
+      function (v) {
+        setPref("font", "font", v, "sans");
+      },
+    );
+
+    // Ledger density toggle (roadmap 4 step 4). Same shape as the theme/size
+    // minisegs just above: the head script already applied any stored
+    // preference to <html data-density> before first paint, so this only
+    // wires the button — unhide it, reflect the current state in
+    // aria-pressed, and on click flip compact<->comfortable and persist it.
+    // Unlike theme there's no OS-preference fallback to resolve — comfortable
+    // (empty string) IS the default, so effective state is just the dataset.
+    (function () {
+      var btn = document.querySelector(".densitytoggle");
+      if (!btn) return;
+      btn.hidden = false;
+      var reflect = function () {
+        btn.setAttribute("aria-pressed", String(document.documentElement.dataset.density === "compact"));
+      };
+      reflect();
+      btn.addEventListener("click", function () {
+        var next = document.documentElement.dataset.density === "compact" ? "" : "compact";
+        // Crossfade the ledger reflow — same withPageTransition treatment the
+        // theme and size minisegs get (owner-reported: density was the one
+        // preference left snapping; it predates the helper).
+        withPageTransition(function () {
+          document.documentElement.dataset.density = next;
+          try {
+            localStorage.setItem("density", next);
+          } catch (e) {}
+          reflect();
+        });
+      }, { signal: signal });
+    })();
+
+    // Settings bubble close polish (owner redesign). Opening needs no JS at
+    // all — details/summary opens natively, and the CSS above animates that
+    // open state directly off the [open] attribute. Closing is different:
+    // <details> snaps shut the instant open is set false, with no hook to
+    // intercept, so this IIFE's close() gives the mirrored close animation
+    // (see the CSS above) somewhere to run before the panel actually leaves —
+    // then wires outside-click, Escape, AND the gear's own click (so every
+    // path that can close the bubble animates it the same way) through that
+    // one helper.
+    (function () {
+      var settings = document.querySelector("details.settings");
+      if (!settings) return;
+      var panel = settings.querySelector(".settingspanel");
+      var summary = settings.querySelector("summary.gear");
+      var closing = false;
+      var close = function () {
+        if (!settings.open || closing) return;
+        closing = true;
+        // "panelclosing", not the shorter "closing" — .closing already names
+        // the digest article's closing-line style elsewhere on this page,
+        // and reusing it here would leak that border/italic/spacing onto the
+        // settings panel for the animation's duration (see the CSS above).
+        panel.classList.add("panelclosing");
+        // setTimeout, not transitionend/animationend: an end event can simply
+        // never fire (interrupted mid-animation, reduced motion turning the
+        // animation into a no-op, a stray browser quirk) and would strand the
+        // panel open with the "panelclosing" class stuck on it forever. A
+        // plain timer always fires. Under reduced motion the "panelclosing"
+        // class's animation is a no-op (it lives inside the
+        // prefers-reduced-motion: no-preference gate above), but this
+        // timeout still runs its full 120ms before the panel closes — an
+        // imperceptible, acceptable delay rather than a second, motion-aware
+        // code path.
+        setTimeout(function () {
+          panel.classList.remove("panelclosing");
+          settings.open = false;
+          closing = false;
+        }, 120);
+      };
+      // Dismiss-tap swallowing (owner-reported): with the bubble open, a tap
+      // outside used to close it AND activate whatever sat under the finger —
+      // closing the panel by tapping an article link opened the article. An
+      // open bubble behaves like a modal with an invisible scrim now: the
+      // first outside tap only dismisses. Capture phase + preventDefault +
+      // stopPropagation is what actually swallows the click before the
+      // underlying link/button ever sees it — a bubble-phase listener would
+      // run after the link's default navigation was already committed.
+      document.addEventListener(
+        "click",
+        function (e) {
+          if (settings.open && !closing && !settings.contains(e.target)) {
+            e.preventDefault();
+            e.stopPropagation();
+            close();
+          }
+        },
+        { capture: true, signal: signal },
+      );
+      // Keep the bubble open across a language hop (owner-reported: switching
+      // language closed the menu — it's a full navigation, so the fresh
+      // document rendered with the details in its default closed state).
+      // sessionStorage, not localStorage: "the settings were open" is
+      // navigation state, not a preference — it must not resurrect the panel
+      // tomorrow. Set on language-link click inside the panel, consumed
+      // (removed) on the very next load. No animation on the restore —
+      // the panel was never closed from the reader's point of view.
+      try {
+        if (sessionStorage.getItem("settingsOpen")) {
+          sessionStorage.removeItem("settingsOpen");
+          settings.open = true;
+        }
+      } catch (e) {}
+      panel.addEventListener("click", function (e) {
+        var link = e.target.closest ? e.target.closest(".langswitch a") : null;
+        if (link) {
+          try {
+            sessionStorage.setItem("settingsOpen", "1");
+          } catch (err) {}
+        }
+      }, { signal: signal });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && settings.open) {
+          close();
+          summary.focus();
+        }
+      }, { signal: signal });
+      // Without this, clicking the gear while open would let <details> close
+      // itself natively and instantly, skipping the animation entirely — the
+      // native toggle already handles OPENING fine (nothing to intercept
+      // there), so this only ever preventDefaults the closing half of the
+      // click. No-JS readers keep the plain native open/close (progressive
+      // enhancement) — this listener simply never attaches for them.
+      summary.addEventListener("click", function (e) {
+        if (settings.open) {
+          e.preventDefault();
+          close();
+        }
+      }, { signal: signal });
+    })();
+
+    // Search bubble open-focus (owner-requested index cleanup, index pages
+    // only — guarded on details.searchpop existing, since digest/arc pages
+    // never render it). Opening itself needs no JS at all — same native
+    // <details>/<summary> toggle the settings bubble above relies on — this
+    // IIFE only adds the one explicit behavioral ask the brief called out:
+    // move focus into the filter input the moment the popover opens, so a
+    // pointer click on the trigger lands the reader ready to type without a
+    // second, separate focus step. The native "toggle" event fires for BOTH
+    // opening and closing (unlike click, which only fires on the summary
+    // itself), so this checks details.open rather than assuming direction.
+    // Outside-click and Escape dismissal match the settings bubble exactly
+    // (owner-reported: "i cant close the search box like at settings, just
+    // with another click on the button"). A native <details> only closes via
+    // its own summary, which is fine for a menu nobody expects to behave like
+    // a popover — but this one sits beside the gear and looks identical to
+    // it, so it has to dismiss identically. Capture phase + preventDefault +
+    // stopPropagation for the same reason close() uses them above: with the
+    // panel open, the first outside tap must ONLY dismiss, never also
+    // activate the link or button under the finger. No closing animation
+    // dance here — the search panel has no .panelclosing counterpart, so it
+    // just closes.
+    (function () {
+      var pop = document.querySelector("details.searchpop");
+      if (!pop) return;
+      var input = pop.querySelector(".filter");
+      if (!input) return;
+      pop.addEventListener("toggle", function () {
+        if (pop.open) input.focus();
+      }, { signal: signal });
+      document.addEventListener(
+        "click",
+        function (e) {
+          if (pop.open && !pop.contains(e.target)) {
+            e.preventDefault();
+            e.stopPropagation();
+            pop.open = false;
+          }
+        },
+        { capture: true, signal: signal },
+      );
+      // Escape closes regardless of focus target, same unconditional
+      // convention the settings bubble and the ⌘K palette both use. Focus
+      // returns to the trigger so keyboard users aren't stranded on a
+      // detached input.
+      document.addEventListener(
+        "keydown",
+        function (e) {
+          if (e.key === "Escape" && pop.open) {
+            pop.open = false;
+            var toggle = pop.querySelector("summary.searchtoggle");
+            if (toggle) toggle.focus();
+          }
+        },
+        { signal: signal },
+      );
+    })();
+
+    // Unread fence (roadmap 2 step 2, index pages only — guarded on an
+    // .entry[data-created] existing, since digest pages carry neither). A
+    // localStorage last-visit timestamp turns the index into an inbox: one
+    // labeled hairline between digests that arrived since the reader was last
+    // here and everything older. No JS = no fence (progressive enhancement —
+    // the class is never in the server-rendered markup).
+    (function () {
+      var entries = Array.prototype.slice.call(document.querySelectorAll(".entry[data-created]"));
+      if (entries.length === 0) return;
+      var section = document.querySelector("section[data-unread-label]");
+      if (!section) return;
+      // Archive-week bail (roadmap 3 step 3): data-week-archive marks the
+      // <section> on any non-current week (see renderIndexPage). An archive
+      // page's "newest" entry is old news by definition, so there's nothing
+      // to fence AND nothing here should ever be treated as the reader's most
+      // recent visit — bailing before the lastVisit read/write below is what
+      // stops a stray archive-page visit from regressing the stamp and
+      // spawning a bogus fence around content the reader has long since seen.
+      // The forward-only guard on the write itself (below) is the second,
+      // independent layer of the same protection.
+      if (section.hasAttribute("data-week-archive")) return;
+
+      var lastVisit = null;
+      try {
+        lastVisit = localStorage.getItem("lastVisit");
+      } catch (e) {}
+
+      // entries are in document order = newest first (lead card first, see the
+      // renderIndexPage/renderLeadCard comments), so entries[0] is the newest
+      // digest in this view overall.
+      var newest = entries[0].getAttribute("data-created");
+
+      if (lastVisit) {
+        // Find the LAST entry (in document order) newer than lastVisit — i.e.
+        // the last "new" one before the "old" run begins. created_at is an
+        // ISO UTC string, so > is a correct lexicographic comparison.
+        var lastNewIndex = -1;
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].getAttribute("data-created") > lastVisit) lastNewIndex = i;
+        }
+        // Draw the fence only for a genuine mix: at least one new entry AND at
+        // least one old entry after it. lastNewIndex === -1 means nothing is
+        // new (skip); lastNewIndex === entries.length - 1 means EVERYTHING is
+        // new — typically a first-ever visit — and a fence above zero old
+        // entries would just be noise, so skip that too.
+        if (lastNewIndex >= 0 && lastNewIndex < entries.length - 1) {
+          var fence = document.createElement("div");
+          fence.className = "unreadfence";
+          fence.setAttribute("role", "separator");
+          var lineBefore = document.createElement("span");
+          lineBefore.className = "line";
+          var label = document.createElement("span");
+          label.className = "label";
+          label.textContent = section.getAttribute("data-unread-label");
+          var lineAfter = document.createElement("span");
+          lineAfter.className = "line";
+          fence.appendChild(lineBefore);
+          fence.appendChild(label);
+          fence.appendChild(lineAfter);
+
+          // Insertion point is strictly "after the last new .entry element" —
+          // if that entry's next sibling happens to be a .dayhead, the fence
+          // lands above the day header, which reads naturally.
+          var lastNewEntry = entries[lastNewIndex];
+          lastNewEntry.parentNode.insertBefore(fence, lastNewEntry.nextSibling);
+
+          // Resume chip (roadmap 4 step 3): the fence above is passive — a
+          // reader landing at the top of a long index has no way to know it
+          // exists further down. Built only here, alongside the fence itself,
+          // so every guard that got us this far (no-JS, archive week, nothing
+          // new, everything new) already applies to it too. Shown only while
+          // the fence is below the viewport; tapping it scrolls the fence
+          // into view and hides the chip again.
+          var chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "resumechip";
+          chip.textContent = "↓ " + label.textContent;
+          document.body.appendChild(chip);
+          // The chip lives on document.body, OUTSIDE .wrap — a soft-nav swap
+          // replaces .wrap's content but never touches this node, so it must
+          // be torn down explicitly before the next wirePage() pass runs.
+          teardown.push(function () {
+            chip.remove();
+          });
+          var updateChip = function () {
+            // Visible ONLY while the fence sits below the viewport's bottom
+            // edge — that's the state where the reader can't know it exists.
+            // In view, scrolled past, or filter-hidden: no chip.
+            chip.hidden = fence.hidden || fence.getBoundingClientRect().top <= window.innerHeight;
+          };
+          subscribeScroll(updateChip, signal);
+          chip.addEventListener("click", function () {
+            fence.scrollIntoView({ block: "center" });
+            // The reader just navigated to the fence — hide the chip so it
+            // doesn't overlap what they scrolled to. The scroll listener
+            // above keeps it hidden for as long as the fence stays in view.
+            chip.hidden = true;
+          }, { signal: signal });
+        }
+
+        // Catch-up banner (§11.2): extends this SAME IIFE rather than adding a
+        // second "where was I" store — see PLAN.md §11.2's reconciliation
+        // note. Built from the exact lastVisit/entries the fence above
+        // just used, still BEFORE the trailing localStorage.setItem further
+        // down advances the stamp — so this always reports what changed since
+        // the visit that's ENDING now, never the one this load is about to
+        // become (same "advance after computing, never before" ordering the
+        // fence itself already relies on). Gated on the hidden .catchup shell
+        // existing at all — renderIndexPage only emits it on the current-week
+        // all-view index (showCatchup, same gate as the NOW section), so this
+        // is a no-op everywhere else without a second gate here.
+        var catchup = document.querySelector(".catchup");
+        if (catchup) {
+          // N: every .entry newer than lastVisit. Deliberately NOT reusing
+          // lastNewIndex from the fence above — that one requires a genuine
+          // mix (at least one old entry too) before it's non- -1, but a
+          // fence-less "everything since lastVisit is new" page (e.g. a long
+          // gap between visits) is still a legitimate, non-filler catch-up to
+          // report, so N is computed independently here.
+          var newEntries = entries.filter(function (el) {
+            return el.getAttribute("data-created") > lastVisit;
+          });
+          var n = newEntries.length;
+
+          // M: NOW's .nowrow arcs whose last update is newer than lastVisit —
+          // see renderNowSection's data-last-seen (§11.2). Empty (0 rows,
+          // ->[]) on a 0-eligible-arcs day, same fail-safe contract every
+          // other NOW-derived feature in this file already uses.
+          var nowRows = Array.prototype.slice.call(document.querySelectorAll(".nowrow[data-last-seen]"));
+          var updatedArcs = nowRows.filter(function (row) {
+            return row.getAttribute("data-last-seen") > lastVisit;
+          });
+          var m = updatedArcs.length;
+
+          // "at least one last-visit value exists" is already guaranteed by
+          // this whole block living inside the enclosing if (lastVisit) above;
+          // the remaining "N+M > 0" half of the spec's show-condition is this
+          // check — together they're exactly "first-ever visit: no banner, no
+          // filler; nothing changed: no banner either".
+          if (n + m > 0) {
+            var textEl = catchup.querySelector(".catchuptext");
+            var parts = [];
+            // Singular template on exactly one, plural otherwise — "1
+            // briefings" was the owner-reported bug. Both forms ride as data
+            // attributes so this stays language-agnostic (Hungarian supplies
+            // identical values, see the STRINGS comment there).
+            if (n > 0) {
+              var briefTmpl = catchup.getAttribute(
+                n === 1 ? "data-tmpl-briefings-one" : "data-tmpl-briefings",
+              );
+              parts.push(briefTmpl.replace("{n}", String(n)));
+            }
+            if (m > 0) {
+              // Follow list (§11.2, optional feature): followed arcs among the
+              // updated ones get named (up to 3, linked) before the bare
+              // count — see the follow-toggle IIFE below for where slugs get
+              // written to localStorage. Nothing followed (the default —
+              // "automatic-first" guardrail) falls straight through to the
+              // bare "{m} arc updates" template below, exactly as if this
+              // optional feature didn't exist.
+              var followed = readFollowedArcs();
+              var followedUpdated = followed.length
+                ? updatedArcs.filter(function (row) {
+                    return followed.indexOf(row.getAttribute("data-arc-slug")) !== -1;
+                  })
+                : [];
+              if (followedUpdated.length > 0) {
+                var named = followedUpdated.slice(0, 3);
+                var rest = m - named.length;
+                // Built via DOM nodes, not innerHTML — arc labels are
+                // LLM-derived text, never trusted as markup, same discipline
+                // the fence/resume chip above already follow.
+                var arcFrag = document.createDocumentFragment();
+                named.forEach(function (row, idx) {
+                  if (idx > 0) arcFrag.appendChild(document.createTextNode(", "));
+                  var a = document.createElement("a");
+                  a.href = row.getAttribute("href");
+                  a.textContent = row.querySelector(".nowarclabel").textContent;
+                  arcFrag.appendChild(a);
+                });
+                if (rest > 0) {
+                  arcFrag.appendChild(
+                    document.createTextNode(" " + catchup.getAttribute("data-tmpl-more").replace("{n}", String(rest))),
+                  );
+                }
+                parts.push(arcFrag);
+              } else {
+                parts.push(
+                  catchup
+                    .getAttribute(m === 1 ? "data-tmpl-arcs-one" : "data-tmpl-arcs")
+                    .replace("{m}", String(m)),
+                );
+              }
+            }
+
+            // Compose: prefix, then each part (plain string or a link-bearing
+            // fragment) joined by ", " — same manual-join-over-locale-join
+            // pragmatism as renderNowSection's own join(" · ") meta line.
+            textEl.appendChild(document.createTextNode(catchup.getAttribute("data-prefix") + " "));
+            parts.forEach(function (part, idx) {
+              if (idx > 0) textEl.appendChild(document.createTextNode(", "));
+              if (typeof part === "string") textEl.appendChild(document.createTextNode(part));
+              else textEl.appendChild(part);
+            });
+
+            // Jump control: only meaningful when the fence above actually got
+            // built (the "genuine mix" case, fence assigned in the block
+            // above) — an "everything new" or "nothing old left" page has no
+            // boundary to jump to, so the control just stays hidden rather
+            // than jumping nowhere. fence is var-hoisted to this IIFE's
+            // top, so referencing it here is safe whether or not that block
+            // ran; unassigned reads back as undefined, which is falsy.
+            if (fence) {
+              var jumpBtn = catchup.querySelector(".catchupjump");
+              jumpBtn.hidden = false;
+              jumpBtn.addEventListener("click", function () {
+                fence.scrollIntoView({ block: "center" });
+              }, { signal: signal });
+            }
+
+            // Dismiss: removes the banner for THIS page-view only — no
+            // localStorage write, no second "seen" concept layered on top of
+            // lastVisit. The natural reset is simply the next visit, once the
+            // trailing advance below has moved lastVisit forward and N/M
+            // recompute from a later stamp.
+            catchup.querySelector(".catchupdismiss").addEventListener("click", function () {
+              catchup.hidden = true;
+            }, { signal: signal });
+
+            catchup.hidden = false;
+          }
+        }
+      }
+
+      // Update AFTER computing the fence above, and to the NEWEST entry's own
+      // data-created — not "now" — so clock skew between the reader's device
+      // and the server's stamped created_at can never make a digest look
+      // newer or older than it is on the next visit. Forward-only (roadmap 3
+      // step 3): only ever advance the stamp, never regress it — the
+      // archive-week bail above is the primary guard (it keeps this line from
+      // running at all on an archive page), this comparison is the second,
+      // independent layer in case that ever changes.
+      try {
+        if (!lastVisit || newest > lastVisit) {
+          localStorage.setItem("lastVisit", newest);
+        }
+      } catch (e) {}
+    })();
+
+    // Follow list (§11.2, optional feature, arc pages only — guarded on
+    // .archead's data-arc-slug existing, since index/digest pages have no
+    // .archead). A localStorage array of followed slugs; the catch-up
+    // banner's unread-fence IIFE above cross-references it when computing M's
+    // named-arcs list. Zero server involvement — the arc page itself doesn't
+    // know or care whether it's followed. No teardown needed: the button gets
+    // appended inside .archead, which lives in the swapped .wrap content, so
+    // a soft nav removes it along with everything else that pass built.
+    (function () {
+      var head = document.querySelector(".archead");
+      var h1 = head ? head.querySelector(".arctitle[data-arc-slug]") : null;
+      if (!head || !h1) return;
+      var slug = h1.getAttribute("data-arc-slug");
+
+      var followed = readFollowedArcs();
+
+      // Text control, no button chrome (design guidance) — a plain <button>
+      // element for semantics/keyboard support, styled bare by .followtoggle.
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "followtoggle";
+      var render = function () {
+        var isFollowed = followed.indexOf(slug) !== -1;
+        btn.textContent = isFollowed ? h1.getAttribute("data-follow-remove") : h1.getAttribute("data-follow-add");
+        btn.setAttribute("aria-pressed", String(isFollowed));
+      };
+      render();
+      btn.addEventListener("click", function () {
+        var idx = followed.indexOf(slug);
+        if (idx === -1) followed.push(slug);
+        else followed.splice(idx, 1);
+        try {
+          localStorage.setItem("followedArcs", JSON.stringify(followed));
+        } catch (e) {}
+        render();
+      }, { signal: signal });
+      head.appendChild(btn);
+    })();
+
+    // Index filter (roadmap step 6, index pages only — guarded on the input's
+    // existence since digest pages have no .filter). applyFilters is the
+    // single place that recomputes visibility from the text query, shared by
+    // the input's "input" handler so it doesn't duplicate the group-hiding/
+    // fence logic anywhere else. Case-insensitive substring match against each
+    // .entry's text content (the lead card is an .entry too); a .dayhead hides
+    // once every entry in its group (its following siblings up to the next
+    // .dayhead) is hidden. No debounce at these list sizes; an empty query
+    // restores everything.
+    (function () {
+      var input = document.querySelector(".filter");
+      if (!input) return;
+      // The SEARCH page's form input reuses the .filter class for its look
+      // (roadmap 4 step 7) but is a server-functional control, not this
+      // client-side filter — without this bail, typing a new query there
+      // would live-hide the previous results before the form ever submits.
+      // The index page's own filter input is the only .filter with no form.
+      if (input.form) return;
+      // Digest/arc pages carry the same masthead search bubble as the index
+      // (consistent-masthead follow-up) but have no ledger to filter — bail
+      // BEFORE the reveal, so their bubble shows only the archive search
+      // link and this input never surfaces as a dead control.
+      var section = document.querySelector("section[data-empty-filtered]");
+      if (!section) return;
+      input.hidden = false;
+      var entries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
+      var dayheads = Array.prototype.slice.call(document.querySelectorAll(".dayhead"));
+      var emptyEl = null;
+
+      var applyFilters = function () {
+        var q = input.value.trim().toLowerCase();
+        var anyVisible = false;
+        entries.forEach(function (el) {
+          el.hidden = Boolean(q) && !el.textContent.toLowerCase().includes(q);
+          if (!el.hidden) anyVisible = true;
+        });
+        dayheads.forEach(function (dh) {
+          var group = [];
+          var el = dh.nextElementSibling;
+          while (el && !el.classList.contains("dayhead")) {
+            if (el.classList.contains("entry")) group.push(el);
+            el = el.nextElementSibling;
+          }
+          dh.hidden = group.length > 0 && group.every(function (e) {
+            return e.hidden;
+          });
+        });
+        // The unread fence is a load-time artifact; while the filter is active
+        // it can end up orphaned between hidden entries, so just hide it
+        // whenever a query is active (roadmap 2 step 2).
+        var fence = document.querySelector(".unreadfence");
+        if (fence) fence.hidden = Boolean(q);
+        // Resume chip (roadmap 4 step 3): the chip's own scroll listener owns
+        // its show/hide rule (fence hidden OR fence in view -> chip hidden),
+        // so after toggling the fence above, just re-trigger that listener
+        // rather than duplicating the rule here — setting chip.hidden
+        // directly would wrongly un-hide it on query clear even with the
+        // fence already in view. Harmless for the other scroll listeners
+        // (backfab, the chip's sibling), which are all idempotent recomputes.
+        // Recompute every scroll-dependent UI (chip, fab, masthead, sticky
+        // headings) now that entries were hidden/shown — by name, not by
+        // forging a scroll event at them.
+        notifyScrollSubs();
+
+        // Empty-filtered state (roadmap 2 step 5): lazily create the message
+        // the first time the filter hides every entry, reusing .empty's
+        // styling; hide it again once at least one entry is visible. Guarded
+        // on entries.length so a genuinely-empty index (server already
+        // rendered its own .empty message) never gets a second one.
+        if (entries.length > 0 && section) {
+          if (!anyVisible) {
+            if (!emptyEl) {
+              emptyEl = document.createElement("p");
+              emptyEl.className = "empty";
+              emptyEl.textContent = section.getAttribute("data-empty-filtered");
+              section.appendChild(emptyEl);
+            }
+            emptyEl.hidden = false;
+          } else if (emptyEl) {
+            emptyEl.hidden = true;
+          }
+        }
+      };
+
+      input.addEventListener("input", applyFilters, { signal: signal });
+
+      // Unified search (owner UX pass): the same input also live-queries the
+      // full-archive search route in the background and injects results below
+      // the ledger — extending THIS IIFE rather than adding a second one,
+      // since it already owns the input (a second listener would just fight
+      // this one for the same element). Guarded on the archiveresults
+      // container existing (see renderIndexPage) — digest/search pages never
+      // reach here anyway (both guards above already return before this
+      // point), but the query stays defensive rather than assuming that.
+      var archiveBox = document.querySelector(".archiveresults");
+      if (archiveBox) {
+        // Token/lang-scoped search route, read off the container rather than
+        // hardcoded — keeps this script token/lang-agnostic like every other
+        // data-* consumer here.
+        var archiveHref = archiveBox.getAttribute("data-search-href");
+        var archiveTimer = null;
+        var archiveInFlight = null;
+
+        var clearArchive = function () {
+          archiveBox.innerHTML = "";
+          archiveBox.hidden = true;
+        };
+
+        var runArchiveSearch = function () {
+          var query = input.value.trim();
+          if (query.length < 2) {
+            clearArchive();
+            return;
+          }
+          // Abort whatever's still in flight before starting a new request —
+          // a slow earlier response landing after a faster later one must
+          // never render stale results over fresh ones.
+          if (archiveInFlight) archiveInFlight.abort();
+          var controller = new AbortController();
+          archiveInFlight = controller;
+          fetch(archiveHref + "?q=" + encodeURIComponent(query) + "&fragment=1", { signal: controller.signal })
+            .then(function (res) {
+              if (!res.ok) throw new Error("archive search fetch failed");
+              return res.text();
+            })
+            .then(function (text) {
+              if (!text) {
+                clearArchive();
+                return;
+              }
+              // Safe to inject verbatim: this is our own server-rendered,
+              // fully-escaped HTML from the fragment route (see
+              // handleSearchPage/renderSearchFragment) — same origin, same
+              // token path, every string in it already ran through esc().
+              archiveBox.innerHTML = text;
+              // Dedupe (roadmap: data-id): hide any injected result already
+              // present in the rendered ledger above, so the reader never
+              // sees the same digest twice on one page.
+              var shown = new Set(
+                entries.map(function (el) {
+                  return el.getAttribute("data-id");
+                }),
+              );
+              var injected = Array.prototype.slice.call(archiveBox.querySelectorAll(".entry"));
+              var anyLeft = false;
+              injected.forEach(function (el) {
+                if (shown.has(el.getAttribute("data-id"))) {
+                  el.hidden = true;
+                } else {
+                  anyLeft = true;
+                }
+              });
+              // Every hit was a dupe of something already on the page: hide
+              // the whole container, including its "From the archive" label —
+              // an empty-looking label is worse than no box at all.
+              archiveBox.hidden = !anyLeft;
+            })
+            .catch(function (err) {
+              if (err && err.name === "AbortError") return; // superseded, not a failure
+              // Search degrading to filter-only is the correct quiet failure —
+              // a broken archive fetch must never surface as an error to a
+              // reader who just wanted to filter the visible ledger.
+              clearArchive();
+            });
+        };
+
+        input.addEventListener("input", function () {
+          if (archiveTimer) clearTimeout(archiveTimer);
+          // Same <2-char rule as runArchiveSearch's own guard, but applied
+          // synchronously here (not through the debounce) so an empty/short
+          // query can never leave a stale container visible while a 300ms
+          // timer is still pending.
+          if (input.value.trim().length < 2) {
+            if (archiveInFlight) archiveInFlight.abort();
+            clearArchive();
+            return;
+          }
+          archiveTimer = setTimeout(runArchiveSearch, 300);
+        }, { signal: signal });
+
+        // Enter triggers the pending search immediately instead of waiting out
+        // the debounce. The input has no form, so Enter is otherwise inert —
+        // this keeps it that way; no navigation, no submit.
+        input.addEventListener("keydown", function (e) {
+          if (e.key !== "Enter") return;
+          if (archiveTimer) clearTimeout(archiveTimer);
+          runArchiveSearch();
+        }, { signal: signal });
+
+        // One box, not two: the standalone search link is the no-JS fallback
+        // (see renderSearchBubble) — once the enhanced archive box is wired
+        // up, hide it. Lives in the same search-bubble panel as the filter
+        // input this IIFE already owns, so a null guard costs nothing even
+        // though this code path only runs where it's known to exist.
+        var searchLink = document.querySelector(".searchlink");
+        if (searchLink) searchLink.hidden = true;
+      }
+    })();
+
+
+    // Keyboard navigation (roadmap 2 step 4, extended §11.1 PR C): desktop
+    // convenience, no visible UI hint — the nav arrows already show the
+    // model. j/ArrowLeft hop to the OLDER digest, k/ArrowRight to the NEWER
+    // one, via the stable nav-older/nav-newer classes renderDigestPage puts
+    // on both the top and bottom digestnav (index/arc pages have neither, see
+    // below for what j/k do there instead). "/" focuses the index filter,
+    // when one exists on the page. j = older = down-the-archive, matching the
+    // index's newest-first reading order (vim-scroll intuition); the arrow
+    // keys mirror the nav's own visual ← older / newer → arrows. Never
+    // intercepts typing: bails on any input/textarea/select/contentEditable
+    // target, and on any ctrl/meta/alt modifier so browser shortcuts stay
+    // untouched.
+    //
+    // §11.1 PR C: on a page with no nav-older/nav-newer (index or arc pages —
+    // digest pages always have at least one, unless at the very end of the
+    // archive, see below), bare j/k (NOT the arrow keys — those stay
+    // digest-nav-only) instead move a focus-based selection through the
+    // page's primary link list: NOW's .nowrow rows then the ledger's .entry
+    // rows, in DOM order (renderNowSection always renders before the ledger —
+    // see renderIndexPage), or an arc page's timeline .entry rows (no .nowrow
+    // there). Selection IS real focus (moveNavSelection's list[next].focus()),
+    // so the site's existing :focus-visible ring is what shows it — no new
+    // highlight styling needed. No wrap-around: stepping past either end
+    // simply stops. "o" opens the currently focused row (Enter already does,
+    // for free — a focused <a> activates on Enter with no JS involved); "o"
+    // exists because letting Enter double as "open" conflicts with nothing
+    // here, but a dedicated key some readers may expect from other
+    // list-nav UIs costs one more branch.
+    //
+    // A one-digest archive floor (both nav-older and nav-newer absent on a
+    // digest page — the archive's very first or only entry) would otherwise
+    // silently fall through into the index/arc branch below; harmless in
+    // practice (a digest page has no .nowrow/.entry to move a selection
+    // through either, so moveNavSelection's empty-list guard just no-ops),
+    // so no extra guard is needed to keep that case distinct.
+    (function () {
+      addEventListener("keydown", function (e) {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (isTypingTarget(e.target)) return;
+        if (e.key === "j" || e.key === "ArrowLeft") {
+          var older = document.querySelector(".nav-older");
+          // click(), not a location.href assignment: the anchor's click runs
+          // through the soft-nav interceptor at the bottom of this script —
+          // a direct href assignment is a HARD navigation that bypasses it,
+          // which was exactly the residual white-flash path once every
+          // pointer navigation had gone soft (keyboard steppers flashed,
+          // taps did not).
+          if (older) older.click();
+          else if (e.key === "j") moveNavSelection(1);
+        } else if (e.key === "k" || e.key === "ArrowRight") {
+          var newer = document.querySelector(".nav-newer");
+          if (newer) newer.click();
+          else if (e.key === "k") moveNavSelection(-1);
+        } else if (e.key === "o") {
+          var active = document.activeElement;
+          if (active && (active.classList.contains("nowrow") || active.classList.contains("entry"))) {
+            active.click();
+          }
+        } else if (e.key === "/") {
+          var filter = document.querySelector(".filter");
+          if (filter) {
+            e.preventDefault();
+            // The filter input lives inside the closed-by-default search
+            // popover (index-cleanup pass) — an element inside a closed
+            // details is not rendered, so focus() on it silently no-ops
+            // (live-verified in Chromium; there is no auto-open-on-focus
+            // fixup to rely on). Open the popover first, then focus; a
+            // .filter that is NOT inside the popover (the standalone search
+            // page's own form input) has no .searchpop ancestor and skips
+            // straight to focus, unchanged.
+            var pop = filter.closest("details.searchpop");
+            if (pop) pop.open = true;
+            filter.focus();
+          }
+        }
+      }, { signal: signal });
+    })();
+
+    // ⌘K command palette (§11.1 PR C): markup is created ONCE, lazily, on
+    // first wirePage() pass, and left living in document.body OUTSIDE .wrap
+    // (like the resume chip elsewhere in this file) — a soft-nav swap only
+    // replaces .wrap's innerHTML, so re-creating this dialog on every pass
+    // would be wasted work and would drop any state (results scroll position,
+    // etc.) for no reason. Its CONTENT is never stale, though: every string
+    // and every command is read fresh off the current page's DOM (.paletteconfig,
+    // .viewtabs, .langswitch, .archivelink, .searchlink, .now, .entry — see
+    // collectPaletteItems) at OPEN time, not at creation time, so a soft-nav
+    // page change (including a language hop) is always reflected the next
+    // time the palette opens, even though the dialog element itself never
+    // gets rebuilt. Listeners on the dialog's own elements ARE rebound every
+    // wirePage() pass via signal — same convention as every other feature in
+    // this function — which is what "hook into it correctly rather than
+    // double-binding" means here: idempotent creation (the "if (!overlay)"
+    // guard below) plus per-pass listener rebinding (via signal), never both
+    // firing a duplicate DOM append.
+    (function () {
+      var config = document.querySelector(".paletteconfig");
+      if (!config) return; // pageChrome always renders this — defensive only
+
+      var overlay = document.querySelector(".cmdpalette-backdrop");
+      var dialog, input, list;
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.className = "cmdpalette-backdrop";
+        overlay.hidden = true;
+        dialog = document.createElement("div");
+        dialog.className = "cmdpalette";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        // "labelled by the input" (§11.1 PR C spec), not a separate heading —
+        // the input doubles as both the dialog's accessible name AND the
+        // control the reader actually types into.
+        dialog.setAttribute("aria-labelledby", "cmdpalette-input");
+        input = document.createElement("input");
+        input.type = "text";
+        input.id = "cmdpalette-input";
+        input.className = "cmdpalette-input";
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        list = document.createElement("div");
+        list.className = "cmdpalette-list";
+        list.setAttribute("role", "listbox");
+        dialog.appendChild(input);
+        dialog.appendChild(list);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+      } else {
+        dialog = overlay.querySelector(".cmdpalette");
+        input = overlay.querySelector(".cmdpalette-input");
+        list = overlay.querySelector(".cmdpalette-list");
+      }
+
+      var currentResults = [];
+      var activeIndex = -1;
+      var previouslyFocused = null;
+
+      // Assembled fresh on every open — see the IIFE's own comment above for
+      // why this must never be cached across soft-navs. Static commands
+      // first, then whatever the current page's own DOM contributes (arcs,
+      // then briefings) — same "commands, then arcs, then briefings" order
+      // the §11.1 spec lists them in.
+      function collectPaletteItems() {
+        var items = [];
+        items.push({
+          label: config.getAttribute("data-cmd-top"),
+          action: function () {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          },
+        });
+        // View tabs: only the non-active ones carry an href (see
+        // renderViewTabs) — reading data-view off each rather than parsing
+        // translated tab text is what lets this stay lang-agnostic.
+        Array.prototype.slice.call(document.querySelectorAll(".viewtabs .viewtab[href]")).forEach(function (tab) {
+          var v = tab.getAttribute("data-view");
+          var key = v === "daily" ? "data-cmd-daily" : v === "weekly" ? "data-cmd-weekly" : "data-cmd-all";
+          items.push({ label: config.getAttribute(key), el: tab });
+        });
+        var searchLink = document.querySelector(".searchlink");
+        if (searchLink) items.push({ label: config.getAttribute("data-cmd-search"), el: searchLink });
+        // The masthead Archive link this used to read (.archivelink) was
+        // removed in the index-cleanup pass — this lookup now always comes up
+        // empty, so the "Archive" command simply never gets pushed, the same
+        // graceful-disappearance behavior every other optional command here
+        // already relies on (compare searchLink/langLink/latest just above and
+        // below). Left in place rather than deleted: harmless dead code that
+        // documents its own absence, and a future masthead Archive link (if
+        // one ever comes back) would only need its class restored, not this.
+        var archiveLink = document.querySelector(".archivelink");
+        if (archiveLink) items.push({ label: config.getAttribute("data-cmd-archive"), el: archiveLink });
+        var langLink = document.querySelector(".langswitch a");
+        if (langLink) items.push({ label: config.getAttribute("data-cmd-switchlang"), el: langLink });
+        var latest = document.querySelector(".wrap .entry");
+        if (latest) items.push({ label: config.getAttribute("data-cmd-latest"), el: latest });
+
+        // Arcs: NOW's .nowrow rows (label + href), when present (§11.1 PR C
+        // spec 2b) — index pages, current week only, see renderNowSection.
+        Array.prototype.slice.call(document.querySelectorAll(".now .nowrow")).forEach(function (row) {
+          var labelEl = row.querySelector(".nowarclabel");
+          items.push({ label: (labelEl ? labelEl.textContent : row.textContent).trim(), el: row, group: "arc" });
+        });
+
+        // Briefings: visible ledger .entry links, capped at 20 (§11.1 PR C
+        // spec 2c) — their time + excerpt text as the label, same "read text
+        // off the rendered DOM" approach as everywhere else in this function.
+        // Deliberately NOT deduped against the "Latest briefing" command
+        // above (that command is a convenience shortcut to the same target,
+        // not a separate source) — a small, harmless overlap, not worth the
+        // extra bookkeeping to avoid.
+        Array.prototype.slice
+          .call(document.querySelectorAll(".wrap .entry"))
+          .slice(0, 20)
+          .forEach(function (entry) {
+            var timeEl = entry.querySelector(".time, .eyebrow-text");
+            var excerptEl = entry.querySelector(".excerpt");
+            var label = (timeEl ? timeEl.textContent + " — " : "") + (excerptEl ? excerptEl.textContent : "");
+            items.push({ label: label.trim(), el: entry, group: "briefing" });
+          });
+
+        return items;
+      }
+
+      var allItems = [];
+
+      function renderResults(query) {
+        var q = query.trim().toLowerCase();
+        var filtered = allItems
+          .filter(function (item) {
+            return !q || item.label.toLowerCase().indexOf(q) !== -1;
+          })
+          .slice(0, 12);
+        currentResults = filtered;
+        activeIndex = filtered.length > 0 ? 0 : -1;
+        list.innerHTML = "";
+        if (filtered.length === 0) {
+          var empty = document.createElement("div");
+          empty.className = "cmdpalette-empty";
+          empty.textContent = config.getAttribute("data-empty");
+          list.appendChild(empty);
+          return;
+        }
+        filtered.forEach(function (item, i) {
+          var row = document.createElement("div");
+          row.className = "cmdpalette-item" + (i === 0 ? " active" : "");
+          row.setAttribute("role", "option");
+          row.setAttribute("aria-selected", String(i === 0));
+          row.dataset.index = String(i);
+          var labelSpan = document.createElement("span");
+          labelSpan.textContent = item.label;
+          row.appendChild(labelSpan);
+          if (item.group) {
+            var groupSpan = document.createElement("span");
+            groupSpan.className = "cmdpalette-group";
+            groupSpan.textContent = item.group;
+            row.appendChild(groupSpan);
+          }
+          list.appendChild(row);
+        });
+      }
+
+      function reflectActive() {
+        var rows = list.querySelectorAll(".cmdpalette-item");
+        for (var i = 0; i < rows.length; i++) {
+          var isActive = i === activeIndex;
+          rows[i].classList.toggle("active", isActive);
+          rows[i].setAttribute("aria-selected", String(isActive));
+          if (isActive) rows[i].scrollIntoView({ block: "nearest" });
+        }
+      }
+
+      function moveActive(delta) {
+        if (currentResults.length === 0) return;
+        activeIndex = (activeIndex + delta + currentResults.length) % currentResults.length;
+        reflectActive();
+      }
+
+      function activateSelection() {
+        var item = currentResults[activeIndex];
+        if (!item) return;
+        closePalette();
+        if (item.action) item.action();
+        // el.click() (not a direct navigation): the click event bubbles up
+        // to the document-level soft-nav interceptor exactly like a real
+        // pointer click on that same anchor would, so results navigate
+        // through the soft path — see the "Keyboard navigation" comment
+        // above for why click() is used instead of location assignment
+        // throughout this file.
+        else if (item.el) item.el.click();
+      }
+
+      function openPalette() {
+        previouslyFocused = document.activeElement;
+        // Re-read every string fresh — see the IIFE's own top comment on why
+        // this must never rely on values captured at creation time.
+        input.placeholder = config.getAttribute("data-placeholder");
+        input.setAttribute("aria-label", config.getAttribute("data-label"));
+        allItems = collectPaletteItems();
+        input.value = "";
+        renderResults("");
+        overlay.hidden = false;
+        input.focus();
+      }
+
+      function closePalette() {
+        if (overlay.hidden) return;
+        overlay.hidden = true;
+        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+      }
+
+      overlay.addEventListener(
+        "click",
+        function (e) {
+          if (e.target === overlay) closePalette();
+        },
+        { signal: signal },
+      );
+      input.addEventListener("input", function () { renderResults(input.value); }, { signal: signal });
+      input.addEventListener(
+        "keydown",
+        function (e) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            moveActive(1);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            moveActive(-1);
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            activateSelection();
+          }
+        },
+        { signal: signal },
+      );
+      list.addEventListener(
+        "click",
+        function (e) {
+          var row = e.target.closest ? e.target.closest(".cmdpalette-item") : null;
+          if (!row) return;
+          activeIndex = Number(row.dataset.index);
+          activateSelection();
+        },
+        { signal: signal },
+      );
+      // Escape closes regardless of where focus happens to be — same
+      // unconditional-on-focus-target convention the settings-bubble's own
+      // Escape handler above already uses (unlike the OPEN trigger below,
+      // which — per the §11.1 spec's "no bindings while focus is in an
+      // input/textarea/select or contenteditable" guardrail — deliberately
+      // does NOT fire while the reader is typing somewhere else on the page).
+      document.addEventListener(
+        "keydown",
+        function (e) {
+          if (e.key === "Escape" && !overlay.hidden) closePalette();
+        },
+        { signal: signal },
+      );
+      document.addEventListener(
+        "keydown",
+        function (e) {
+          if (isTypingTarget(e.target)) return;
+          if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {
+            e.preventDefault();
+            openPalette();
+          }
+        },
+        { signal: signal },
+      );
+    })();
+  }
+
+  // ── soft navigation ────────────────────────────────────────────────────
+  // Every page here is Cache-Control: private, no-store (see the file-header
+  // comment / trust model) — load-bearing, never touched — so a plain link
+  // click is a full network round trip every time, and on a slow response
+  // iOS Safari's canvas gap white-flashes despite color-scheme and the
+  // cross-document view transition (see the :root comment above). The fix:
+  // for internal links, fetch the next page in the background while the
+  // CURRENT page stays fully visible, then swap the new content into the
+  // live document inside a same-document View Transition (withPageTransition,
+  // above) instead of letting the browser tear down and rebuild everything.
+  // Nothing here is ever persisted — in-memory fetch only, gone on reload —
+  // and a JS-off reader simply never gets this listener, so every link keeps
+  // working as a plain navigation for them.
+  //
+  // Attached ONCE, at module init, before the first wirePage() call — see
+  // the boot sequence at the bottom of this script.
+  (function () {
+    // The token lives in every href on this page already, but this script
+    // never hardcodes it — the prefix is DERIVED from the page's own URL
+    // (the first two path segments, "/t/<token>/") once, at module init.
+    var pathSegments = location.pathname.split("/");
+    var tokenPrefix = "/" + pathSegments[1] + "/" + pathSegments[2] + "/";
+
+    // One AbortController per soft nav: starting a new one aborts whatever
+    // was still in flight, and the reference comparison below (controller
+    // !== activeNav) catches the rarer case where an old response arrives
+    // AFTER a newer nav is already under way but wasn't itself cancelled in
+    // time — a rapid string of soft-navs must never let a stale response
+    // win the race and overwrite what the reader is now looking at.
+    var activeNav = null;
+
+    // The path+search this script has actually rendered, kept in the same
+    // "pathname + search" shape doSoftNav takes (deliberately WITHOUT the
+    // fragment). The popstate handler at the bottom compares against this
+    // to tell a real history move from a same-document fragment move —
+    // see there for why that distinction is load-bearing.
+    var lastRendered = location.pathname + location.search;
+
+    // hash param (§11.1 PR A follow-on fix): a CROSS-page link that also
+    // carries a fragment — e.g. an arc page's deep link into a digest's own
+    // #sN section (renderArcAppearance) — used to lose the fragment on the
+    // soft-nav path: the click handler below only ever passed
+    // dest.pathname + dest.search into this function, so the swap landed on
+    // the right PAGE but never scrolled to the right SECTION, silently,
+    // with no error — only a plain full navigation (or JS disabled)
+    // happened to work by accident, via the browser's own native handling.
+    // This was already a latent bug for the TOC's own #sN chips (dead code
+    // path before this feature: no chip anywhere on the site pointed at a
+    // DIFFERENT page's fragment until arc pages existed to do it) — fixed
+    // here rather than shipping a feature whose flagship mechanic silently
+    // degrades for every JS-enabled reader. hash is either "" or something
+    // like "#sN" (URL.hash's own shape, including the "#"); scrolling only
+    // happens once the swap has actually landed, same ordering as
+    // wirePage() below.
+    function doSoftNav(href, isPopstate, hash) {
+      if (activeNav) activeNav.abort();
+      var controller = new AbortController();
+      activeNav = controller;
+      fetch(href, { signal: controller.signal })
+        .then(function (res) {
+          if (!res.ok) throw new Error("soft-nav: response not ok");
+          return res.text();
+        })
+        .then(function (html) {
+          if (controller !== activeNav) return; // superseded — the newer nav owns the screen
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var newWrap = doc.querySelector(".wrap");
+          var curWrap = document.querySelector(".wrap");
+          if (!newWrap || !curWrap) throw new Error("soft-nav: .wrap missing");
+          withPageTransition(function () {
+            // .wrap is the ENTIRE page body except the masthead-adjacent
+            // script tag and the resume chip (both live outside it) — see
+            // pageChrome's document skeleton above — so swapping just its
+            // innerHTML replaces everything a reader would call "the page"
+            // in one move. speculationrules/prefetch artifacts in the
+            // fetched document live in head/body root, never inside .wrap
+            // (see pageChrome), so this scoped swap sidesteps them for
+            // free — nothing to strip.
+            curWrap.innerHTML = newWrap.innerHTML;
+            document.title = doc.title;
+            // Language hops (EN/HU switcher) change the document's lang —
+            // carry that onto the live <html> along with the content.
+            document.documentElement.lang = doc.documentElement.lang;
+            // Deliberately UNCHANGED: html's data-theme/data-density/
+            // data-fontsize/data-font. Those are live preference state, not page
+            // content — leaving them alone is what makes the swap flicker-
+            // free (no re-applying a preference that was already in effect).
+            // Same for the theme-color metas in <head> — theme state is
+            // live-owned, the fetched document's copies are simply ignored.
+            //
+            // The fetched document's own <script> tag never runs — an
+            // innerHTML assignment inertly skips embedded scripts, and it's
+            // moot here anyway since .wrap never contained the script tag
+            // to begin with. The LIVE page's script owns behavior; that's
+            // the whole point of re-wiring instead of reloading.
+            wirePage();
+            // Scroll restoration: a plain forward soft-nav or popstate
+            // soft-load lands at the top, same as always. A hash-bearing
+            // cross-page link (see the function comment above) scrolls the
+            // target element into view instead, once it's actually in the
+            // freshly-swapped DOM — getElementById, not querySelector, since
+            // every id this ever targets (buildSectionToc's "sN") is a
+            // literal token, never CSS-special characters. An id that isn't
+            // in the fetched page (a stale/bad fragment) falls back to the
+            // top, same as no hash at all — never a jump to nowhere.
+            // behavior "instant", explicitly: the stylesheet's
+            // scroll-behavior: smooth (reduced-motion-gated, see the CSS)
+            // turns a bare scrollIntoView()/scrollTo() into an ANIMATED
+            // scroll, and an animated scroll started inside this
+            // startViewTransition update callback is cancelled when the
+            // transition snapshots the new state — observed live on deploy
+            // day: the scrollIntoView call fired, the viewport never moved.
+            // An explicit behavior overrides the CSS per spec; the
+            // transition's own crossfade is this swap's motion story
+            // anyway, an animated scroll under it was never wanted.
+            var target = hash ? document.getElementById(hash.slice(1)) : null;
+            if (target) target.scrollIntoView({ behavior: "instant", block: "start" });
+            else window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+          });
+          // Committed: this address is now what's on screen. Set for BOTH
+          // directions (forward soft-nav and popstate soft-load), and only
+          // once the swap has actually happened — an aborted or superseded
+          // nav returns above and must never move this. The hash rides
+          // along in the URL bar (history.pushState) but NOT in
+          // lastRendered/href themselves — every existing comparison
+          // against those two (the popstate fragment-only bail below,
+          // fetch(href) above) is deliberately path+search-only, and adding
+          // the hash to either would break that fragment-vs-real-move
+          // distinction this whole soft-nav module already depends on.
+          lastRendered = href;
+          if (!isPopstate) history.pushState({ soft: true }, "", href + (hash || ""));
+        })
+        .catch(function (err) {
+          if (err && err.name === "AbortError") return; // superseded fetch, silent
+          // Fetch failure, non-ok status, or any exception during the swap
+          // itself: fall back to the ordinary navigation the reader always
+          // had. Correctness never depends on the soft path working.
+          location.href = href + (hash || "");
+        });
+    }
+
+    // Capture phase, attached before wirePage's first call — see the
+    // settings-dismiss handler inside wirePage above. That handler also
+    // listens for document clicks in the capture phase; because this
+    // listener is registered first (module init, before the initial
+    // wirePage() call at the bottom of this script) and re-registering it
+    // inside wirePage never moves this one, this listener always runs
+    // FIRST in capture order, on every pass. That ordering is what the
+    // settings-open bail below depends on.
+    document.addEventListener(
+      "click",
+      function (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        if (e.button !== 0) return;
+        var a = e.target.closest ? e.target.closest("a[href]") : null;
+        if (!a) return;
+        if (a.target) return; // opens elsewhere (new tab, frame) — let it
+        if (a.hasAttribute("download")) return;
+        var dest;
+        try {
+          dest = new URL(a.href, location.href);
+        } catch (err) {
+          return;
+        }
+        if (dest.origin !== location.origin) return;
+        if (dest.pathname.indexOf(tokenPrefix) !== 0) return; // cite links, robots/favicon — not ours
+        // Hash-only change on the same path/query: let the browser do its
+        // native in-page anchor scroll instead of soft-navving nowhere.
+        if (dest.pathname === location.pathname && dest.search === location.search && dest.hash) return;
+        // Dismiss-swallow interplay, for BOTH masthead disclosures: with
+        // one open, a click OUTSIDE it belongs to that disclosure's dismiss
+        // handler behind this listener — bail here with no preventDefault
+        // so the click reaches it untouched. Clicks INSIDE an open panel
+        // (the settings language switcher) soft-nav normally.
+        //
+        // This listener is registered at module init, BEFORE wirePage()
+        // attaches either dismiss handler, and capture listeners on the
+        // same node fire in registration order — so without this bail THIS
+        // one wins and navigates before the dismiss handler can swallow
+        // anything. That is exactly what the search popover did until now:
+        // clicking a headline to dismiss it opened the headline (caught by
+        // driving a real browser; the popover's own preventDefault looked
+        // correct in isolation).
+        var openPanel = document.querySelector("details.settings[open], details.searchpop[open]");
+        if (openPanel && !openPanel.contains(a)) return;
+        e.preventDefault();
+        doSoftNav(dest.pathname + dest.search, false, dest.hash);
+      },
+      true,
+    );
+
+    addEventListener("popstate", function () {
+      var here = location.pathname + location.search;
+      // Fragment-only move — bail (owner-reported 2026-08-10: every TOC
+      // chip scrolled down, then snapped back to the top).
+      //
+      // A fragment navigation ("#s4" from renderToc's chips, or any
+      // in-page anchor) is a SAME-DOCUMENT navigation, and browsers fire
+      // popstate for those as well as for real history traversals —
+      // popstate first, then hashchange. Unguarded, this handler treated
+      // that as a history move and soft-navved to the page the reader was
+      // already on: the swap replaced .wrap mid-scroll, destroying the
+      // element the browser's smooth scroll was animating toward, and the
+      // trailing scrollTo(0, 0) put them back at the top.
+      //
+      // The click interceptor above already declines hash-only links (see
+      // its own bail); this is the SAME condition arriving through the
+      // other entry point into doSoftNav. Comparing path+search — neither
+      // of which a fragment move changes — is what distinguishes them.
+      // The browser's native anchor scroll is exactly right here and
+      // needs no help from this script.
+      if (here === lastRendered) return;
+      // location.hash already reflects wherever the browser just navigated
+      // the address bar to (a real history move, not a fragment-only one —
+      // ruled out just above) — threaded through so a cross-page hash link
+      // (see doSoftNav's own comment) still resolves correctly on a
+      // back/forward traversal, not just on the initial click.
+      doSoftNav(here, true, location.hash);
+    });
+  })();
+
+  wirePage();
+</script>
+</body>
+</html>

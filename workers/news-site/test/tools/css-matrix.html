@@ -1,0 +1,76 @@
+<!doctype html><meta charset="utf-8"><title>css matrix</title>
+<div id="stage"></div>
+<script>
+const WIDTHS = [375, 700, 1280];
+const THEMES = ["light", "dark"];
+const MAST = [false, true];
+function load(src, w) {
+  return new Promise((resolve, reject) => {
+    const f = document.createElement("iframe");
+    f.style.cssText = `width:${w}px;height:900px;border:0;position:absolute;left:-99999px;top:0`;
+    f.src = src;
+    f.onload = () => resolve(f);
+    f.onerror = () => reject(new Error("load fail " + src));
+    document.getElementById("stage").appendChild(f);
+  });
+}
+function setState(f, theme, hid) {
+  const root = f.contentDocument.documentElement;
+  root.dataset.theme = theme;
+  root.classList.toggle("masthid", hid);
+  root.style.setProperty("--mast-h", "57px");
+  // reading a computed style forces the recalc synchronously — no rAF needed
+  void f.contentWindow.getComputedStyle(root).backgroundColor;
+}
+function* walk(el) { yield el; for (const c of el.children) yield* walk(c); }
+function styleOf(win, el, pseudo) {
+  const cs = win.getComputedStyle(el, pseudo);
+  let s = "";
+  for (let i = 0; i < cs.length; i++) { const p = cs[i]; s += p + ":" + cs.getPropertyValue(p) + ";"; }
+  return s;
+}
+window.runPage = async function (page) {
+  let comparisons = 0; const diffs = [];
+  for (const w of WIDTHS) {
+    const [fb, fa] = await Promise.all([load(`before/${page}.html`, w), load(`after/${page}.html`, w)]);
+    for (const theme of THEMES) for (const hid of MAST) {
+      setState(fb, theme, hid); setState(fa, theme, hid);
+      const A = [...walk(fb.contentDocument.documentElement)];
+      const B = [...walk(fa.contentDocument.documentElement)];
+      if (A.length !== B.length) { diffs.push(`DOM MISMATCH w${w}: ${A.length} vs ${B.length}`); continue; }
+      for (let i = 0; i < A.length; i++) {
+        if (A[i].tagName === "STYLE" || A[i].tagName === "SCRIPT") continue;
+        for (const pseudo of [null, "::before", "::after"]) {
+          comparisons++;
+          const sa = styleOf(fb.contentWindow, A[i], pseudo);
+          const sb = styleOf(fa.contentWindow, B[i], pseudo);
+          if (sa !== sb && diffs.length < 20) {
+            const pa = sa.split(";"), pb = sb.split(";");
+            let fp = "";
+            for (let k = 0; k < Math.max(pa.length, pb.length); k++) if (pa[k] !== pb[k]) { fp = `${pa[k]} => ${pb[k]}`; break; }
+            diffs.push(`w${w} ${theme} hid=${hid} <${A[i].tagName.toLowerCase()} class="${A[i].className}">${pseudo ?? ""}: ${fp}`);
+          } else if (sa !== sb) diffs.push("…more");
+        }
+      }
+    }
+    fb.remove(); fa.remove();
+  }
+  return { page, comparisons, diffCount: diffs.filter(d => d !== "…more").length, diffs: diffs.slice(0, 12) };
+};
+</script>
+<!--
+  Computed-style regression matrix for CSS refactors.
+
+  Usage: put "before" page renders in before/ and "after" renders in after/
+  next to this file (npm run golden writes the current pages; copy
+  test/golden/*.html for the before side, regenerate for the after side),
+  serve the directory over HTTP, open this page, then in the console:
+
+      await runPage("index-en")   // -> { comparisons, diffCount, diffs }
+
+  per page. Compares getComputedStyle for every element and its
+  ::before/::after across 375/700/1280px x light/dark x masthead
+  shown/hidden. Zero diffs = the CSS change is computationally inert for
+  everything the matrix covers (hover states and print are not coverable
+  here — check those by hand).
+-->
