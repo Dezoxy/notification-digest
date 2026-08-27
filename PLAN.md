@@ -670,7 +670,10 @@ the entry is approved; a rejected entry is removed, leaving a line in §9's
 decision log saying why. Entries appear in recommended execution order.
 Cross-repo steps are labeled (digest), (toom-edge = the news-site repo),
 (homelab = deploy repo); per §6/deploy note, digest code ships nothing until
-a tag is cut and homelab bumps it.
+a tag is cut and homelab bumps it. The (toom-edge) label is historical:
+§11.1–11.6 predate the news-site source moving into this repo at
+`workers/news-site/`, so entries written after that move label site steps
+(site) and are not cross-repo at all.
 
 ### 11.1 Storyline-first site IA — NOW homepage and arc pages (approved)
 
@@ -1130,8 +1133,171 @@ implementation, its input fencing, and the `CONTEXT_MAX_PER_RUN` bound.
       excludes keys that already have a row), so deleting a row silently
       re-authorizes a paid regeneration.
 
-All of §11 is now shipped except the two entries that were closed rather
+### 11.7 Installable site + push on arrival (approved, not started)
+
+**Status:** APPROVED 2026-08-27, not started. Origin: owner request the
+same day ("next upgrade PWA and push notification when a digest arrives").
+Site-only — every step below lands in `workers/news-site/`, so this entry
+needs no tag, no homelab bump, and no VM deploy (see "Why the Worker
+triggers it" below). Note the step label: the news-site subtree lives in
+THIS repo now, so steps read `(site)` rather than the `(toom-edge)` of
+§11.1–11.6, which predate the move.
+
+**What & why.** The site becomes installable (web app manifest + service
+worker) and pushes a notification when a digest lands. The two halves are
+not separable, and that is the whole reason this is one entry: Web Push on
+iOS works ONLY inside a PWA that has been added to the Home Screen. On iOS
+the PWA is not packaging around the feature, it is the feature's hard
+prerequisite. Today the only arrival signal is the Telegram TL;DR ping;
+this adds a second, site-native one that lands on the lock screen and opens
+straight into the brief that triggered it.
+
+**Retiring the standing deferral.** `workers/news-site/README.md` deferred
+PWA four times across roadmaps 1–4, always for two stated reasons. Both are
+answered here, and the answers are the design, not a waiver:
+
+- *"the manifest would be fetched tokenless."* It is not: the manifest is
+  served at `/t/<token>/manifest.webmanifest`, behind the same
+  `tokenMatches` gate and the same indistinguishable `notFound()` as every
+  other route. The objection assumed a root-level `/manifest.json`, which
+  is what would have forced a tokenless fetch; nothing requires that
+  placement.
+- *"the capability token would end up in a persisted, cached artifact."*
+  This is two claims, and only one survives. The token landing on disk is
+  already true — browser history, any bookmark, and the Telegram message
+  that delivered the link all persist it; a Home Screen shortcut and a
+  service-worker registration are the same exposure class on the owner's
+  own device, not a new one. Private CONTENT landing on disk is the real
+  objection and it stands, so it becomes the entry's first guardrail: the
+  service worker uses NO Cache API, ever. This ships as installable +
+  push, explicitly NOT an offline reader. `Cache-Control: private,
+  no-store` stays honest.
+
+**Why the Worker triggers it (not `digest/deliver.py`).** The fan-out runs
+inside `handleIngest` under `ctx.waitUntil()`, not as another delivery
+channel in the app. "A digest arrived" and "the site has the digest" are
+the same event, so the app would only be re-deriving something the Worker
+already knows. Doing it site-side means no app release train (no tag, no
+GHCR image, no homelab bump, no VM deploy), no new Key Vault secret, and no
+new `config.py` env var — the feature ships with the git-connected
+Cloudflare Workers Build that already deploys this Worker on merge to main
+(see `wrangler.jsonc`'s observability comment and the news-site README's
+"deploys are automatic now"). The cost is one signature change:
+`fetch(request, env)` gains `ctx`, threaded into `handleIngest`.
+
+**Why the push carries no payload.** The push message is empty; the service
+worker's `push` handler fetches `${self.registration.scope}push/latest` and
+renders the notification from that. `registration.scope` IS
+`https://<host>/t/<token>/`, so the worker knows the capability token
+without the token ever being stored in IndexedDB or put in a push payload.
+Three consequences worth stating: the only crypto this repo owns is VAPID
+JWT signing (~40 lines of `crypto.subtle` ECDSA P-256), the notification
+always reflects the NEWEST digest rather than whatever was current at send
+time, and no digest text transits Apple/Google infrastructure at all. The
+alternative (RFC 8291 encrypted payload) is a further ~120 lines of
+ECDH/HKDF/AES-128-GCM for a strictly worse privacy story; it stays the
+named contingency below rather than the design.
+
+**Notification policy: every digest.** Owner decision, 2026-08-27, chosen
+over "briefs + urgent windows only". `shouldNotify` therefore returns true
+today, and is kept as a real function anyway rather than inlined — if this
+turns out noisy, the fix is a one-line diff plus a test row, with no
+schema, route, or subscription change. The `kind` / `has_attention`
+distinction is not discarded, it just moves from FILTERING to
+PRESENTATION: the title varies by kind, and `has_attention` sets
+`requireInteraction` so an urgent brief does not auto-dismiss.
+
+**Guardrails:**
+- No Cache API in the service worker. Not "cache carefully" — none. The
+  offline fallback is a response constructed inline by the worker, so a
+  digest body is never written to disk. Adding offline reading later is a
+  separate entry with its own privacy think, not an increment on this one.
+- `created_at` MUST NOT be used as a push freshness signal. It is
+  backfillable and historical for daily/weekly briefs (see the column's own
+  comment in `schema.sql`) — a `created_at` freshness window would
+  silently suppress exactly the briefs most worth notifying about. Ingest
+  wall-clock and id ordering are the only valid signals.
+- Notification delivery inherits the SQLite idempotency contract. Two
+  guards: claim-once (`INSERT OR IGNORE INTO push_sent`, fan out only when
+  `meta.changes === 1`) covers the app's own retry path
+  (`get_pending_digests`); newest-only (`id = MAX(id)`) covers historical
+  backfill, whose lower ids must claim silently and never ring.
+- Newest-only means a BACKLOG FLUSH collapses to one notification, and that
+  is deliberate, not a dropped digest: after a VM outage the app republishes
+  N digests in one run, and because the push is payload-less every one of
+  those N would render the same newest brief anyway. Stated here so it is
+  not later rediscovered as "push lost my digests".
+- The Sunday 20:00/20:30/21:00 cascade produces three ascending ids, each
+  newest at its own ingest, so all three ring within the hour. A fixed
+  `tag: "digest"` makes successive notifications REPLACE rather than stack,
+  which extends the payload-less invariant into the tray: the notification,
+  the tray, and the site never disagree about what is newest.
+- Unconfigured must degrade to a no-op, because the Worker auto-deploys on
+  merge. With no `VAPID_PRIVATE_JWK` set, subscribe returns 503 and the
+  fan-out skips silently; ingest can never fail because push is half-wired.
+  This is what makes the merge-before-migration ordering survivable.
+- `push/latest` carries the full trust-header set (`private, no-store`,
+  `no-referrer`, `noindex`) like every other token-scoped route. Easy to
+  forget on a JSON endpoint when every existing precedent is HTML.
+- Subscriptions are capped (~20 rows) so a leaked token cannot fill D1. The
+  cap's own error message must name the single-owner remedy
+  (`DELETE FROM push_subscriptions`), since a cap with no eviction is
+  otherwise a silent lockout for the owner's next real device.
+
+**Steps:**
+- [ ] (site, PR 0 — this entry) Record the roadmap; retire the standing
+      PWA deferral in `workers/news-site/README.md`.
+- [ ] (site, PR A) Installable shell: token-scoped manifest, service worker
+      (push handler + inline offline-navigation fallback, no Cache API),
+      embedded PNG icons (180/192/512 — iOS ignores SVG for Home Screen),
+      `pageChrome` wiring, golden regeneration.
+- [ ] (site, PR B) Subscriptions: `migrations/0009-push.sql`
+      (`push_subscriptions`, `push_sent`) mirrored into `schema.sql`, the
+      `push/*` endpoints, the settings-bubble row in EN/HU.
+- [ ] (site, PR C) The sender: VAPID JWT signing, `ctx` threading,
+      `shouldNotify`, claim-once + newest-only, `Promise.allSettled`
+      fan-out, prune on 404/410, `fail_count` backoff.
+
+**Verification notes specific to this entry:**
+- PR C's FIRST smoke test is a body-less push to a real iPhone
+  subscription, before anything is built on top of it. Chrome and Firefox
+  accept empty-body pushes; Apple's gateway is the strict one here, and
+  the one that validates the VAPID `sub` claim most tightly. If it rejects
+  them, the fallback is NOT "add a small payload" — the Push API forbids
+  unencrypted payloads, so any payload at all pulls in the full RFC 8291
+  implementation. Storing `p256dh`/`auth` from PR B onward makes that a
+  code-only change with no re-subscribe.
+- Adding the manifest link and service-worker registration to `pageChrome`
+  touches ALL golden pages. Per `test/README.md` the diff is the review
+  artifact: it must contain those two lines and nothing else.
+- `test/stub-db.mjs` throws on unknown SQL by design, so every new query
+  needs a branch. `test/env.mjs`'s `fetchPath` must pass a `ctx` stub whose
+  `waitUntil` COLLECTS AND AWAITS its promises — a stub that discards them
+  would let the claim-once and prune-on-410 tests pass while testing
+  nothing, the same class of trap the throw-on-unknown-SQL rule exists to
+  prevent.
+- `src/client.js` is one IIFE with a `wirePage()` teardown/rebind cycle;
+  re-verify the settings toggle after two consecutive soft navigations.
+- The iOS toggle has three states, and the not-installed one is the whole
+  UX: on iOS outside standalone mode, show "Add to Home Screen to enable"
+  rather than a dead button. `Notification.requestPermission()` must be
+  called synchronously inside the click handler or iOS rejects it.
+
+**Known limitations, accepted:**
+- Token rotation orphans installed apps. The old service worker keeps its
+  subscription and keeps ringing, but its `push/latest` fetch 404s
+  (generic notification) and the tap opens a 404. Remedy for a
+  single-owner service: rotate, `DELETE FROM push_subscriptions`,
+  reinstall. Cheap to document, expensive to automate.
+- Every window digest now buzzes twice — Telegram TL;DR and push. That is
+  the "every digest" decision, taken knowingly. The escape valve is
+  app-side and independent: `disable_notification: true` on the TL;DR
+  send, on the app's own release train, if the doubling gets old.
+- Not an offline reader, by construction (first guardrail).
+
+§11.1–11.6 are all shipped except the two entries that were closed rather
 than built: §11.5 (rejected, §9 decision 6) and the OPEN GAP inside §11.3
 (Hungarian delta text, `deltas_hu` — unapproved), plus §11.4's still-open
-"flip the in-repo default" decision and its optional toom-edge status
-chips.
+"flip the in-repo default" decision and its optional site status chips.
+§11.7 is approved and not started — it is the only entry with unticked
+boxes that are meant to be ticked.
