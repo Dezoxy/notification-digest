@@ -49,13 +49,27 @@ export function loadWorker(entry = new URL("../worker.js", import.meta.url).href
   return workerPromise;
 }
 
-export function makeEnv({ writes } = {}) {
+export function makeEnv({ writes, pushSubs, push = true } = {}) {
   return {
     SITE_TOKEN,
     INGEST_KEY,
-    DB: makeDb({ writes }),
+    // Push (PLAN.md §11.7) is CONFIGURED by default in tests, because the
+    // interesting behavior is what the endpoints do when it is. Pass
+    // { push: false } to exercise the unconfigured path, which is the state
+    // a real deployment is in between this code merging and the secrets
+    // being set — the Worker auto-deploys on merge, so that window always
+    // exists and must degrade to 503 rather than 500.
+    ...(push ? { VAPID_PUBLIC_KEY: VAPID_PUBLIC_KEY, VAPID_PRIVATE_JWK: "{}" } : {}),
+    DB: makeDb({ writes, pushSubs }),
   };
 }
+
+// A real, correctly shaped VAPID public key (uncompressed P-256 point,
+// 65 bytes, base64url) — the client decodes it into applicationServerKey,
+// so a placeholder of the wrong length would pass every test here and fail
+// in a browser.
+export const VAPID_PUBLIC_KEY =
+  "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U";
 
 export const ORIGIN = "https://news.toomhorvath.com";
 

@@ -428,7 +428,7 @@
      language row keeps its plain <a> links and stays; rows whose only
      controls are still [hidden] disappear until the script reveals them.
      Browsers without :has() just keep the old harmless empty-pill look. */
-  .settingsrow:not(:has(a, button:not([hidden]))) { display: none; }
+  .settingsrow:not(:has(a, button:not([hidden]), .pushnote:not([hidden]))) { display: none; }
   .settingslabel {
     font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--faint);
@@ -475,12 +475,24 @@
      size (owner upgrade) moved off this single-pill look onto the miniseg
      control just below — density stays a pill since it's genuinely binary
      (compact/comfortable), not a 3-way choice. */
-  .densitytoggle {
+  .densitytoggle, .pushtoggle {
     background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
     color: var(--text); font-family: var(--font-data); font-size: 0.75em; padding: 0.15em 0.55em; cursor: pointer;
   }
-  .densitytoggle:hover { border-color: var(--accent); color: var(--accent); }
-  .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .densitytoggle:hover, .pushtoggle:hover { border-color: var(--accent); color: var(--accent); }
+  .densitytoggle:focus-visible, .pushtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  /* Push notifications (PLAN.md §11.7): the toggle is the density pill's
+     primitive reused, not a new one — same shape, same hover, same focus
+     ring, inherited by joining the selectors above rather than copied.
+     The ON state fills the pill so "is it on" is answerable at a glance
+     rather than by reading the word inside it. .pushnote is the text-only
+     state (an iOS reader who has not installed to the Home Screen yet, a
+     browser-level block): no border, because it is a statement rather than
+     a control, and nothing about it should invite a tap. */
+  .pushtoggle[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .pushnote {
+    font-family: var(--font-data); font-size: 0.7em; color: var(--faint); text-align: right;
+  }
 
   /* Mini segmented control (three-state theme, S/M/L text size) — the view
      tabs' segmented language (.viewtabs/.viewtab above) miniaturized to
@@ -1863,7 +1875,17 @@
     </div>
     <nav class="viewtabs"><span class="viewtab active" data-view="all">All</span><a class="viewtab" data-view="daily" href="/t/goldentesttoken/daily/">Daily</a><a class="viewtab" data-view="weekly" href="/t/goldentesttoken/weekly/">Weekly</a></nav>
     <div class="mastright">
-      <details class="searchpop"><summary class="searchtoggle" aria-label="Search" title="Search"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Search</span></summary><div class="searchpanel"><div class="searchfield"><svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input class="filter" type="search" placeholder="Filter briefings…" aria-label="Filter briefings…" hidden></div><a class="searchlink" href="/t/goldentesttoken/search">Search ↗</a></div></details><details class="settings"><summary class="gear" aria-label="Settings"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary><div class="settingspanel"><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/a/markets-slide">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Body font</span><span class="miniseg miniseg-font" role="group" aria-label="Body font"><button class="minisegbtn" data-set="sans" hidden>Modern</button><button class="minisegbtn" data-set="serif" hidden>Classic</button></span></div><div class="settingsrow"><a href="/t/goldentesttoken/about">About</a></div></div></details>
+      <details class="searchpop"><summary class="searchtoggle" aria-label="Search" title="Search"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Search</span></summary><div class="searchpanel"><div class="searchfield"><svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input class="filter" type="search" placeholder="Filter briefings…" aria-label="Filter briefings…" hidden></div><a class="searchlink" href="/t/goldentesttoken/search">Search ↗</a></div></details><details class="settings"><summary class="gear" aria-label="Settings"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary><div class="settingspanel"><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/a/markets-slide">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Body font</span><span class="miniseg miniseg-font" role="group" aria-label="Body font"><button class="minisegbtn" data-set="sans" hidden>Modern</button><button class="minisegbtn" data-set="serif" hidden>Classic</button></span></div><div class="settingsrow pushrow" hidden
+    data-label="Notifications"
+    data-enable="Turn on"
+    data-enabled="On"
+    data-disable="Turn off"
+    data-blocked="Blocked in browser settings"
+    data-ioshint="Add to Home Screen first"
+    data-failed="Could not enable"
+    data-lang="en"
+    data-base="/t/goldentesttoken/"
+  ><span class="settingslabel">Notifications</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div><div class="settingsrow"><a href="/t/goldentesttoken/about">About</a></div></div></details>
     </div>
   </header>
   <span class="paletteconfig" hidden
@@ -2290,6 +2312,178 @@
           reflect();
         });
       }, { signal: signal });
+    })();
+
+    // Push notifications (PLAN.md §11.7, PR B). The row is server-rendered
+    // HIDDEN — the whole row, not just its control, unlike every miniseg
+    // above — because whether push is possible at all is a question only
+    // the client can answer, and there are several distinct no's. This
+    // decides which one applies and reveals the row only when it has
+    // something true to say.
+    (function () {
+      var row = document.querySelector(".pushrow");
+      if (!row) return;
+      var btn = row.querySelector(".pushtoggle");
+      var note = row.querySelector(".pushnote");
+      var d = row.dataset;
+
+      function say(text) {
+        note.textContent = text;
+        note.hidden = false;
+        row.hidden = false;
+      }
+
+      // navigator.standalone is a Safari-only boolean, and it is a far
+      // better signal than sniffing the user agent: its mere PRESENCE says
+      // "this is iOS/iPadOS Safari", and its value says whether the page is
+      // running from the Home Screen. That matters because iOS exposes
+      // Notification and PushManager ONLY inside an installed web app — so
+      // in Safari the capability check below would fail and the row would
+      // stay silently hidden, when the honest thing to tell the reader is
+      // the one action that would work.
+      var iosSafari = typeof navigator.standalone === "boolean";
+      var installed =
+        navigator.standalone === true ||
+        (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+
+      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+        if (iosSafari && !installed) say(d.ioshint);
+        return;
+      }
+
+      // Is push configured on the SERVER? A deployment without VAPID keys
+      // answers 503 here, and the right response is to show nothing at all
+      // rather than a control that cannot work. This is also what keeps the
+      // feature dark between this PR merging and the keys being set.
+      var aborted = function () {
+        return signal.aborted;
+      };
+      fetch(d.base + "push/key", { signal: signal })
+        .then(function (res) {
+          if (!res.ok) throw new Error("push not configured");
+          return res.json();
+        })
+        .then(function (cfg) {
+          if (aborted()) return;
+          if (Notification.permission === "denied") {
+            // Nothing this page can do — the reader has to undo it in
+            // browser settings, so say that rather than offering a button
+            // whose only outcome is silence.
+            say(d.blocked);
+            return;
+          }
+          return navigator.serviceWorker.ready.then(function (reg) {
+            return reg.pushManager.getSubscription().then(function (sub) {
+              if (aborted()) return;
+              wire(reg, cfg.key, sub);
+            });
+          });
+        })
+        .catch(function () {
+          // Unconfigured, offline, or no worker — leave the row hidden.
+        });
+
+      function reflect(on) {
+        btn.textContent = on ? d.enabled : d.enable;
+        btn.setAttribute("aria-pressed", String(on));
+        btn.title = on ? d.disable : d.enable;
+        btn.hidden = false;
+        note.hidden = true;
+        row.hidden = false;
+      }
+
+      function wire(reg, key, sub) {
+        reflect(Boolean(sub));
+        btn.addEventListener("click", function () {
+          // Notification.requestPermission() MUST be called synchronously
+          // inside the gesture handler — iOS rejects it otherwise, and it
+          // is the one call here that cannot be moved behind an await.
+          var permission = sub ? Promise.resolve("granted") : Notification.requestPermission();
+          btn.disabled = true;
+          permission
+            .then(function (result) {
+              if (result !== "granted") throw new Error("permission " + result);
+              return sub ? disable() : enable();
+            })
+            .then(function (next) {
+              if (aborted()) return;
+              sub = next;
+              reflect(Boolean(sub));
+            })
+            .catch(function () {
+              if (aborted()) return;
+              // Distinguish the two failures the reader can act on: a hard
+              // browser-level block is permanent until they change it, any
+              // other error is worth retrying.
+              if (Notification.permission === "denied") say(d.blocked);
+              else say(d.failed);
+            })
+            .then(function () {
+              btn.disabled = false;
+            });
+        }, { signal: signal });
+
+        function enable() {
+          return reg.pushManager
+            .subscribe({ userVisibleOnly: true, applicationServerKey: decodeKey(key) })
+            .then(function (created) {
+              var body = created.toJSON();
+              body.lang = d.lang;
+              body.label = deviceLabel();
+              return fetch(d.base + "push/subscribe", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+              }).then(function (res) {
+                if (!res.ok) {
+                  // Do not leave a browser-side subscription the server
+                  // does not know about: it would receive nothing and the
+                  // toggle would lie about being on.
+                  return created.unsubscribe().then(function () {
+                    throw new Error("subscribe rejected");
+                  });
+                }
+                return created;
+              });
+            });
+        }
+
+        function disable() {
+          var endpoint = sub.endpoint;
+          return sub.unsubscribe().then(function () {
+            return fetch(d.base + "push/unsubscribe", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ endpoint: endpoint }),
+            }).then(function () {
+              return null;
+            });
+          });
+        }
+      }
+
+      // VAPID keys travel as base64url; the Push API wants raw bytes.
+      function decodeKey(base64url) {
+        var padded = base64url.replace(/-/g, "+").replace(/_/g, "/");
+        while (padded.length % 4) padded += "=";
+        var raw = atob(padded);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return bytes;
+      }
+
+      // Coarse enough to be useful when the owner has three devices and one
+      // stops working, coarse enough not to be a fingerprint. Stored only
+      // in the owner's own D1, never shown to anyone else.
+      function deviceLabel() {
+        var ua = navigator.userAgent || "";
+        if (/iPhone/.test(ua)) return "iPhone";
+        if (/iPad/.test(ua)) return "iPad";
+        if (/Android/.test(ua)) return "Android";
+        if (/Macintosh/.test(ua)) return "Mac";
+        if (/Windows/.test(ua)) return "Windows";
+        return "Other";
+      }
     })();
 
     // Hover-to-open for the masthead popovers (owner request, DESKTOP ONLY).

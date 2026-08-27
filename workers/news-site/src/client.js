@@ -395,6 +395,178 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       }, { signal: signal });
     })();
 
+    // Push notifications (PLAN.md §11.7, PR B). The row is server-rendered
+    // HIDDEN — the whole row, not just its control, unlike every miniseg
+    // above — because whether push is possible at all is a question only
+    // the client can answer, and there are several distinct no's. This
+    // decides which one applies and reveals the row only when it has
+    // something true to say.
+    (function () {
+      var row = document.querySelector(".pushrow");
+      if (!row) return;
+      var btn = row.querySelector(".pushtoggle");
+      var note = row.querySelector(".pushnote");
+      var d = row.dataset;
+
+      function say(text) {
+        note.textContent = text;
+        note.hidden = false;
+        row.hidden = false;
+      }
+
+      // navigator.standalone is a Safari-only boolean, and it is a far
+      // better signal than sniffing the user agent: its mere PRESENCE says
+      // "this is iOS/iPadOS Safari", and its value says whether the page is
+      // running from the Home Screen. That matters because iOS exposes
+      // Notification and PushManager ONLY inside an installed web app — so
+      // in Safari the capability check below would fail and the row would
+      // stay silently hidden, when the honest thing to tell the reader is
+      // the one action that would work.
+      var iosSafari = typeof navigator.standalone === "boolean";
+      var installed =
+        navigator.standalone === true ||
+        (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+
+      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+        if (iosSafari && !installed) say(d.ioshint);
+        return;
+      }
+
+      // Is push configured on the SERVER? A deployment without VAPID keys
+      // answers 503 here, and the right response is to show nothing at all
+      // rather than a control that cannot work. This is also what keeps the
+      // feature dark between this PR merging and the keys being set.
+      var aborted = function () {
+        return signal.aborted;
+      };
+      fetch(d.base + "push/key", { signal: signal })
+        .then(function (res) {
+          if (!res.ok) throw new Error("push not configured");
+          return res.json();
+        })
+        .then(function (cfg) {
+          if (aborted()) return;
+          if (Notification.permission === "denied") {
+            // Nothing this page can do — the reader has to undo it in
+            // browser settings, so say that rather than offering a button
+            // whose only outcome is silence.
+            say(d.blocked);
+            return;
+          }
+          return navigator.serviceWorker.ready.then(function (reg) {
+            return reg.pushManager.getSubscription().then(function (sub) {
+              if (aborted()) return;
+              wire(reg, cfg.key, sub);
+            });
+          });
+        })
+        .catch(function () {
+          // Unconfigured, offline, or no worker — leave the row hidden.
+        });
+
+      function reflect(on) {
+        btn.textContent = on ? d.enabled : d.enable;
+        btn.setAttribute("aria-pressed", String(on));
+        btn.title = on ? d.disable : d.enable;
+        btn.hidden = false;
+        note.hidden = true;
+        row.hidden = false;
+      }
+
+      function wire(reg, key, sub) {
+        reflect(Boolean(sub));
+        btn.addEventListener("click", function () {
+          // Notification.requestPermission() MUST be called synchronously
+          // inside the gesture handler — iOS rejects it otherwise, and it
+          // is the one call here that cannot be moved behind an await.
+          var permission = sub ? Promise.resolve("granted") : Notification.requestPermission();
+          btn.disabled = true;
+          permission
+            .then(function (result) {
+              if (result !== "granted") throw new Error("permission " + result);
+              return sub ? disable() : enable();
+            })
+            .then(function (next) {
+              if (aborted()) return;
+              sub = next;
+              reflect(Boolean(sub));
+            })
+            .catch(function () {
+              if (aborted()) return;
+              // Distinguish the two failures the reader can act on: a hard
+              // browser-level block is permanent until they change it, any
+              // other error is worth retrying.
+              if (Notification.permission === "denied") say(d.blocked);
+              else say(d.failed);
+            })
+            .then(function () {
+              btn.disabled = false;
+            });
+        }, { signal: signal });
+
+        function enable() {
+          return reg.pushManager
+            .subscribe({ userVisibleOnly: true, applicationServerKey: decodeKey(key) })
+            .then(function (created) {
+              var body = created.toJSON();
+              body.lang = d.lang;
+              body.label = deviceLabel();
+              return fetch(d.base + "push/subscribe", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+              }).then(function (res) {
+                if (!res.ok) {
+                  // Do not leave a browser-side subscription the server
+                  // does not know about: it would receive nothing and the
+                  // toggle would lie about being on.
+                  return created.unsubscribe().then(function () {
+                    throw new Error("subscribe rejected");
+                  });
+                }
+                return created;
+              });
+            });
+        }
+
+        function disable() {
+          var endpoint = sub.endpoint;
+          return sub.unsubscribe().then(function () {
+            return fetch(d.base + "push/unsubscribe", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ endpoint: endpoint }),
+            }).then(function () {
+              return null;
+            });
+          });
+        }
+      }
+
+      // VAPID keys travel as base64url; the Push API wants raw bytes.
+      function decodeKey(base64url) {
+        var padded = base64url.replace(/-/g, "+").replace(/_/g, "/");
+        while (padded.length % 4) padded += "=";
+        var raw = atob(padded);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return bytes;
+      }
+
+      // Coarse enough to be useful when the owner has three devices and one
+      // stops working, coarse enough not to be a fingerprint. Stored only
+      // in the owner's own D1, never shown to anyone else.
+      function deviceLabel() {
+        var ua = navigator.userAgent || "";
+        if (/iPhone/.test(ua)) return "iPhone";
+        if (/iPad/.test(ua)) return "iPad";
+        if (/Android/.test(ua)) return "Android";
+        if (/Macintosh/.test(ua)) return "Mac";
+        if (/Windows/.test(ua)) return "Windows";
+        return "Other";
+      }
+    })();
+
     // Hover-to-open for the masthead popovers (owner request, DESKTOP ONLY).
     // Both bubbles stay native details/summary: this only sets .open, so
     // click, Enter, Escape, the "/" shortcut and the palette all keep working

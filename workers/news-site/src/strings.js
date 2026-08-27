@@ -235,6 +235,27 @@ export const STRINGS = {
     offlineRetry: "Try again",
     pushFallbackTitle: "New briefing",
     pushFallbackBody: "Tap to read it.",
+    // Push notifications (PLAN.md §11.7, PR B) — the settings-bubble row.
+    // Every one of these is hidden-until-JS like the minisegs beside it:
+    // with no script, or on a browser without the Push API, the row never
+    // appears at all rather than showing a dead control.
+    // pushIosHint is the state that matters most in practice. On iOS, Web
+    // Push is delivered ONLY inside a PWA opened from the Home Screen, so a
+    // reader in Safari cannot enable anything no matter what they tap — the
+    // honest answer is to tell them the one action that would work.
+    pushLabel: "Notifications",
+    pushEnable: "Turn on",
+    pushEnabled: "On",
+    pushDisable: "Turn off",
+    pushBlocked: "Blocked in browser settings",
+    pushIosHint: "Add to Home Screen first",
+    pushFailed: "Could not enable",
+    // The notification title for a plain window digest ("Digest #412"),
+    // capitalized by notificationTitle in src/push.js. daily/weekly reuse
+    // dailyBrief/weeklyBrief above rather than adding two more keys — the
+    // notification and the stamp line should not be able to disagree about
+    // what a brief is called.
+    pushWindowTitle: "digest",
   },
   hu: {
     locale: "hu-HU",
@@ -389,5 +410,21 @@ export const STRINGS = {
     offlineRetry: "Újra",
     pushFallbackTitle: "Új összefoglaló",
     pushFallbackBody: "Koppints az olvasáshoz.",
+    // Owner: please review — new HU strings, push notification settings row
+    // (this feature), mirror the EN block's pattern. Machine-drafted
+    // translation, not yet read by a native speaker.
+    pushLabel: "Értesítések",
+    pushEnable: "Bekapcsolás",
+    pushEnabled: "Bekapcsolva",
+    pushDisable: "Kikapcsolás",
+    pushBlocked: "A böngésző letiltotta",
+    pushIosHint: "Előbb add hozzá a kezdőképernyőhöz",
+    pushFailed: "Nem sikerült bekapcsolni",
+    // Deliberately NOT translated, and not an oversight: this file's own
+    // header records that "digest #N" is one of the micro-labels the HU
+    // pages leave in English. A notification that said "Összefoglaló #412"
+    // while the page it opens says "digest #412" would be the two surfaces
+    // disagreeing about the same object.
+    pushWindowTitle: "digest",
   },
 };

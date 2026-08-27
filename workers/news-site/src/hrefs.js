@@ -220,13 +220,43 @@ export function renderSwitchers(
   // no settingslabel column — .settingsrow's flex layout degrades cleanly
   // to one child.
   const aboutRow = `<div class="settingsrow"><a href="${aboutHref(token, lang)}">${esc(strings.aboutLabel)}</a></div>`;
+  // Push notifications (PLAN.md §11.7, PR B). The whole row starts hidden —
+  // not just its button, unlike every miniseg above — because "can this
+  // browser do Web Push at all" is a question only the client can answer,
+  // and there are three distinct no's: no Push API, push not configured on
+  // the server, and iOS-but-not-installed. Showing the label with a dead
+  // control in any of those would be worse than showing nothing, so the
+  // push IIFE unhides the row only once it knows which state applies. The
+  // data-* carrier pattern (same as .paletteconfig in pageChrome) hands it
+  // the strings so the client script stays lang-agnostic.
+  //
+  // data-base is the TOKEN ROOT, deliberately NOT indexHref(token, lang) —
+  // the push/* endpoints have no "hu/" variant (see the route comment in
+  // worker.js: they are machine endpoints, and a subscription's language is
+  // a stored field rather than a URL segment). A /hu/ page therefore posts
+  // to the same paths every other page does and says which language it is
+  // in data-lang, which the client sends in the body. Deriving this from
+  // `lang` instead would 404 every subscribe attempt made from a Hungarian
+  // page — and only from a Hungarian page, which is exactly the kind of
+  // half-broken that survives a careless review.
+  const pushRow = `<div class="settingsrow pushrow" hidden
+    data-label="${esc(strings.pushLabel)}"
+    data-enable="${esc(strings.pushEnable)}"
+    data-enabled="${esc(strings.pushEnabled)}"
+    data-disable="${esc(strings.pushDisable)}"
+    data-blocked="${esc(strings.pushBlocked)}"
+    data-ioshint="${esc(strings.pushIosHint)}"
+    data-failed="${esc(strings.pushFailed)}"
+    data-lang="${esc(lang)}"
+    data-base="${esc(indexHref(token, "en", "all"))}"
+  ><span class="settingslabel">${esc(strings.pushLabel)}</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div>`;
   // The settings trigger is TEXT-ONLY on desktop and ICON-ONLY on the phone
   // (owner follow-up: no gear glyph next to the label; the phone button
   // matches the search icon's size). Both halves live in their own spans so
   // each breakpoint hides one — .gearicon desktop-hidden, .gearlabel
   // phone-hidden (see the CSS) — and the aria-label covers it everywhere.
   const searchHtml = showSearch ? renderSearchBubble(token, lang, strings) : "";
-  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${fontRow}${densityRow}${aboutRow}</div></details>`;
+  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${fontRow}${densityRow}${pushRow}${aboutRow}</div></details>`;
 }
 
 // Search bubble (owner-requested index cleanup): replaces the old

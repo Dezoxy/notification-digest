@@ -403,7 +403,7 @@ export const CSS = `
      language row keeps its plain <a> links and stays; rows whose only
      controls are still [hidden] disappear until the script reveals them.
      Browsers without :has() just keep the old harmless empty-pill look. */
-  .settingsrow:not(:has(a, button:not([hidden]))) { display: none; }
+  .settingsrow:not(:has(a, button:not([hidden]), .pushnote:not([hidden]))) { display: none; }
   .settingslabel {
     font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--faint);
@@ -450,12 +450,24 @@ export const CSS = `
      size (owner upgrade) moved off this single-pill look onto the miniseg
      control just below — density stays a pill since it's genuinely binary
      (compact/comfortable), not a 3-way choice. */
-  .densitytoggle {
+  .densitytoggle, .pushtoggle {
     background: none; border: 1px solid var(--rule-heavy); border-radius: 999px;
     color: var(--text); font-family: var(--font-data); font-size: 0.75em; padding: 0.15em 0.55em; cursor: pointer;
   }
-  .densitytoggle:hover { border-color: var(--accent); color: var(--accent); }
-  .densitytoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .densitytoggle:hover, .pushtoggle:hover { border-color: var(--accent); color: var(--accent); }
+  .densitytoggle:focus-visible, .pushtoggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  /* Push notifications (PLAN.md §11.7): the toggle is the density pill's
+     primitive reused, not a new one — same shape, same hover, same focus
+     ring, inherited by joining the selectors above rather than copied.
+     The ON state fills the pill so "is it on" is answerable at a glance
+     rather than by reading the word inside it. .pushnote is the text-only
+     state (an iOS reader who has not installed to the Home Screen yet, a
+     browser-level block): no border, because it is a statement rather than
+     a control, and nothing about it should invite a tap. */
+  .pushtoggle[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .pushnote {
+    font-family: var(--font-data); font-size: 0.7em; color: var(--faint); text-align: right;
+  }
 
   /* Mini segmented control (three-state theme, S/M/L text size) — the view
      tabs' segmented language (.viewtabs/.viewtab above) miniaturized to

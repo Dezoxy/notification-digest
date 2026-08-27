@@ -20,6 +20,7 @@ import {
   INGEST_KEY,
 } from "./env.mjs";
 import { VALID_INGEST_PAYLOAD } from "./fixtures.mjs";
+import { VAPID_PUBLIC_KEY } from "./env.mjs";
 
 const TRUST_HEADERS = {
   "referrer-policy": "no-referrer",
@@ -384,5 +385,219 @@ test("every page links its own language's manifest and registers the worker", as
       `${name} registers`,
     );
     assert.ok(html.includes('name="mobile-web-app-capable"'), `${name} is standalone-capable`);
+  }
+});
+
+// ── Web Push subscriptions (PLAN.md §11.7, PR B) ──────────────────────────
+
+const FCM = "https://fcm.googleapis.com/fcm/send/abc123";
+
+function subPayload(over = {}) {
+  return {
+    endpoint: FCM,
+    keys: {
+      p256dh: "BLc4xRzKlKORKWlbdgFaBrrPK3ydWAHo4M0gs0i1oEKgPpWG5F",
+      auth: "8eDyX_uCN0XRhSbY5hs7Hg",
+    },
+    ...over,
+  };
+}
+
+async function pushFetch(action, body, env) {
+  const worker = await loadWorker();
+  return worker.fetch(
+    new Request(`${ORIGIN}/t/${SITE_TOKEN}/push/${action}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    env,
+  );
+}
+
+test("push/key: serves the VAPID key, 503 when unconfigured", async () => {
+  const worker = await loadWorker();
+  const ok = await worker.fetch(new Request(`${ORIGIN}/t/${SITE_TOKEN}/push/key`), makeEnv());
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).key, VAPID_PUBLIC_KEY);
+
+  // The state every deployment passes through: this Worker auto-deploys on
+  // merge, so the code always lands before the secrets. It must degrade,
+  // not fault.
+  const off = await worker.fetch(
+    new Request(`${ORIGIN}/t/${SITE_TOKEN}/push/key`),
+    makeEnv({ push: false }),
+  );
+  assert.equal(off.status, 503);
+});
+
+test("push/subscribe: stores, and re-subscribing is idempotent", async () => {
+  const pushSubs = [];
+  const env = makeEnv({ pushSubs });
+  assert.equal((await pushFetch("subscribe", subPayload({ lang: "hu" }), env)).status, 200);
+  assert.equal(pushSubs.length, 1);
+  assert.equal(pushSubs[0].lang, "hu");
+  assert.equal(pushSubs[0].endpoint, FCM);
+
+  // Same device, new language — one row, updated, not a second row.
+  assert.equal((await pushFetch("subscribe", subPayload({ lang: "en" }), env)).status, 200);
+  assert.equal(pushSubs.length, 1);
+  assert.equal(pushSubs[0].lang, "en");
+});
+
+test("push/subscribe: rejects an endpoint outside the push-service allowlist", async () => {
+  // THE security control in this PR: PR C's sender POSTs to whatever is
+  // stored here, so an unchecked endpoint makes this Worker a blind proxy.
+  const pushSubs = [];
+  const env = makeEnv({ pushSubs });
+  for (const endpoint of [
+    "https://evil.example.com/collect",
+    "http://fcm.googleapis.com/fcm/send/x", // right host, wrong scheme
+    "https://fcm.googleapis.com.evil.example/x", // suffix-looking, not a suffix
+    "not-a-url",
+  ]) {
+    const res = await pushFetch("subscribe", subPayload({ endpoint }), env);
+    assert.equal(res.status, 400, `${endpoint} rejected`);
+  }
+  assert.equal(pushSubs.length, 0, "nothing stored");
+
+  // Every real engine's host still works.
+  for (const endpoint of [
+    "https://fcm.googleapis.com/fcm/send/x",
+    "https://updates.push.services.mozilla.com/wpush/v2/x",
+    "https://web.push.apple.com/x",
+    "https://xyz.notify.windows.com/w/?token=x",
+  ]) {
+    const res = await pushFetch("subscribe", subPayload({ endpoint }), env);
+    assert.equal(res.status, 200, `${endpoint} accepted`);
+  }
+});
+
+test("push/subscribe: each validator rejects its malformed field", async () => {
+  const env = makeEnv({ pushSubs: [] });
+  const cases = [
+    ["no endpoint", subPayload({ endpoint: undefined })],
+    ["no keys", { endpoint: FCM }],
+    ["bad p256dh", subPayload({ keys: { p256dh: "not base64!", auth: "aGk" } })],
+    ["no auth", subPayload({ keys: { p256dh: "aGk" } })],
+    ["label not a string", subPayload({ label: 42 })],
+  ];
+  for (const [label, payload] of cases) {
+    assert.equal((await pushFetch("subscribe", payload, env)).status, 400, label);
+  }
+});
+
+test("push/subscribe: the cap never blocks a device refreshing its own row", async () => {
+  // A cap checked before the upsert without this ordering would lock out
+  // the exact case that matters most — browsers rotate endpoints, and a
+  // full table would refuse the owner's own device its refresh.
+  const pushSubs = Array.from({ length: 20 }, (_, i) => ({
+    endpoint: `https://fcm.googleapis.com/fcm/send/seed${i}`,
+    lang: "en",
+  }));
+  const env = makeEnv({ pushSubs });
+
+  const refresh = await pushFetch(
+    "subscribe",
+    subPayload({ endpoint: pushSubs[3].endpoint, lang: "hu" }),
+    env,
+  );
+  assert.equal(refresh.status, 200, "existing device refreshes at the cap");
+  assert.equal(pushSubs.length, 20);
+  assert.equal(pushSubs[3].lang, "hu");
+
+  const newDevice = await pushFetch("subscribe", subPayload(), env);
+  assert.equal(newDevice.status, 429, "a NEW device is refused at the cap");
+  assert.match(
+    (await newDevice.json()).error,
+    /DELETE FROM push_subscriptions/,
+    "names the remedy",
+  );
+});
+
+test("push/unsubscribe: removes, is idempotent, and works unconfigured", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "en" }];
+  const env = makeEnv({ pushSubs });
+  assert.equal((await pushFetch("unsubscribe", { endpoint: FCM }, env)).status, 200);
+  assert.equal(pushSubs.length, 0);
+  // Deleting what is not there is the same success — the caller wanted to
+  // end up unsubscribed, and they are.
+  assert.equal((await pushFetch("unsubscribe", { endpoint: FCM }, env)).status, 200);
+
+  // Withdrawing consent must never be the thing that fails closed.
+  const off = makeEnv({ pushSubs: [{ endpoint: FCM, lang: "en" }], push: false });
+  assert.equal((await pushFetch("unsubscribe", { endpoint: FCM }, off)).status, 200);
+});
+
+test("push/latest: answers in the subscription's language, EN when unknown", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "hu" }];
+  const env = makeEnv({ pushSubs });
+
+  const hu = await (await pushFetch("latest", { endpoint: FCM }, env)).json();
+  assert.ok(hu.url.startsWith(`/t/${SITE_TOKEN}/hu/d/`), "deep-links into the HU page");
+  assert.ok(hu.title.length > 0);
+  assert.ok(hu.body.length <= 160, "trimmed for a lock screen");
+
+  // A worker with no subscription (or an unrecognized one) is not an
+  // error — English is the honest fallback, same as the offline copy.
+  const en = await (await pushFetch("latest", { endpoint: null }, env)).json();
+  assert.ok(en.url.startsWith(`/t/${SITE_TOKEN}/d/`), "EN deep link");
+  assert.notEqual(en.url, hu.url, "the deep links differ by language");
+  assert.notEqual(en.body, hu.body, "the TL;DR is the translated one");
+
+  // The TITLES are deliberately identical here, and that is the contract
+  // rather than an accident: the newest fixture is a window digest, and
+  // this file's strings header records that "digest #N" is one of the
+  // micro-labels the HU pages leave in English. A notification must not
+  // name the thing differently from the page it opens.
+  assert.equal(en.title, hu.title, "window titles match across languages, on purpose");
+  assert.equal(en.id, hu.id);
+});
+
+test("push routes: wrong token and wrong method 404 indistinguishably", async () => {
+  const worker = await loadWorker();
+  const unknown = await fetchPath("/no/such/path");
+  const unknownBody = await unknown.text();
+
+  for (const action of ["key", "subscribe", "unsubscribe", "latest"]) {
+    const res = await worker.fetch(
+      new Request(`${ORIGIN}/t/definitely-not-the-token/push/${action}`, {
+        method: action === "key" ? "GET" : "POST",
+      }),
+      makeEnv(),
+    );
+    assert.equal(res.status, 404, `${action} wrong token`);
+    assert.equal(await res.text(), unknownBody, `${action} body`);
+  }
+
+  // GET on a POST-only endpoint reveals nothing either — including that
+  // push/latest takes a body carrying a capability, which is why it is a
+  // POST in the first place.
+  for (const action of ["subscribe", "unsubscribe", "latest"]) {
+    const res = await worker.fetch(
+      new Request(`${ORIGIN}/t/${SITE_TOKEN}/push/${action}`),
+      makeEnv(),
+    );
+    assert.equal(res.status, 404, `${action} via GET`);
+  }
+});
+
+test("the settings row ships hidden, in both languages, on every page", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const { html } = await page(path);
+    const lang = path.startsWith("hu/") ? "hu" : "en";
+    assert.ok(html.includes('class="settingsrow pushrow" hidden'), `${name} row starts hidden`);
+    assert.ok(html.includes(`data-lang="${lang}"`), `${name} carries its language`);
+    // The endpoints have no /hu/ variant, so EVERY page — Hungarian
+    // included — must post to the token root. Deriving this from the page's
+    // own language would 404 every subscribe made from a /hu/ page, and
+    // only from a /hu/ page.
+    assert.ok(
+      html.includes(`data-base="/t/${SITE_TOKEN}/"`),
+      `${name} posts to the token root, not its language root`,
+    );
+    // Whether push is possible is a client-side question with several
+    // distinct no's; the row must not appear until the script knows which.
+    assert.ok(html.includes('class="pushtoggle" hidden'), `${name} control starts hidden`);
   }
 });

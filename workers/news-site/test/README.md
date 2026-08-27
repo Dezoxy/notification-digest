@@ -37,7 +37,7 @@ not mean to.
 | File | Role |
 | --- | --- |
 | `env.mjs` | Freezes the clock and shims `crypto.subtle.timingSafeEqual`; exports `fetchPath`/`makeEnv`/`loadWorker` and the golden page list. |
-| `stub-db.mjs` | Stands in for the D1 binding, dispatching on the SQL the handlers issue. |
+| `stub-db.mjs` | Stands in for the D1 binding, dispatching on the SQL the handlers issue. Read-only over fixtures, except the push tables (see below). |
 | `fixtures.mjs` | The dataset. Its header lists every render branch it keeps alive. |
 | `fixtures.sql` | The same rows for a real local D1 (browser-based checks). |
 | `render.test.mjs` | The invariant suite. |
@@ -53,6 +53,13 @@ goldens would differ between runs and the whole byte-comparison contract
 collapses. `env.mjs` replaces `Date` with a subclass whose zero-argument
 constructor and `Date.now()` return one instant; explicit construction
 (parsing fixture timestamps) passes through untouched.
+
+**The push arms are the one piece of mutable state.** Every other arm reads
+fixtures. `push_subscriptions` cannot: subscribe/unsubscribe are the first
+handlers whose entire behavior *is* what the table contains afterwards —
+idempotent re-subscribe, the cap that must never block a device refreshing its
+own row, delete-then-look-up. Tests pass their own array in via
+`makeEnv({ pushSubs })` and assert against it directly.
 
 **The stub throws on unknown SQL.** If a handler starts issuing a query the
 stub does not recognise, it raises instead of returning an empty result —
@@ -121,6 +128,44 @@ Zero diffs means the change is computationally inert for everything covered.
 It does **not** cover `:hover`, `:focus`, or print — check those by hand, or
 confirm (as the phone-block consolidation did) that the moved ranges contain
 no such selectors.
+
+### Service workers: the browser pane cannot test them
+
+`mcp__Claude_Browser__*` (the in-app browser pane) **blocks service-worker
+registration outright**. `navigator.serviceWorker.register()` rejects there
+with `An unknown error occurred when fetching the script` — not because of
+anything in this Worker's headers or MIME types, but because the environment
+does not permit workers at all. A one-line control worker served from a plain
+`python3 -m http.server` fails there identically; that is the cheapest way to
+confirm you are looking at the environment and not at a bug.
+
+Use real headless Chrome over CDP instead. Node 22+ has a global `WebSocket`,
+so no dependency is needed:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-sw \
+  --no-first-run --disable-gpu about:blank &
+# then: PUT http://127.0.0.1:9222/json/new?<url> for a target, connect to its
+# webSocketDebuggerUrl, and drive Page.enable / Runtime.evaluate.
+```
+
+Two traps that cost real time here:
+
+- **`Network.emulateNetworkConditions` does not reach the service worker.**
+  CDP network emulation is per-target and a worker is its own target, so the
+  page goes offline while the worker's own `fetch()` still has live network —
+  an offline-fallback test run that way *passes without testing anything*.
+  Kill the dev server instead. That is the only honest version of the test.
+- **`Browser.grantPermissions`** for `notifications` up front, or a click
+  handler calling `Notification.requestPermission()` blocks on a prompt
+  nothing can answer.
+
+Verifying a real push subscription end to end is not possible locally — it
+needs a live push service. Stub `reg.pushManager.subscribe` in the page to
+return a fixed fake subscription: that still exercises everything this repo
+owns (the click path, the POST shape, the server storing it), and only the
+browser's own registration is faked.
 
 ### Driving the real router in a browser
 

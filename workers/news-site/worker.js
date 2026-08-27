@@ -55,7 +55,11 @@
  *   GET  /t/:token/hu/about       -> same about page, Hungarian chrome
  *   GET  /t/:token/manifest.webmanifest    -> web app manifest, start_url = the EN token root
  *   GET  /t/:token/hu/manifest.webmanifest -> same manifest, start_url = the HU token root
- *   GET  /t/:token/sw.js          -> service worker; its URL IS its scope (the token root)
+ *   GET  /t/:token/sw.js          -> service worker; its URL IS its scope
+ *   GET  /t/:token/push/key       -> the VAPID public key (token-gated, but public by design)
+ *   POST /t/:token/push/subscribe -> store/refresh one device's push subscription
+ *   POST /t/:token/push/unsubscribe -> forget one device
+ *   POST /t/:token/push/latest    -> what the service worker should show, localized (the token root)
  *   anything else                 -> plain 404, wrong token included
  *
  * Story-arc pages (PLAN.md §11.1 PR A, this feature): a slug is the digest
@@ -153,6 +157,7 @@
  *   chrome.js     pageChrome — the shell every page renders into
  *   icons.js      the three base64 PWA PNGs (same mark as FAVICON_SVG)
  *   pwa.js        buildManifest + buildServiceWorker (PLAN.md §11.7)
+ *   push.js       the push/* endpoints and their validators
  *   ingest.js     PUT /ingest: handler + every validator
  *   handlers.js   the GET page handlers
  *   render-*.js   per-page renderers (shared helpers in render-shared.js)
@@ -167,6 +172,12 @@ import { viewSeg } from "./src/hrefs.js";
 import { FAVICON_SVG } from "./src/chrome.js";
 import { APPLE_TOUCH_ICON, ICON_512, ICON_MASKABLE_512 } from "./src/icons.js";
 import { buildManifest, buildServiceWorker } from "./src/pwa.js";
+import {
+  handlePushKey,
+  handlePushLatest,
+  handlePushSubscribe,
+  handlePushUnsubscribe,
+} from "./src/push.js";
 import { tokenMatches } from "./src/auth.js";
 import { handleIngest } from "./src/ingest.js";
 import {
@@ -208,6 +219,13 @@ const ROUTE_ABOUT = /^\/t\/([^/]+)\/(hu\/)?about$/;
 const ROUTE_MANIFEST = /^\/t\/([^/]+)\/(hu\/)?manifest\.webmanifest$/;
 
 const ROUTE_SW = /^\/t\/([^/]+)\/sw\.js$/;
+
+// No "hu/" variant, deliberately: these four are machine endpoints, not
+// pages. The service worker only ever knows the EN scope (its own script
+// URL), and a subscription's language is a stored FIELD rather than a URL
+// segment — a /hu/ page subscribes through this same path and says
+// {"lang":"hu"} in the body. See src/push.js.
+const ROUTE_PUSH = /^\/t\/([^/]+)\/push\/(key|subscribe|unsubscribe|latest)$/;
 
 const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
 
@@ -346,6 +364,23 @@ export default {
           "cache-control": "private, no-store",
         },
       });
+    }
+
+    // Web Push subscription endpoints (PLAN.md §11.7, PR B). Token-gated
+    // inside each handler, same notFound() contract as everywhere else.
+    // Nothing here SENDS a push — that is PR C.
+    const pushMatch = path.match(ROUTE_PUSH);
+    if (pushMatch) {
+      const [, pushToken, action] = pushMatch;
+      // GET for the key (it is a read of a constant), POST for the other
+      // three (two of them write, and the third carries a capability in its
+      // body that has no business in a URL — see src/push.js's header).
+      const wantMethod = action === "key" ? "GET" : "POST";
+      if (request.method !== wantMethod) return notFound();
+      if (action === "key") return handlePushKey(env, pushToken);
+      if (action === "subscribe") return handlePushSubscribe(request, env, pushToken);
+      if (action === "unsubscribe") return handlePushUnsubscribe(request, env, pushToken);
+      return handlePushLatest(request, env, pushToken);
     }
 
     // Roadmap 3 (weekly pagination): one optional, always-LAST segment,
