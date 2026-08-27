@@ -69,6 +69,14 @@ export const GOLDEN_PAGES = [
   { name: "search-en", path: "search?q=markets" },
   { name: "about-en", path: "about" },
   { name: "arc-en", path: "a/markets-slide" },
+  // The daily and weekly index views had NO golden coverage until the
+  // 2026-08-27 two-column pass, so any change to how they render produced a
+  // zero golden diff -- nothing to review. Their fixture set is thin (one
+  // daily, one weekly digest), so these pin the MARKUP rather than
+  // demonstrating a dense grid; see the DIGESTS fixture if that ever needs
+  // to change.
+  { name: "daily-en", path: "daily/" },
+  { name: "weekly-en", path: "weekly/" },
 ];
 
 export async function fetchPath(path, { init, entry } = {}) {
