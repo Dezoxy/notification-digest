@@ -118,6 +118,26 @@ test("digest section ids are sequential and agree with the TOC", async () => {
 
 // ── branch markers (one per fixture-covered branch) ───────────────────────
 
+test("hover-to-open is wired for both popovers and gated to hovering pointers", async () => {
+  // Marker test, not a behaviour test: the client script is inlined as TEXT
+  // and never executed here, so there is no DOM to dispatch mouseenter on.
+  // What this pins is the part whose loss would be silent and bad -- the
+  // pointer gate. Without it a touch device synthesises mouseenter on tap,
+  // opening a panel that then has no pointer to move away from it.
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  assert.match(CLIENT_SCRIPT, /hover: hover\) and \(pointer: fine/, "pointer gate present");
+  assert.match(CLIENT_SCRIPT, /hoverPopovers\(\s*settings/, "settings wired");
+  assert.match(CLIENT_SCRIPT, /hoverPopovers\(\s*pop/, "search popover wired");
+  // Settings must close through its animated close() helper, never by
+  // assigning open = false, or the pointer path skips the animation every
+  // other close path runs.
+  assert.match(
+    CLIENT_SCRIPT,
+    /hoverPopovers\(\s*settings,[\s\S]*?\n\s*close,\n/,
+    "settings closes via close()",
+  );
+});
+
 test("day headers are an ALL-view affordance; daily/weekly flow flat", async () => {
   // The golden pages CANNOT review this: the fixture set has one daily and
   // one weekly digest, each of which becomes its view's lead card, so

@@ -1210,6 +1210,21 @@ export const CSS = `
   }
   summary.searchtoggle::-webkit-details-marker { display: none; }
 
+  /* Hover bridge (hover-to-open, client.js's hoverPopovers). Both bubbles
+     sit 0.5em BELOW their chip, and that gap is outside both boxes -- so a
+     pointer travelling from chip to panel leaves the details element and
+     fires mouseleave halfway there. Covering the gap with a transparent
+     pseudo-element makes the trip continuous, which is what lets the close
+     timer stay short: a long grace period would leave the panel open after
+     the pointer had gone, and an open panel swallows the next click
+     anywhere on the page. Pointer-events only -- it paints nothing, and it
+     sits inside the panel so it exists only while the panel does. */
+  .settingspanel::before,
+  .searchpanel::before {
+    content: ""; position: absolute; left: 0; right: 0;
+    top: -0.55em; height: 0.55em;
+  }
+
   .searchpanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     z-index: 20;
