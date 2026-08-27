@@ -4,7 +4,7 @@
 # `myapps` role. `docker build .` / `docker compose build` here are for local
 # dev only.
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # --- uv ---
 # Pinned uv release tag (not :latest) for reproducible builds. Renovate
