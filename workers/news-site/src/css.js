@@ -32,7 +32,8 @@ export const CSS = `
     --font-data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
     --bg: #ffffff; /* paper */
-    --page-bg: #ffffff; /* same as --bg: the purple desktop "bubble" background is retired — flat paper everywhere, see the >=52em block below */
+    --page-bg: #eaedf3; /* the gutter the lifted desktop column sits on — see the >=52em block below */
+    --card-shadow: 0 2px 4px rgba(16, 18, 21, 0.07), 0 18px 48px rgba(16, 18, 21, 0.13);
     --text: #101215; /* ink */
     --muted: #5b6270;
     --accent: #0e3fa9; /* press blue */
@@ -64,7 +65,8 @@ export const CSS = `
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #131418;
-      --page-bg: #131418;
+      --page-bg: #0a0b0e;
+      --card-shadow: 0 2px 5px rgba(0, 0, 0, 0.55), 0 22px 56px rgba(0, 0, 0, 0.55);
       --text: #ecedf0;
       --muted: #9aa1af;
       --accent: #7d9bff;
@@ -92,14 +94,17 @@ export const CSS = `
      media block's resolved values from outside it, so with no build step the
      only option is a third, explicit copy of each palette. Three copies is
      the price of a manual override without a build step, and the palette
-     changes rarely. Deliberately only the COLOR variables are duplicated —
-     --font-prose/--font-data are identical in every theme and stay defined
-     once, above. */
+     changes rarely. Deliberately only the THEME-DEPENDENT variables are
+     duplicated — the colors, plus --card-shadow, whose blacks and alphas
+     differ per theme (a light-theme shadow under a dark-theme card would
+     be invisible, and vice versa). --font-prose/--font-data are identical
+     in every theme and stay defined once, above. */
   :root[data-theme="dark"] {
     /* Pin the UA canvas too — see the color-scheme comment in :root. */
     color-scheme: dark;
     --bg: #131418;
-    --page-bg: #131418;
+    --page-bg: #0a0b0e;
+    --card-shadow: 0 2px 5px rgba(0, 0, 0, 0.55), 0 22px 56px rgba(0, 0, 0, 0.55);
     --text: #ecedf0;
     --muted: #9aa1af;
     --accent: #7d9bff;
@@ -122,7 +127,8 @@ export const CSS = `
     /* Pin the UA canvas too — see the color-scheme comment in :root. */
     color-scheme: light;
     --bg: #ffffff;
-    --page-bg: #ffffff;
+    --page-bg: #eaedf3;
+    --card-shadow: 0 2px 4px rgba(16, 18, 21, 0.07), 0 18px 48px rgba(16, 18, 21, 0.13);
     --text: #101215;
     --muted: #5b6270;
     --accent: #0e3fa9;
@@ -168,8 +174,8 @@ export const CSS = `
   html { scrollbar-gutter: stable; }
   /* Second layer of the anti-flash fix (see :root's color-scheme comment):
      an explicit root background so overscroll and any pre-body-paint gap
-     show the theme's own paper/ink, never the UA default. The desktop
-     bubble layout overrides this to the purple page background below. */
+     show the theme's own paper/ink, never the UA default. The lifted
+     desktop column overrides this to --page-bg below. */
   html { background: var(--bg); }
   /* A single unbreakable token wider than a phone screen (production
      digests carry them — a defanged URL from the link allowlist is one
@@ -1496,12 +1502,20 @@ export const CSS = `
   .resumechip:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
 
-  /* Desktop ("print poster" redesign — the purple floating "bubble" card is
-     RETIRED): --page-bg now equals --bg (see the :root token block above),
-     so the page is flat paper at every width — this block only widens the
-     reading column's max-width a little past the 42em mobile measure and
-     keeps generous side whitespace; it no longer draws a separate card
-     (no border, no radius, no distinct background) on top of the page. */
+  /* Desktop: the reading column is a LIFTED SHEET — paper (--bg) floating
+     on a tinted gutter (--page-bg), with a shadow between them.
+     A rounded card here is not new. PR #64 shipped one on a purple page
+     background; the print-poster redesign (#144) retired it and left
+     --page-bg behind as a token equal to --bg, referenced by no rule at
+     all — this block re-points it at its original job. The owner's
+     correction over #64 is the important part: the edge is drawn by a
+     SHADOW, not #64's hairline border. A border states where the card
+     stops; a shadow states that the card is ABOVE something, which is the
+     whole point of the ask.
+     Mobile is untouched — below 52em the page stays flat paper edge to
+     edge. That is also why pageChrome's <meta name="theme-color"> pair
+     still tracks --bg and not --page-bg: it only ever colors mobile
+     browser chrome, and mobile never sees the gutter. */
   /* Wide-viewport type scale (owner: "the resolution is too low" on a big
      display). The honest lever for a prose-first site is SIZE, not width:
      every dimension here is em-based off body, so stepping the base up
@@ -1515,8 +1529,26 @@ export const CSS = `
   @media (min-width: 100em) { body { font-size: 19px; } }
 
   @media (min-width: 52em) {
-    body { padding: 2.5em 1.5em; }
+    /* html AND body, deliberately. body paints the gutter; html paints the
+       overscroll rubber-band and any pre-body-paint gap — that is the
+       second layer of the anti-flash fix above, which pinned html to --bg
+       for the flat era. Left on --bg it would flash paper-white behind a
+       bounce scroll. */
+    html { background: var(--page-bg); }
+    body { background: var(--page-bg); padding: 2.5em 1.5em; }
     .wrap {
+      background: var(--bg);
+      border-radius: 20px;
+      box-shadow: var(--card-shadow);
+      /* Without this the sheet ENDS where the content ends: /about, a thin
+         digest and an empty search result each stopped a third of the way
+         down the viewport and read as a truncated stub floating in the
+         gutter (caught in the render pass, before this shipped). 5em =
+         body's 2.5em top + 2.5em bottom padding, and box-sizing: border-box
+         is global, so this is the outer height. dvh over vh costs nothing
+         and is simply the non-fragile unit — the mobile dynamic-viewport
+         problem it guards against cannot reach a desktop-only block. */
+      min-height: calc(100dvh - 5em);
       /* 61em (owner follow-up on the Front Page redesign: "desktop text
          should be wider about 30 percent") — up from 48em, i.e. a ~55em
          text measure after the 3em side padding, ~31% over the old 42em.
@@ -1742,7 +1774,11 @@ export const CSS = `
      (--font-data is untouched here, only color is forced). */
   @media print {
     body { background: #fff; }
-    .wrap { max-width: none; padding: 0; border: 0; }
+    /* The lifted-sheet rules land on print too (a printed page is often
+       wider than 52em), so the card has to be flattened back to paper
+       here: #64's border reset was the first half of this, the background
+       and shadow are the rest. */
+    .wrap { max-width: none; padding: 0; border: 0; background: #fff; box-shadow: none; min-height: 0; }
     .mast, .mast-big, .issueline, .viewtabs, nav.digestnav, .backfab, .toc,
     .searchpop, .miniseg, .densitytoggle, .resumechip,
     .archiveresults, .catchup, .followtoggle {
