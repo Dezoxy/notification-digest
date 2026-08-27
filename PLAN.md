@@ -1135,8 +1135,10 @@ implementation, its input fencing, and the `CONTEXT_MAX_PER_RUN` bound.
 
 ### 11.7 Installable site + push on arrival (approved, not started)
 
-**Status:** APPROVED 2026-08-27, not started. Origin: owner request the
-same day ("next upgrade PWA and push notification when a digest arrives").
+**Status:** SHIPPED 2026-08-27 — site PRs #122 (installable shell), #123
+(subscriptions), #124 (the sender), all deployed; VAPID keys set, owner's
+iPhone subscribed and receiving. Origin: owner request the same day ("next
+upgrade PWA and push notification when a digest arrives").
 Site-only — every step below lands in `workers/news-site/`, so this entry
 needs no tag, no homelab bump, and no VM deploy (see "Why the Worker
 triggers it" below). Note the step label: the news-site subtree lives in
@@ -1282,6 +1284,53 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
   UX: on iOS outside standalone mode, show "Add to Home Screen to enable"
   rather than a dead button. `Notification.requestPermission()` must be
   called synchronously inside the click handler or iOS rejects it.
+
+**Amendment — what production settled (2026-08-27, same day).**
+
+- **Apple accepts body-less pushes.** This was the entry's one unverifiable
+  assumption and the reason the verification note put it FIRST: a rejection
+  would have forced the full RFC 8291 implementation (ECDH → HKDF →
+  AES-128-GCM) rather than a tweak. Confirmed on a real iPhone against
+  `web.push.apple.com`, notification rendered from `push/latest` with the
+  correct title, trimmed TL;DR and icon. The payload-less design stands as
+  designed and the contingency is closed — `p256dh`/`auth` stay stored
+  anyway, since the whole point of storing them was that the decision could
+  be revisited without a re-subscribe.
+- **A VAPID private key is unrecoverable once set.** Cloudflare Worker
+  secrets are write-only: `wrangler secret` has `put`/`delete`/`list`/`bulk`
+  and no `get`, and `list` returns names and types only. This bit
+  immediately — the key was generated, pasted into the dashboard, and not
+  kept. It cost nothing, because the Worker is the key's only consumer, but
+  the recovery path is worth writing down: ROTATION IS THE RECOVERY PATH.
+  There is no other one.
+- **Rotating VAPID keys invalidates every existing subscription.**
+  `applicationServerKey` is bound into a subscription when the browser
+  creates it, so a push signed by a different key is rejected for the life
+  of that row. Every device must unsubscribe and re-subscribe, and the stale
+  rows should be deleted rather than left to age out. Rotation is therefore
+  cheapest at one device and gets linearly more annoying — a reason to keep
+  the key somewhere, not a reason to fear rotating.
+- **A 403 stays a SOFT failure, deliberately, and rotation is why.** The
+  obvious reading is that a VAPID rejection is permanent for that
+  subscription and the row should be deleted on the spot. It is not
+  distinguishable, per-response, from "this deployment's key is wrong for
+  EVERY device" — so delete-on-403 would mean one botched rotation wipes the
+  entire fleet. `MAX_PUSH_FAILURES` strikes gives a misconfiguration time to
+  be noticed. Same failure class as the signing-failure bug PR C fixed (see
+  below), one layer further out.
+- **Two bugs the process caught before they shipped**, both worth naming
+  because of HOW they surfaced rather than what they were. The settings
+  row's `data-base` was derived from the page's language, so subscribing
+  from a `/hu/` page would have 404'd — broken only in Hungarian, found by
+  reading the regenerated HU golden rather than by any test. And PR C's
+  first draft signed the VAPID token inside the per-device delivery path,
+  where a signing error is indistinguishable from a delivery error; since
+  signing depends only on configuration it fails for every device on every
+  ingest, so a malformed key would have deleted the owner's whole fleet
+  within a day. That one surfaced because the test harness carried an
+  unusable placeholder key and every sender test failed at `importKey` — a
+  placeholder that could not sign turned out to be more useful than a
+  plausible one.
 
 **Known limitations, accepted:**
 - Token rotation orphans installed apps. The old service worker keeps its
