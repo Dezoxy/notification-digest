@@ -59,7 +59,7 @@ export function makeEnv({ writes } = {}) {
 
 export const ORIGIN = "https://news.toomhorvath.com";
 
-// The seven golden pages. Paths are relative to the token root; `name` is the
+// The golden pages. Paths are relative to the token root; `name` is the
 // golden filename. Every later refactor PR is judged against these bytes.
 export const GOLDEN_PAGES = [
   { name: "index-en", path: "" },
