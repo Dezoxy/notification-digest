@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import urllib.error
 from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -349,6 +350,20 @@ def _deliver_site(
             deltas=deltas,
             arc_contexts=arc_contexts,
         )
+    except urllib.error.HTTPError as exc:
+        # Status code, not just "HTTPError". The type name alone cannot
+        # distinguish an expired ingest key (401) from a payload the site's
+        # validator rejected (400) from the site being down (5xx) -- three
+        # failures with three completely different responses, one of which
+        # (400) never clears on its own because every retry re-sends the same
+        # rejected payload. Safe to log here in a way it is NOT in
+        # digest/publish.py's `_send_message`: that one's URL embeds the
+        # Telegram bot token, whereas this channel's `x-ingest-key`
+        # authenticates via a HEADER, so neither the code nor the URL it came
+        # from carries a secret. Still only the code -- no `str(exc)`, no
+        # `exc.url`, no response-body read, matching that function's posture.
+        logger.error("site publish failed for digest %d: HTTP %d", digest_id, exc.code)
+        return False
     except Exception as exc:
         logger.error("site publish failed for digest %d: %s", digest_id, type(exc).__name__)
         return False
