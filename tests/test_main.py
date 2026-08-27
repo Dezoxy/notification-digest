@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import urllib.error
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1338,6 +1340,145 @@ def test_deliver_site_omits_arc_contexts_when_none_generated(conn, monkeypatch):
 
     assert ok is True
     assert captured["arc_contexts"] == []
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    """An HTTPError carrying just a status code -- what _deliver_site branches on."""
+    return urllib.error.HTTPError("https://site.example/ingest/1", code, "nope", {}, None)
+
+
+def _site_fixture(conn):
+    """One digest with a stored primer, plus the args _deliver_site wants."""
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    write_arc_context(conn, "hormuz", "Background about Hormuz.")
+    return digest_id, body_md, get_digest_item_urls(conn, digest_id)
+
+
+def test_deliver_site_retries_without_arc_contexts_on_400(conn, monkeypatch):
+    # The 2026-08-27 outage shape (digest 249): the site's validator 400s the
+    # whole PUT over the optional arc_contexts field, and because every retry
+    # re-sends the identical payload, "retry next run" becomes fail-forever.
+    # The digest itself must still get published, with the field dropped.
+    digest_id, body_md, allowed_urls = _site_fixture(conn)
+
+    attempts = []
+
+    def fake_publish(*a, arc_contexts=None, **k):
+        attempts.append(arc_contexts)
+        if arc_contexts:
+            raise _http_error(400)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls)
+
+    assert ok is True
+    # Exactly two attempts: the full payload, then the degraded one.
+    assert len(attempts) == 2
+    assert attempts[0] == [{"key": "hormuz", "context_md": "Background about Hormuz."}]
+    assert attempts[1] is None
+    # A degraded publish is still a publish -- the flag must be set, or the
+    # next run would retry a digest the site already has.
+    row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (1,)
+
+
+def test_deliver_site_degraded_publish_logs_at_error(conn, monkeypatch, caplog):
+    # Owner decision: the request SUCCEEDED, but the app/site contract
+    # mismatch behind it does not heal on its own and shows up nowhere else,
+    # so a silent (or merely WARNING-level) degrade would repeat exactly the
+    # invisibility that let the 2026-08-27 outage sit unnoticed.
+    digest_id, body_md, allowed_urls = _site_fixture(conn)
+
+    def fake_publish(*a, arc_contexts=None, **k):
+        if arc_contexts:
+            raise _http_error(400)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    with caplog.at_level(logging.ERROR, logger="digest.deliver"):
+        ok = _deliver_site(
+            conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls
+        )
+
+    assert ok is True
+    assert [r.levelname for r in caplog.records] == ["ERROR"]
+    assert "PUBLISHED WITHOUT" in caplog.records[0].getMessage()
+
+
+def test_deliver_site_does_not_retry_400_when_no_arc_contexts_were_sent(conn, monkeypatch):
+    # Nothing to degrade: the 400 is about some OTHER field, so a second
+    # identical-minus-nothing request would just be a doomed extra call.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
+    digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
+    allowed_urls = get_digest_item_urls(conn, digest_id)
+
+    attempts = []
+
+    def fake_publish(*a, arc_contexts=None, **k):
+        attempts.append(arc_contexts)
+        raise _http_error(400)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls)
+
+    assert ok is False
+    assert len(attempts) == 1
+    row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (0,)
+
+
+@pytest.mark.parametrize("code", [401, 500])
+def test_deliver_site_does_not_degrade_on_non_400(conn, monkeypatch, code):
+    # A wrong ingest key (401) or a site that is down (5xx) cannot be fixed by
+    # dropping a payload field -- degrading there buys a second doomed request
+    # and nothing else. Only 400 is retried.
+    digest_id, body_md, allowed_urls = _site_fixture(conn)
+
+    attempts = []
+
+    def fake_publish(*a, arc_contexts=None, **k):
+        attempts.append(arc_contexts)
+        raise _http_error(code)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls)
+
+    assert ok is False
+    assert len(attempts) == 1
+    row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (0,)
+
+
+def test_deliver_site_fails_when_degraded_retry_also_fails(conn, monkeypatch):
+    # Degrading is one attempt, not a retry loop: if the stripped payload is
+    # rejected too, the digest stays pending for the next run as before.
+    digest_id, body_md, allowed_urls = _site_fixture(conn)
+
+    attempts = []
+
+    def fake_publish(*a, arc_contexts=None, **k):
+        attempts.append(arc_contexts)
+        raise _http_error(400)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls)
+
+    assert ok is False
+    assert len(attempts) == 2
+    row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (0,)
 
 
 def test_deliver_site_omits_key_when_arc_keys_site_enabled_is_false(conn, monkeypatch):
