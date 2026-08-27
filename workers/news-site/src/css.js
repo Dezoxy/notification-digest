@@ -1257,10 +1257,28 @@ export const CSS = `
      archive-search integration already look for (document.querySelector of
      ".filter" — see pageChrome's bottom script), just styled for its new
      home inside the panel instead of a standalone row. */
+  /* The icon + input pair. The row owns the padding the input used to carry,
+     so the two sit on one baseline with the glyph in the panel's left
+     gutter. Its own color property is what the inline SVG's currentColor
+     resolves against — muted at rest, accent while the field has focus, so it
+     tracks the panel border's own focus state instead of sitting there at a
+     fixed weight. */
+  .searchfield {
+    display: flex; align-items: center; gap: 0.55em;
+    padding: 0.7em 0.95em; color: var(--faint);
+  }
+  .searchpanel:focus-within .searchfield { color: var(--accent); }
+  .fieldicon { flex: none; }
+  /* Hide the PAIR, not just the input. The input ships [hidden] until the
+     filter IIFE reveals it, and on digest/arc pages that reveal never
+     happens (no ledger to filter — it bails before the reveal), so without
+     this the icon would hang above the archive link as a dead control. :has
+     is already used in this stylesheet (see .settingsrow above). */
+  .searchpanel:has(.filter[hidden]) .searchfield { display: none; }
   .searchpanel .filter {
-    display: block; width: 100%; box-sizing: border-box;
+    flex: 1; min-width: 0;
     font: inherit; font-size: 0.9em;
-    padding: 0.7em 0.95em;
+    padding: 0;
     /* No border and no radius of its own: the panel draws both now. */
     border: 0; border-radius: 0;
     background: none; color: var(--text);
@@ -1288,9 +1306,11 @@ export const CSS = `
   /* The divider belongs to the PAIR, not to the link: with no JS the filter
      input stays [hidden] (see renderSearchBubble) and this link is the
      panel's only content, where a top border would read as a stray rule
-     across an otherwise empty bubble. Adjacent-sibling so it appears
-     exactly when there is something above to divide from. */
-  .searchpanel .filter:not([hidden]) + .searchlink {
+     across an otherwise empty bubble. Was an adjacent-sibling selector until
+     the icon landed and moved the input inside .searchfield; :has keeps it
+     keyed off the same condition without depending on the two being
+     siblings. */
+  .searchpanel:has(.filter:not([hidden])) .searchlink {
     border-top: 1px solid var(--hairline);
   }
 

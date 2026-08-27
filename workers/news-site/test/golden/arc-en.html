@@ -1277,10 +1277,28 @@
      archive-search integration already look for (document.querySelector of
      ".filter" — see pageChrome's bottom script), just styled for its new
      home inside the panel instead of a standalone row. */
+  /* The icon + input pair. The row owns the padding the input used to carry,
+     so the two sit on one baseline with the glyph in the panel's left
+     gutter. Its own color property is what the inline SVG's currentColor
+     resolves against — muted at rest, accent while the field has focus, so it
+     tracks the panel border's own focus state instead of sitting there at a
+     fixed weight. */
+  .searchfield {
+    display: flex; align-items: center; gap: 0.55em;
+    padding: 0.7em 0.95em; color: var(--faint);
+  }
+  .searchpanel:focus-within .searchfield { color: var(--accent); }
+  .fieldicon { flex: none; }
+  /* Hide the PAIR, not just the input. The input ships [hidden] until the
+     filter IIFE reveals it, and on digest/arc pages that reveal never
+     happens (no ledger to filter — it bails before the reveal), so without
+     this the icon would hang above the archive link as a dead control. :has
+     is already used in this stylesheet (see .settingsrow above). */
+  .searchpanel:has(.filter[hidden]) .searchfield { display: none; }
   .searchpanel .filter {
-    display: block; width: 100%; box-sizing: border-box;
+    flex: 1; min-width: 0;
     font: inherit; font-size: 0.9em;
-    padding: 0.7em 0.95em;
+    padding: 0;
     /* No border and no radius of its own: the panel draws both now. */
     border: 0; border-radius: 0;
     background: none; color: var(--text);
@@ -1308,9 +1326,11 @@
   /* The divider belongs to the PAIR, not to the link: with no JS the filter
      input stays [hidden] (see renderSearchBubble) and this link is the
      panel's only content, where a top border would read as a stray rule
-     across an otherwise empty bubble. Adjacent-sibling so it appears
-     exactly when there is something above to divide from. */
-  .searchpanel .filter:not([hidden]) + .searchlink {
+     across an otherwise empty bubble. Was an adjacent-sibling selector until
+     the icon landed and moved the input inside .searchfield; :has keeps it
+     keyed off the same condition without depending on the two being
+     siblings. */
+  .searchpanel:has(.filter:not([hidden])) .searchlink {
     border-top: 1px solid var(--hairline);
   }
 
@@ -1787,7 +1807,7 @@
     </div>
     <nav class="viewtabs"><span class="viewtab active" data-view="all">All</span><a class="viewtab" data-view="daily" href="/t/goldentesttoken/daily/">Daily</a><a class="viewtab" data-view="weekly" href="/t/goldentesttoken/weekly/">Weekly</a></nav>
     <div class="mastright">
-      <details class="searchpop"><summary class="searchtoggle" aria-label="Search" title="Search"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Search</span></summary><div class="searchpanel"><input class="filter" type="search" placeholder="Filter briefings…" aria-label="Filter briefings…" hidden><a class="searchlink" href="/t/goldentesttoken/search">Search ↗</a></div></details><details class="settings"><summary class="gear" aria-label="Settings"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary><div class="settingspanel"><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/a/markets-slide">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Body font</span><span class="miniseg miniseg-font" role="group" aria-label="Body font"><button class="minisegbtn" data-set="sans" hidden>Modern</button><button class="minisegbtn" data-set="serif" hidden>Classic</button></span></div><div class="settingsrow"><a href="/t/goldentesttoken/about">About</a></div></div></details>
+      <details class="searchpop"><summary class="searchtoggle" aria-label="Search" title="Search"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Search</span></summary><div class="searchpanel"><div class="searchfield"><svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input class="filter" type="search" placeholder="Filter briefings…" aria-label="Filter briefings…" hidden></div><a class="searchlink" href="/t/goldentesttoken/search">Search ↗</a></div></details><details class="settings"><summary class="gear" aria-label="Settings"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary><div class="settingspanel"><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/a/markets-slide">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Body font</span><span class="miniseg miniseg-font" role="group" aria-label="Body font"><button class="minisegbtn" data-set="sans" hidden>Modern</button><button class="minisegbtn" data-set="serif" hidden>Classic</button></span></div><div class="settingsrow"><a href="/t/goldentesttoken/about">About</a></div></div></details>
     </div>
   </header>
   <span class="paletteconfig" hidden
