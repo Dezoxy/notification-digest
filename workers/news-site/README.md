@@ -37,6 +37,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main`.
 | `src/chrome.js` | `pageChrome` — the shell every page renders into |
 | `src/icons.js` | the three base64 PWA PNGs — same mark as `FAVICON_SVG` |
 | `src/pwa.js` | `buildManifest` + `buildServiceWorker` (PLAN.md §11.7) |
+| `src/push.js` | the `push/*` endpoints and their validators |
 | `src/ingest.js` | `PUT /ingest`: handler plus every validator |
 | `src/handlers.js` | the GET page handlers |
 | `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
@@ -180,9 +181,15 @@ stores and serves whatever the app sends.
 
 The URL grammar is `/t/:token/(hu/)?(daily/|weekly/)?(w/YYYY-Www/)?` for index and
 digest pages, plus the standalone `search`, `a/:slug`, `about`,
-`manifest.webmanifest`, and `sw.js` endpoints. The
+`manifest.webmanifest`, `sw.js`, and the four `push/*` endpoints. The
 language segment always comes first; `worker.js`'s file header is the authoritative
 list.
+
+The `push/*` four are the exception to the language grammar, deliberately: they
+are machine endpoints, not pages, so they have no `hu/` variant. A service
+worker only ever knows the EN scope (its own script URL), and a subscription's
+language is a stored FIELD rather than a URL segment — a `/hu/` page subscribes
+through these same paths and says `{"lang":"hu"}` in the body.
 
 Four routes need no token: `robots.txt` and the three icons. That is not a gap —
 an icon reveals nothing about the site's content (`robots.txt` already concedes
@@ -206,6 +213,10 @@ instead of in four more icon URLs beside it.
 | `GET /t/:token/about` | Static explainer for anyone the capability link is shared with. |
 | `GET /t/:token/manifest.webmanifest` | Web app manifest; `hu/` variant differs only in `start_url`. |
 | `GET /t/:token/sw.js` | The service worker. Its URL is its scope. |
+| `GET /t/:token/push/key` | The VAPID public key. Token-gated, though the key itself is public. |
+| `POST /t/:token/push/subscribe` | Store or refresh one device's push subscription. |
+| `POST /t/:token/push/unsubscribe` | Forget one device. |
+| `POST /t/:token/push/latest` | What the service worker should show, in the subscription's language. |
 | anything else | Plain `404`, wrong token included. |
 
 ## Deploy
@@ -228,6 +239,39 @@ wrangler deploy
 wrangler secret put SITE_TOKEN
 wrangler secret put INGEST_KEY
 ```
+
+### Web Push (optional, PLAN.md §11.7)
+
+Push is entirely optional and the Worker runs fine without it: with no VAPID
+keys set, `push/key` answers `503`, the settings row never appears, and (from
+PR C) the send is skipped. That is not a degraded mode to fix in a hurry — it
+is the state every deployment passes through, because this Worker deploys
+automatically on merge and the code therefore always lands before the secrets.
+
+```bash
+# 1. Apply the push tables (BEFORE merging the code, ideally)
+wrangler d1 execute news-digests --remote --file migrations/0009-push.sql
+
+# 2. Generate a VAPID key pair (P-256; any Node with webcrypto will do)
+node -e '
+const { subtle } = require("node:crypto").webcrypto;
+subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign","verify"]).then(async (kp) => {
+  const raw = Buffer.from(await subtle.exportKey("raw", kp.publicKey));
+  const b64u = (b) => b.toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  console.log("VAPID_PUBLIC_KEY:", b64u(raw));
+  console.log("VAPID_PRIVATE_JWK:", JSON.stringify(await subtle.exportKey("jwk", kp.privateKey)));
+});'
+
+# 3. Set both as SECRETS, not vars — a var in wrangler.jsonc would be
+#    committed, and a var set in the dashboard is reverted by the next
+#    deploy (this file overwrites the dashboard; see its own comment).
+wrangler secret put VAPID_PUBLIC_KEY
+wrangler secret put VAPID_PRIVATE_JWK
+```
+
+The public key genuinely is public — it is handed to every browser that
+subscribes and is useless without the private half — so storing it as a secret
+is about having one mechanism rather than about hiding it.
 
 The Terraform in this repo's root (`news_site.tf`) only wires up
 `news.toomhorvath.com` and `news.tomhorvath.me` as Workers Custom Domains

@@ -1251,7 +1251,7 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
       (push handler + inline offline-navigation fallback, no Cache API),
       embedded PNG icons (180/192/512 — iOS ignores SVG for Home Screen),
       `pageChrome` wiring, golden regeneration.
-- [ ] (site, PR B) Subscriptions: `migrations/0009-push.sql`
+- [x] (site, PR B) Subscriptions: `migrations/0009-push.sql`
       (`push_subscriptions`, `push_sent`) mirrored into `schema.sql`, the
       `push/*` endpoints, the settings-bubble row in EN/HU.
 - [ ] (site, PR C) The sender: VAPID JWT signing, `ctx` threading,

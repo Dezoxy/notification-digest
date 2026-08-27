@@ -54,9 +54,69 @@ function identityOf(topic) {
 const M1 = String.fromCharCode(1);
 const M2 = String.fromCharCode(2);
 
-export function makeDb({ writes } = {}) {
+export function makeDb({ writes, pushSubs } = {}) {
+  // Web Push (PLAN.md §11.7 PR B). Unlike every other arm in this file,
+  // these need real MUTABLE state: subscribe/unsubscribe are the first
+  // handlers whose whole behavior is what the table contains afterwards
+  // (idempotent re-subscribe, the cap, delete-then-lookup), and a
+  // read-only fixture cannot express any of that. Callers pass their own
+  // array in to seed it and to assert against it.
+  const subs = pushSubs ?? [];
+
   function dispatch(sql, binds) {
     const s = String(sql);
+
+    // Push arms come FIRST so their distinctive tables/shapes are matched
+    // before the broader digests patterns below can claim them.
+    if (/push_subscriptions/.test(s)) {
+      if (/^\s*INSERT INTO push_subscriptions/.test(s)) {
+        const [endpoint, p256dh, auth, lang, label, created_at] = binds;
+        const existing = subs.find((r) => r.endpoint === endpoint);
+        if (existing) {
+          // ON CONFLICT DO UPDATE — note created_at is deliberately NOT
+          // overwritten by the real statement, so it is not here either.
+          Object.assign(existing, { p256dh, auth, lang, label, fail_count: 0 });
+        } else {
+          subs.push({
+            endpoint,
+            p256dh,
+            auth,
+            lang,
+            label,
+            created_at,
+            last_ok_at: null,
+            fail_count: 0,
+          });
+        }
+        return { run: async () => ({ success: true }) };
+      }
+      if (/^\s*DELETE FROM push_subscriptions/.test(s)) {
+        const i = subs.findIndex((r) => r.endpoint === binds[0]);
+        if (i >= 0) subs.splice(i, 1);
+        return { run: async () => ({ success: true }) };
+      }
+      if (/COUNT\(\*\)/.test(s)) {
+        return { first: async () => ({ total: subs.length }) };
+      }
+      if (/SELECT lang/.test(s)) {
+        const row = subs.find((r) => r.endpoint === binds[0]);
+        return { first: async () => (row ? { lang: row.lang } : null) };
+      }
+      if (/SELECT 1/.test(s)) {
+        const row = subs.find((r) => r.endpoint === binds[0]);
+        return { first: async () => (row ? { 1: 1 } : null) };
+      }
+    }
+
+    // handlePushLatest's "newest digest" read. Distinctive enough on its
+    // own (nothing else orders by id) to sit ahead of the list queries.
+    if (/ORDER BY id DESC LIMIT 1/.test(s)) {
+      const newest = [...DIGESTS].sort((a, b) => b.id - a.id)[0];
+      return {
+        first: async () =>
+          newest ? pick(newest, ["id", "kind", "tldr", "tldr_hu", "has_attention"]) : null,
+      };
+    }
 
     if (/INSERT INTO digests/.test(s)) {
       writes?.push({ table: "digests", binds });

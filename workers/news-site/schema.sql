@@ -108,3 +108,54 @@ CREATE TABLE IF NOT EXISTS arc_context (
   context_md TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- Web Push (PLAN.md §11.7, PR B). Two tables, because they answer two
+-- different questions and outlive each other.
+--
+-- push_subscriptions: one row per DEVICE that asked to be notified, keyed on
+-- the push endpoint the browser minted -- which is both the row's identity
+-- and the URL the sender (PR C) posts to. A re-subscribe from the same
+-- device produces the same endpoint, so ON CONFLICT(endpoint) DO UPDATE
+-- makes subscribing idempotent the same way ingest is.
+--   p256dh/auth are stored even though the current design sends PAYLOAD-LESS
+-- pushes and therefore needs neither. They are the client keys RFC 8291
+-- payload encryption requires, and §11.7 names that encryption as the
+-- contingency if Apple's gateway turns out to reject body-less pushes.
+-- Storing them now makes that a code-only change; not storing them would
+-- make it a re-subscribe on every device.
+--   lang is what makes a localized notification possible at all. The service
+-- worker has no page context and its scope carries no language segment, so
+-- it cannot know the reader's language on its own -- it sends its endpoint
+-- to push/latest and the row answers on its behalf. See handlePushLatest in
+-- src/push.js.
+--   fail_count/last_ok_at are the sender's health record (PR C): a push
+-- service answering 404/410 means the subscription is dead and the row is
+-- deleted outright; softer failures increment fail_count instead.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint   TEXT PRIMARY KEY,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  lang       TEXT NOT NULL DEFAULT 'en',
+  label      TEXT,
+  created_at TEXT NOT NULL,
+  last_ok_at TEXT,
+  fail_count INTEGER NOT NULL DEFAULT 0
+);
+
+-- push_sent: the claim-once ledger, one row per digest that has ever been
+-- notified about. Created here in PR B; the sender that writes it lands in
+-- PR C. It exists because PUT /ingest/:id is idempotent BY CONTRACT -- the
+-- digest app retries a failed publish on its next run (get_pending_digests,
+-- digest/state.py) -- and a notification must inherit that idempotency
+-- rather than firing once per retry. INSERT OR IGNORE plus a check of
+-- meta.changes is an atomic "I am the one who gets to notify for this
+-- digest", which is why this is a table rather than a column on `digests`:
+-- a column would have to be read, compared and written, and two concurrent
+-- ingests of the same id could both pass the read.
+--   Deliberately NOT pruned alongside `digests`. A row here is the assertion
+-- "this id was already announced"; deleting it would re-authorize a
+-- notification for a digest the owner has already seen.
+CREATE TABLE IF NOT EXISTS push_sent (
+  digest_id INTEGER PRIMARY KEY,
+  sent_at   TEXT NOT NULL
+);

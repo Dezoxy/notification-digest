@@ -141,3 +141,48 @@ export const ARC_CONTEXT_MAX_BYTES = 8 * 1024;
 // mode). Bounds the per-request body_html haul regardless of how many
 // hundreds of appearances an arc accumulates over months.
 export const ARC_ANCHOR_BODIES = 24;
+
+// Web Push (PLAN.md §11.7, PR B). Same shape-discipline pattern as the
+// ingest caps above: bound what is stored, and be explicit about which
+// bound is a security control rather than hygiene.
+//
+// PUSH_ENDPOINT_HOST_SUFFIXES is the one that IS a security control. The
+// endpoint a browser mints is chosen by whoever holds the capability token,
+// and PR C's sender will POST to it -- so without this list the Worker
+// becomes a blind POST proxy for any https host on the internet. An
+// allowlist rather than a shape check, and the tradeoff is deliberate: a
+// browser vendor moving to a new push host breaks subscribing on that
+// browser until a suffix is added here. For a single-owner service with a
+// handful of known devices that is the right way round -- a broken
+// subscribe is loud and one line to fix, an open proxy is silent. The
+// current entries cover the four engines that exist: Chrome/Edge on FCM,
+// Firefox on Mozilla's autopush, Safari (macOS and iOS) on Apple, and
+// Windows' own WNS.
+export const PUSH_ENDPOINT_HOST_SUFFIXES = [
+  "fcm.googleapis.com",
+  "android.googleapis.com",
+  "push.services.mozilla.com",
+  "web.push.apple.com",
+  "notify.windows.com",
+];
+
+// A push endpoint is a long opaque URL (FCM's run ~200 chars, Mozilla's
+// carry a UUID path); 2KB is far above any real one while still refusing an
+// unbounded string into a PRIMARY KEY column.
+export const MAX_PUSH_ENDPOINT_LEN = 2048;
+
+// p256dh is a 65-byte P-256 point and auth is 16 bytes, so base64url runs
+// 88 and 24 characters respectively. 256 leaves generous room without
+// pretending these are open-ended.
+export const MAX_PUSH_KEY_LEN = 256;
+
+// An owner-chosen device nickname ("iPhone"), truncated rather than
+// rejected -- it is cosmetic, and a too-long label is not worth failing a
+// subscribe over.
+export const MAX_PUSH_LABEL_LEN = 64;
+
+// A backstop against a leaked capability token filling D1 with rows, not a
+// device budget -- the owner has single digits of devices. Checked only for
+// endpoints not already stored (see handlePushSubscribe), so a device at
+// the cap can always still refresh its own subscription.
+export const MAX_PUSH_SUBSCRIPTIONS = 20;

@@ -119,7 +119,9 @@ export function buildServiceWorker(token) {
 // Written as a constant with NO template interpolation of its own: every
 // value it needs arrives through the CFG object buildServiceWorker prepends
 // above. That is what keeps this readable as service-worker source instead
-// of as an escaping puzzle, and it is why `${` never appears below.
+// of as an escaping puzzle, and it is why neither `${` NOR A BACKTICK ever
+// appears below — including inside a comment, where one silently ends this
+// template literal and turns the rest of the worker into stray JS.
 const SERVICE_WORKER_BODY = `self.addEventListener("install", function () {
   // Take over immediately rather than waiting for every tab to close: this
   // worker holds no cached state that a half-updated client could disagree
@@ -199,24 +201,44 @@ function offlineResponse(url) {
 // worker addresses the site without the token ever being stored here or
 // travelling inside a push message.
 //
-// INERT UNTIL PR B, deliberately: push/latest does not exist yet, and
-// nothing can subscribe yet either (no subscribe endpoint, no VAPID key),
-// so this handler cannot fire in production today. It ships now so the
-// worker script is complete from its first install and the owner's device
-// does not have to go through a second service-worker update cycle to gain
-// it. Until then its behavior on a hypothetical push is the fallback
-// branch below, which is correct, just generic.
+// As of PR B this handler is fully wired — push/latest exists and devices
+// can subscribe — but nothing SENDS a push until PR C adds the VAPID
+// signer and the fan-out from handleIngest. So it still cannot fire in
+// production today; what changed is that it now would work if it did.
 self.addEventListener("push", function (event) {
   event.waitUntil(showLatest());
 });
 
 function showLatest() {
-  return fetch(self.registration.scope + "push/latest", { cache: "no-store" })
+  // Identify by our own push endpoint. It is the one fact a service worker
+  // knows about itself that the site also knows, and the site uses it for
+  // exactly one purpose: to look up which LANGUAGE this device subscribed
+  // in. A worker has no page context and its scope carries no language
+  // segment, so without this every notification would be English.
+  // POST, not a query string: the endpoint is a capability (whoever holds
+  // it can notify this device), and URLs land in Workers Observability.
+  return self.registration.pushManager
+    .getSubscription()
+    .catch(function () {
+      return null;
+    })
+    .then(function (sub) {
+      return fetch(self.registration.scope + "push/latest", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ endpoint: sub ? sub.endpoint : null }),
+      });
+    })
     .then(function (response) {
       if (!response.ok) throw new Error("push/latest " + response.status);
       return response.json();
     })
     .then(function (data) {
+      // "empty" means the token was valid but there are no digests yet — a
+      // real state on a fresh deployment, not a failure. The generic copy
+      // is the right thing to show, so route it through the same fallback.
+      if (!data || data.empty) throw new Error("no digest");
       return show(data.title, data.body, data.url, data.urgent);
     })
     .catch(function () {
