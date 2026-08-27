@@ -55,6 +55,14 @@ true at the multi-channel cutover.
   pushes to main are blocked by `.githooks/pre-push` (activated per-clone
   with `git config core.hooksPath .githooks`); `ALLOW_MAIN_PUSH=1` exists
   only for bootstrap.
+- Dependency bumps arrive as Renovate PRs (`renovate.json`), one at a time,
+  weekday mornings. The /docs-sync and /pr-summary rules below are written
+  for PRs a session drives and do not apply to them -- a bot cannot run
+  either. Review the diff, let CI verify it, merge. `twifork` is excluded
+  from automation on purpose: it is a single-maintainer fork handling a
+  live X session cookie, so each bump needs a supply-chain re-audit by hand
+  (see the pin's comment in `pyproject.toml` and the rule's own
+  `description` in `renovate.json`).
 - Repo: github.com/Dezoxy/notification-digest (private). Container image:
   `ghcr.io/dezoxy/notification-digest`.
 - Before opening or updating any PR, run /docs-sync
