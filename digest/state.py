@@ -157,10 +157,23 @@ CREATE TABLE IF NOT EXISTS arc_keys (
 -- key (a key excluded from `get_arc_keys_needing_context` once it has a
 -- row), so the "second call wins" semantics that contract implies never
 -- actually triggers here.
+--
+-- `synced_at` (NULL until the site has it) is what makes the site publish a
+-- DELTA rather than a full snapshot -- PLAN.md §11.6 rule 5's "send only
+-- unpublished primers" branch, which the original 3-column shape had no
+-- state for and so could not take (see `get_unsynced_arc_contexts`). NULL means
+-- "the site has not confirmed this one", and that is the ONLY thing this
+-- column claims: it is stamped by digest/deliver.py's `_deliver_site`
+-- strictly for the keys a SUCCEEDING publish actually carried, never as a
+-- blanket "the run went fine". A row here is never un-stamped by ordinary
+-- operation; `UPDATE arc_context SET synced_at = NULL` is the deliberate
+-- manual escape hatch for the one case that needs it (the site's D1 being
+-- rebuilt from empty), and is documented as such in PLAN.md §11.6.
 CREATE TABLE IF NOT EXISTS arc_context (
     key          TEXT PRIMARY KEY,
     context_md   TEXT NOT NULL,
-    generated_at TEXT NOT NULL
+    generated_at TEXT NOT NULL,
+    synced_at    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_digest_id ON items(digest_id);
@@ -315,7 +328,11 @@ def connect(db_path: str) -> sqlite3.Connection:
 # see `_migrate_add_arc_context_table` and init_db's `if version < 4:` step.
 # The Patreon collector's embedded-video link: see `_migrate_add_embed_url_column`
 # and init_db's `if version < 5:` step.
-_LATEST_SCHEMA_VERSION = 5
+#
+# Version 6 (site-publish delta): adds `arc_context.synced_at` -- see
+# `_migrate_add_arc_context_synced_at_column` and init_db's `if version < 6:`
+# step.
+_LATEST_SCHEMA_VERSION = 6
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -434,6 +451,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         # column, and every commit_new_items INSERT would fail without it.
         _migrate_add_embed_url_column(conn)
 
+    if version < 6:
+        # `arc_context.synced_at` (site-publish delta). Like the version-5
+        # step and unlike 2/3/4, this is NOT a no-op on an existing
+        # database: _SCHEMA's `CREATE TABLE IF NOT EXISTS` never alters a
+        # table that already exists, so a live state.db reaches this point
+        # with the table but without the column.
+        _migrate_add_arc_context_synced_at_column(conn)
+
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
 
@@ -520,6 +545,35 @@ def _migrate_add_embed_url_column(conn: sqlite3.Connection) -> None:
     """
     try:
         conn.execute("ALTER TABLE items ADD COLUMN embed_url TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
+def _migrate_add_arc_context_synced_at_column(conn: sqlite3.Connection) -> None:
+    """Add `arc_context.synced_at` to a database predating the site-publish delta.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_embed_url_column` immediately above, including swallowing
+    the duplicate-column OperationalError for a fresh database that already
+    got the column from _SCHEMA.
+
+    Nullable with no default, and DELIBERATELY NOT BACKFILLED: every
+    pre-existing row comes out NULL, i.e. "the site has not confirmed this
+    one", even though in practice the site almost certainly already has all
+    of them (they were sent as a full snapshot on every publish before this
+    version). Backfilling them to "synced" would be the optimization, and it
+    is the wrong call -- it would assume a delivery this database has no
+    record of, and any primer that assumption got wrong would be stranded
+    permanently, unreachable by anything short of the manual escape hatch.
+    Leaving them NULL costs exactly ONE publish carrying the existing
+    backlog (13 rows on the real VM at the time of writing, well under
+    `_MAX_ARC_CONTEXTS_PER_PUBLISH`), which the site upserts by key
+    idempotently, exactly as it has been doing on every publish already.
+    One redundant send beats one silently stranded primer.
+    """
+    try:
+        conn.execute("ALTER TABLE arc_context ADD COLUMN synced_at TEXT")
     except sqlite3.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
@@ -2016,65 +2070,118 @@ def get_latest_arc_occurrence(conn: sqlite3.Connection, key: str) -> tuple[str, 
     return (row[0], row[1]) if row is not None else None
 
 
-# Caps how many stored primers `get_all_arc_contexts` will ever return in one
+# Caps how many primers `get_unsynced_arc_contexts` will ever return in one
 # call. This is a HARD PARITY CONSTANT with the site's own MAX_ARC_CONTEXTS
 # (workers/news-site/src/config.js), the same way digest/publish.py's
 # _MAX_TOPICS and digest/summarize.py's _MAX_DELTAS/_MAX_ARC_KEYS mirror
-# their server-side counterparts -- NOT the "belt and suspenders" ceiling
-# this comment used to call it. Exceeding the site's cap 400s the WHOLE PUT
-# (validateArcContexts -> badRequest), taking the digest body down with an
-# optional field, and because `_deliver_site` re-sends the same unscoped
-# snapshot on every retry, that 400 never clears on its own. Change one side
-# without the other and site publish breaks completely.
+# their server-side counterparts: exceeding the site's cap 400s the WHOLE
+# PUT, taking the digest body down with an optional field.
 #
-# Unlike its siblings, this one is NOT bounded by a digest's own shape:
-# `get_all_arc_contexts` is deliberately unscoped from `digest_id` (see its
-# docstring), and nothing prunes the `arc_context` table, so the row count
-# only ever grows -- at up to `CONTEXT_MAX_PER_RUN` (PLAN.md §11.6) new rows
-# per day. That growth is precisely why the cap has to be a real ceiling
-# both sides agree on rather than a number picked as "surely never reached".
+# Since the site publish became a DELTA (`synced_at`), this cap is back to
+# being the belt-and-suspenders ceiling it was originally described as, and
+# is genuinely hard to reach: the normal payload is whatever was generated
+# since the last successful publish, which is 0 or 1 entries
+# (CONTEXT_MAX_PER_RUN=3 is the per-daily-run ceiling, and the measured rate
+# on the real VM is ~1/day against ~5 publishes/day). Two situations can
+# still put a real backlog here, and both DRAIN across consecutive publishes
+# rather than failing: the one-time migration backlog (every pre-existing
+# row is NULL by design -- see _migrate_add_arc_context_synced_at_column)
+# and a long site-channel outage. Neither can exceed the cap in a single
+# payload, because this LIMIT clamps it.
+#
+# What this constant is NOT any more is the thing standing between the app
+# and a 400: that was true while every publish re-sent the full table, which
+# grew monotonically (nothing prunes `arc_context`, by design -- the table
+# doubles as the generation ledger via get_arc_keys_needing_context's
+# `NOT IN` subquery, so deleting a row silently re-authorizes a paid
+# regeneration). The 2026-08-27 outage was exactly that: 13 stored primers
+# against a site cap of 12.
 _MAX_ARC_CONTEXTS_PER_PUBLISH = 50
 
 
-def get_all_arc_contexts(
+def get_unsynced_arc_contexts(
     conn: sqlite3.Connection, limit: int = _MAX_ARC_CONTEXTS_PER_PUBLISH
 ) -> list[dict[str, str]]:
-    """Return every stored arc-context primer as `{"key", "context_md"}` dicts, newest-first.
+    """Return primers the site has not confirmed yet, as `{"key", "context_md"}`, newest-first.
 
-    Feeds digest/deliver.py's `_deliver_site`, which attaches this
-    UNCONDITIONALLY to EVERY site-publish payload (any digest, any kind,
-    fresh or pending-resend -- see that function's own docstring for the
-    full rationale) as the optional top-level `arc_contexts` field (PLAN.md
-    §11.6 rule 5), rather than trying to track "which primers has the site
-    already confirmed receiving" -- a feature this exact 3-column schema
-    (`key`, `context_md`, `generated_at` -- no publish-confirmation column)
-    deliberately has no state for. Sending the full current snapshot on
-    every publish is what makes this self-healing without that state: a
-    primer generated today rides the very next successful site publish of
-    ANY digest, and if that attempt fails, the next one (window or daily)
-    tries again automatically -- there is nothing here that can permanently
-    strand a generated primer the way "attach only to the digest published
-    at generation time" could if that ONE attempt happened to fail.
+    Feeds digest/deliver.py's `_deliver_site`, which attaches this to every
+    site-publish payload as the optional top-level `arc_contexts` field
+    (PLAN.md §11.6 rule 5) and, on a publish that SUCCEEDS while actually
+    carrying them, stamps exactly those keys via `mark_arc_contexts_synced`.
 
-    Ordered `generated_at DESC` (newest-generated first) so a cap, if it
-    were ever actually reached, would keep the freshest primers -- the ones
-    most likely to correspond to a currently-active recurring arc -- over
-    the oldest ones. `limit` defaults to `_MAX_ARC_CONTEXTS_PER_PUBLISH`;
-    see that constant's own comment for why it is realistically never
-    reached.
+    "Unsynced" (`synced_at IS NULL`), not "all". This is rule 5's "send only
+    unpublished primers" branch; the predecessor `get_all_arc_contexts` took
+    the other branch -- the full unscoped snapshot on every publish -- purely
+    because the original three-column table had nowhere to record what the
+    site had received. With `synced_at` it does, and the delta is strictly
+    better on both counts that mattered: the payload is bounded by how often
+    publishes succeed (something this system controls) rather than by the
+    ratio of a hardcoded cap to the rate at which the news cycle throws off
+    new recurring arcs (something it does not), and a primer stops being
+    re-sent, and re-upserted by the Worker, on every publish forever.
 
-    Returns `[]` when nothing has been generated yet (`CONTEXT_ENABLED` off,
-    or on but no arc has qualified) -- `_deliver_site`'s own truthy-only
-    inclusion rule (matching `deltas`/`topics`/`source_counts`) then omits
-    the `arc_contexts` field entirely, so a deployment that has never
-    generated a primer sends byte-identical payloads to before this feature
-    existed.
+    Ordered `generated_at DESC` so a backlog large enough to hit `limit`
+    drains newest-first -- the freshest primers, most likely to match a
+    currently-active arc, reach the site first. The remainder is not lost:
+    it stays NULL and rides the next publish, and the one after that, until
+    it lands.
+
+    What is deliberately given up: the predecessor was self-healing by
+    construction, because a full snapshot re-sent everything forever. If the
+    site's D1 is ever rebuilt from empty, this will NOT notice -- there is no
+    handshake here, only this side's record of what it believes it sent.
+    That case is a manual recovery already (a rebuilt D1 loses every digest
+    row too, and `digests.site_published` stays 1 for all of them, so
+    nothing backfills those either); the escape hatch for this table is one
+    statement, `UPDATE arc_context SET synced_at = NULL`, documented in
+    PLAN.md §11.6. Auto-resyncing on a schedule was considered and rejected
+    as machinery guarding a failure D1 does not spontaneously have.
+
+    Returns `[]` when everything is synced (the steady state) or nothing has
+    been generated at all -- `_deliver_site`'s truthy-only inclusion then
+    omits the `arc_contexts` field entirely, exactly as before.
     """
     rows = conn.execute(
-        "SELECT key, context_md FROM arc_context ORDER BY generated_at DESC LIMIT ?",
+        """
+        SELECT key, context_md
+        FROM arc_context
+        WHERE synced_at IS NULL
+        ORDER BY generated_at DESC
+        LIMIT ?
+        """,
         (limit,),
     ).fetchall()
     return [{"key": key, "context_md": context_md} for key, context_md in rows]
+
+
+def mark_arc_contexts_synced(conn: sqlite3.Connection, keys: Sequence[str]) -> None:
+    """Stamp `synced_at` on exactly `keys` -- the primers a publish actually carried.
+
+    Called by digest/deliver.py's `_deliver_site` only after
+    `publish_to_site` returned without raising AND the payload it returned
+    for genuinely included these keys. Both halves of that matter, and the
+    second is the one with a trap in it: `_deliver_site`'s degraded path
+    (PR #104) republishes with `arc_contexts=None` after a 400, and that
+    call also "succeeds". Stamping on success alone would mark primers the
+    site was never sent as delivered -- stranding them permanently behind an
+    escape hatch, a strictly nastier version of the outage that path exists
+    to survive. So the caller passes the keys it actually put on the wire,
+    and the degraded path passes nothing.
+
+    Idempotent and re-stamp-safe: writing over an existing `synced_at` is
+    harmless (the column records "the site has it", not when it first got
+    it), and an unknown key simply matches no row. Empty `keys` is a no-op
+    without touching the database, so the steady state -- nothing new to
+    send -- costs nothing.
+    """
+    if not keys:
+        return
+    now = datetime.now(UTC).isoformat()
+    conn.executemany(
+        "UPDATE arc_context SET synced_at = ? WHERE key = ?",
+        [(now, key) for key in keys],
+    )
+    conn.commit()
 
 
 def get_digest_item_urls(conn: sqlite3.Connection, digest_id: int) -> set[str]:

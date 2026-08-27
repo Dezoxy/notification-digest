@@ -1045,7 +1045,7 @@ def test_publish_to_site_omits_arc_contexts_when_none(monkeypatch):
 def test_publish_to_site_omits_arc_contexts_when_empty(monkeypatch):
     # Truthy-only inclusion, matching deltas/topics/source_counts/
     # failed_sources above: an explicit empty list must be omitted exactly
-    # like None -- this is the shape get_all_arc_contexts returns when
+    # like None -- this is the shape get_unsynced_arc_contexts returns when
     # CONTEXT_ENABLED is off or nothing has qualified yet.
     captured = {}
 

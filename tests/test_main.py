@@ -48,6 +48,7 @@ from digest.state import (
     get_pending_digests,
     get_recent_arc_keys,
     get_unsummarized_items,
+    get_unsynced_arc_contexts,
     init_db,
     write_arc_context,
     write_arc_keys,
@@ -1284,7 +1285,7 @@ def test_deliver_site_forwards_arc_contexts_from_storage(conn, monkeypatch):
     # PLAN.md §11.6: unlike topics/deltas above, arc_contexts is NOT scoped
     # to this digest_id at all -- _deliver_site attaches the FULL current
     # arc_context table snapshot to every site publish, whichever digest it
-    # happens to be for (see get_all_arc_contexts' own docstring for why).
+    # happens to be for (see get_unsynced_arc_contexts' own docstring for why).
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     body_md = "**TL;DR:** hi\n\n## Worth knowing\n\nstuff"
     digest_id = create_digest(conn, body_md, get_unsummarized_items(conn))
@@ -1384,6 +1385,47 @@ def test_deliver_site_retries_without_arc_contexts_on_400(conn, monkeypatch):
     # next run would retry a digest the site already has.
     row = conn.execute("SELECT site_published FROM digests WHERE id = ?", (digest_id,)).fetchone()
     assert row == (1,)
+
+
+def test_deliver_site_stamps_synced_only_for_keys_it_carried(conn, monkeypatch):
+    # The delta's closing half: a primer that made it onto the wire must stop
+    # riding subsequent publishes.
+    digest_id, body_md, allowed_urls = _site_fixture(conn)
+    monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls)
+
+    assert ok is True
+    assert get_unsynced_arc_contexts(conn) == []
+
+
+def test_deliver_site_degraded_publish_does_not_stamp_synced(conn, monkeypatch):
+    # The trap this whole design turns on: the degraded 400-retry path
+    # publishes with arc_contexts=None and SUCCEEDS. Stamping on success
+    # alone would mark primers the site never received as delivered --
+    # stranding them permanently, a nastier bug than the outage the degraded
+    # path exists to survive. They must stay unsynced and ride the next
+    # healthy publish.
+    digest_id, body_md, allowed_urls = _site_fixture(conn)
+
+    def fake_publish(*a, arc_contexts=None, **k):
+        if arc_contexts:
+            raise _http_error(400)
+
+    monkeypatch.setattr(deliver_mod, "publish_to_site", fake_publish)
+
+    cfg = _multichannel_cfg()
+    ok = _deliver_site(conn, cfg, digest_id, body_md, 1, "2026-07-29T10:00:00+00:00", allowed_urls)
+
+    assert ok is True
+    # The digest published; the primer did not.
+    assert conn.execute(
+        "SELECT site_published FROM digests WHERE id = ?", (digest_id,)
+    ).fetchone() == (1,)
+    assert get_unsynced_arc_contexts(conn) == [
+        {"key": "hormuz", "context_md": "Background about Hormuz."}
+    ]
 
 
 def test_deliver_site_degraded_publish_logs_at_error(conn, monkeypatch, caplog):
