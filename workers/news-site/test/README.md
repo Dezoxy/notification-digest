@@ -16,8 +16,11 @@ Two halves, and the split matters:
 - **`render.test.mjs`** asserts *semantics* — the things that must stay true
   no matter how the code is arranged (trust headers, EN/HU parity, `#sN`
   numbering, one marker per fixture-covered render branch).
-- **`golden.mjs`** asserts *bytes* — the seven page types, rendered and
-  compared against `golden/*.html`.
+- **`golden.mjs`** asserts *bytes* — every page type in `GOLDEN_PAGES`
+  (`env.mjs`), rendered and compared against `golden/*.html`. Nine as of the
+  2026-08-27 two-column pass, which added the daily and weekly index views;
+  they had no coverage before it, so changes to how they render produced a
+  zero golden diff.
 
 Which one you lean on depends on the change you are making:
 

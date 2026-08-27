@@ -567,18 +567,16 @@
   section[data-unread-label] {
     display: grid; grid-template-columns: 1fr 1fr; column-gap: 2.2em;
   }
-  /* One-card-per-row views (owner-reported: "the text has just half the
-     width"). Two columns only pay for themselves where the ledger is dense
-     enough to fill both — the ALL view's ~8 window digests a day. The daily
-     view carries at most ONE brief per day and the weekly view one per week,
-     so there every single row placed a ~26em card in column 1 against a
-     permanently empty column 2. Those views drop to a single column and let
-     each card use the full ~55em measure — the same measure the digest page's
-     own prose already runs at, per the owner's "desktop text should be wider
-     about 30 percent" call recorded in the .wrap block below. Keyed off
-     data-ledger rather than a media query because this is a function of how
-     many cards the VIEW yields, not of viewport width. */
-  section[data-ledger="single"] { grid-template-columns: 1fr; }
+  /* Every index view now uses the two-column grid above. It briefly did not:
+     the daily and weekly views were dropped to a single column (a
+     data-ledger="single" attribute, since removed) after the owner reported
+     "the text has just half the width". The real cause was not the column
+     count but the DAY HEADERS -- those views yield one card per day-group, so
+     each header forced a new row and left a ~26em card beside a permanently
+     empty cell. Removing the headers on those views instead (see
+     renderLedgerFor in render-index.js) lets their cards flow two-across and
+     fill the grid, which is what the owner asked for on 2026-08-27; each card
+     carries its own short date now, so nothing is lost with the header. */
   .dayhead {
     grid-column: 1 / -1;
     font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.11em;

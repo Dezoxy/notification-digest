@@ -34,7 +34,7 @@ async function page(path) {
 
 // ── every page renders, with the load-bearing headers ─────────────────────
 
-test("all seven golden pages render 200 with trust headers", async () => {
+test("every golden page renders 200 with trust headers", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const { res, html } = await page(path);
     assert.equal(res.status, 200, `${name} status`);
@@ -117,6 +117,31 @@ test("digest section ids are sequential and agree with the TOC", async () => {
 });
 
 // ── branch markers (one per fixture-covered branch) ───────────────────────
+
+test("day headers are an ALL-view affordance; daily/weekly flow flat", async () => {
+  // The golden pages CANNOT review this: the fixture set has one daily and
+  // one weekly digest, each of which becomes its view's lead card, so
+  // daily-en/weekly-en contain zero ledger entries and zero day headers.
+  // renderLedgerFor is therefore asserted directly.
+  //
+  // Why it matters: those views yield at most one card per day-group, so a
+  // day header before every card forced each into its own grid row beside a
+  // permanently empty second column -- the owner-reported "the text has just
+  // half the width". Dropping the headers lets the cards flow two-across.
+  const { renderLedgerFor } = await import("../src/render-index.js");
+  const rows = [{ created_at: "2026-08-24T20:00:00Z" }, { created_at: "2026-08-23T20:00:00Z" }];
+  const row = (r) => `<a class="entry" data-created="${r.created_at}"></a>`;
+
+  const all = renderLedgerFor("all", rows, "en-GB", row);
+  assert.ok(all.includes('class="dayhead"'), "all view groups by day");
+  assert.equal(all.match(/class="dayhead"/g).length, 2, "one header per day");
+
+  for (const view of ["daily", "weekly"]) {
+    const flat = renderLedgerFor(view, rows, "en-GB", row);
+    assert.ok(!flat.includes("dayhead"), `${view} view emits no day headers`);
+    assert.equal(flat.match(/class="entry"/g).length, 2, `${view} keeps every row`);
+  }
+});
 
 test("index EN: NOW section, week rail, degraded badge, kind badges", async () => {
   const { html } = await page("");
