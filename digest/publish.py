@@ -799,15 +799,15 @@ def publish_to_site(
     field, and `deltas` follows the same shape.
 
     `arc_contexts` (keyword-only, default None; PLAN.md §11.6 "context
-    mode") is digest/state.py's `get_all_arc_contexts` output -- the FULL
-    current set of generated background primers, `{"key", "context_md"}`
+    mode") is digest/state.py's `get_unsynced_arc_contexts` output -- the
+    primers the site has not confirmed receiving yet, `{"key", "context_md"}`
     dicts, NOT scoped to this `digest_id` at all (unlike `topics`/`deltas`,
     which describe THIS digest's own sections). Included under the IDENTICAL
     truthy-only rule as `source_counts`/`failed_sources`/`topics`/`deltas`
-    above -- see digest/deliver.py's `_deliver_site` for why sending the
-    unscoped full snapshot on every publish, rather than trying to track
-    which primers the site has already confirmed, is the deliberate,
-    self-healing choice here.
+    above -- so the STEADY STATE (nothing generated since the last successful
+    publish) omits the field entirely. See digest/deliver.py's
+    `_deliver_site` for the other half of the delta: which keys it stamps
+    as synced afterwards, and why the degraded 400-retry path stamps none.
 
     Site-validator finding, RE-VERIFIED 2026-08-10 for this field
     specifically (same method as the `deltas` finding immediately above --

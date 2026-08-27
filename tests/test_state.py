@@ -11,7 +11,6 @@ from digest.state import (
     count_stale_unsummarized_by_source,
     count_unsummarized_items,
     create_digest,
-    get_all_arc_contexts,
     get_arc_context,
     get_arc_keys,
     get_arc_keys_needing_context,
@@ -26,9 +25,11 @@ from digest.state import (
     get_recent_arc_keys,
     get_recent_digests,
     get_unsummarized_items,
+    get_unsynced_arc_contexts,
     get_weekly_allowed_urls,
     get_window_digests_since,
     init_db,
+    mark_arc_contexts_synced,
     mark_digest_sent,
     mark_digest_site_published,
     mark_digest_telegram_sent,
@@ -1157,11 +1158,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1239,7 +1240,7 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     preserved = old_conn.execute("SELECT id, source FROM items WHERE id = ?", (row_id,)).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
@@ -1285,7 +1286,7 @@ def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Pa
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
@@ -1319,7 +1320,7 @@ def test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it(tmp_path: 
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
     arc_keys_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
     ).fetchone()
@@ -1353,7 +1354,7 @@ def test_init_db_migrates_v3_db_predating_arc_context_table_by_adding_it(tmp_pat
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
     arc_context_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
     ).fetchone()
@@ -2466,7 +2467,7 @@ def test_get_recent_arc_keys_cap_sheds_rare_keys_not_alphabetically_late_ones(co
 
 
 # --- write_arc_context / get_arc_context / get_arc_keys_needing_context /
-# get_latest_arc_occurrence / get_all_arc_contexts (PLAN.md §11.6, "context mode") ---
+# get_latest_arc_occurrence / get_unsynced_arc_contexts (PLAN.md §11.6, "context mode") ---
 
 
 def _tagged_window_digest(
@@ -2617,11 +2618,11 @@ def test_get_latest_arc_occurrence_none_when_key_unknown(conn):
     assert get_latest_arc_occurrence(conn, "nonexistent") is None
 
 
-def test_get_all_arc_contexts_empty_when_nothing_generated(conn):
-    assert get_all_arc_contexts(conn) == []
+def test_get_unsynced_arc_contexts_empty_when_nothing_generated(conn):
+    assert get_unsynced_arc_contexts(conn) == []
 
 
-def test_get_all_arc_contexts_returns_newest_first(conn):
+def test_get_unsynced_arc_contexts_returns_newest_first(conn):
     write_arc_context(conn, "older", "older background")
     write_arc_context(conn, "newer", "newer background")
     # Pin generated_at explicitly rather than relying on real-clock
@@ -2637,19 +2638,103 @@ def test_get_all_arc_contexts_returns_newest_first(conn):
     )
     conn.commit()
 
-    assert get_all_arc_contexts(conn) == [
+    assert get_unsynced_arc_contexts(conn) == [
         {"key": "newer", "context_md": "newer background"},
         {"key": "older", "context_md": "older background"},
     ]
 
 
-def test_get_all_arc_contexts_respects_limit(conn):
+def test_get_unsynced_arc_contexts_respects_limit(conn):
     for i in range(5):
         write_arc_context(conn, f"key-{i}", f"background {i}")
 
-    result = get_all_arc_contexts(conn, limit=2)
+    result = get_unsynced_arc_contexts(conn, limit=2)
 
     assert len(result) == 2
+
+
+def test_get_unsynced_arc_contexts_excludes_already_synced(conn):
+    # The whole point of the delta: a primer the site has confirmed must
+    # stop riding every subsequent publish.
+    write_arc_context(conn, "synced", "already on the site")
+    write_arc_context(conn, "fresh", "not yet sent")
+    mark_arc_contexts_synced(conn, ["synced"])
+
+    assert get_unsynced_arc_contexts(conn) == [{"key": "fresh", "context_md": "not yet sent"}]
+
+
+def test_get_unsynced_arc_contexts_empty_once_everything_is_synced(conn):
+    # The steady state. _deliver_site's truthy-only inclusion then omits the
+    # arc_contexts field entirely, so the ordinary payload carries none.
+    write_arc_context(conn, "a", "aaa")
+    write_arc_context(conn, "b", "bbb")
+    mark_arc_contexts_synced(conn, ["a", "b"])
+
+    assert get_unsynced_arc_contexts(conn) == []
+
+
+def test_mark_arc_contexts_synced_only_stamps_the_given_keys(conn):
+    # _deliver_site passes the keys a publish actually CARRIED, never "all of
+    # them" -- the degraded 400-retry path publishes with arc_contexts=None,
+    # and stamping on success alone would strand every primer it skipped.
+    write_arc_context(conn, "carried", "sent in the payload")
+    write_arc_context(conn, "skipped", "never left the building")
+    mark_arc_contexts_synced(conn, ["carried"])
+
+    rows = dict(conn.execute("SELECT key, synced_at FROM arc_context").fetchall())
+    assert rows["carried"] is not None
+    assert rows["skipped"] is None
+
+
+def test_mark_arc_contexts_synced_is_a_noop_on_empty_keys(conn):
+    # The steady state calls this on every successful publish with nothing to
+    # stamp; it must not touch the database.
+    write_arc_context(conn, "a", "aaa")
+    mark_arc_contexts_synced(conn, [])
+
+    assert conn.execute("SELECT synced_at FROM arc_context").fetchone() == (None,)
+
+
+def test_mark_arc_contexts_synced_tolerates_unknown_keys(conn):
+    # Re-stamping and unknown keys are both harmless: the column records
+    # "the site has it", not when it first got it.
+    write_arc_context(conn, "a", "aaa")
+    mark_arc_contexts_synced(conn, ["a", "vanished"])
+    mark_arc_contexts_synced(conn, ["a"])
+
+    assert get_unsynced_arc_contexts(conn) == []
+
+
+def test_init_db_migrates_v5_db_predating_synced_at_column_by_adding_it(tmp_path):
+    # A live state.db reaches the version-6 step with arc_context already
+    # present but without the column -- CREATE TABLE IF NOT EXISTS never
+    # alters an existing table.
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(db)
+    init_db(conn)
+    conn.execute("ALTER TABLE arc_context DROP COLUMN synced_at")
+    conn.execute("PRAGMA user_version = 5")
+    conn.commit()
+
+    init_db(conn)
+
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(arc_context)")}
+    assert "synced_at" in cols
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    conn.close()
+
+
+def test_migration_leaves_pre_existing_primers_unsynced(conn):
+    # Deliberately NOT backfilled to "synced": assuming a delivery this
+    # database has no record of would strand any primer the assumption got
+    # wrong. One redundant send beats one silently stranded primer.
+    write_arc_context(conn, "pre-existing", "generated before the delta shipped")
+    conn.execute("UPDATE arc_context SET synced_at = NULL")
+    conn.commit()
+
+    assert get_unsynced_arc_contexts(conn) == [
+        {"key": "pre-existing", "context_md": "generated before the delta shipped"}
+    ]
 
 
 def test_init_db_migrates_v4_db_predating_embed_url_column_by_adding_it(tmp_path):
@@ -2686,7 +2771,7 @@ def test_init_db_migrates_v4_db_predating_embed_url_column_by_adding_it(tmp_path
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
     columns = {r[1] for r in old_conn.execute("PRAGMA table_info(items)").fetchall()}
     assert "embed_url" in columns
 
