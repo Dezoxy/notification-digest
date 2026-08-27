@@ -24,3 +24,11 @@ dist/
 
 # Claude Code agent worktrees (session-local, never part of the repo)
 .claude/worktrees/
+
+# wrangler local cache/state. workers/news-site/.gitignore already covers that
+# subtree, but wrangler drops this wherever it is INVOKED -- run a `wrangler`
+# command from the repo root (easy to do; the worker's npm scripts are not the
+# only entry point) and .wrangler/cache/wrangler-account.json lands here
+# untracked and un-ignored, carrying the Cloudflare account id. Unanchored so
+# it matches at any depth.
+.wrangler/
