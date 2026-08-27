@@ -16,11 +16,14 @@
   },
   "packageRules": [
     {
-      "description": "twifork is DELIBERATELY not automated. It is a single-maintainer fork of the dead upstream twikit, it still imports as `twikit`, and it handles a live X session cookie -- see the pin's own comment in pyproject.toml. Every bump needs a supply-chain re-audit of the diff against the previous pin (no new network hosts, no new eval/exec/base64/subprocess/pickle) before it can be trusted, which is not something a bot can assert. Bump it by hand, after that audit. Same posture the homelab repo takes for unifi_os_server_version, and for the same reason: the update is real, but the verification is not machine-checkable.",
+      "description": "twifork IS tracked, but gated behind the Dependency Dashboard rather than opening a PR on its own. It is a single-maintainer fork of the dead upstream twikit, it still imports as `twikit`, and it handles a live X session cookie -- see the pin's own comment in pyproject.toml. Every bump needs a supply-chain re-audit of the diff against the previous pin (no new network hosts, no new eval/exec/base64/subprocess/pickle), which no bot can assert. Excluding it entirely made those updates INVISIBLE, which is not the same as safe -- a fork going unmaintained, or shipping a fix this collector needs, would simply never surface. dependencyDashboardApproval makes Renovate report the update and wait: ticking the box is the deliberate act that starts the audit, so the bump can never arrive looking like a routine one. Remove this rule entirely to make it fully automatic.",
       "matchPackageNames": [
         "twifork"
       ],
-      "enabled": false
+      "dependencyDashboardApproval": true,
+      "addLabels": [
+        "supply-chain-audit"
+      ]
     },
     {
       "description": "Group workflow action bumps. The four actions in release.yml/pr-summary.yml move together and a split would mean several near-identical PRs against one file. Matches the homelab repo's own grouping of .github/workflows/**.",

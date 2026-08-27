@@ -182,7 +182,7 @@ notification-digest/
 ├── Dockerfile                     # slim Python 3.12 image, runs `python -m digest`
 ├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
 ├── pyproject.toml                 # uv-managed, Python 3.12 deps: telethon, twifork, markdown, nh3, feedparser, python-dotenv
-├── renovate.json                  # dependency automation; twifork deliberately excluded (supply-chain audit per bump)
+├── renovate.json                  # dependency automation; twifork is dashboard-gated (hand audit per bump)
 └── .env.example                   # documents every env var from §4.7, no real values
 ```
 

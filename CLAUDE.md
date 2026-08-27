@@ -62,11 +62,16 @@ true at the multi-channel cutover.
 - Dependency bumps arrive as Renovate PRs (`renovate.json`), one at a time,
   weekday mornings. The /docs-sync and /pr-summary rules below are written
   for PRs a session drives and do not apply to them -- a bot cannot run
-  either. Review the diff, let CI verify it, merge. `twifork` is excluded
-  from automation on purpose: it is a single-maintainer fork handling a
-  live X session cookie, so each bump needs a supply-chain re-audit by hand
-  (see the pin's comment in `pyproject.toml` and the rule's own
-  `description` in `renovate.json`).
+  either. Review the diff, let CI verify it, merge.
+- `twifork` is the ONE exception: it is tracked, but gated behind the
+  Dependency Dashboard (`dependencyDashboardApproval`) instead of opening a
+  PR on its own, and its PR carries a `supply-chain-audit` label. It is a
+  single-maintainer fork handling a live X session cookie, so each bump
+  needs a hand audit of the diff against the previous pin -- no new network
+  hosts, no new eval/exec/base64/subprocess/pickle -- before it can be
+  trusted. Ticking the dashboard box IS the decision to do that audit, so
+  the bump can never arrive looking routine. See the pin's comment in
+  `pyproject.toml` and the rule's own `description` in `renovate.json`.
 - Repo: github.com/Dezoxy/notification-digest (private). Container image:
   `ghcr.io/dezoxy/notification-digest`.
 - Before opening or updating any PR, run /docs-sync
