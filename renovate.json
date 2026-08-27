@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "prConcurrentLimit": 1,
+  "timezone": "Europe/Budapest",
+  "schedule": [
+    "after 6am before 7am"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 7am on monday"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "twifork is DELIBERATELY not automated. It is a single-maintainer fork of the dead upstream twikit, it still imports as `twikit`, and it handles a live X session cookie -- see the pin's own comment in pyproject.toml. Every bump needs a supply-chain re-audit of the diff against the previous pin (no new network hosts, no new eval/exec/base64/subprocess/pickle) before it can be trusted, which is not something a bot can assert. Bump it by hand, after that audit. Same posture the homelab repo takes for unifi_os_server_version, and for the same reason: the update is real, but the verification is not machine-checkable.",
+      "matchPackageNames": [
+        "twifork"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Group workflow action bumps. The four actions in release.yml/pr-summary.yml move together and a split would mean several near-identical PRs against one file. Matches the homelab repo's own grouping of .github/workflows/**.",
+      "matchFileNames": [
+        ".github/workflows/**"
+      ],
+      "groupName": "github workflow dependencies"
+    },
+    {
+      "description": "Group the news-site Worker toolchain. prettier and wrangler are one subtree's devDependencies with their own Node toolchain (CLAUDE.md's Conventions: npm/prettier/node --test, NOT ruff/pytest), and a bump to either is verified by the same `cd workers/news-site && npm ci && npm test` run -- so one PR, one verification.",
+      "matchFileNames": [
+        "workers/news-site/package.json"
+      ],
+      "groupName": "news-site toolchain"
+    },
+    {
+      "description": "A prettier major can reformat files it did not otherwise touch, and this subtree's test suite byte-compares rendered output against committed goldens -- so a prettier major is a review event, not a routine bump. Kept separate from the group above so its diff is read on its own.",
+      "matchFileNames": [
+        "workers/news-site/package.json"
+      ],
+      "matchPackageNames": [
+        "prettier"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "groupName": "news-site prettier major"
+    }
+  ]
+}
