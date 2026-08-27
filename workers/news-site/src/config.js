@@ -186,3 +186,19 @@ export const MAX_PUSH_LABEL_LEN = 64;
 // endpoints not already stored (see handlePushSubscribe), so a device at
 // the cap can always still refresh its own subscription.
 export const MAX_PUSH_SUBSCRIPTIONS = 20;
+
+// How long a push service should hold an undelivered notification (PLAN.md
+// §11.7, PR C). Four hours, deliberately shorter than the six-hour window
+// cadence: a notification about digest N is not just stale but WRONG once
+// N+1 exists, because the payload-less service worker would fetch
+// push/latest and render the newer brief under the older ring. Letting it
+// expire instead is the honest outcome — the site is right there.
+export const PUSH_TTL_SECONDS = 4 * 60 * 60;
+
+// Consecutive soft failures (429, 5xx, network) before a subscription is
+// dropped. 404/410 bypass this entirely — a push service saying "gone" is
+// authoritative and the row is deleted on the spot. This counter is for the
+// ambiguous cases, where the right posture is patience: five failed
+// fan-outs is over a day of a device being unreachable, which is a dead
+// subscription rather than a bad afternoon.
+export const MAX_PUSH_FAILURES = 5;

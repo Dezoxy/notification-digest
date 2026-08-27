@@ -253,17 +253,29 @@ export async function handlePushLatest(request, env, token) {
   // same as PR A's offline notification does.
   const payload = await readJson(request);
   let lang = "en";
-  const endpoint = validateEndpoint(payload && payload.endpoint);
-  if (endpoint.ok) {
-    const row = await env.DB.prepare("SELECT lang FROM push_subscriptions WHERE endpoint = ?")
-      .bind(endpoint.value)
-      .first();
-    if (row && row.lang === "hu") lang = "hu";
+  let digest;
+  // Wrapped, unlike the reads in the handlers above which each sit inside
+  // their own try. A D1 failure here must degrade to the service worker's
+  // own generic notification rather than throwing: this endpoint is called
+  // from a push event, and an unhandled rejection there means the browser
+  // shows its "site updated in the background" notice instead — the exact
+  // outcome the fallback exists to prevent. (Found the hard way: with the
+  // push tables not yet migrated, this threw where its siblings returned a
+  // clean 500.)
+  try {
+    const endpoint = validateEndpoint(payload && payload.endpoint);
+    if (endpoint.ok) {
+      const row = await env.DB.prepare("SELECT lang FROM push_subscriptions WHERE endpoint = ?")
+        .bind(endpoint.value)
+        .first();
+      if (row && row.lang === "hu") lang = "hu";
+    }
+    digest = await env.DB.prepare(
+      "SELECT id, kind, tldr, tldr_hu, has_attention FROM digests ORDER BY id DESC LIMIT 1",
+    ).first();
+  } catch {
+    return json({ error: "database error" }, 500);
   }
-
-  const digest = await env.DB.prepare(
-    "SELECT id, kind, tldr, tldr_hu, has_attention FROM digests ORDER BY id DESC LIMIT 1",
-  ).first();
   if (!digest) {
     // No digests at all: a real state on a fresh deployment, and not one
     // worth a 404 (the token was valid). The worker's own fallback copy is

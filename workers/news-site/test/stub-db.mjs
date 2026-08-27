@@ -54,7 +54,7 @@ function identityOf(topic) {
 const M1 = String.fromCharCode(1);
 const M2 = String.fromCharCode(2);
 
-export function makeDb({ writes, pushSubs } = {}) {
+export function makeDb({ writes, pushSubs, pushSentIds } = {}) {
   // Web Push (PLAN.md §11.7 PR B). Unlike every other arm in this file,
   // these need real MUTABLE state: subscribe/unsubscribe are the first
   // handlers whose whole behavior is what the table contains afterwards
@@ -62,6 +62,7 @@ export function makeDb({ writes, pushSubs } = {}) {
   // read-only fixture cannot express any of that. Callers pass their own
   // array in to seed it and to assert against it.
   const subs = pushSubs ?? [];
+  const pushSent = pushSentIds ?? new Set();
 
   function dispatch(sql, binds) {
     const s = String(sql);
@@ -102,10 +103,47 @@ export function makeDb({ writes, pushSubs } = {}) {
         const row = subs.find((r) => r.endpoint === binds[0]);
         return { first: async () => (row ? { lang: row.lang } : null) };
       }
+      if (/SELECT endpoint, fail_count/.test(s)) {
+        return { all: async () => ({ results: subs.map((r) => ({ ...r })) }) };
+      }
       if (/SELECT 1/.test(s)) {
         const row = subs.find((r) => r.endpoint === binds[0]);
         return { first: async () => (row ? { 1: 1 } : null) };
       }
+    }
+
+    if (/push_sent/.test(s)) {
+      // Claim-once. INSERT OR IGNORE semantics, and meta.changes is what
+      // the sender actually branches on — returning a constant 1 here would
+      // make the "a retried ingest does not re-notify" test meaningless.
+      const id = Number(binds[0]);
+      const already = pushSent.has(id);
+      if (!already) pushSent.add(id);
+      return { run: async () => ({ meta: { changes: already ? 0 : 1 } }) };
+    }
+
+    if (/^\s*UPDATE push_subscriptions/.test(s)) {
+      const endpoint = binds[binds.length - 1];
+      const row = subs.find((r) => r.endpoint === endpoint);
+      if (row) {
+        if (/last_ok_at/.test(s)) {
+          row.last_ok_at = binds[0];
+          row.fail_count = 0;
+        } else {
+          row.fail_count = binds[0];
+        }
+      }
+      return { run: async () => ({ success: true }) };
+    }
+
+    if (/SELECT MAX\(id\) AS max_id/.test(s)) {
+      const max = DIGESTS.reduce((m, d) => (d.id > m ? d.id : m), 0);
+      return { first: async () => ({ max_id: max }) };
+    }
+
+    if (/SELECT id, kind, has_attention FROM digests WHERE id/.test(s)) {
+      const row = DIGESTS.find((d) => d.id === Number(binds[0]));
+      return { first: async () => (row ? pick(row, ["id", "kind", "has_attention"]) : null) };
     }
 
     // handlePushLatest's "newest digest" read. Distinctive enough on its

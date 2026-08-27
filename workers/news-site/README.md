@@ -38,6 +38,8 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main`.
 | `src/icons.js` | the three base64 PWA PNGs — same mark as `FAVICON_SVG` |
 | `src/pwa.js` | `buildManifest` + `buildServiceWorker` (PLAN.md §11.7) |
 | `src/push.js` | the `push/*` endpoints and their validators |
+| `src/vapid.js` | ES256 JWT signing for the push services (RFC 8292) |
+| `src/notify.js` | the fan-out: claim-once, newest-only, delivery, pruning |
 | `src/ingest.js` | `PUT /ingest`: handler plus every validator |
 | `src/handlers.js` | the GET page handlers |
 | `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
@@ -240,6 +242,44 @@ wrangler secret put SITE_TOKEN
 wrangler secret put INGEST_KEY
 ```
 
+### How a notification actually happens
+
+`handleIngest` calls `notifyForDigest` under `ctx.waitUntil` after every write
+has succeeded — not awaited, so a slow or failing push service can never delay
+or fail an ingest. The digest is committed either way; this is strictly an
+announcement.
+
+Four gates stand between an ingest and a buzzing phone, and each exists for a
+specific failure:
+
+1. **Configured?** No VAPID keys, no send. This Worker deploys automatically
+   on merge, so the code always lands before the secrets — that window is the
+   default path through every deployment, not an edge case.
+2. **Newest?** Only the highest `id` in `digests` rings. A historical backfill
+   carries lower ids and claims silently; a backlog flush after an outage
+   collapses to one notification, which is correct rather than lossy — the
+   push is payload-less, so all of them would render the same newest brief
+   anyway. Deliberately **not** a `created_at` freshness check: that column is
+   backfillable for daily and weekly briefs, so a freshness window would
+   suppress exactly the briefs most worth announcing.
+3. **Claimed?** `INSERT OR IGNORE INTO push_sent` — an atomic claim, because
+   `PUT /ingest/:id` is idempotent by contract and the app retries failed
+   publishes. Claiming *before* sending makes this at-most-once: if every send
+   then fails, the digest is never announced. That is the intended trade — the
+   notification is not the delivery (the site has it, and Telegram still
+   pings), whereas at-least-once means re-ringing a phone for a digest already
+   read.
+4. **Signable?** The VAPID token is minted once per push-service origin,
+   before the fan-out. A signing failure aborts the whole run and touches no
+   subscription: signing depends only on configuration, so it fails for every
+   device or none, and charging it to the per-device error path would delete
+   the owner's entire fleet over a typo in a secret.
+
+Delivery outcomes: `404`/`410` deletes the row on the spot (the push service
+saying "gone" is authoritative); anything else soft increments `fail_count`,
+and a row is dropped after `MAX_PUSH_FAILURES` consecutive failures. A success
+resets the counter and stamps `last_ok_at`.
+
 ### Web Push (optional, PLAN.md §11.7)
 
 Push is entirely optional and the Worker runs fine without it: with no VAPID
@@ -272,6 +312,13 @@ wrangler secret put VAPID_PRIVATE_JWK
 The public key genuinely is public — it is handed to every browser that
 subscribes and is useless without the private half — so storing it as a secret
 is about having one mechanism rather than about hiding it.
+
+`VAPID_SUBJECT` is optional. RFC 8292 wants a `mailto:` or `https:` URL
+identifying whoever operates the sender, so a push service has someone to
+contact; with none set this falls back to the site's own origin, which is
+always valid and needs no extra secret. Set one only if you want a real
+contact address there — Apple validates this field more strictly than the
+others.
 
 The Terraform in this repo's root (`news_site.tf`) only wires up
 `news.toomhorvath.com` and `news.tomhorvath.me` as Workers Custom Domains

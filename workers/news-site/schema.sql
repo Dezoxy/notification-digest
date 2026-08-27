@@ -143,8 +143,8 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 
 -- push_sent: the claim-once ledger, one row per digest that has ever been
--- notified about. Created here in PR B; the sender that writes it lands in
--- PR C. It exists because PUT /ingest/:id is idempotent BY CONTRACT -- the
+-- notified about. Written by notifyForDigest (src/notify.js). It exists
+-- because PUT /ingest/:id is idempotent BY CONTRACT -- the
 -- digest app retries a failed publish on its next run (get_pending_digests,
 -- digest/state.py) -- and a notification must inherit that idempotency
 -- rather than firing once per retry. INSERT OR IGNORE plus a check of
