@@ -18,10 +18,11 @@ import { badRequest, json } from "./http.js";
 import { keyMatches } from "./auth.js";
 import { renderDeltas } from "./render-digest.js";
 import { renderArcAppearance } from "./render-arc.js";
+import { notifyForDigest } from "./notify.js";
 
 // ── route handlers ──────────────────────────────────────────────────────
 
-export async function handleIngest(request, env, idParam) {
+export async function handleIngest(request, env, idParam, ctx) {
   const id = Number(idParam);
   if (!Number.isInteger(id) || id <= 0) {
     return badRequest("id must be a positive integer");
@@ -156,6 +157,22 @@ export async function handleIngest(request, env, idParam) {
       return json({ error: "database error" }, 500);
     }
   }
+
+  // Push fan-out (PLAN.md §11.7, PR C). AFTER every write has succeeded, so
+  // a notification can never announce a digest that failed to store.
+  //
+  // waitUntil, not await: the ingest response must not wait on a push
+  // service, and a push service having a bad day must not turn a successful
+  // ingest into a failed one. The digest is committed either way — this is
+  // strictly an announcement. Everything that decides whether to actually
+  // send anything (newest-only, claim-once, whether push is even
+  // configured) lives in notifyForDigest, which swallows its own failures
+  // for the same reason.
+  //
+  // ctx is optional so a caller without one — any direct handleIngest call
+  // that is not the Worker entry point — still ingests correctly, just
+  // without notifying.
+  ctx?.waitUntil(notifyForDigest(env, id, new URL(request.url).origin));
 
   return json({ ok: true }, 200);
 }

@@ -49,7 +49,7 @@ export function loadWorker(entry = new URL("../worker.js", import.meta.url).href
   return workerPromise;
 }
 
-export function makeEnv({ writes, pushSubs, push = true } = {}) {
+export function makeEnv({ writes, pushSubs, pushSentIds, push = true } = {}) {
   return {
     SITE_TOKEN,
     INGEST_KEY,
@@ -59,17 +59,36 @@ export function makeEnv({ writes, pushSubs, push = true } = {}) {
     // a real deployment is in between this code merging and the secrets
     // being set — the Worker auto-deploys on merge, so that window always
     // exists and must degrade to 503 rather than 500.
-    ...(push ? { VAPID_PUBLIC_KEY: VAPID_PUBLIC_KEY, VAPID_PRIVATE_JWK: "{}" } : {}),
-    DB: makeDb({ writes, pushSubs }),
+    ...(push ? { VAPID_PUBLIC_KEY, VAPID_PRIVATE_JWK } : {}),
+    DB: makeDb({ writes, pushSubs, pushSentIds }),
   };
 }
 
-// A real, correctly shaped VAPID public key (uncompressed P-256 point,
-// 65 bytes, base64url) — the client decodes it into applicationServerKey,
-// so a placeholder of the wrong length would pass every test here and fail
-// in a browser.
+// A REAL P-256 key pair, generated once for the test suite and committed on
+// purpose — the same category of fixture as SITE_TOKEN's "goldentesttoken",
+// and worth nothing to anyone: it signs pushes to a push service that does
+// not exist, and production's keys live in Cloudflare secrets.
+//
+// Real, rather than a placeholder, because a placeholder cannot sign. The
+// first version of this file carried a well-formed public key next to
+// VAPID_PRIVATE_JWK: "{}", and every sender test then failed at importKey —
+// which is how the fan-out's error handling turned out to be charging
+// signing failures to the SUBSCRIPTIONS (see notify.js's signAll).
+// The two halves are a matching pair: the suite verifies a produced VAPID
+// signature against the advertised public key, so they cannot drift apart
+// without a test failing.
 export const VAPID_PUBLIC_KEY =
-  "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U";
+  "BLxWERpS2Y6OKzlO4UWS_jpR63AoABN-lfSBcvjbseelZ88FBa0z31Qw0deRCuOj6OQMm63J4qLJlU1vxI-TS7M";
+
+export const VAPID_PRIVATE_JWK = JSON.stringify({
+  key_ops: ["sign"],
+  ext: true,
+  kty: "EC",
+  x: "vFYRGlLZjo4rOU7hRZL-OlHrcCgAE36V9IFy-Nux56U",
+  y: "Z88FBa0z31Qw0deRCuOj6OQMm63J4qLJlU1vxI-TS7M",
+  crv: "P-256",
+  d: "RiSof-pDOCLxruE7SS-WUnmOOXGzc4zhxPsAqXAHew8",
+});
 
 export const ORIGIN = "https://news.toomhorvath.com";
 
@@ -93,10 +112,34 @@ export const GOLDEN_PAGES = [
   { name: "weekly-en", path: "weekly/" },
 ];
 
-export async function fetchPath(path, { init, entry } = {}) {
+export async function fetchPath(path, { init, entry, env } = {}) {
   const worker = await loadWorker(entry);
   const url = path.startsWith("/") ? `${ORIGIN}${path}` : `${ORIGIN}/t/${SITE_TOKEN}/${path}`;
-  return worker.fetch(new Request(url, init), makeEnv());
+  return fetchWithCtx(worker, new Request(url, init), env ?? makeEnv());
+}
+
+// The ExecutionContext stub, and the reason it exists at all: handleIngest's
+// push fan-out (PLAN.md §11.7) runs inside ctx.waitUntil, so a stub that
+// merely ACCEPTED the promise and dropped it would let every claim-once,
+// prune-on-410 and newest-only test pass while asserting against work that
+// had not happened yet — green, and testing nothing. §11.7 names this as a
+// guardrail for exactly that reason; it is the same class of trap as
+// stub-db's throw-on-unknown-SQL.
+//
+// So: collect, then AWAIT, before the response is handed back. Tests can
+// assert on the resulting database state immediately, with no polling and
+// no sleeps.
+export async function fetchWithCtx(worker, request, env) {
+  const pending = [];
+  const ctx = {
+    waitUntil(promise) {
+      pending.push(promise);
+    },
+    passThroughOnException() {},
+  };
+  const response = await worker.fetch(request, env, ctx);
+  await Promise.allSettled(pending);
+  return response;
 }
 
 export { FROZEN_NOW, SITE_TOKEN, INGEST_KEY, DIGESTS, ARC_CONTEXTS };

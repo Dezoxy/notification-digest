@@ -601,3 +601,225 @@ test("the settings row ships hidden, in both languages, on every page", async ()
     assert.ok(html.includes('class="pushtoggle" hidden'), `${name} control starts hidden`);
   }
 });
+
+// ── the sender (PLAN.md §11.7, PR C) ──────────────────────────────────────
+
+// Intercept the outbound push. Returns the recorded requests so a test can
+// assert on the VAPID header, the TTL, and the fact that there is no body.
+function stubPushService(responder = () => new Response(null, { status: 201 })) {
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (/googleapis|mozilla|apple|windows/.test(url)) {
+      calls.push({ url, init });
+      return responder(url, init, calls.length);
+    }
+    return real(input, init);
+  };
+  return { calls, restore: () => (globalThis.fetch = real) };
+}
+
+// The newest fixture digest — the sender only ever notifies for that id.
+const NEWEST_ID = 235;
+
+async function ingestNewest(env) {
+  return fetchPath(`/ingest/${NEWEST_ID}`, {
+    env,
+    init: {
+      method: "PUT",
+      headers: { "x-ingest-key": INGEST_KEY, "content-type": "application/json" },
+      body: JSON.stringify(VALID_INGEST_PAYLOAD),
+    },
+  });
+}
+
+test("sender: fans out on ingest, with a verifiable VAPID token and no body", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "en", fail_count: 0 }];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  const push = stubPushService();
+  try {
+    assert.equal((await ingestNewest(env)).status, 200);
+    assert.equal(push.calls.length, 1, "one device, one push");
+  } finally {
+    push.restore();
+  }
+
+  const { init } = push.calls[0];
+  assert.equal(init.method, "POST");
+  assert.ok(!init.body, "payload-less: nothing to encrypt, nothing to leak");
+  assert.equal(init.headers.TTL, String(4 * 60 * 60));
+  assert.equal(init.headers.Urgency, "normal");
+
+  // Actually VERIFY the signature rather than pattern-matching the header.
+  // A JWT that is well-shaped but wrongly signed is the single most likely
+  // way this feature fails silently in production: push services answer 401
+  // and nothing else ever says why.
+  const auth = init.headers.Authorization;
+  const [, token, key] = auth.match(/^vapid t=([^,]+), k=(.+)$/);
+  const [header, payload, signature] = token.split(".");
+
+  const b64uToBytes = (s) =>
+    Uint8Array.from(
+      atob(
+        s
+          .replace(/-/g, "+")
+          .replace(/_/g, "/")
+          .padEnd(Math.ceil(s.length / 4) * 4, "="),
+      ),
+      (c) => c.charCodeAt(0),
+    );
+  const pub = await crypto.subtle.importKey(
+    "raw",
+    b64uToBytes(key),
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["verify"],
+  );
+  const valid = await crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    pub,
+    b64uToBytes(signature),
+    new TextEncoder().encode(`${header}.${payload}`),
+  );
+  assert.ok(valid, "the VAPID signature verifies against the advertised key");
+
+  const claims = JSON.parse(new TextDecoder().decode(b64uToBytes(payload)));
+  // `aud` is the PUSH SERVICE's origin, not this site's — the most common
+  // cause of a 401 is getting that backwards.
+  assert.equal(claims.aud, "https://fcm.googleapis.com");
+  assert.equal(claims.sub, ORIGIN, "falls back to the site origin as contact");
+  assert.ok(claims.exp > Math.floor(Date.now() / 1000), "not already expired");
+  assert.ok(claims.exp - Math.floor(Date.now() / 1000) <= 24 * 60 * 60, "Apple rejects exp > 24h");
+});
+
+test("sender: claim-once — a retried ingest does not re-notify", async () => {
+  // PUT /ingest/:id is idempotent BY CONTRACT (the app retries a failed
+  // publish on its next run), so the notification has to inherit that.
+  const pushSubs = [{ endpoint: FCM, lang: "en", fail_count: 0 }];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  const push = stubPushService();
+  try {
+    await ingestNewest(env);
+    await ingestNewest(env);
+    await ingestNewest(env);
+    assert.equal(push.calls.length, 1, "three ingests of the same id, one push");
+  } finally {
+    push.restore();
+  }
+});
+
+test("sender: newest-only — a backfilled older digest claims silently", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "en", fail_count: 0 }];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  const push = stubPushService();
+  try {
+    // 234 exists in the fixtures and is NOT the newest. A historical
+    // backfill of it must not ring — the reader would open push/latest and
+    // be shown 235 anyway.
+    const res = await fetchPath("/ingest/234", {
+      env,
+      init: {
+        method: "PUT",
+        headers: { "x-ingest-key": INGEST_KEY, "content-type": "application/json" },
+        body: JSON.stringify(VALID_INGEST_PAYLOAD),
+      },
+    });
+    assert.equal(res.status, 200, "the ingest itself still succeeds");
+    assert.equal(push.calls.length, 0, "but nothing rings");
+  } finally {
+    push.restore();
+  }
+});
+
+test("sender: 410 Gone prunes the subscription, 429 only counts against it", async () => {
+  const gone = "https://fcm.googleapis.com/fcm/send/dead";
+  const flaky = "https://web.push.apple.com/flaky";
+  const pushSubs = [
+    { endpoint: gone, lang: "en", fail_count: 0 },
+    { endpoint: flaky, lang: "en", fail_count: 0 },
+  ];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  const push = stubPushService((url) =>
+    url === gone ? new Response(null, { status: 410 }) : new Response(null, { status: 429 }),
+  );
+  try {
+    await ingestNewest(env);
+  } finally {
+    push.restore();
+  }
+
+  assert.equal(pushSubs.length, 1, "the dead endpoint is deleted outright");
+  assert.equal(pushSubs[0].endpoint, flaky);
+  // A rate-limited push service is a bad afternoon, not a dead device.
+  assert.equal(pushSubs[0].fail_count, 1, "counted, not dropped");
+});
+
+test("sender: a success resets fail_count and stamps last_ok_at", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "en", fail_count: 3 }];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  const push = stubPushService();
+  try {
+    await ingestNewest(env);
+  } finally {
+    push.restore();
+  }
+  assert.equal(pushSubs[0].fail_count, 0, "a recovered device is forgiven");
+  assert.ok(pushSubs[0].last_ok_at, "and its last success is recorded");
+});
+
+test("sender: unconfigured push never reaches a push service", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "en", fail_count: 0 }];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set(), push: false });
+  const push = stubPushService();
+  try {
+    assert.equal((await ingestNewest(env)).status, 200, "ingest is unaffected");
+    assert.equal(push.calls.length, 0);
+  } finally {
+    push.restore();
+  }
+});
+
+test("sender: a push service failing never fails the ingest", async () => {
+  const pushSubs = [{ endpoint: FCM, lang: "en", fail_count: 0 }];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  const push = stubPushService(() => {
+    throw new Error("network down");
+  });
+  try {
+    // The digest is already committed by the time the fan-out starts; an
+    // announcement that cannot be delivered must not undo it.
+    assert.equal((await ingestNewest(env)).status, 200);
+  } finally {
+    push.restore();
+  }
+  assert.equal(pushSubs[0].fail_count, 1);
+});
+
+test("sender: a broken VAPID key costs no subscriptions", async () => {
+  // The failure mode this guards against: signing depends only on
+  // configuration, so a malformed key fails for EVERY device, every time.
+  // Charged to the per-device error path, it would increment every row's
+  // fail_count on every ingest and delete the owner's entire fleet within a
+  // day — over a typo in a secret. The subscriptions are not at fault and
+  // must not pay.
+  const pushSubs = [
+    { endpoint: FCM, lang: "en", fail_count: 4 }, // one away from the cull
+    { endpoint: "https://web.push.apple.com/x", lang: "en", fail_count: 4 },
+  ];
+  const env = makeEnv({ pushSubs, pushSentIds: new Set() });
+  env.VAPID_PRIVATE_JWK = "{}"; // configured-looking, unusable
+  const push = stubPushService();
+  try {
+    assert.equal((await ingestNewest(env)).status, 200, "ingest is unaffected");
+    assert.equal(push.calls.length, 0, "nothing is sent");
+  } finally {
+    push.restore();
+  }
+  assert.equal(pushSubs.length, 2, "both devices survive");
+  assert.deepEqual(
+    pushSubs.map((s) => s.fail_count),
+    [4, 4],
+    "and are not blamed for it",
+  );
+});

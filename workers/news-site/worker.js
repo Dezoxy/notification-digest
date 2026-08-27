@@ -158,6 +158,8 @@
  *   icons.js      the three base64 PWA PNGs (same mark as FAVICON_SVG)
  *   pwa.js        buildManifest + buildServiceWorker (PLAN.md §11.7)
  *   push.js       the push/* endpoints and their validators
+ *   vapid.js      ES256 JWT signing for the push services (RFC 8292)
+ *   notify.js     the fan-out: claim-once, newest-only, prune
  *   ingest.js     PUT /ingest: handler + every validator
  *   handlers.js   the GET page handlers
  *   render-*.js   per-page renderers (shared helpers in render-shared.js)
@@ -230,7 +232,7 @@ const ROUTE_PUSH = /^\/t\/([^/]+)\/push\/(key|subscribe|unsubscribe|latest)$/;
 const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -272,7 +274,7 @@ export default {
     const ingestMatch = path.match(ROUTE_INGEST);
     if (ingestMatch) {
       if (request.method !== "PUT") return notFound();
-      return handleIngest(request, env, ingestMatch[1]);
+      return handleIngest(request, env, ingestMatch[1], ctx);
     }
 
     // The optional "hu/" segment selects the Hungarian chrome/translations,

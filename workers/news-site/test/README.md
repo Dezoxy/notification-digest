@@ -54,6 +54,15 @@ collapses. `env.mjs` replaces `Date` with a subclass whose zero-argument
 constructor and `Date.now()` return one instant; explicit construction
 (parsing fixture timestamps) passes through untouched.
 
+**The `ctx` stub awaits its `waitUntil` promises.** `handleIngest` runs the
+push fan-out inside `ctx.waitUntil`, so a stub that merely *accepted* the
+promise and dropped it would let every claim-once, newest-only and
+prune-on-410 test pass while asserting against work that had not happened yet
+— green, and testing nothing. `fetchWithCtx` collects and awaits them before
+handing back the response, so tests read the resulting database state directly
+with no polling and no sleeps. Same class of trap as the throw-on-unknown-SQL
+rule below.
+
 **The push arms are the one piece of mutable state.** Every other arm reads
 fixtures. `push_subscriptions` cannot: subscribe/unsubscribe are the first
 handlers whose entire behavior *is* what the table contains afterwards —

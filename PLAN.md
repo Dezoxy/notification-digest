@@ -1254,7 +1254,7 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
 - [x] (site, PR B) Subscriptions: `migrations/0009-push.sql`
       (`push_subscriptions`, `push_sent`) mirrored into `schema.sql`, the
       `push/*` endpoints, the settings-bubble row in EN/HU.
-- [ ] (site, PR C) The sender: VAPID JWT signing, `ctx` threading,
+- [x] (site, PR C) The sender: VAPID JWT signing, `ctx` threading,
       `shouldNotify`, claim-once + newest-only, `Promise.allSettled`
       fan-out, prune on 404/410, `fail_count` backoff.
 
