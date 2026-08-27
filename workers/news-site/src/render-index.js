@@ -182,7 +182,18 @@ export function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
 
 export function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
-  const time = formatTime(new Date(row.created_at), strings.locale);
+  const created = new Date(row.created_at);
+  // The daily and weekly views drop their day headers (see renderIndexPage)
+  // so their cards can flow two-across instead of one-per-row against an
+  // empty second column. The day those headers carried has to survive that,
+  // so it moves INTO the card here -- "Mon 24 Aug · 20:43" instead of a bare
+  // "20:43". The all view keeps time only: its cards still sit under a day
+  // header, and repeating the date on every one of a day's ~8 window
+  // digests would be noise.
+  const time =
+    view === "all"
+      ? formatTime(created, strings.locale)
+      : `${formatShortDate(created, strings.locale)} · ${formatTime(created, strings.locale)}`;
   // Weekly gets the same accent/clamp treatment as daily — both are a
   // synthesis, just a different window — so this checks "not a plain
   // window digest" rather than "is daily" specifically; see kindBadge for
@@ -449,6 +460,21 @@ export function computeNowArcs(rows, nowMs) {
   }));
 }
 
+// Day grouping is an ALL-view affordance, not a universal one. That view
+// yields ~8 window digests a day, so a day header is a real divider between
+// dense runs of cards. The daily view yields ONE brief per day and the
+// weekly view one per week, so a header before every single card turned the
+// two-column grid into one card beside a permanently empty cell -- the
+// owner-reported "the text has just half the width", originally answered by
+// dropping those views to a single column (see section[data-ledger] in
+// css.js). Dropping the headers instead lets the cards flow two-across and
+// actually fill the grid; each card carries its own date now, see
+// renderIndexEntry.
+export function renderLedgerFor(view, rows, locale, renderRow) {
+  if (view !== "all") return rows.map(renderRow).join("\n");
+  return renderDayLedger(groupByDay(rows, locale), renderRow);
+}
+
 // NOW section (§11.1 PR B): the situational-overview block rendered at the
 // top of renderIndexPage, above the ledger — see handleIndexPage for the
 // current-week-all-view-only gate that decides whether `nowArcs` is ever
@@ -588,15 +614,17 @@ export function renderIndexPage(
     // no empty day header is left behind.
     const [lead, ...rest] = rows;
     leadRow = lead;
-    const groups = groupByDay(rest, strings.locale);
-    const ledger = renderDayLedger(groups, (row) => renderIndexEntry(row, token, lang, view));
+    const ledger = renderLedgerFor(view, rest, strings.locale, (row) =>
+      renderIndexEntry(row, token, lang, view),
+    );
     body = `${renderLeadCard(lead, token, lang, view)}\n${ledger}`;
   } else {
     // Archive week (roadmap 3 step 3): no lead card — every row, including
     // rows[0], goes through the plain day-grouped ledger, same as the
     // "rest" branch above minus the exclusion.
-    const groups = groupByDay(rows, strings.locale);
-    body = renderDayLedger(groups, (row) => renderIndexEntry(row, token, lang, view));
+    body = renderLedgerFor(view, rows, strings.locale, (row) =>
+      renderIndexEntry(row, token, lang, view),
+    );
   }
 
   // Unified search (owner UX pass): the container the bottom script's
@@ -650,15 +678,6 @@ export function renderIndexPage(
   // fence or advance the lastVisit stamp.
   const archiveAttr = isCurrent ? "" : ' data-week-archive="1"';
 
-  // data-ledger (owner-reported half-width cards): marks the <section> on the
-  // views whose ledger yields at most one card per day-group — see the
-  // section[data-ledger="single"] rule in the stylesheet for the full
-  // reasoning. The ALL view is the only dense one, so it alone keeps the
-  // two-column grid. Purely presentational: nothing scripted reads this, and
-  // the DOM structure/sibling order the unread-fence and filter IIFEs walk is
-  // untouched.
-  const ledgerAttr = view === "all" ? "" : ' data-ledger="single"';
-
   // data-unread-label (roadmap 2 step 2): the unread-fence label text,
   // rendered server-side so the bottom script that builds the fence stays
   // language-agnostic — it just reads this attribute rather than knowing
@@ -705,7 +724,7 @@ export function renderIndexPage(
     lang,
     view,
     renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
-    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}${ledgerAttr}>${body}</section>${archiveResultsHtml}`,
+    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     prefetchHref,
     buildIssueLine(leadRow, rows, view, strings),
