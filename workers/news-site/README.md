@@ -610,5 +610,19 @@ wrangler's built-in bundler folds back into one self-contained script at
 deploy time, no build configuration involved. Inline CSS, no external
 requests, EN/HU parity, both themes, a working no-JS baseline, and the
 trust-model headers stay load-bearing exactly as before. The golden tests
-under `test/` (npm test) hold every refactor to byte-identical output. Still deferred, unchanged:
-PWA/offline — the capability token would end up in a persisted, cached artifact.
+under `test/` (npm test) hold every refactor to byte-identical output.
+
+**No longer deferred: PWA + push** (notification-digest `PLAN.md` §11.7,
+approved 2026-08-27, not yet built). Roadmaps 1–4 above deferred this four
+times over one objection — "the capability token would end up in a
+persisted, cached artifact" — and §11.7 splits that objection in two. The
+token landing on disk is already true of browser history and any bookmark,
+so an installed shortcut is the same exposure class, not a new one. Private
+CONTENT landing on disk is the part that stands, and it becomes the
+feature's first guardrail: the service worker uses no Cache API at all.
+What ships is installable + push-on-arrival, explicitly NOT the offline
+reader the old deferral bundled it with — `Cache-Control: private,
+no-store` stays honest. The manifest is served token-scoped at
+`/t/<token>/manifest.webmanifest`, behind the same gate and the same
+indistinguishable 404 as every other route, which answers the companion
+"fetched tokenless" objection outright.
