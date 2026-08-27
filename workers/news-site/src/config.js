@@ -105,17 +105,29 @@ export const DELTA_TEXT_MAX_LEN = 400;
 // per-digest field, so it does not live inside the digests row at all (see
 // the arc_context table, schema.sql) — this cap only bounds one ingest
 // PAYLOAD's array, same "shape discipline" pattern as topics/deltas above.
-// MAX_ARC_CONTEXTS reuses MAX_TOPICS' own value, same reasoning MAX_DELTAS
-// already applies: a digest can have at most MAX_TOPICS topics/arcs in the
-// first place, so one ingest can never legitimately carry more primers than
-// that either. ARC_CONTEXT_MAX_BYTES bounds `context_md`: the spec is
+// MAX_ARC_CONTEXTS deliberately does NOT reuse MAX_TOPICS the way MAX_DELTAS
+// does, and the difference is the whole point of this comment. `topics` and
+// `deltas` describe THIS digest, so MAX_TOPICS genuinely bounds them.
+// `arc_contexts` does not: the app attaches the FULL current snapshot of
+// every primer it has ever generated to EVERY publish (digest/deliver.py's
+// `_deliver_site` -- an unscoped send is what makes the feature self-healing
+// without a "has the site confirmed this primer" column), so this array's
+// size tracks the age of the deployment, not the shape of one digest.
+// Bounding it by MAX_TOPICS was a false analogy that made every site publish
+// 400 the moment the 13th primer was generated -- total, permanent, and
+// self-sustaining, since each retry re-sent the same oversized snapshot.
+// The value MUST stay in lockstep with the app's own
+// `_MAX_ARC_CONTEXTS_PER_PUBLISH` (digest/state.py), which is what actually
+// caps the array on the wire. 50 primers at ARC_CONTEXT_MAX_BYTES each is
+// ~400KB, an order of magnitude under MAX_REQUEST_BYTES, so this ceiling
+// costs nothing. ARC_CONTEXT_MAX_BYTES bounds `context_md`: the spec is
 // "3-5 SHORT markdown paragraphs" (a primer, not a full digest body) —
 // 8KB is several times the size even a generous reading of "3-5 short
 // paragraphs" would produce (roughly 1000-1500 words at typical English
 // prose density), while staying two orders of magnitude below
 // MAX_BODY_FIELD_BYTES's 2MB full-digest-body cap, which this is nothing
 // like.
-export const MAX_ARC_CONTEXTS = MAX_TOPICS;
+export const MAX_ARC_CONTEXTS = 50;
 
 export const ARC_CONTEXT_MAX_BYTES = 8 * 1024;
 

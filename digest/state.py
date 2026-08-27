@@ -2017,12 +2017,22 @@ def get_latest_arc_occurrence(conn: sqlite3.Connection, key: str) -> tuple[str, 
 
 
 # Caps how many stored primers `get_all_arc_contexts` will ever return in one
-# call -- defense in depth, mirroring `_MAX_RECENT_ARC_KEYS`'s identical
-# bounding rationale for the sibling {{RECENT_ARCS}} prompt block: the real
-# bound is `CONTEXT_MAX_PER_RUN` capping how many NEW rows this table can
-# ever gain per day (PLAN.md §11.6), so this table stays small by
-# construction -- this is a belt-and-suspenders ceiling on the site-publish
-# payload size, not the primary control.
+# call. This is a HARD PARITY CONSTANT with the site's own MAX_ARC_CONTEXTS
+# (workers/news-site/src/config.js), the same way digest/publish.py's
+# _MAX_TOPICS and digest/summarize.py's _MAX_DELTAS/_MAX_ARC_KEYS mirror
+# their server-side counterparts -- NOT the "belt and suspenders" ceiling
+# this comment used to call it. Exceeding the site's cap 400s the WHOLE PUT
+# (validateArcContexts -> badRequest), taking the digest body down with an
+# optional field, and because `_deliver_site` re-sends the same unscoped
+# snapshot on every retry, that 400 never clears on its own. Change one side
+# without the other and site publish breaks completely.
+#
+# Unlike its siblings, this one is NOT bounded by a digest's own shape:
+# `get_all_arc_contexts` is deliberately unscoped from `digest_id` (see its
+# docstring), and nothing prunes the `arc_context` table, so the row count
+# only ever grows -- at up to `CONTEXT_MAX_PER_RUN` (PLAN.md §11.6) new rows
+# per day. That growth is precisely why the cap has to be a real ceiling
+# both sides agree on rather than a number picked as "surely never reached".
 _MAX_ARC_CONTEXTS_PER_PUBLISH = 50
 
 
