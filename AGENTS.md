@@ -71,7 +71,7 @@ true at the multi-channel cutover.
 - Repo: github.com/Dezoxy/notification-digest (private). Container image:
   `ghcr.io/dezoxy/notification-digest`.
 - Before opening or updating any PR, run /docs-sync
-  (`.claude/skills/docs-sync/SKILL.md`): audit the branch diff for
+  (`.agents/skills/docs-sync/SKILL.md`): audit the branch diff for
   documentation it falsifies — README, PLAN.md's layout tree, this file and
   its twin, the worker's READMEs and file header — and fix those docs in the
   same branch, with the proof in the PR body. A PR that changes paths,
