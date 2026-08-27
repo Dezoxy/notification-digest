@@ -1230,6 +1230,21 @@
   }
   summary.searchtoggle::-webkit-details-marker { display: none; }
 
+  /* Hover bridge (hover-to-open, client.js's hoverPopovers). Both bubbles
+     sit 0.5em BELOW their chip, and that gap is outside both boxes -- so a
+     pointer travelling from chip to panel leaves the details element and
+     fires mouseleave halfway there. Covering the gap with a transparent
+     pseudo-element makes the trip continuous, which is what lets the close
+     timer stay short: a long grace period would leave the panel open after
+     the pointer had gone, and an open panel swallows the next click
+     anywhere on the page. Pointer-events only -- it paints nothing, and it
+     sits inside the panel so it exists only while the panel does. */
+  .settingspanel::before,
+  .searchpanel::before {
+    content: ""; position: absolute; left: 0; right: 0;
+    top: -0.55em; height: 0.55em;
+  }
+
   .searchpanel {
     position: absolute; right: 0; top: calc(100% + 0.5em);
     z-index: 20;
@@ -2236,6 +2251,66 @@
       }, { signal: signal });
     })();
 
+    // Hover-to-open for the masthead popovers (owner request, DESKTOP ONLY).
+    // Both bubbles stay native details/summary: this only sets .open, so
+    // click, Enter, Escape, the "/" shortcut and the palette all keep working
+    // exactly as before, and the [open] attribute stays the single source of
+    // truth every other handler already reads.
+    //
+    // Gated on a real hovering pointer. A touch device synthesises
+    // mouseenter on tap, which would open the panel and then immediately
+    // leave it open with no pointer to move away -- worse than the tap it
+    // replaced. pointer: fine excludes coarse styluses/remotes for the same
+    // reason.
+    //
+    // Timers, both cancellable:
+    //   openDelay  ignores a pointer merely CROSSING the chip on its way
+    //              somewhere else, which would otherwise flash the panel.
+    //   closeDelay covers the pointer leaving one edge and re-entering
+    //              another (the summary/panel seam), so the bubble does not
+    //              blink during ordinary travel. Kept SHORT on purpose: an
+    //              open panel swallows the next click anywhere on the page
+    //              (the dismiss handlers below, and the soft-nav bail that
+    //              reads details.settings[open], details.searchpop[open]),
+    //              so a bubble left open after the pointer has gone would
+    //              eat a link click. The .5em gap between chip and panel is
+    //              bridged in CSS instead of by a longer timer -- see the
+    //              .settingspanel::before / .searchpanel::before rules.
+    //
+    // keepOpen() is per-popover rather than a blanket "focus is inside"
+    // check, because the search bubble focuses its own input the moment it
+    // opens (see its toggle handler below) -- a blanket check would mean a
+    // hover-opened search panel could never close on mouseleave, since it
+    // had focused itself on the way in. Each caller decides what counts as
+    // work in progress worth protecting.
+    var hoverPopovers = function (el, keepOpen, onClose) {
+      if (!el) return;
+      if (!window.matchMedia || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+      var openTimer = null;
+      var closeTimer = null;
+      var clear = function () {
+        if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+        if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+      };
+      el.addEventListener("mouseenter", function () {
+        clear();
+        if (el.open) return;
+        openTimer = setTimeout(function () { el.open = true; }, 120);
+      }, { signal: signal });
+      el.addEventListener("mouseleave", function () {
+        clear();
+        if (!el.open) return;
+        closeTimer = setTimeout(function () {
+          if (keepOpen()) return;
+          // Blur first when the thing losing focus is inside: details hides
+          // its content on close, and leaving focus parked on a hidden
+          // element strands the keyboard there.
+          if (el.contains(document.activeElement)) document.activeElement.blur();
+          onClose();
+        }, 140);
+      }, { signal: signal });
+    };
+
     // Settings bubble close polish (owner redesign). Opening needs no JS at
     // all — details/summary opens natively, and the CSS above animates that
     // open state directly off the [open] attribute. Closing is different:
@@ -2275,6 +2350,16 @@
           closing = false;
         }, 120);
       };
+      // Hover-open/close (desktop). Routed through close() above, not a bare
+      // settings.open = false, so the pointer path animates exactly like the
+      // click, Escape and outside-tap paths already do. keepOpen guards a
+      // reader who tabbed into the rows and then moved the mouse away.
+      hoverPopovers(
+        settings,
+        function () { return settings.contains(document.activeElement); },
+        close,
+      );
+
       // Dismiss-tap swallowing (owner-reported): with the bubble open, a tap
       // outside used to close it AND activate whatever sat under the finger —
       // closing the panel by tapping an article link opened the article. An
@@ -2365,6 +2450,17 @@
       pop.addEventListener("toggle", function () {
         if (pop.open) input.focus();
       }, { signal: signal });
+      // Hover-open/close (desktop). keepOpen protects a query in progress:
+      // the input focuses itself on open, so "focus is inside" alone would
+      // pin the panel open forever. A TYPED value is the real signal that
+      // closing would destroy something; an empty field is not, and neither
+      // is focus sitting on the archive link, which the reader is about to
+      // leave anyway if the pointer has gone.
+      hoverPopovers(
+        pop,
+        function () { return input.value !== ""; },
+        function () { pop.open = false; },
+      );
       document.addEventListener(
         "click",
         function (e) {
