@@ -222,9 +222,26 @@ def _deliver_site(
     run's `get_pending_digests` pass retries exactly this channel -- and,
     per `deliver_channels`'s ordering contract, Telegram is skipped THIS
     run for this digest too (it links to the site page this call just
-    failed to publish). Only the exception's type name is logged, never its
-    message or the request URL/response body (digest/publish.py's
-    `publish_to_site` never logs either itself).
+    failed to publish). An `HTTPError` logs its status code; every other
+    failure logs only the exception's type name. Never the exception's
+    message, the request URL, or the response body (digest/publish.py's
+    `publish_to_site` never logs either itself) -- the status code is safe
+    here only because this channel's `x-ingest-key` rides in a HEADER, so
+    neither it nor the URL it came from carries a secret.
+
+    ONE failure shape does not follow that all-or-nothing rule: an HTTP 400
+    on a payload that carried a non-empty `arc_contexts` is retried ONCE
+    with that field dropped, and a digest published that way counts as
+    published (`site_published = 1`, Telegram proceeds normally). A 400 is
+    the site's validator rejecting the payload, so the ordinary
+    retry-next-run model degenerates into fail-forever -- the next run
+    re-sends the identical rejected bytes. `arc_contexts` is the only field
+    worth sacrificing to break that: optional, decoration rather than
+    content, and the only one whose size tracks deployment age instead of
+    this digest (see `get_all_arc_contexts`). The degraded publish logs at
+    ERROR despite succeeding, because the contract mismatch behind it heals
+    on its own no more than the 400 did. 401/5xx, and a 400 with nothing in
+    `arc_contexts`, are NOT retried -- dropping a field cannot help those.
 
     `kind` ("window", "daily", or "weekly", default "window") is threaded straight
     through to `publish_to_site`'s own `kind` payload field unchanged -- see
@@ -332,7 +349,15 @@ def _deliver_site(
                 topic["key"] = key
     deltas = get_deltas(conn, digest_id)
     arc_contexts = get_all_arc_contexts(conn)
-    try:
+
+    def _put(contexts: list[dict[str, str]] | None) -> None:
+        """One PUT of this digest, with `contexts` as the `arc_contexts` field.
+
+        A closure purely so the degraded retry below cannot drift from the
+        primary call: every other one of these fifteen arguments must be
+        byte-identical between the two attempts, and two hand-maintained
+        copies of that call is how they would stop being.
+        """
         publish_to_site(
             digest_id,
             body_md,
@@ -348,8 +373,11 @@ def _deliver_site(
             failed_sources=failed_sources,
             topics=topics,
             deltas=deltas,
-            arc_contexts=arc_contexts,
+            arc_contexts=contexts,
         )
+
+    try:
+        _put(arc_contexts)
     except urllib.error.HTTPError as exc:
         # Status code, not just "HTTPError". The type name alone cannot
         # distinguish an expired ingest key (401) from a payload the site's
@@ -362,8 +390,59 @@ def _deliver_site(
         # authenticates via a HEADER, so neither the code nor the URL it came
         # from carries a secret. Still only the code -- no `str(exc)`, no
         # `exc.url`, no response-body read, matching that function's posture.
-        logger.error("site publish failed for digest %d: HTTP %d", digest_id, exc.code)
-        return False
+        if exc.code != 400 or not arc_contexts:
+            logger.error("site publish failed for digest %d: HTTP %d", digest_id, exc.code)
+            return False
+
+        # A 400 with a non-empty `arc_contexts` is the one failure shape that
+        # is BOTH self-inflicted and self-sustaining: the site's validator
+        # rejected the payload, and the next run would re-send the identical
+        # rejected payload, so "retry next run" -- the retry model every other
+        # channel here relies on -- degenerates into "fail forever". That is
+        # not hypothetical; it is exactly what took the site channel down on
+        # 2026-08-27 (digest 249), when the stored primer count crossed the
+        # site's then-12-entry MAX_ARC_CONTEXTS cap.
+        #
+        # `arc_contexts` is the ONLY field worth dropping to recover: it is
+        # optional, it is decoration on a digest page rather than the digest
+        # itself, and unlike every other optional field it is not scoped to
+        # this digest at all (get_all_arc_contexts is a full unscoped
+        # snapshot -- see its docstring), so it is the one field whose size
+        # grows with deployment age rather than with this digest's content.
+        # Publishing the digest without it beats publishing nothing.
+        #
+        # Deliberately narrow: 400 ONLY. A 401 means the ingest key is wrong
+        # and a 5xx means the site is down -- dropping a field cannot help
+        # either, so a degraded retry there would just be a second doomed
+        # request. And when nothing was sent in `arc_contexts` to begin with,
+        # the 400 is about some OTHER field, so there is nothing to degrade.
+        try:
+            _put(None)
+        except Exception as retry_exc:
+            code = retry_exc.code if isinstance(retry_exc, urllib.error.HTTPError) else None
+            logger.error(
+                "site publish failed for digest %d: HTTP 400, and the retry without "
+                "arc_contexts also failed: %s",
+                digest_id,
+                f"HTTP {code}" if code is not None else type(retry_exc).__name__,
+            )
+            return False
+
+        # ERROR, not WARNING, on a request that SUCCEEDED -- deliberate. The
+        # digest is published and the channel is healthy, so by severity alone
+        # this is a warning. But a silent degrade is precisely how the 2026-08-27
+        # outage stayed invisible while everything else logged green, and the
+        # condition behind it (an app/site contract mismatch) does not heal on
+        # its own and does not show up anywhere else. Availability is bought
+        # here, but not with silence: this line has to be loud enough to
+        # actually get looked at.
+        logger.error(
+            "site publish for digest %d rejected with HTTP 400; PUBLISHED WITHOUT "
+            "the %d arc_contexts entries -- app/site contract mismatch, primers are "
+            "NOT reaching the site until it is fixed",
+            digest_id,
+            len(arc_contexts),
+        )
     except Exception as exc:
         logger.error("site publish failed for digest %d: %s", digest_id, type(exc).__name__)
         return False
