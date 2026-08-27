@@ -1214,13 +1214,33 @@ export const CSS = `
     position: absolute; right: 0; top: calc(100% + 0.5em);
     z-index: 20;
     /* Simple soft bubble — same recipe as .settingspanel above (owner
-       follow-up), one popover family. */
+       follow-up), one popover family.
+
+       Owner-reported 2026-08-27 ("the search box is really bad looking").
+       The fault was NESTED BOXES, not the bubble: this panel drew a border,
+       the input inside drew a second one, and the input's focus ring drew a
+       third 2px OUTSIDE its own border (outline-offset), so a focused field
+       showed three concentric rounded rectangles a couple of pixels apart.
+       The 1em padding against a 16em min-width left the field floating in
+       dead space on top of that.
+
+       The bubble now owns the only border. Its padding moves onto the two
+       children, which run edge to edge; overflow: hidden clips them to the
+       radius so the input's own corners never need to agree with the
+       panel's. gap goes to 0 because the divider between them is a border,
+       not a space. */
     background: var(--bg); border: 1px solid var(--hairline);
-    border-radius: 14px;
-    padding: 1em 1.1em;
+    border-radius: 12px;
+    padding: 0;
+    overflow: hidden;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-    display: flex; flex-direction: column; gap: 0.7em; min-width: 16em;
+    display: flex; flex-direction: column; gap: 0; min-width: 19em;
   }
+  /* Focus lives on the BUBBLE, which is the only thing still drawing a
+     border — so a focused field highlights the whole control instead of
+     stacking another ring inside it. :focus-within, not :focus, because the
+     element actually receiving focus is the input. */
+  .searchpanel:focus-within { border-color: var(--accent); }
   @media (prefers-reduced-motion: no-preference) {
     /* Reuses .settingspanel's own open keyframe (see above) — same visual
        language, no need for a second identical @keyframes block. Opening
@@ -1238,22 +1258,40 @@ export const CSS = `
      ".filter" — see pageChrome's bottom script), just styled for its new
      home inside the panel instead of a standalone row. */
   .searchpanel .filter {
-    display: block; font: inherit; font-size: 0.9em;
-    padding: 0.5em 0.9em;
-    /* Hairline + a little rounding (owner follow-up): the heavy ink border
-       double-boxed with the accent focus ring right on top of it. */
-    border: 1px solid var(--hairline); border-radius: 8px;
-    background: var(--bg); color: var(--text);
+    display: block; width: 100%; box-sizing: border-box;
+    font: inherit; font-size: 0.9em;
+    padding: 0.7em 0.95em;
+    /* No border and no radius of its own: the panel draws both now. */
+    border: 0; border-radius: 0;
+    background: none; color: var(--text);
   }
-  .searchpanel .filter::placeholder { color: var(--muted); }
-  .searchpanel .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .searchpanel .filter::placeholder { color: var(--faint); }
+  /* Deliberately none: the panel's own :focus-within border above IS this
+     input's focus indicator, and it is the accent against a hairline, so
+     the state stays visible without a second ring. */
+  .searchpanel .filter:focus-visible { outline: none; }
   /* Entry point into the standalone search page (roadmap 4 step 7) — the
      no-JS fallback, still the row's only visible content when the filter
      input above is hidden (see renderSearchBubble). Mono chrome voice, not
-     styled like the data field beside it, same as before this move. */
+     styled like the data field beside it, same as before this move.
+
+     It is now the panel's FOOTER ROW rather than a link sitting under a
+     field: full-bleed, its own padding, a hairline above it. That gives the
+     bubble a reason to be a bubble (a field plus a way out of it) instead
+     of a box with one control rattling around inside. */
   .searchlink {
+    display: block; padding: 0.5em 0.95em;
     font-family: var(--font-data); font-size: 0.78em;
     text-decoration: none; letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .searchlink:hover { background: var(--chip-bg); }
+  /* The divider belongs to the PAIR, not to the link: with no JS the filter
+     input stays [hidden] (see renderSearchBubble) and this link is the
+     panel's only content, where a top border would read as a stray rule
+     across an otherwise empty bubble. Adjacent-sibling so it appears
+     exactly when there is something above to divide from. */
+  .searchpanel .filter:not([hidden]) + .searchlink {
+    border-top: 1px solid var(--hairline);
   }
 
   /* Unified search results (owner UX pass): the index page's own box for
