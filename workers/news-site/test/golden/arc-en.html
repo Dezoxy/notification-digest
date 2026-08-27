@@ -2292,11 +2292,31 @@
         if (openTimer) { clearTimeout(openTimer); openTimer = null; }
         if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
       };
+      // data-hoveropen marks a panel the reader never asked for. The three
+      // places that treat an open panel as MODAL -- both outside-click
+      // swallows and the soft-nav bail -- skip a panel wearing it, so a
+      // bubble the pointer merely drifted across cannot eat the next click
+      // on the page. The attribute is dropped the moment the panel closes or
+      // the reader interacts with it deliberately (pointerdown on the
+      // summary), because from then on it IS a panel they asked for and the
+      // modal behaviour is right again.
       el.addEventListener("mouseenter", function () {
         clear();
         if (el.open) return;
-        openTimer = setTimeout(function () { el.open = true; }, 120);
+        openTimer = setTimeout(function () {
+          el.setAttribute("data-hoveropen", "");
+          el.open = true;
+        }, 120);
       }, { signal: signal });
+      el.addEventListener("toggle", function () {
+        if (!el.open) el.removeAttribute("data-hoveropen");
+      }, { signal: signal });
+      var summaryEl = el.querySelector("summary");
+      if (summaryEl) {
+        summaryEl.addEventListener("pointerdown", function () {
+          el.removeAttribute("data-hoveropen");
+        }, { signal: signal });
+      }
       el.addEventListener("mouseleave", function () {
         clear();
         if (!el.open) return;
@@ -2372,8 +2392,14 @@
         "click",
         function (e) {
           if (settings.open && !closing && !settings.contains(e.target)) {
-            e.preventDefault();
-            e.stopPropagation();
+            // A hover-opened bubble still DISMISSES on an outside click, it
+            // just does not swallow it: the reader never opened this panel,
+            // so making them click twice to reach a link is a papercut the
+            // dismiss-tap rule was never meant to cause.
+            if (!settings.hasAttribute("data-hoveropen")) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
             close();
           }
         },
@@ -2465,8 +2491,11 @@
         "click",
         function (e) {
           if (pop.open && !pop.contains(e.target)) {
-            e.preventDefault();
-            e.stopPropagation();
+            // Same hover exemption as the settings bubble above.
+            if (!pop.hasAttribute("data-hoveropen")) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
             pop.open = false;
           }
         },
@@ -3509,7 +3538,9 @@
         // clicking a headline to dismiss it opened the headline (caught by
         // driving a real browser; the popover's own preventDefault looked
         // correct in isolation).
-        var openPanel = document.querySelector("details.settings[open], details.searchpop[open]");
+        var openPanel = document.querySelector(
+          "details.settings[open]:not([data-hoveropen]), details.searchpop[open]:not([data-hoveropen])",
+        );
         if (openPanel && !openPanel.contains(a)) return;
         e.preventDefault();
         doSoftNav(dest.pathname + dest.search, false, dest.hash);
