@@ -241,5 +241,14 @@ export function renderSearchBubble(token, lang, strings) {
   // it is the same string as the visible text, so the two never disagree.
   // The ⌘K palette's own DOM scrape reads it too.
   const icon = `<svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
-  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}" title="${esc(strings.searchToggleLabel)}">${icon}<span class="searchlabel">${esc(strings.searchToggleLabel)}</span></summary><div class="searchpanel"><input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
+  // The same magnifier again, inside the panel this time, under its own
+  // class: .searchicon is display:none on the desktop (the toggle shows the
+  // WORD there — see summary.searchtoggle), and this copy must survive at
+  // every breakpoint. Wrapped with the input in .searchfield so the pair can
+  // be hidden together: the input ships [hidden] until the filter IIFE
+  // reveals it (client.js), and on digest/arc pages it stays hidden
+  // forever — a bare icon floating above the archive link in either case
+  // would be a dead control. See the .searchpanel:has(.filter[hidden]) rule.
+  const fieldIcon = `<svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+  return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}" title="${esc(strings.searchToggleLabel)}">${icon}<span class="searchlabel">${esc(strings.searchToggleLabel)}</span></summary><div class="searchpanel"><div class="searchfield">${fieldIcon}<input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
 }
