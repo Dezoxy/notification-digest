@@ -54,6 +54,28 @@ export function arcHref(token, lang, slug) {
   return `/t/${encodeURIComponent(token)}/${langSeg(lang)}a/${esc(slug)}`;
 }
 
+// Like searchHref, to the web app manifest (PLAN.md §11.7) — no `view`
+// parameter, same reasoning as search/arc/about: an installed app is one
+// app over the whole archive, not one per view. It DOES take `lang`,
+// because the manifest a page links to is the one whose start_url follows
+// that page's language (buildManifest pins `id` across both so this stays
+// one installed app, not two).
+export function manifestHref(token, lang) {
+  return `/t/${encodeURIComponent(token)}/${langSeg(lang)}manifest.webmanifest`;
+}
+
+// The service worker's script URL, and therefore — by the Service Worker
+// spec's default-scope rule — the registration's SCOPE, which is the token
+// root. That is load-bearing rather than incidental: the worker reads
+// self.registration.scope to address the site (see src/pwa.js), so the
+// capability token reaches it through its own URL and never has to be
+// stored, messaged, or put inside a push payload. No `lang`, deliberately:
+// a per-language script URL would be a second registration, and therefore a
+// second push subscription over one archive.
+export function swHref(token) {
+  return `/t/${encodeURIComponent(token)}/sw.js`;
+}
+
 // Like searchHref, to the about page — no `view` parameter either, same
 // reasoning: the about text doesn't belong to one view (see the file-header
 // comment).

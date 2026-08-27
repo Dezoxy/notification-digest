@@ -1245,9 +1245,9 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
   otherwise a silent lockout for the owner's next real device.
 
 **Steps:**
-- [ ] (site, PR 0 — this entry) Record the roadmap; retire the standing
+- [x] (site, PR 0 — this entry) Record the roadmap; retire the standing
       PWA deferral in `workers/news-site/README.md`.
-- [ ] (site, PR A) Installable shell: token-scoped manifest, service worker
+- [x] (site, PR A) Installable shell: token-scoped manifest, service worker
       (push handler + inline offline-navigation fallback, no Cache API),
       embedded PNG icons (180/192/512 — iOS ignores SVG for Home Screen),
       `pageChrome` wiring, golden regeneration.

@@ -276,3 +276,113 @@ test("ingest: each validator rejects its malformed field", async () => {
     assert.equal(res.status, 400, `${label} rejected`);
   }
 });
+
+// ── PWA shell (PLAN.md §11.7) ─────────────────────────────────────────────
+
+test("manifest: token-scoped, one app id across both languages", async () => {
+  const en = await fetchPath("manifest.webmanifest");
+  assert.equal(en.status, 200);
+  assert.equal(
+    en.headers.get("content-type"),
+    "application/manifest+json; charset=utf-8",
+    "manifest content-type",
+  );
+  for (const [h, v] of Object.entries(TRUST_HEADERS)) {
+    assert.equal(en.headers.get(h), v, `manifest header ${h}`);
+  }
+  const m = JSON.parse(await en.text());
+  assert.equal(m.start_url, `/t/${SITE_TOKEN}/`);
+  assert.equal(m.scope, `/t/${SITE_TOKEN}/`);
+  assert.equal(m.display, "standalone");
+  assert.ok(m.icons.length >= 1, "declares icons");
+  assert.ok(
+    m.icons.some((i) => i.purpose === "maskable"),
+    "declares a maskable icon (Android crops the 'any' one)",
+  );
+
+  // start_url follows the language the reader installed from, but `id`
+  // does NOT — otherwise EN and HU become two Home Screen apps over one
+  // archive, each with half the history.
+  const hu = JSON.parse(await (await fetchPath("hu/manifest.webmanifest")).text());
+  assert.equal(hu.start_url, `/t/${SITE_TOKEN}/hu/`);
+  assert.equal(hu.id, m.id, "one installed app, not one per language");
+  assert.equal(hu.scope, m.scope);
+});
+
+test("manifest icons stay OFF the token path", async () => {
+  // The installed app record persists these URLs. Keeping them tokenless
+  // means it embeds the capability token once (start_url/scope/id), not
+  // once more per icon.
+  const m = JSON.parse(await (await fetchPath("manifest.webmanifest")).text());
+  for (const icon of m.icons) {
+    assert.ok(!icon.src.includes(SITE_TOKEN), `${icon.src} must not carry the token`);
+    assert.ok(icon.src.startsWith("/"), `${icon.src} is root-absolute`);
+  }
+});
+
+test("service worker: served, scoped to the token root, and cache-free", async () => {
+  const res = await fetchPath("sw.js");
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "text/javascript; charset=utf-8");
+  // no-store, not a long cache: the update check for a worker is a byte
+  // comparison of this very response.
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
+  const src = await res.text();
+
+  assert.match(src, /addEventListener\("push"/, "handles push");
+  assert.match(src, /addEventListener\("fetch"/, "handles fetch (Chrome installability)");
+  assert.match(src, /addEventListener\("notificationclick"/, "handles the tap");
+  assert.match(src, /showNotification/, "always shows something");
+  assert.ok(src.includes(`/t/${SITE_TOKEN}/`), "CFG carries the token root as its scope");
+
+  // THE guardrail of §11.7, as a test rather than a comment: no Cache API,
+  // anywhere. This is the line that let PWA stop being deferred — private
+  // digest content must never reach disk, so Cache-Control: private,
+  // no-store stays honest. A future change that adds caching here is not an
+  // increment on this feature, it is the still-deferred offline reader.
+  for (const forbidden of ["caches.", "CacheStorage", "cache.put", "cache.match", "addAll("]) {
+    assert.ok(!src.includes(forbidden), `service worker must not use ${forbidden}`);
+  }
+});
+
+test("PWA routes 404 indistinguishably on a wrong token", async () => {
+  const unknownPath = await fetchPath("/no/such/path");
+  const unknownBody = await unknownPath.text();
+  for (const path of [
+    "/t/definitely-not-the-token/manifest.webmanifest",
+    "/t/definitely-not-the-token/hu/manifest.webmanifest",
+    "/t/definitely-not-the-token/sw.js",
+  ]) {
+    const res = await fetchPath(path);
+    assert.equal(res.status, 404, `${path} status`);
+    assert.equal(await res.text(), unknownBody, `${path} body`);
+  }
+});
+
+test("icons: real PNGs, tokenless, long-cached", async () => {
+  for (const path of ["/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"]) {
+    const res = await fetchPath(path);
+    assert.equal(res.status, 200, `${path} status`);
+    assert.equal(res.headers.get("content-type"), "image/png", `${path} content-type`);
+    assert.equal(res.headers.get("cache-control"), "public, max-age=86400", `${path} cache`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // PNG magic number — proves the base64 survived source formatting.
+    assert.deepEqual([...bytes.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47], `${path} is a PNG`);
+  }
+});
+
+test("every page links its own language's manifest and registers the worker", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const { html } = await page(path);
+    const lang = path.startsWith("hu/") ? "hu/" : "";
+    assert.ok(
+      html.includes(`<link rel="manifest" href="/t/${SITE_TOKEN}/${lang}manifest.webmanifest">`),
+      `${name} links its own manifest`,
+    );
+    assert.ok(
+      html.includes(`serviceWorker.register("/t/${SITE_TOKEN}/sw.js")`),
+      `${name} registers`,
+    );
+    assert.ok(html.includes('name="mobile-web-app-capable"'), `${name} is standalone-capable`);
+  }
+});

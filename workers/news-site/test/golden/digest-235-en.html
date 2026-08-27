@@ -15,6 +15,11 @@
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131418">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- PWA shell — see src/chrome.js for why each line is shaped this way. -->
+<link rel="manifest" href="/t/goldentesttoken/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="NEWS">
 
 <title>digest #235 · Tue 25 Aug 16:00</title>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.font=localStorage.getItem("font")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
@@ -3628,5 +3633,6 @@
 
   wirePage();
 </script>
+<script>if("serviceWorker" in navigator)addEventListener("load",function(){navigator.serviceWorker.register("/t/goldentesttoken/sw.js").catch(function(){})});</script>
 </body>
 </html>

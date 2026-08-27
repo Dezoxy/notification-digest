@@ -35,6 +35,8 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main`.
 | `src/css.js` | the stylesheet, one static string |
 | `src/client.js` | the client-side script, one static string |
 | `src/chrome.js` | `pageChrome` — the shell every page renders into |
+| `src/icons.js` | the three base64 PWA PNGs — same mark as `FAVICON_SVG` |
+| `src/pwa.js` | `buildManifest` + `buildServiceWorker` (PLAN.md §11.7) |
 | `src/ingest.js` | `PUT /ingest`: handler plus every validator |
 | `src/handlers.js` | the GET page handlers |
 | `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
@@ -105,6 +107,20 @@ observability setting is declared in that file rather than toggled in the
 dashboard, because the file overwrites the dashboard on every deploy — and
 deploys are automatic now.
 
+One more place the token comes to rest, new with the installable shell
+(PLAN.md §11.7): a reader who adds the site to a Home Screen persists
+`start_url` in the installed app record, and the service-worker registration
+persists its own script URL. Both carry the capability token. That is
+deliberate and it is the *same* exposure class the browser's history and any
+bookmark already carry — which is precisely the argument that let PWA stop
+being deferred after four roadmaps. What did NOT get waived is the other half:
+**the service worker uses no Cache API at all**, so no digest content is ever
+written to disk and `Cache-Control: private, no-store` stays honest. `npm test`
+enforces this rather than trusting the comment — see the "cache-free" assertion
+in `test/render.test.mjs`. What ships is installable + push, explicitly not an
+offline reader; adding a cache there is not an increment on this feature, it is
+the still-deferred one.
+
 Also set on every HTML response: `X-Robots-Tag: noindex, nofollow` (belt and
 suspenders against a crawler that ignores `robots.txt`) and
 `Content-Type: text/html; charset=utf-8`. `GET /robots.txt` itself needs no
@@ -163,13 +179,23 @@ stores and serves whatever the app sends.
 ## Routes
 
 The URL grammar is `/t/:token/(hu/)?(daily/|weekly/)?(w/YYYY-Www/)?` for index and
-digest pages, plus the standalone `search`, `a/:slug`, and `about` endpoints. The
+digest pages, plus the standalone `search`, `a/:slug`, `about`,
+`manifest.webmanifest`, and `sw.js` endpoints. The
 language segment always comes first; `worker.js`'s file header is the authoritative
 list.
 
+Four routes need no token: `robots.txt` and the three icons. That is not a gap —
+an icon reveals nothing about the site's content (`robots.txt` already concedes
+something is served here), browsers fetch them before any page-level auth context
+exists, and keeping them off the token path means an INSTALLED app's stored record
+embeds the capability token once, in the manifest's `start_url`/`scope`/`id`,
+instead of in four more icon URLs beside it.
+
 | Route | Serves |
 | --- | --- |
-| `GET /robots.txt` | Disallow-everything. The only route needing no token. |
+| `GET /robots.txt` | Disallow-everything. |
+| `GET /favicon.svg` | Tab icon. |
+| `GET /icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png` | PWA icons. |
 | `PUT /ingest/:id` | Upsert a digest. Requires the `x-ingest-key` header. |
 | `GET /t/:token/` | Index, all kinds, newest first, grouped by day. `hu/` prefix for Hungarian chrome throughout. |
 | `GET /t/:token/daily/`, `/weekly/` | Same index filtered to that `kind` only; prev/next on digest pages stays within the kind. |
@@ -178,6 +204,8 @@ list.
 | `GET /t/:token/search?q=` | FTS5 full-text search over the whole archive. Also backs the index filter box via `?fragment=1`. |
 | `GET /t/:token/a/:slug` | Story-arc page — every digest carrying that arc identity, reconstructed at request time. |
 | `GET /t/:token/about` | Static explainer for anyone the capability link is shared with. |
+| `GET /t/:token/manifest.webmanifest` | Web app manifest; `hu/` variant differs only in `start_url`. |
+| `GET /t/:token/sw.js` | The service worker. Its URL is its scope. |
 | anything else | Plain `404`, wrong token included. |
 
 ## Deploy
