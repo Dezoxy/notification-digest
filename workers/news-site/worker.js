@@ -30,6 +30,10 @@
  * outside, the whole archive rather than belonging to one view). No view
  * segment is the ALL view (every digest, mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
+ *   GET  /favicon.svg             -> tab icon, no token needed
+ *   GET  /icon-512.png            -> PWA icon (purpose "any"), no token needed
+ *   GET  /icon-maskable-512.png   -> PWA icon (purpose "maskable"), no token needed
+ *   GET  /apple-touch-icon.png    -> iOS Home Screen icon, no token needed
  *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
  *   GET  /t/:token/               -> index (EN, all view), newest-first, grouped by day
  *   GET  /t/:token/d/:id          -> single digest (EN, all view), with prev/next nav
@@ -49,6 +53,9 @@
  *   GET  /t/:token/hu/a/:slug     -> same arc page, Hungarian chrome
  *   GET  /t/:token/about          -> about page (EN): static, no D1 query beyond the token check
  *   GET  /t/:token/hu/about       -> same about page, Hungarian chrome
+ *   GET  /t/:token/manifest.webmanifest    -> web app manifest, start_url = the EN token root
+ *   GET  /t/:token/hu/manifest.webmanifest -> same manifest, start_url = the HU token root
+ *   GET  /t/:token/sw.js          -> service worker; its URL IS its scope (the token root)
  *   anything else                 -> plain 404, wrong token included
  *
  * Story-arc pages (PLAN.md §11.1 PR A, this feature): a slug is the digest
@@ -110,6 +117,21 @@
  * a digest page (digest -> that view's index, because the current digest
  * may not exist in the target view).
  *
+ * Installable shell (PLAN.md §11.7): the site ships a token-scoped web app
+ * manifest and a service worker, so it can be added to a Home Screen — which
+ * on iOS is the ONLY context Web Push is delivered in, and is therefore the
+ * prerequisite this exists to satisfy rather than packaging for its own sake.
+ * The manifest sits behind the same token gate as every page (that is the
+ * answer to the "fetched tokenless" objection that deferred PWA across four
+ * roadmaps); the icons deliberately do not, on the same reasoning that keeps
+ * /favicon.svg tokenless. The service worker's script URL is its scope, so it
+ * addresses the site through self.registration.scope and never has to store
+ * the capability token. It uses NO Cache API, anywhere, by design: the token
+ * reaching disk is an exposure class bookmarks already carry, but private
+ * digest CONTENT reaching disk is not, and Cache-Control: private, no-store
+ * has to stay honest. What ships is installable + push, explicitly NOT an
+ * offline reader — see src/pwa.js's file header before adding a cache there.
+ *
  * body_html and body_html_hu both arrive PRE-SANITIZED by the app (nh3) and
  * are stored/served verbatim — they are the only fields ever inserted into
  * a response without HTML-escaping, and only ever into the <article> slot.
@@ -129,6 +151,8 @@
  *   css.js        the stylesheet, one static string
  *   client.js     the client-side script, one static string
  *   chrome.js     pageChrome — the shell every page renders into
+ *   icons.js      the three base64 PWA PNGs (same mark as FAVICON_SVG)
+ *   pwa.js        buildManifest + buildServiceWorker (PLAN.md §11.7)
  *   ingest.js     PUT /ingest: handler + every validator
  *   handlers.js   the GET page handlers
  *   render-*.js   per-page renderers (shared helpers in render-shared.js)
@@ -141,6 +165,9 @@ import { notFound } from "./src/http.js";
 import { isoWeeksInYear } from "./src/dates.js";
 import { viewSeg } from "./src/hrefs.js";
 import { FAVICON_SVG } from "./src/chrome.js";
+import { APPLE_TOUCH_ICON, ICON_512, ICON_MASKABLE_512 } from "./src/icons.js";
+import { buildManifest, buildServiceWorker } from "./src/pwa.js";
+import { tokenMatches } from "./src/auth.js";
 import { handleIngest } from "./src/ingest.js";
 import {
   handleAboutPage,
@@ -162,6 +189,12 @@ function viewFromSeg(seg) {
   return seg === "daily/" ? "daily" : seg === "weekly/" ? "weekly" : "all";
 }
 
+const PNG_ASSETS = {
+  "/icon-512.png": ICON_512,
+  "/icon-maskable-512.png": ICON_MASKABLE_512,
+  "/apple-touch-icon.png": APPLE_TOUCH_ICON,
+};
+
 const ROUTE_INGEST = /^\/ingest\/(\d+)$/;
 
 const ROUTE_DIGEST = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?d\/(\d+)$/;
@@ -171,6 +204,10 @@ const ROUTE_SEARCH = /^\/t\/([^/]+)\/(hu\/)?search$/;
 const ROUTE_ARC = /^\/t\/([^/]+)\/(hu\/)?a\/([a-z0-9-]{1,64})$/;
 
 const ROUTE_ABOUT = /^\/t\/([^/]+)\/(hu\/)?about$/;
+
+const ROUTE_MANIFEST = /^\/t\/([^/]+)\/(hu\/)?manifest\.webmanifest$/;
+
+const ROUTE_SW = /^\/t\/([^/]+)\/sw\.js$/;
 
 const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
 
@@ -194,6 +231,21 @@ export default {
           "content-type": "image/svg+xml",
           // Icons are immutable-ish and requested constantly — long cache,
           // unlike the no-store pages (the icon carries no private data).
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
+
+    // The PWA icons (PLAN.md §11.7), tokenless for exactly the reason the
+    // favicon above is: an icon carries no private data, and a manifest's
+    // icon URLs get persisted into the installed app record — keeping them
+    // off the token path means that record embeds the capability token
+    // once (in start_url/scope/id) instead of three times more beside it.
+    const icon = PNG_ASSETS[path];
+    if (icon && request.method === "GET") {
+      return new Response(icon, {
+        headers: {
+          "content-type": "image/png",
           "cache-control": "public, max-age=86400",
         },
       });
@@ -253,6 +305,47 @@ export default {
     if (aboutMatch && request.method === "GET") {
       const lang = aboutMatch[2] ? "hu" : "en";
       return handleAboutPage(env, aboutMatch[1], url, lang);
+    }
+
+    // The PWA shell (PLAN.md §11.7). Both are token-gated exactly like a
+    // page — a wrong token 404s byte-identically — which is the whole
+    // answer to the "the manifest would be fetched tokenless" objection
+    // that deferred this feature across four roadmaps. Neither is HTML, so
+    // neither goes through pageChrome or the golden renderer; both are
+    // built in src/pwa.js.
+    const manifestMatch = path.match(ROUTE_MANIFEST);
+    if (manifestMatch && request.method === "GET") {
+      if (!(await tokenMatches(env, manifestMatch[1]))) return notFound();
+      const lang = manifestMatch[2] ? "hu" : "en";
+      return new Response(buildManifest(url.hostname, manifestMatch[1], lang), {
+        headers: {
+          "content-type": "application/manifest+json; charset=utf-8",
+          // Same posture as every token-bearing response here: this one
+          // embeds start_url, so it is as private as the URL itself.
+          "referrer-policy": "no-referrer",
+          "x-robots-tag": "noindex, nofollow",
+          "cache-control": "private, no-store",
+        },
+      });
+    }
+
+    const swMatch = path.match(ROUTE_SW);
+    if (swMatch && request.method === "GET") {
+      if (!(await tokenMatches(env, swMatch[1]))) return notFound();
+      return new Response(buildServiceWorker(swMatch[1]), {
+        headers: {
+          "content-type": "text/javascript; charset=utf-8",
+          "referrer-policy": "no-referrer",
+          "x-robots-tag": "noindex, nofollow",
+          // no-store, not the 24h a script would normally earn: the update
+          // check for a service worker is a byte-comparison of THIS
+          // response, so a cached copy is how a worker gets stuck on an old
+          // version. Browsers already bypass HTTP cache for the worker
+          // script itself; this makes that explicit rather than relying on
+          // it, and matches the private posture of the token path anyway.
+          "cache-control": "private, no-store",
+        },
+      });
     }
 
     // Roadmap 3 (weekly pagination): one optional, always-LAST segment,

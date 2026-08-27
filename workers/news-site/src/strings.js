@@ -222,6 +222,19 @@ export const STRINGS = {
       "Each briefing is organized under story headings. The small numbers next to a claim are citations — hover or tap one to see where it came from. Stories that keep developing get their own story-arc page, reachable from a “story so far” link, so you can catch up without re-reading every briefing. To read in Hungarian, use the EN/HU switcher in the settings menu.",
     aboutCaveat:
       "Everything on this site is written by an AI, working only from the sources listed above — it can misread a source or miss context. If something matters, follow the citation and check it yourself.",
+    // PWA shell (PLAN.md §11.7). Two audiences, both reached without a
+    // page: the offline* three are the service worker's own fallback
+    // document, shown when a navigation inside the installed app cannot
+    // reach the network; the pushFallback* pair is the generic notification
+    // shown only when push/latest is unreachable. None of these render
+    // through pageChrome — see src/pwa.js, which reads them straight off
+    // STRINGS and serializes them into the worker's CFG so this file stays
+    // the single vocabulary source even for text that never touches HTML.
+    offlineTitle: "Offline",
+    offlineBody: "This briefing archive lives online only — nothing is stored on your device.",
+    offlineRetry: "Try again",
+    pushFallbackTitle: "New briefing",
+    pushFallbackBody: "Tap to read it.",
   },
   hu: {
     locale: "hu-HU",
@@ -362,5 +375,19 @@ export const STRINGS = {
       "Minden összefoglaló témák szerinti címsorok alá van rendezve. Az állítások melletti kis számok hivatkozások — vidd rájuk az egeret, vagy koppints rájuk, hogy lásd, honnan származnak. A tovább fejlődő történeteknek saját sztori-oldaluk van, egy „eddig történt” hivatkozással elérve, hogy ne kelljen minden korábbi összefoglalót újraolvasnod. Ha inkább magyarul olvasnál, használd az EN/HU váltót a beállítások menüben.",
     aboutCaveat:
       "Ezen az oldalon minden szöveget egy AI ír, kizárólag a fent felsorolt forrásokból dolgozva — előfordulhat, hogy félreért egy forrást, vagy kihagy egy összefüggést. Ha valami fontos, kövesd a hivatkozást, és nézd meg magad.",
+    // Owner: please review — new HU strings, PWA shell (this feature),
+    // mirror the EN block's pattern. Machine-drafted translation, not yet
+    // read by a native speaker. Note that pushFallbackTitle/Body are
+    // currently UNREACHABLE in Hungarian by design (a service worker cannot
+    // know the reader's language when it has just failed to reach the
+    // site) — they are defined here so the vocabulary stays complete and so
+    // PR B, which localizes the normal push path server-side, has them
+    // ready.
+    offlineTitle: "Nincs kapcsolat",
+    offlineBody:
+      "Ez az összefoglaló-archívum csak online érhető el — az eszközödön semmi nem tárolódik.",
+    offlineRetry: "Újra",
+    pushFallbackTitle: "Új összefoglaló",
+    pushFallbackBody: "Koppints az olvasáshoz.",
   },
 };

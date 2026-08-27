@@ -1,7 +1,7 @@
 import { STRINGS } from "./strings.js";
 import { CSS } from "./css.js";
 import { esc } from "./http.js";
-import { indexHref, renderViewTabs } from "./hrefs.js";
+import { indexHref, manifestHref, renderViewTabs, swHref } from "./hrefs.js";
 import { CLIENT_SCRIPT } from "./client.js";
 
 // ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
@@ -123,6 +123,27 @@ export function pageChrome(
     data-cmd-switchlang="${esc(strings.paletteCmdSwitchLang)}"
     data-cmd-latest="${esc(strings.paletteCmdLatest)}"
   ></span>`;
+  // PWA shell wiring (PLAN.md §11.7), three decisions worth naming since
+  // the markup below is terse about them:
+  //
+  // - The manifest link is TOKEN-SCOPED and language-specific (it carries
+  //   start_url); the touch icon is deliberately TOKENLESS, the same
+  //   precedent /favicon.svg already set. An icon reveals nothing, and
+  //   keeping icons off the token path means the installed app record
+  //   embeds the capability token only in the manifest's own
+  //   start_url/scope/id rather than in four more URLs beside it.
+  // - mobile-web-app-capable is what makes an iOS Home Screen launch open
+  //   standalone, which is in turn the ONLY context iOS delivers Web Push
+  //   in — so it is load-bearing for the whole feature, not decoration.
+  // - The service-worker registration is its own script tag rather than
+  //   part of CLIENT_SCRIPT because the script URL must be absolute and
+  //   token-bearing, and CLIENT_SCRIPT is one static string with no access
+  //   to the token. Registering the same URL twice is a no-op, so this
+  //   needs none of wirePage()'s teardown/rebind discipline — a soft
+  //   navigation simply never re-runs it. Failure is swallowed on purpose:
+  //   an unavailable worker (private window, iOS Lockdown Mode, a reader
+  //   who blocked it) must cost nothing, because every page here works
+  //   fully without one.
   return `<!doctype html>
 <html lang="${lang}">
 <head>
@@ -140,6 +161,11 @@ export function pageChrome(
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131418">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- PWA shell — see src/chrome.js for why each line is shaped this way. -->
+<link rel="manifest" href="${manifestHref(token, lang)}">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="${esc(first.toUpperCase())}">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.font=localStorage.getItem("font")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
@@ -170,6 +196,7 @@ ${prefetchScriptHtml}
 <script>
 ${CLIENT_SCRIPT}
 </script>
+<script>if("serviceWorker" in navigator)addEventListener("load",function(){navigator.serviceWorker.register(${JSON.stringify(swHref(token))}).catch(function(){})});</script>
 </body>
 </html>`;
 }
