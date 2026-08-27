@@ -280,6 +280,25 @@ saying "gone" is authoritative); anything else soft increments `fail_count`,
 and a row is dropped after `MAX_PUSH_FAILURES` consecutive failures. A success
 resets the counter and stamps `last_ok_at`.
 
+### Sending a test push by hand
+
+`scripts/send-test-push.mjs` sends one body-less push to every stored
+subscription, reproducing exactly what `notify.js` sends — same VAPID scheme,
+same headers, no body. It exists because the alternative way to test the send
+path is to wait up to six hours for a digest.
+
+```bash
+VAPID_PRIVATE_JWK='<the JWK>' node scripts/send-test-push.mjs
+```
+
+It reads endpoints from D1 itself and DERIVES the public key from the private
+JWK, which also proves the pair in Cloudflare matches — a mismatch there is
+the commonest cause of a `401` and says nothing about itself in the response.
+
+Note what it does **not** cover: it talks to the push service directly, so
+claim-once, newest-only and the `waitUntil` fan-out are all bypassed. A green
+run here plus a silent real digest means the fault is upstream of delivery.
+
 ### Web Push (optional, PLAN.md §11.7)
 
 Push is entirely optional and the Worker runs fine without it: with no VAPID
@@ -732,7 +751,7 @@ trust-model headers stay load-bearing exactly as before. The golden tests
 under `test/` (npm test) hold every refactor to byte-identical output.
 
 **No longer deferred: PWA + push** (notification-digest `PLAN.md` §11.7,
-approved 2026-08-27, not yet built). Roadmaps 1–4 above deferred this four
+shipped and deployed 2026-08-27). Roadmaps 1–4 above deferred this four
 times over one objection — "the capability token would end up in a
 persisted, cached artifact" — and §11.7 splits that objection in two. The
 token landing on disk is already true of browser history and any bookmark,
