@@ -1133,7 +1133,7 @@ implementation, its input fencing, and the `CONTEXT_MAX_PER_RUN` bound.
       excludes keys that already have a row), so deleting a row silently
       re-authorizes a paid regeneration.
 
-### 11.7 Installable site + push on arrival (approved, not started)
+### 11.7 Installable site + push on arrival (shipped)
 
 **Status:** SHIPPED 2026-08-27 — site PRs #122 (installable shell), #123
 (subscriptions), #124 (the sender), all deployed; VAPID keys set, owner's
@@ -1344,9 +1344,9 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
   send, on the app's own release train, if the doubling gets old.
 - Not an offline reader, by construction (first guardrail).
 
-§11.1–11.6 are all shipped except the two entries that were closed rather
+§11.1–11.7 are all shipped except the two entries that were closed rather
 than built: §11.5 (rejected, §9 decision 6) and the OPEN GAP inside §11.3
 (Hungarian delta text, `deltas_hu` — unapproved), plus §11.4's still-open
 "flip the in-repo default" decision and its optional site status chips.
-§11.7 is approved and not started — it is the only entry with unticked
-boxes that are meant to be ticked.
+No entry is left with unticked boxes that are meant to be ticked: every box
+still open in §11 is either unapproved or explicitly optional.
