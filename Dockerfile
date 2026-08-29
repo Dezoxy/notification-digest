@@ -57,9 +57,12 @@ ENV PATH="/app/.venv/bin:${PATH}"
 # passes it through to the `claude -p` subprocess — required by the CLI's
 # auth flow per that function's docstring.
 ENV USER=digest
-# Claude CLI config/credentials dir — a persisted volume in production
-# (PLAN.md §4.4/§4.7), overridable per-deploy. No ANTHROPIC_API_KEY is used;
-# auth is the owner's Max-subscription login living in this directory.
-ENV CLAUDE_CONFIG_DIR=/data/claude-home
+# CLAUDE_CONFIG_DIR is deliberately NOT set here. Auth is a long-lived
+# CLAUDE_CODE_OAUTH_TOKEN supplied at runtime, so the CLI's config dir holds
+# nothing worth persisting. Baking a default made it worse than useless: an
+# env_file can only OVERRIDE an image ENV, never unset one, so a deployment
+# that wanted an ephemeral dir could not simply omit the variable -- it had
+# to know this default existed in order to override it. Callers that want a
+# specific location set CLAUDE_CONFIG_DIR themselves.
 
 ENTRYPOINT ["python", "-m", "digest"]

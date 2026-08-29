@@ -445,6 +445,34 @@ def test_run_claude_env_is_scrubbed_of_secrets(monkeypatch):
     assert leaked == []
 
 
+def test_run_claude_forwards_the_cli_oauth_token(monkeypatch):
+    # Regression, 2026-08-29: the allowlist withheld CLAUDE_CODE_OAUTH_TOKEN.
+    # That was harmless while auth came from a login persisted in
+    # CLAUDE_CONFIG_DIR, and became a total outage the moment the homelab
+    # moved to a long-lived token and removed the login directory -- every
+    # summarize call died "Not logged in · Please run /login".
+    #
+    # The sibling test above proves secrets are withheld. Nothing proved the
+    # CLI's OWN credential gets through, which is why the regression shipped.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test-token")
+    monkeypatch.setenv("SMTP_PASSWORD", "super-secret-smtp-password")
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return _fake_completed()
+
+    monkeypatch.setattr(summarize_mod.subprocess, "run", fake_run)
+
+    run_claude("the prompt", model="claude-opus-5", timeout_seconds=300, effort="high")
+
+    env = captured["kwargs"]["env"]
+    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test-token"
+    # ...and widening the allowlist must not have widened it for anything else
+    assert "SMTP_PASSWORD" not in env
+
+
 def test_run_claude_nonzero_exit_raises_summarize_error_without_stderr_content(monkeypatch):
     fake_stderr = "auth error: session expired SECRET_STDERR_MARKER_98765"
 

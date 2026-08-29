@@ -169,18 +169,21 @@ deploy time and must never be committed or logged.
 
 ```
 docker compose build          # build the image locally
-docker compose run --rm -it --entrypoint claude digest   # ONE-TIME: /login (Max subscription)
 docker compose run --rm digest   # one-shot run (no daemon, no ports)
 ```
 
-The interactive `claude` step is required once per fresh `digest-data`
-volume: the summarizer authenticates via the persisted subscription login
-in `CLAUDE_CONFIG_DIR` (no API key), and a brand-new volume has no
-credentials — without the login, the first run that collects any items
-fails at summarization. Complete `/login` in the prompt, exit, and the
-credentials persist in the volume for every later run.
+The summarizer authenticates with `CLAUDE_CODE_OAUTH_TOKEN` — a long-lived
+token from `claude setup-token`, on the owner's Max subscription, no API key.
+Set it in the environment; without it the first run that collects any items
+fails at summarization with "Not logged in".
 
-Local state (SQLite db, markdown archive, Claude CLI config dir) lands in
+This replaced a one-time interactive `claude` login persisted in
+`CLAUDE_CONFIG_DIR`. That login could not be kept alive: the session carries
+a hard ceiling roughly 30 days after it is created which refreshing does not
+extend, and at the ceiling the CLI wipes its own credentials file. Nothing is
+persisted for auth any more, so a fresh volume needs no setup step.
+
+Local state (SQLite db, markdown archive) lands in
 the named Docker volume `digest-data`, mounted into the container at
 `/data`. A named volume is used instead of a `./local-data:/data` bind mount
 because Docker initializes a named volume's contents (and ownership) from
