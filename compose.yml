@@ -22,11 +22,12 @@ services:
     build: .
     env_file: .env
     environment:
-      # All persisted state lives under one volume so it covers the SQLite
-      # db, the markdown archive, and the Claude CLI's config/credentials dir.
+      # All persisted state lives under one volume: the SQLite db and the
+      # markdown archive. The Claude CLI's config dir is deliberately NOT
+      # here -- auth is CLAUDE_CODE_OAUTH_TOKEN from .env, and nothing the
+      # CLI writes is worth keeping between runs.
       STATE_DB_PATH: /data/state.db
       ARCHIVE_DIR: /data/archive
-      CLAUDE_CONFIG_DIR: /data/claude-home
     volumes:
       - digest-data:/data
 

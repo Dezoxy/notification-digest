@@ -1169,12 +1169,27 @@ def claude_subprocess_env() -> dict[str, str]:
     over scraped, untrusted Telegram/X text; a successful prompt injection
     that induces a tool call would otherwise be able to read those secrets
     straight out of its own environment. Only PATH and HOME (needed for the
-    CLI binary and its on-disk config to resolve) and CLAUDE_CONFIG_DIR (the
-    CLI's own auth/config directory override, if the caller set one) are
-    passed through -- everything else, all secrets included, is deliberately
-    withheld. USER is included because the CLI's macOS Keychain-backed auth
-    fails ("Not logged in") without it -- found by live-testing the scrubbed
-    env against the real CLI.
+    CLI binary and its on-disk config to resolve), CLAUDE_CONFIG_DIR (the
+    CLI's own auth/config directory override, if the caller set one) and
+    CLAUDE_CODE_OAUTH_TOKEN (the CLI's credential) are passed through --
+    everything else, all secrets included, is deliberately withheld. USER is
+    included because the CLI's macOS Keychain-backed auth fails ("Not logged
+    in") without it -- found by live-testing the scrubbed env against the
+    real CLI.
+
+    CLAUDE_CODE_OAUTH_TOKEN is a credential, and forwarding it does widen
+    what a successful injection could read. It is forwarded anyway because
+    it is the CLI's OWN credential: withholding it does not protect anything,
+    it just makes the CLI fail with "Not logged in". The alternative it
+    replaced -- a long-lived login persisted in CLAUDE_CONFIG_DIR -- put the
+    same credential on disk inside a directory this same subprocess could
+    read, so the exposure is not new. run_claude() passes --tools "", so the
+    agent has no file or shell access to exfiltrate it with.
+
+    Added 2026-08-29: the homelab moved these jobs off the interactive login
+    (it expires ~30 days after it is created and cannot be renewed) onto a
+    long-lived `claude setup-token` token. With the token withheld here and
+    the login gone, every summarize call failed "Not logged in".
     """
-    allowed = ("PATH", "HOME", "USER", "CLAUDE_CONFIG_DIR")
+    allowed = ("PATH", "HOME", "USER", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN")
     return {k: os.environ[k] for k in allowed if k in os.environ}
