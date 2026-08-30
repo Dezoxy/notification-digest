@@ -16,7 +16,7 @@ dependencies = [
     # drift here -- bump only after re-auditing the diff against the
     # previous pin, same as the audit this pin followed (no new network
     # hosts, no new eval/exec/base64/subprocess/pickle).
-    "twifork==2.3.5",
+    "twifork==2.4.0",
     "markdown>=3.7",
     "nh3>=0.2",
     "python-dotenv>=1.0",
