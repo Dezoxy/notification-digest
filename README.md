@@ -134,7 +134,12 @@ deploy time and must never be committed or logged.
 | `POSITIONS_KEYWORDS` | Free-text terms (min 4 chars) that claim an item from **any** source, so the project's news is pulled out of general channels and feeds too. Keep them distinctive — cashtags and proper names, never a bare `ASI`/`FET`; an over-broad term can make unrelated stories vanish from every channel. |
 | `RELAY_TG_CHANNELS` | Telegram usernames (no `@`) whose new posts the `relay` run mode forwards verbatim into the hub topic via the user session. Requires a numeric `TELEGRAM_NOTIFY_CHAT_ID`; does **not** need the bot token. |
 
-**Summarization**
+**Summarization** — every model call goes to `claude -p` first; if that fails
+for any reason (safeguards refusal, usage limit, timeout, empty output) and
+`OPENROUTER_API_KEY` is set, the same prompt is retried against each
+`FALLBACK_MODELS` entry in order. `verify.py` is excluded: it is the only call
+that needs live web tools, which no fallback can provide.
+
 
 | Variable | Description |
 |---|---|
@@ -147,6 +152,10 @@ deploy time and must never be committed or logged.
 | `VERIFY_DAILY_ENABLED` | Web-verification pass over the daily brief (`false`). |
 | `VERIFY_DAILY_TIMEOUT_SECONDS` / `VERIFY_DAILY_MAX_WEB_OPS` | Its budget (`600`) and its self-policed tool-call guidance (`20`). |
 | `VERIFY_DAILY_MODEL` / `VERIFY_DAILY_EFFORT` | Default to `ANTHROPIC_MODEL` / `CLAUDE_EFFORT`. |
+| `OPENROUTER_API_KEY` | Enables the OpenRouter fallback chain. Unset = Claude only, exactly as before. **(secret)** |
+| `FALLBACK_MODELS` | Editorial-tier chain, tried in order when the Claude call fails (`openai/gpt-5.6-sol,z-ai/glm-5.3`). Explicitly empty disables this tier. |
+| `FALLBACK_LIGHT_MODELS` | Same for translation and context primers (`openai/gpt-5.6-terra,deepseek/deepseek-v4-flash`). |
+| `FALLBACK_TIMEOUT_SECONDS` | Wall-clock budget **shared by all legs of one call** (`180`), started when the Claude call fails. |
 | `CONTEXT_ENABLED` | Story-arc context primers, generated after the daily brief ships (`false`). |
 | `CONTEXT_MAX_PER_RUN` / `CONTEXT_MODEL` / `CONTEXT_TIMEOUT_SECONDS` | Primer bounds: calls per daily run (`3`), model (`sonnet`), timeout (`120`). |
 

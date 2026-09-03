@@ -109,7 +109,7 @@ notification-digest/
 │   ├── config.py                 # loads/validates every env var into a typed Config object
 │   ├── state.py                  # SQLite: schema + migrations, item/cursor/digest persistence, prunes
 │   ├── deliver.py                # per-channel senders, pending-digest retry, Telegram 429 breaker
-│   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation
+│   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation + the fallback chain
 │   ├── daily.py                  # daily-brief prompt build + `claude -p`, synthesizes window digests
 │   ├── weekly.py                 # weekly-report prompt build + `claude -p`, synthesizes daily briefs
 │   ├── patreon.py                # one paid post -> one digest -> one Telegram message
@@ -119,6 +119,7 @@ notification-digest/
 │   ├── verify.py                 # optional web-verification pass over the daily brief
 │   ├── translate.py              # optional Hungarian translation of a digest, soft-failing
 │   ├── emailer.py                # markdown→HTML render, smtplib send, archive-to-disk
+│   ├── openrouter.py             # one OpenRouter chat-completion call; the fallback chain's HTTP leg
 │   ├── publish.py                # site ingest PUT + Telegram Bot API sendMessage
 │   └── collectors/
 │       ├── __init__.py
@@ -157,6 +158,7 @@ notification-digest/
 │   ├── test_patreon_collector.py  # authorized vs unauthenticated response shapes (mocked fetch)
 │   ├── test_patreon_isolation.py  # Patreon rows must never leak into window/daily/weekly queries
 │   ├── test_patreon_kind.py       # per-post prompt build + Telegram rendering (mocked CLI/HTTP)
+│   ├── test_openrouter.py         # OpenRouter POST shape, usage logging, secrets-scrubbed errors (mocked urllib)
 │   ├── test_patreon_run.py        # run_patreon: seeding, dedup, per-post failure isolation
 │   ├── test_polymarket_collector.py # swing detection, the anchor rule (mocked urllib)
 │   ├── test_positions.py          # membership partition, NO-SIGNAL path, run_positions (real SQLite)
@@ -378,6 +380,10 @@ Every var below is read in `config.py`'s `Config.from_env`, except `CLAUDE_CONFI
 | `ARCHIVE_DIR` | emailer.py (`archive()`) | markdown archive dir (default `./archive`) |
 | `CLAUDE_TIMEOUT_SECONDS` | summarize.py, daily.py, weekly.py, patreon.py, positions.py (passed in by main.py) | `claude -p` subprocess timeout, seconds (default `300`; the deployment sets 600). Translation, verification and context primers each have their OWN timeout below — reusing this one made the daily run's worst case unbounded |
 | `CLAUDE_EFFORT` | summarize.py, daily.py, weekly.py | `claude -p --effort`, one of low/medium/high/xhigh/max (default `high`) |
+| `OPENROUTER_API_KEY` | main.py, openrouter.py | the fallback chain's master switch and only credential (secret). Unset = `fallbacks=()` everywhere, behaviour identical to before §4.23 existed |
+| `FALLBACK_MODELS` | config.py, main.py | editorial-tier OpenRouter ids, in order (default `openai/gpt-5.6-sol,z-ai/glm-5.3`); backs every call summarizing with `ANTHROPIC_MODEL`. Unset = that default; explicitly EMPTY = tier disabled |
+| `FALLBACK_LIGHT_MODELS` | config.py, main.py | same for `TRANSLATE_MODEL`/`CONTEXT_MODEL` work (default `openai/gpt-5.6-terra,deepseek/deepseek-v4-flash`) |
+| `FALLBACK_TIMEOUT_SECONDS` | config.py, main.py | wall-clock budget SHARED by all legs of one call (default `180`), started when the primary fails — so a call's worst case is the primary's own timeout plus this |
 | `NEWS_FEEDS` | collectors/rss.py | comma-separated RSS/Atom feed URLs; empty = news collector disabled (no separate flag) |
 | `TRANSLATE_HU_ENABLED` | main.py, translate.py | master switch for the Hungarian translation step (default `false`) |
 | `TRANSLATE_MODEL` | translate.py | Claude model for translation (default `sonnet` alias) |
@@ -505,6 +511,22 @@ Design points, each a deliberate answer to something that would otherwise bite:
 - **Failure policy mirrors the collector.** First run seeds the cursor at the latest message (or 0 for an empty channel) and forwards nothing — never a history backfill. FloodWait ≤60s: sleep and retry that chunk once; longer: abort the channel. `ChatForwardsRestrictedError` (the channel has forwarding disabled — no retry can help) is logged by username with a "remove it from `RELAY_TG_CHANNELS`" hint. One unresolvable or failing channel never costs its siblings their run. `_MAX_MESSAGES_PER_CHANNEL = 500` is a runaway guard only — a module constant, deliberately not an env var: at one post a day the backlog question does not arise, and a channel 500 behind needs the owner, not a bigger cap.
 
 What is NOT verified in this repo, and must be watched on the first live run: that `top_msg_id` alone lands the forward in the intended forum topic (the TL schema documents it as "destination forum topic"; the alternative, `reply_to=InputReplyToMessage(top_msg_id=…)`, exists on the same request if it does not).
+
+### 4.23 `digest/openrouter.py` + `summarize.py`'s fallback chain
+
+`claude -p` fails in ways that have nothing to do with content quality: the Max subscription's usage limit can be hit mid-run, the target model's real-time safety classifier can refuse a security-heavy digest (`SafeguardsRefusalError`, §8 and the 2026-08-01 incident behind it), or the CLI can time out. None of those are fixable by retrying the same model. `run_with_fallbacks` (summarize.py) retries the same prompt against a different PROVIDER, via `openrouter.py` — one stdlib-urllib POST to OpenRouter's OpenAI-compatible chat-completions endpoint, `reasoning.effort` fixed at `high` for every leg.
+
+Two tiers, matching the two primary tiers: `FALLBACK_MODELS` backs every call summarizing with `ANTHROPIC_MODEL` (window, daily, weekly, positions, patreon); `FALLBACK_LIGHT_MODELS` backs `translate_digest` and `generate_arc_context`. `verify.py` is deliberately excluded — it is the only `claude -p` call made WITH tools (WebSearch/WebFetch), and no fallback leg can honour that contract.
+
+Five properties are load-bearing, each for a reason that bites if reversed:
+
+- **`primary` is a CALLABLE, not model/effort arguments the chain resolves.** ~145 test references monkeypatch `run_claude` as a module GLOBAL in seven different modules. Had the chain called `run_claude` itself, every one of those patches would be bypassed, the real CLI subprocess would run inside the test suite, and the suite would report green while testing nothing. Each caller instead passes a closure over its own already-imported name.
+- **`validate` runs INSIDE the loop, per leg.** Claude signals a refusal structurally (non-zero exit + marker → `SafeguardsRefusalError`); an OpenRouter model declining returns ordinary prose with HTTP 200, which is a *successful* call returning unusable output. Validating only after the chain returned would accept that leg and fail downstream with the next leg never tried. A leg failing `validate` is therefore treated exactly like a leg that raised. `positions` and `context` pass their own validators, because their `NO-SIGNAL`/`INSUFFICIENT_CONTEXT` sentinels are CORRECT outcomes, not failures.
+- **One budget shared by all legs, started when the PRIMARY FAILS.** Not one budget each, and not measured from function entry. Both distinctions are load-bearing: a per-leg budget makes the worst case scale with the number of legs and silently invalidates the systemd ceilings; and starting the clock at entry charges the primary's own runtime against the fallbacks — which, at the deployed `CLAUDE_TIMEOUT_SECONDS=600` against a 180s budget, made `180 - 600` negative and skipped EVERY leg without sending one request. That was a real bug in the first draft of this feature, caught in review and now pinned by a regression test; it disabled the chain for precisely the failure mode it most needed to cover.
+- **Empty `fallbacks` re-raises the primary's exception object UNCHANGED** — a bare `raise`, not a wrapper. This is the whole mechanism behind "unset `OPENROUTER_API_KEY` = today's behaviour, byte for byte": `translate_digest` catches `SafeguardsRefusalError` specifically, and existing tests assert on the primary's own type.
+- **Secrets never reach a message.** `OpenRouterError` carries only an HTTP status or an exception type name — never a response body, `str(exc)`, `exc.url`, or the key — mirroring `publish.py`'s `_send_message` posture, because the request body is this pipeline's own prompt built from scraped Telegram/X text and an error body can echo it back. The final "every leg failed" message lists `<model>: <ExceptionTypeName>` only. `FallbackLeg.api_key` is `repr=False` so a dataclass repr in a traceback cannot leak it, and `OPENROUTER_API_KEY` is deliberately absent from `claude_subprocess_env()`'s allowlist — the Claude subprocess must never see another provider's credential.
+
+Cost: reasoning tokens are billed as output and are the main unknown, so `run_openrouter` logs `prompt_tokens`/`completion_tokens`/`reasoning_tokens` per call — the first real fallback replaces the planning estimate with a measurement. Modelled against 30 days of real volumes, a month with EVERY call falling through costs roughly $34–98 on the editorial tier; realistic fire rates put it in single-dollar territory.
 
 ## 5. Summarization prompt design
 

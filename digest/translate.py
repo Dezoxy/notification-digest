@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from pathlib import Path
 
 from digest.summarize import (
+    FallbackLeg,
     SafeguardsRefusalError,
     enforce_link_allowlist,
     run_claude,
+    run_with_fallbacks,
     validate_output,
 )
 
@@ -99,6 +101,8 @@ def translate_digest(
     model: str,
     timeout_seconds: int,
     fallback_model: str | None = None,
+    fallbacks: Sequence[FallbackLeg] = (),
+    fallback_budget_seconds: int = 180,
 ) -> str | None:
     """Translate a validated English digest to Hungarian. Never raises; None on any failure.
 
@@ -189,22 +193,56 @@ def translate_digest(
     `enforce_link_allowlist`'s markdown-link/autolink/bare-URL regexes see
     the digest's REAL final shape, not a shape still carrying an artifact
     from the fencing defense.
+
+    `fallbacks` (default `()`, matching every existing direct call and
+    test) is this translation's own OpenRouter chain, on the LIGHT tier
+    (`Config.fallback_light_models`, the same tier `generate_arc_context`
+    uses -- see digest/main.py's `_fallback_legs`): translation is a
+    mechanical rewrite, not editorial judgment (`_TRANSLATE_EFFORT`'s own
+    comment), so it does not need the heavier editorial-tier models
+    `summarize`/`summarize_daily`/etc. fall back to. `fallback_budget_seconds`
+    (default 180) is the SHARED wall-clock budget every leg of THAT chain
+    draws from together -- see digest/summarize.py's `run_with_fallbacks`
+    for the full mechanics. The primary closure passed to it is the
+    EXISTING two-step call above (`model`, then -- on a
+    `SafeguardsRefusalError` specifically -- `fallback_model`) UNCHANGED: that
+    is a same-provider, same-mechanism retry this function has always done
+    on its own, orthogonal to reaching for an entirely different provider
+    via OpenRouter, so it stays exactly where it was, just wrapped in one
+    more layer of retry rather than replaced by it. Because this whole
+    function's own `except Exception` below still catches anything
+    `run_with_fallbacks` itself ultimately raises (every leg, OpenRouter
+    included, exhausted) and soft-fails to English-only, `fallbacks` can
+    only ever IMPROVE this function's odds of producing a Hungarian digest
+    -- it can never turn a translation that would have succeeded before
+    this feature existed into one that now fails the run, matching this
+    function's own "never raises" contract exactly as it always has.
     """
+
     try:
         prompt = build_translate_prompt(body_md)
-        try:
-            output = run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
-        except SafeguardsRefusalError:
-            if not fallback_model:
-                raise
-            logger.warning(
-                "translate_digest: %s refused by the API safety classifier; "
-                "retrying with fallback model %s",
-                model,
-                fallback_model,
-            )
-            output = run_claude(prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT)
-        validate_output(output)
+
+        def _primary() -> str:
+            try:
+                return run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+            except SafeguardsRefusalError:
+                if not fallback_model:
+                    raise
+                logger.warning(
+                    "translate_digest: %s refused by the API safety classifier; "
+                    "retrying with fallback model %s",
+                    model,
+                    fallback_model,
+                )
+                return run_claude(prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+
+        output = run_with_fallbacks(
+            primary=_primary,
+            fallbacks=fallbacks,
+            prompt=prompt,
+            budget_seconds=fallback_budget_seconds,
+            validate=validate_output,
+        )
     # Broad on purpose, not just SummarizeError: this function's contract is
     # NEVER raises -- translation is cosmetic, and an unanticipated failure
     # shape (an unreadable prompt file, a pathological template, anything

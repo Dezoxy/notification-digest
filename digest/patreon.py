@@ -33,10 +33,17 @@ so its failure must propagate and fail the run.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from digest.state import Item
-from digest.summarize import SummarizeError, run_claude, validate_output
+from digest.summarize import (
+    FallbackLeg,
+    SummarizeError,
+    run_claude,
+    run_with_fallbacks,
+    validate_output,
+)
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "patreon.md"
 
@@ -79,7 +86,13 @@ def build_prompt(item: Item) -> str:
     )
 
 
-def summarize_post(item: Item, model: str, timeout_seconds: int) -> str:
+def summarize_post(
+    item: Item,
+    model: str,
+    timeout_seconds: int,
+    fallbacks: Sequence[FallbackLeg] = (),
+    fallback_budget_seconds: int = 180,
+) -> str:
     """Summarize one Patreon post into Hungarian briefing markdown.
 
     Raises `SummarizeError` when the model returns something without a real
@@ -89,9 +102,27 @@ def summarize_post(item: Item, model: str, timeout_seconds: int) -> str:
     reports it unknown and the next hourly run simply tries again. That
     self-healing property is the whole reason `known_source_ids` keys on
     the digest link rather than on mere row presence.
+
+    `fallbacks` (default `()`, matching every existing direct call and
+    test) is this post's own OpenRouter fallback chain -- see
+    digest/summarize.py's `run_with_fallbacks` for the full mechanics, and
+    `fallback_budget_seconds` (default 180) the SHARED wall-clock budget
+    every leg of that chain draws from together. digest/main.py's
+    `_deliver_one_post` passes `cfg.fallback_timeout_seconds` and the
+    editorial-tier chain built by its own `_fallback_legs` helper -- a
+    post's summary is this feature's own deliverable (see this module's own
+    docstring), the same reasoning that puts it on the editorial tier
+    alongside `summarize`/`summarize_daily`/`summarize_weekly`/
+    `summarize_positions` rather than the lighter translate/context tier.
     """
-    output = run_claude(build_prompt(item), model, timeout_seconds, effort=_PATREON_EFFORT)
-    validate_output(output)
+    prompt = build_prompt(item)
+    output = run_with_fallbacks(
+        primary=lambda: run_claude(prompt, model, timeout_seconds, effort=_PATREON_EFFORT),
+        fallbacks=fallbacks,
+        prompt=prompt,
+        budget_seconds=fallback_budget_seconds,
+        validate=validate_output,
+    )
     return output
 
 

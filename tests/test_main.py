@@ -261,7 +261,14 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         # cfg.claude_effort must reach summarize() unchanged -- the only hop
         # between Config.claude_effort and the eventual `--effort` argv flag
@@ -606,7 +613,9 @@ def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, m
 
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append((body_md, allowed_urls, model, timeout_seconds, fallback_model))
         return "**TL;DR:** szia\n\n## Sz\n\ny"
 
@@ -719,7 +728,14 @@ def test_deliver_threads_real_recent_coverage_from_prior_digests(conn, monkeypat
     captured = {}
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         captured["recent_coverage"] = recent_coverage
         return "## Needs attention\n...", [], []
@@ -751,7 +767,14 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append((items, failed_sources))
         return "## Needs attention\n...new...", [], []
@@ -808,7 +831,14 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append(failed_sources)
         return "## Needs attention\n...new...", [], []
@@ -846,7 +876,14 @@ def test_deliver_pending_digest_send_fails_new_items_still_summarized_and_delive
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append(items)
         return "## Needs attention\n...new...", [], []
@@ -895,7 +932,14 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append(items)
         return "## Needs attention\n...batch...", [], []
@@ -945,7 +989,14 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     summarize_received = {}
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_received["items"] = items
         return "## Needs attention\n...selected...", [], []
@@ -3251,7 +3302,7 @@ def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatc
 
     daily_calls = []
 
-    def fake_summarize_daily(digest_rows, allowed_urls, model, timeout_seconds, effort):
+    def fake_summarize_daily(digest_rows, allowed_urls, model, timeout_seconds, effort, **_kwargs):
         daily_calls.append(
             dict(
                 digest_rows=digest_rows,
@@ -3609,7 +3660,7 @@ def test_generate_arc_context_primers_success_writes_and_returns_count(conn, mon
 
     captured = {}
 
-    def fake_generate(label, model, timeout_seconds):
+    def fake_generate(label, model, timeout_seconds, **_kwargs):
         captured.update(label=label, model=model, timeout_seconds=timeout_seconds)
         return "Background about the strait."
 
@@ -3707,7 +3758,7 @@ def test_run_daily_context_enabled_generates_bounded_to_max_per_run(conn, monkey
 
     calls = []
 
-    def fake_generate(label, model, timeout_seconds):
+    def fake_generate(label, model, timeout_seconds, **_kwargs):
         calls.append((label, model, timeout_seconds))
         return f"background for {label}"
 
@@ -3813,7 +3864,9 @@ def test_run_daily_translation_enabled_threads_hu_body_to_site(conn, monkeypatch
     )
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append((body_md, fallback_model))
         return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
 
@@ -4111,7 +4164,9 @@ def test_run_daily_flag_on_translation_uses_widened_allowlist(conn, monkeypatch,
 
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append(set(allowed_urls))
         return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
 
@@ -4207,7 +4262,7 @@ def test_run_weekly_happy_path_creates_and_delivers_weekly_digest(conn, monkeypa
 
     weekly_calls = []
 
-    def fake_summarize_weekly(daily_rows, allowed_urls, model, timeout_seconds, effort):
+    def fake_summarize_weekly(daily_rows, allowed_urls, model, timeout_seconds, effort, **_kwargs):
         weekly_calls.append(
             dict(
                 daily_rows=daily_rows,
@@ -4404,7 +4459,9 @@ def test_run_weekly_translation_enabled_threads_hu_body_to_site(conn, monkeypatc
     )
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append((body_md, fallback_model))
         return "**TL;DR:** a het\n\n## Egy szal\n\ndolog"
 
@@ -4584,3 +4641,97 @@ def test_deliver_channels_hidden_channel_does_not_suppress_the_others(conn, monk
 
     assert ok is True
     assert emailed == ["sent"]
+
+
+# --- OpenRouter fallback chain wiring (digest/main.py's _fallback_legs) ---
+
+
+def test_deliver_summarize_receives_fallback_legs_when_openrouter_configured(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    captured = {}
+
+    def fake_summarize(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "## Needs attention\n...", [], []
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+
+    cfg = replace(_cfg(), openrouter_api_key="sk-or-test-key")
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] != ()
+    assert all(leg.model in cfg.fallback_models for leg in captured["fallbacks"])
+
+
+def test_deliver_summarize_receives_empty_fallbacks_when_openrouter_unconfigured(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    captured = {}
+
+    def fake_summarize(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "## Needs attention\n...", [], []
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+
+    cfg = _cfg()  # openrouter_api_key defaults to None -- unconfigured
+
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] == ()
+
+
+def test_deliver_translate_digest_receives_fallback_legs_when_openrouter_configured(
+    conn, monkeypatch
+):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [])
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    captured = {}
+
+    def fake_translate(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "**TL;DR:** szia\n\n## Sz\n\ny"
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    cfg = replace(_cfg(), translate_hu_enabled=True, openrouter_api_key="sk-or-test-key")
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] != ()
+    assert all(leg.model in cfg.fallback_light_models for leg in captured["fallbacks"])
+
+
+def test_deliver_translate_digest_receives_empty_fallbacks_when_openrouter_unconfigured(
+    conn, monkeypatch
+):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [])
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    captured = {}
+
+    def fake_translate(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "**TL;DR:** szia\n\n## Sz\n\ny"
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    cfg = replace(_cfg(), translate_hu_enabled=True)  # openrouter_api_key unset
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] == ()

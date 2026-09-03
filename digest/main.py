@@ -78,6 +78,7 @@ from digest.state import (
 )
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
+    FallbackLeg,
     SummarizeError,
     format_recent_arcs,
     format_recent_coverage,
@@ -233,6 +234,39 @@ _MAX_ITEMS_PER_DIGEST = 250
 # it can actually see, so the pool read must be wide enough to reach past
 # one source's backlog to the items behind it.
 _MAX_ITEMS_FETCH_POOL = 1000
+
+
+def _fallback_legs(cfg: Config, *, light: bool) -> tuple[FallbackLeg, ...]:
+    """Build one call site's OpenRouter fallback chain, or none if the feature is off.
+
+    `cfg.openrouter_api_key` is the master switch (see that field's own
+    comment in digest/config.py): unset (`None`) means every one of this
+    run's model calls gets `fallbacks=()`, which is exactly the default
+    every one of the seven `summarize*`/`translate_digest`/
+    `generate_arc_context` signatures already carries -- so an unconfigured
+    deployment is unaffected by this helper existing at all, byte for byte
+    (digest/summarize.py's `run_with_fallbacks`, point 4 of its own
+    docstring, is what actually guarantees that once the empty tuple
+    arrives there).
+
+    `light` selects which of the two model tiers this particular call site
+    needs: `False` (the default shape callers reach for) returns
+    `cfg.fallback_models`, the EDITORIAL tier every window/daily/weekly/
+    positions/patreon call uses (they all summarize with
+    `cfg.anthropic_model`); `True` returns `cfg.fallback_light_models`, the
+    tier `translate_digest`/`generate_arc_context` use instead (they
+    summarize with `cfg.translate_model`/`cfg.context_model`) -- see those
+    two Config fields' own comments for why the tiers are split rather than
+    sharing one list.
+
+    Every leg in the returned tuple carries the SAME `cfg.openrouter_api_key`
+    -- there is exactly one OpenRouter account configured for this
+    deployment, never a per-model key.
+    """
+    if cfg.openrouter_api_key is None:
+        return ()
+    models = cfg.fallback_light_models if light else cfg.fallback_models
+    return tuple(FallbackLeg(model=model, api_key=cfg.openrouter_api_key) for model in models)
 
 
 async def _client_ready(client: TelegramClient) -> bool:
@@ -434,6 +468,8 @@ def _deliver(
             cfg.claude_timeout_seconds,
             cfg.claude_effort,
             recent_arcs=recent_arcs,
+            fallbacks=_fallback_legs(cfg, light=False),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
         )
     except SummarizeError as exc:
         logger.error("summarization failed: %s", exc)
@@ -456,6 +492,8 @@ def _deliver(
             cfg.translate_model,
             cfg.translate_timeout_seconds,
             fallback_model=cfg.translate_model_fallback,
+            fallbacks=_fallback_legs(cfg, light=True),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
         )
 
     digest_id = create_digest(conn, body_md, items, body_md_hu=body_md_hu)
@@ -996,7 +1034,13 @@ def _generate_arc_context_primers(conn: sqlite3.Connection, cfg: Config, now: da
         if label is None:
             continue
 
-        context_md = generate_arc_context(label, cfg.context_model, cfg.context_timeout_seconds)
+        context_md = generate_arc_context(
+            label,
+            cfg.context_model,
+            cfg.context_timeout_seconds,
+            fallbacks=_fallback_legs(cfg, light=True),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
+        )
         if context_md is None:
             continue
 
@@ -1202,6 +1246,8 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
                 cfg.anthropic_model,
                 cfg.claude_timeout_seconds,
                 cfg.claude_effort,
+                fallbacks=_fallback_legs(cfg, light=False),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
         except SummarizeError as exc:
             logger.error("daily brief summarization failed: %s", exc)
@@ -1262,6 +1308,8 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
                 cfg.translate_model,
                 cfg.translate_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
+                fallbacks=_fallback_legs(cfg, light=True),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
 
         total_items = sum(item_count for _, _, item_count, _ in rows)
@@ -1479,6 +1527,8 @@ def run_weekly(cfg: Config) -> bool:
                 cfg.anthropic_model,
                 cfg.claude_timeout_seconds,
                 cfg.claude_effort,
+                fallbacks=_fallback_legs(cfg, light=False),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
         except SummarizeError as exc:
             logger.error("weekly brief summarization failed: %s", exc)
@@ -1495,6 +1545,8 @@ def run_weekly(cfg: Config) -> bool:
                 cfg.translate_model,
                 cfg.translate_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
+                fallbacks=_fallback_legs(cfg, light=True),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
 
         total_items = sum(item_count for _, _, item_count, _ in rows)
@@ -1662,7 +1714,13 @@ def _deliver_one_post(conn, cfg: Config, item, telegram_state) -> bool:
     leaves the item's `digest_id` NULL and makes the next run retry it.
     """
     try:
-        body_md = summarize_post(item, cfg.anthropic_model, cfg.claude_timeout_seconds)
+        body_md = summarize_post(
+            item,
+            cfg.anthropic_model,
+            cfg.claude_timeout_seconds,
+            fallbacks=_fallback_legs(cfg, light=False),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
+        )
     except SummarizeError as exc:
         logger.error("patreon: summarizing post %s failed: %s", item.source_id, exc)
         return False
@@ -1897,6 +1955,8 @@ def run_positions(cfg: Config) -> bool:
                 recent_coverage,
                 cfg.anthropic_model,
                 cfg.claude_timeout_seconds,
+                fallbacks=_fallback_legs(cfg, light=False),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
         except SummarizeError as exc:
             logger.error("positions: summarization failed: %s", exc)

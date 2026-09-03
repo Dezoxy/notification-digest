@@ -5,7 +5,8 @@ the owner's own Telegram groups (Telethon, MTProto user session) and own
 X/Twitter notifications (twifork — a maintained twikit fork that still imports
 as `twikit` — cookie session, unofficial API, ToS risk accepted by the owner),
 plus RSS/Reddit/Polymarket/Hacker News collectors, tracks state in SQLite,
-summarizes new items with the Claude CLI headless (`claude -p`), and delivers a
+summarizes new items with the Claude CLI headless (`claude -p`, falling back to
+OpenRouter models when that call fails), and delivers a
 structured digest with deep links. Two lanes run outside that cascade on their
 own timers and into their own Telegram topics: `patreon` (one paid post per
 message) and `positions` (the tracked-project tracker, silent when nothing

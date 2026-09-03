@@ -10,6 +10,8 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from digest.openrouter import validate_model_id
+
 
 class ConfigError(Exception):
     """Raised when required configuration is missing or malformed.
@@ -469,6 +471,56 @@ class Config:
     # verify_daily_timeout_seconds' 600s (an agentic, tool-calling loop) --
     # neither of those call shapes applies here.
     context_timeout_seconds: int = 120
+    # THE master switch for the OpenRouter fallback chain (digest/summarize.py's
+    # `run_with_fallbacks`, digest/openrouter.py's `run_openrouter`): unset
+    # (None) means digest/main.py's `_fallback_legs` builds an EMPTY leg
+    # tuple for every one of this run's seven summarization call sites, and
+    # an empty `fallbacks` sequence makes `run_with_fallbacks` re-raise the
+    # primary's own exception unchanged (see that function's own docstring,
+    # point 4) -- so an unconfigured deployment behaves byte-for-byte as it
+    # did before this feature existed. `field(repr=False)`, like every other
+    # secret this dataclass carries (tg_api_hash, smtp_password, x_cookies,
+    # ...): it is a bearer-style API key sent as a request header
+    # (digest/openrouter.py's `run_openrouter`), and a dataclass repr is
+    # exactly the kind of thing that can end up in a traceback without
+    # anyone deliberately choosing to print it.
+    openrouter_api_key: str | None = field(default=None, repr=False)
+    # The EDITORIAL-tier fallback chain: every call site whose primary uses
+    # `anthropic_model` (window/daily/weekly/positions/patreon summarization
+    # -- digest/main.py's `_fallback_legs(cfg, light=False)`) falls back
+    # through these, in order, when the primary and any earlier fallback
+    # both fail. "openai/gpt-5.6-sol" and "z-ai/glm-5.3" are the owner's
+    # chosen defaults -- two different frontier-tier providers, so a
+    # provider-wide OpenRouter outage or rate limit affecting one still
+    # leaves the other reachable, which a two-model chain drawn from the
+    # SAME upstream provider would not guarantee. Only consulted at all when
+    # `openrouter_api_key` is set; see that field's own comment.
+    fallback_models: tuple[str, ...] = ("openai/gpt-5.6-sol", "z-ai/glm-5.3")
+    # The LIGHT-tier fallback chain: every call site whose primary uses
+    # `translate_model`/`context_model` (digest/main.py's
+    # `_fallback_legs(cfg, light=True)`) falls back through these instead --
+    # translation and background-primer generation need no frontier
+    # capability (see digest/translate.py's `_TRANSLATE_EFFORT` and
+    # digest/context.py's `_CONTEXT_EFFORT`, both fixed at a cheaper tier
+    # than the editorial models for the identical reason), so this tier's
+    # defaults are smaller/cheaper models rather than a copy of
+    # `fallback_models`. Kept as a SEPARATE knob, not a derived subset of
+    # `fallback_models`, so either tier can be retuned independently of the
+    # other -- mirroring `context_model` defaulting to the SAME literal
+    # `translate_model` resolves to today without being wired to it
+    # dynamically (see `context_model`'s own comment for that exact
+    # precedent).
+    fallback_light_models: tuple[str, ...] = ("openai/gpt-5.6-terra", "deepseek/deepseek-v4-flash")
+    # The SHARED wall-clock budget for one call's entire fallback chain --
+    # every leg together, never per leg (digest/summarize.py's
+    # `run_with_fallbacks`, point 3 of its own docstring). 180s is sized
+    # against the homelab's systemd `TimeoutStartSec` ceilings the same way
+    # translate_timeout_seconds' own comment describes: a run mode that
+    # calls a handful of these chains (e.g. the daily run's summarize_daily,
+    # translate_digest, and generate_arc_context calls) must still add a
+    # BOUNDED, not per-fallback-model-count-scaled, worst case to that run's
+    # total wall-clock.
+    fallback_timeout_seconds: int = 180
     # Hacker News collector (digest/collectors/hackernews.py). Like
     # x_enabled/polymarket_enabled/reddit_enabled, this is an explicit on/off
     # flag rather than an empty-means-disabled sentinel -- unlike news_feeds,
@@ -574,6 +626,15 @@ class Config:
         )
         context_model = os.environ.get("CONTEXT_MODEL", "sonnet")
         context_timeout_seconds = _optional_positive_int("CONTEXT_TIMEOUT_SECONDS", default=120)
+
+        openrouter_api_key = _optional_secret("OPENROUTER_API_KEY")
+        fallback_models = _optional_model_id_tuple(
+            "FALLBACK_MODELS", default=("openai/gpt-5.6-sol", "z-ai/glm-5.3")
+        )
+        fallback_light_models = _optional_model_id_tuple(
+            "FALLBACK_LIGHT_MODELS", default=("openai/gpt-5.6-terra", "deepseek/deepseek-v4-flash")
+        )
+        fallback_timeout_seconds = _optional_positive_int("FALLBACK_TIMEOUT_SECONDS", default=180)
 
         email_enabled = _parse_bool(os.environ.get("EMAIL_ENABLED", "true"))
 
@@ -694,6 +755,10 @@ class Config:
             context_max_per_run=context_max_per_run,
             context_model=context_model,
             context_timeout_seconds=context_timeout_seconds,
+            openrouter_api_key=openrouter_api_key,
+            fallback_models=fallback_models,
+            fallback_light_models=fallback_light_models,
+            fallback_timeout_seconds=fallback_timeout_seconds,
             email_enabled=email_enabled,
             site_publish_url=site_publish_url,
             site_ingest_key=site_ingest_key,
@@ -959,6 +1024,52 @@ def _optional_tg_channel_tuple(name: str) -> tuple[str, ...]:
                 "(letters, digits, underscore; 5-32 chars; no @ or t.me/ prefix)"
             )
     return names
+
+
+def _optional_model_id_tuple(name: str, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read an optional comma-separated list of OpenRouter model ids.
+
+    Backs FALLBACK_MODELS and FALLBACK_LIGHT_MODELS (Config.fallback_models
+    / Config.fallback_light_models) -- both are OpenRouter "<provider>/
+    <model>" id lists with the identical validation need, so this parser
+    takes the env var NAME and its own `default` tuple rather than being
+    hardcoded to either one, mirroring `_optional_tg_channel_tuple`'s own
+    shape exactly.
+
+    UNSET (the env var is absent entirely) falls back to `default` -- the
+    owner's two chosen models for that tier. Explicitly EMPTY (set to "" or
+    all-whitespace) means "no fallback legs for this tier" instead, and is
+    deliberately DISTINCT from unset: an operator who wants the editorial
+    tier's chain but not the light tier's (or vice versa) needs a way to
+    say "off" for one without simply not mentioning it, which unset alone
+    cannot express (unset already means "give me the default two models").
+    `_optional_tg_channel_tuple` doesn't need this distinction -- its
+    unset AND blank cases both mean the same thing, "lane not configured",
+    because it has no non-empty default to fall back to.
+
+    Each surviving entry is validated against `digest.openrouter`'s
+    `validate_model_id` (single home for the "<provider>/<model>" shape --
+    see that function's own comment for why it lives there, not a second
+    copy here) and a ConfigError NAMING the variable (never echoing the
+    malformed value -- a model id isn't a secret, but the house style here
+    is "name the var, not the value" regardless) is raised on the first bad
+    entry. Validated at startup rather than left to fail lazily: an
+    unvalidated typo'd model id would otherwise present as a fallback leg
+    that ALWAYS fails with the same OpenRouterError, discovered only the
+    first time the primary itself fails and the chain actually needs that
+    leg -- which, for a rarely-exercised fallback path, could be weeks
+    into a live outage rather than at the next deploy.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    if not raw.strip():
+        return ()
+    models = tuple(p.strip() for p in raw.split(",") if p.strip())
+    for model in models:
+        if not validate_model_id(model):
+            raise ConfigError(f"{name} entries must be valid OpenRouter model ids (provider/model)")
+    return models
 
 
 def _optional_x_handle_tuple(name: str) -> tuple[str, ...]:
@@ -1239,6 +1350,20 @@ def claude_subprocess_env() -> dict[str, str]:
     (it expires ~30 days after it is created and cannot be renewed) onto a
     long-lived `claude setup-token` token. With the token withheld here and
     the login gone, every summarize call failed "Not logged in".
+
+    OPENROUTER_API_KEY is deliberately NOT in this allowlist, even though
+    `claude -p` never reads it and forwarding it would look harmless. The
+    `claude` CLI subprocess is exactly the untrusted-content-facing process
+    this allowlist exists to protect every OTHER secret from (see this
+    docstring's opening paragraph) -- widening it to also hand over a
+    DIFFERENT provider's own credential would make the fallback chain's own
+    OpenRouter key exfiltratable by the exact same injection path this
+    function was written to close for TG_SESSION/SMTP_PASSWORD/etc.
+    digest/openrouter.py's `run_openrouter` never runs inside this
+    subprocess anyway -- it is a plain `urllib` HTTP call made directly by
+    this codebase's own process, never by the `claude` CLI -- so there is
+    no legitimate reason this key would ever need to reach that
+    environment in the first place.
     """
     allowed = ("PATH", "HOME", "USER", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN")
     return {k: os.environ[k] for k in allowed if k in os.environ}
