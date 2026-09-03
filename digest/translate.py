@@ -17,10 +17,12 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Collection, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from digest.summarize import (
     FallbackLeg,
+    ModelRun,
     SafeguardsRefusalError,
     enforce_link_allowlist,
     run_claude,
@@ -103,7 +105,7 @@ def translate_digest(
     fallback_model: str | None = None,
     fallbacks: Sequence[FallbackLeg] = (),
     fallback_budget_seconds: int = 180,
-) -> str | None:
+) -> tuple[str, ModelRun] | None:
     """Translate a validated English digest to Hungarian. Never raises; None on any failure.
 
     This is a PRODUCTION step run on the VM after summarize() has already
@@ -217,12 +219,39 @@ def translate_digest(
     -- it can never turn a translation that would have succeeded before
     this feature existed into one that now fails the run, matching this
     function's own "never raises" contract exactly as it always has.
+
+    Returns `(body_md_hu, model_run)`, NOT a bare string, on success -- see
+    `run_with_fallbacks`' own docstring (point 6) for why `model_run` (a
+    `digest.summarize.ModelRun`) exists at all and how it's normally built.
+    THIS function's `model_run` needs one correction `run_with_fallbacks`
+    itself cannot make: `_primary` below is ITSELF a two-step retry (`model`,
+    then -- on a `SafeguardsRefusalError` -- `fallback_model`), so a
+    primary-path success (`model_run.fallback is False`) does not always
+    mean `model` produced the output -- it can just as well mean
+    `fallback_model` did, if the SAME-PROVIDER retry inside `_primary` is
+    what actually succeeded. `run_with_fallbacks` has no visibility into
+    that inner retry at all (point 1 of its own docstring: `primary` is an
+    opaque closure), so this function tracks which of the two actually ran
+    itself (`served_model`, mutated by `_primary` via `nonlocal`) and
+    corrects `model_run.model` after the call, via `dataclasses.replace`,
+    whenever the primary path served but the model that served isn't the
+    one `run_with_fallbacks` was told to label it with. digest/main.py's
+    `_deliver`/`run_daily`/`run_weekly` persist the corrected result
+    unchanged (`create_digest`'s `provenance` column).
     """
 
     try:
         prompt = build_translate_prompt(body_md)
 
+        # Mutated by `_primary` below (via `nonlocal`) the moment the
+        # SAME-PROVIDER `fallback_model` retry actually runs -- see this
+        # function's own docstring for why `run_with_fallbacks` cannot see
+        # or report this on its own, and why this function corrects
+        # `model_run.model` against it after the call returns.
+        served_model = model
+
         def _primary() -> str:
+            nonlocal served_model
             try:
                 return run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
             except SafeguardsRefusalError:
@@ -234,13 +263,16 @@ def translate_digest(
                     model,
                     fallback_model,
                 )
+                served_model = fallback_model
                 return run_claude(prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT)
 
-        output = run_with_fallbacks(
+        output, model_run = run_with_fallbacks(
             primary=_primary,
             fallbacks=fallbacks,
             prompt=prompt,
             budget_seconds=fallback_budget_seconds,
+            primary_model=model,
+            primary_effort=_TRANSLATE_EFFORT,
             validate=validate_output,
         )
     # Broad on purpose, not just SummarizeError: this function's contract is
@@ -252,5 +284,14 @@ def translate_digest(
         logger.warning("translate_digest: translation failed: %s", type(exc).__name__)
         return None
 
+    if not model_run.fallback and model_run.model != served_model:
+        # `run_with_fallbacks` labeled the primary path with `model` (the
+        # only identity it was told about), but `_primary`'s own inner
+        # safeguards-refusal retry is what actually served this call -- fix
+        # the label up to the model that really produced `output`. See this
+        # function's own docstring for the full "why run_with_fallbacks
+        # can't do this itself" reasoning.
+        model_run = replace(model_run, model=served_model)
+
     output = output.replace("\\u0060", "`")
-    return enforce_link_allowlist(output, allowed_urls)
+    return enforce_link_allowlist(output, allowed_urls), model_run

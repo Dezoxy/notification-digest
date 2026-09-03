@@ -77,7 +77,15 @@ _USER_AGENT = "notification-digest/1.0"
 # handle. Only CLAUDE_EFFORT (the primary's own effort, Config.claude_effort)
 # stays a configurable knob; every fallback leg, at every tier, always asks
 # OpenRouter for "high".
-_REASONING_EFFORT = "high"
+#
+# PUBLIC, not `_`-prefixed: digest/summarize.py's `run_with_fallbacks` needs
+# this exact value to stamp a fallback leg's `ModelRun.effort` (the
+# model-provenance feature that reports which leg of the chain actually
+# produced a digest) -- reaching into another module's private constant
+# would be the wrong shape for something a second module now depends on as
+# part of its own contract, not just as an implementation detail of this
+# one.
+REASONING_EFFORT = "high"
 
 # OpenRouter's own model-id shape: "<provider>/<model>", e.g.
 # "openai/gpt-5.6-sol" or "z-ai/glm-5.3". The provider segment is always
@@ -128,11 +136,11 @@ def run_openrouter(prompt: str, model: str, timeout_seconds: int, api_key: str) 
     """POST one prompt to OpenRouter's chat-completions endpoint and return the reply text.
 
     Sends `{"model": model, "messages": [{"role": "user", "content": prompt}],
-    "reasoning": {"effort": _REASONING_EFFORT}}` as the JSON body, with the
+    "reasoning": {"effort": REASONING_EFFORT}}` as the JSON body, with the
     API key carried as a Bearer `authorization` header (never in the body or
     the URL, where it would be far more likely to end up copied into a log
     line or an error message by accident). `reasoning.effort` is OpenRouter's
-    own analogue of `claude -p`'s `--effort` flag -- see `_REASONING_EFFORT`'s
+    own analogue of `claude -p`'s `--effort` flag -- see `REASONING_EFFORT`'s
     own comment for why it is fixed at "high" for every leg rather than
     threaded from Config the way the primary's CLAUDE_EFFORT is.
 
@@ -172,7 +180,7 @@ def run_openrouter(prompt: str, model: str, timeout_seconds: int, api_key: str) 
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "reasoning": {"effort": _REASONING_EFFORT},
+        "reasoning": {"effort": REASONING_EFFORT},
     }
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(

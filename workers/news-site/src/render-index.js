@@ -180,6 +180,61 @@ export function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
   return `<div class="sourcekey"><span class="sklabel">${esc(strings.sourcesLabel)}</span>${countSpans}${failedSpans}</div>`;
 }
 
+// Model provenance (owner-requested "WRITTEN" byline, PLAN.md OpenRouter-
+// fallback work): a SECOND digest-page colophon row, directly below the
+// source key above — which model wrote this brief, and (when the digest was
+// also translated) which model translated it, plus whether an OpenRouter
+// fallback model served in place of the primary Claude call for that leg.
+// Same fail-safe JSON.parse contract as renderSourceKey above: unparseable,
+// wrong-shaped, or an unrecognizable leg -> that leg (or the whole row)
+// renders nothing rather than throwing, so an old digest predating this
+// data (or a stored value from before a future validation change) still
+// renders cleanly. `summarize` is always present when `provenance` parses
+// at all (app contract); `translate` only shows up on a digest that also
+// got a Hungarian translation — see validateProvenance in src/ingest.js for
+// the shape this trusts but re-checks structurally anyway.
+export function renderProvenance(provenanceJson, strings) {
+  if (!provenanceJson) return "";
+  let parsed;
+  try {
+    parsed = JSON.parse(provenanceJson);
+  } catch {
+    return "";
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "";
+
+  // One leg's chip: glyph + (for the translate leg only) the localized "HU"
+  // marker + model · effort. A fallback swaps the leg's own directional
+  // glyph (✎ write / ⇄ translate) for ↻ and gets the muted .sk-fallback
+  // class — same "no new color, the glyph is the marker" posture
+  // renderSourceKey's .sk-failed pills already established for a failed
+  // source; the ↻ baked into the chip text (not CSS) is what marks it.
+  const legChip = (leg, glyph, markerHtml) => {
+    if (
+      typeof leg !== "object" ||
+      leg === null ||
+      Array.isArray(leg) ||
+      typeof leg.model !== "string" ||
+      typeof leg.effort !== "string"
+    ) {
+      return "";
+    }
+    const fallback = leg.fallback === true;
+    const mark = fallback ? "↻" : glyph;
+    const cls = fallback ? "sk sk-fallback" : "sk";
+    return `<span class="${cls}">${mark} ${markerHtml}${esc(leg.model)} · ${esc(leg.effort)}</span>`;
+  };
+
+  const summarizeHtml = legChip(parsed.summarize, "✎", "");
+  const translateHtml = parsed.translate
+    ? legChip(parsed.translate, "⇄", `${esc(strings.provenanceHuMarker)} `)
+    : "";
+
+  if (!summarizeHtml && !translateHtml) return "";
+
+  return `<div class="provenance"><span class="sklabel">${esc(strings.provenanceLabel)}</span>${summarizeHtml}${translateHtml}</div>`;
+}
+
 export function renderIndexEntry(row, token, lang, view) {
   const strings = STRINGS[lang];
   const created = new Date(row.created_at);

@@ -1,0 +1,17 @@
+-- Adds the optional provenance column to an EXISTING deployed digests table
+-- (model-provenance byline, PLAN.md OpenRouter-fallback work). Fresh installs
+-- don't need this file -- schema.sql already includes this column for a
+-- brand-new database.
+--
+-- Apply to the deployed D1 database with:
+--   wrangler d1 execute news-digests --remote --file migrations/0010-provenance.sql
+--
+-- Nullable and defaults to NULL, so existing rows (all pre-provenance
+-- payloads) come through unaffected, and any ingest payload with no
+-- provenance field (older app version) keeps working unchanged.
+--
+-- digests_fts (0005-fts-search.sql) and its sync triggers are untouched
+-- here -- provenance is not an indexed text column (same reasoning as
+-- 0006's topics column and 0007's deltas column), so the FTS table's own
+-- schema and triggers need no corresponding change.
+ALTER TABLE digests ADD COLUMN provenance TEXT;

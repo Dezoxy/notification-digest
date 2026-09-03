@@ -6,6 +6,7 @@ idempotency contract this module must uphold.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -60,7 +61,44 @@ CREATE TABLE IF NOT EXISTS digests (
     -- DEFAULT 'window' means every pre-existing row -- every digest this
     -- codebase ever created before this column existed -- is correctly
     -- classified as a window digest, with no separate backfill needed.
-    kind            TEXT NOT NULL DEFAULT 'window'
+    kind            TEXT NOT NULL DEFAULT 'window',
+    -- Model provenance (which model/effort actually produced this digest's
+    -- summarize/translate legs, and whether an OpenRouter fallback fired
+    -- for either one): a single JSON object with up to two keys, "summarize"
+    -- (always present) and "translate" (present only when this digest has a
+    -- Hungarian translation), each a nested model/effort/fallback object.
+    --
+    -- NOTE for whoever next touches this comment: never split a quoted or
+    -- braced fragment (a literal double quote, backtick, or curly brace)
+    -- across two separate comment lines below. SQLite 3.47's ALTER TABLE
+    -- DROP COLUMN implementation mis-scans a CREATE TABLE whose comments do
+    -- that, raising an "incomplete input" error on an otherwise valid
+    -- table -- reproduced by an earlier draft of this very comment, and
+    -- guarded against by test_state.py's migration test for this column
+    -- (see its own name for which one). Production code only ever ADDS
+    -- this column and never drops it, but a comment that breaks the TEST
+    -- harness simulating an old database is still worth avoiding.
+    --
+    -- digest/main.py's `_provenance` helper owns the exact shape;
+    -- digest/summarize.py's `ModelRun` is what each leg's own sub-object is
+    -- built from. One JSON TEXT column rather than several plain columns,
+    -- for the same reason this table already prefers it elsewhere:
+    -- the site payload's `source_counts`/`topics`/`deltas` fields
+    -- (digest/publish.py's `publish_to_site`) are exactly this shape --
+    -- JSON, nullable/absent-when-empty, parsed defensively on the
+    -- consuming side -- and this column follows that same precedent rather
+    -- than inventing a fifth. It also keeps this feature to ONE migration
+    -- instead of one per sub-field, and leaves room for a future verify
+    -- pass (PLAN.md §11.4) to record its own leg here later with no
+    -- further schema change -- just one more key in the same object.
+    -- Nullable, no default: unlike `kind` immediately above (which always
+    -- has a correct default for a pre-existing row -- every digest before
+    -- this feature WAS a "window" digest), there is no correct backfill
+    -- value for a digest created before this column existed -- it simply
+    -- never recorded which model produced it, so NULL is exactly right,
+    -- mirroring `body_md_hu`'s own "no equivalent sentinel" nullability
+    -- rationale above.
+    provenance      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -332,7 +370,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 # Version 6 (site-publish delta): adds `arc_context.synced_at` -- see
 # `_migrate_add_arc_context_synced_at_column` and init_db's `if version < 6:`
 # step.
-_LATEST_SCHEMA_VERSION = 6
+#
+# Version 7 (model provenance): adds `digests.provenance` -- see
+# `_migrate_add_provenance_column` and init_db's `if version < 7:` step.
+_LATEST_SCHEMA_VERSION = 7
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -458,6 +499,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         # table that already exists, so a live state.db reaches this point
         # with the table but without the column.
         _migrate_add_arc_context_synced_at_column(conn)
+
+    if version < 7:
+        # `digests.provenance` (model provenance). Like the version-5/6
+        # steps and unlike 2/3/4, this is NOT a no-op on an existing
+        # database: _SCHEMA's `CREATE TABLE IF NOT EXISTS` never alters a
+        # table that already exists, so a live state.db reaches this point
+        # still missing the column, and every `create_digest` INSERT would
+        # fail without it.
+        _migrate_add_provenance_column(conn)
 
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
@@ -597,6 +647,27 @@ def _migrate_add_body_md_hu_column(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
     if "body_md_hu" not in columns:
         conn.execute("ALTER TABLE digests ADD COLUMN body_md_hu TEXT")
+        conn.commit()
+
+
+def _migrate_add_provenance_column(conn: sqlite3.Connection) -> None:
+    """Backfill `digests.provenance` on databases predating the model-provenance feature.
+
+    Same idempotent ALTER-TABLE-ADD-COLUMN pattern as
+    `_migrate_add_body_md_hu_column` immediately above -- `CREATE TABLE IF
+    NOT EXISTS` never alters an existing table, so an upgraded pre-provenance
+    database would otherwise be missing this column and every
+    `create_digest` INSERT would crash with "sqlite3.OperationalError: no
+    such column: provenance". Nullable, no default value: exactly like
+    `body_md_hu`, a pre-existing row has no equivalent sentinel to backfill
+    -- it genuinely never recorded which model produced it, so NULL means
+    exactly that, and `get_digest_provenance` already treats NULL (and any
+    other unparseable value) as "nothing to show" rather than a schema
+    surprise.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digests)").fetchall()}
+    if "provenance" not in columns:
+        conn.execute("ALTER TABLE digests ADD COLUMN provenance TEXT")
         conn.commit()
 
 
@@ -1601,12 +1672,13 @@ def create_digest(
     body_md_hu: str | None = None,
     kind: str = "window",
     item_count: int | None = None,
+    provenance: dict | None = None,
 ) -> int:
     """Durably record a digest and stamp its items, in one transaction.
 
     Inserts a `digests` row (created_at = now UTC, item_count = len(items)
     unless overridden -- see `item_count` below --, email_sent = 0, body_md,
-    body_md_hu, kind) and stamps exactly the given `items` snapshot with the
+    body_md_hu, kind, provenance) and stamps exactly the given `items` snapshot with the
     new digest's id — one `UPDATE ... WHERE source = ? AND
     source_id = ? AND digest_id IS NULL` per item. We deliberately do NOT use
     an unqualified `WHERE digest_id IS NULL` update: `items` is a snapshot
@@ -1639,6 +1711,23 @@ def create_digest(
     body_md was subject to, so there is nothing left for create_digest to
     check.
 
+    `provenance` (keyword-only, default None) is the model-provenance
+    object digest/main.py's own `_provenance` helper builds from the
+    `digest.summarize.ModelRun`(s) `summarize()`/`summarize_daily()`/
+    `summarize_weekly()` and (optionally) `translate_digest()` return --
+    see `_provenance`'s own docstring for the exact `{"summarize": {...},
+    "translate": {...}}` shape and the `_SCHEMA` comment on
+    `digests.provenance` for why it is stored as one JSON TEXT column.
+    Serialized here with `json.dumps(provenance, sort_keys=True)` --
+    `sort_keys=True` so the stored bytes are deterministic across runs for
+    the identical logical object (no functional need, but it is what makes
+    a `provenance` column diffable/greppable in a raw `sqlite3` dump, and
+    costs nothing). `None` (the default -- every call site that has no
+    provenance to record, and every call from before this feature existed)
+    stores SQL NULL, not the string `"null"` -- `get_digest_provenance`
+    treats NULL identically to a digest that predates this column
+    entirely.
+
     `kind` (keyword-only, default "window") distinguishes the every-6-hours
     item digest (the only kind that existed before the daily-brief feature)
     from a "daily" brief (digest/daily.py's `summarize_daily`, synthesized
@@ -1663,15 +1752,20 @@ def create_digest(
     """
     now = datetime.now(UTC).isoformat()
     stored_item_count = item_count if item_count is not None else len(items)
+    # None -> SQL NULL, not the string "null" -- see this function's own
+    # `provenance` docstring paragraph for why that distinction matters to
+    # `get_digest_provenance`.
+    stored_provenance = json.dumps(provenance, sort_keys=True) if provenance is not None else None
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
         cur.execute(
             """
-            INSERT INTO digests (created_at, item_count, email_sent, body_md, body_md_hu, kind)
-            VALUES (?, ?, 0, ?, ?, ?)
+            INSERT INTO digests
+                (created_at, item_count, email_sent, body_md, body_md_hu, kind, provenance)
+            VALUES (?, ?, 0, ?, ?, ?, ?)
             """,
-            (now, stored_item_count, body_md, body_md_hu, kind),
+            (now, stored_item_count, body_md, body_md_hu, kind, stored_provenance),
         )
         digest_id = cur.lastrowid
         stamped = 0
@@ -2375,6 +2469,44 @@ def get_digest_source_counts(conn: sqlite3.Connection, digest_id: int) -> dict[s
         (digest_id,),
     ).fetchall()
     return {source: count for source, count in rows}
+
+
+def get_digest_provenance(conn: sqlite3.Connection, digest_id: int) -> dict | None:
+    """Return the given digest's stored model-provenance object, or None.
+
+    Feeds the site channel's optional `provenance` ingest field
+    (digest/publish.py's `publish_to_site`), the same "read a single stored
+    column back by digest_id" shape `get_digest_source_counts` (above) uses,
+    but reading `digests.provenance` directly rather than deriving anything
+    from `items`.
+
+    Returns `None` in every case there is nothing usable to report: no such
+    `digest_id`, a NULL column (a digest predating this feature, or one this
+    codebase deliberately never recorded provenance for -- see
+    create_digest's `provenance` docstring), or -- defensively -- a
+    non-NULL value that fails `json.loads` or does not decode to a dict.
+    This function NEVER raises on malformed stored JSON: a hand-edited row,
+    a future storage-layer bug, or (in principle) a `json.dumps` change
+    upstream that stops round-tripping cleanly must degrade to "nothing to
+    show" exactly like `get_deltas`/`get_digest_source_counts` degrade to an
+    empty result for a digest with nothing stored, not take down the whole
+    delivery/publish path over one bad column value. digest/publish.py's
+    `publish_to_site` then omits the `provenance` field entirely for a
+    falsy (None or, in principle, empty-dict) result, matching that
+    function's truthy-only inclusion contract for
+    `source_counts`/`failed_sources`/`topics`/`deltas`.
+    """
+    row = conn.execute(
+        "SELECT provenance FROM digests WHERE id = ?",
+        (digest_id,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    try:
+        parsed = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def get_deltas(conn: sqlite3.Connection, digest_id: int) -> list[dict[str, str]]:

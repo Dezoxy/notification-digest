@@ -1069,6 +1069,85 @@ def test_publish_to_site_omits_arc_contexts_when_empty(monkeypatch):
     assert "arc_contexts" not in captured["body"]
 
 
+# --- publish_to_site: provenance (model-provenance feature) ---
+
+
+def test_publish_to_site_includes_provenance_when_given(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    provenance = {
+        "summarize": {"model": "claude-opus-5", "effort": "high", "fallback": False},
+        "translate": {"model": "openai/gpt-5.6-terra", "effort": "high", "fallback": True},
+    }
+
+    publish_to_site(
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
+        provenance=provenance,
+    )
+
+    assert captured["body"]["provenance"] == provenance
+
+
+def test_publish_to_site_omits_provenance_when_none(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
+    )
+
+    assert "provenance" not in captured["body"]
+
+
+def test_publish_to_site_omits_provenance_when_empty(monkeypatch):
+    # Truthy-only inclusion, matching deltas/topics/source_counts/
+    # failed_sources/arc_contexts above: an explicit empty dict must be
+    # omitted exactly like None.
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr(publish_mod.urllib.request, "urlopen", fake_urlopen)
+
+    publish_to_site(
+        1,
+        "body",
+        "<p>body</p>",
+        "2026-07-29T10:00:00+00:00",
+        1,
+        "https://news-site.example.workers.dev",
+        "key",
+        provenance={},
+    )
+
+    assert "provenance" not in captured["body"]
+
+
 # --- map_deltas_to_slugs ---
 
 

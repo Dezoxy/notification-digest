@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from digest.config import claude_subprocess_env
-from digest.openrouter import run_openrouter
+from digest.openrouter import REASONING_EFFORT, run_openrouter
 from digest.state import Item
 
 logger = logging.getLogger(__name__)
@@ -713,16 +713,56 @@ class FallbackLeg:
     api_key: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class ModelRun:
+    """Which model actually produced a `run_with_fallbacks` call's output, and how.
+
+    Provenance, not configuration: with a fallback chain in play, the model
+    named in a caller's OWN `model`/`primary_model` argument is only ever
+    the one ASKED first, not necessarily the one that ANSWERED -- an owner
+    (or a Loki dashboard) looking at a finished digest has no way to tell
+    "the primary served this" from "the primary hit a Max-subscription
+    limit and OpenRouter's third fallback model quietly wrote it instead"
+    without this. `run_with_fallbacks` returns one of these alongside its
+    output on every successful call (see that function's own docstring,
+    point 6) so a caller can persist it (digest/state.py's `create_digest`'s
+    `provenance` column) and the site can show it.
+
+    `model` is the model id that actually served -- `primary_model` verbatim
+    on the primary path, or `FallbackLeg.model` verbatim on a fallback path.
+    `effort` is the reasoning/thinking effort that leg actually ran at --
+    `primary_effort` verbatim on the primary path, or
+    `digest.openrouter.REASONING_EFFORT` on a fallback path (every
+    OpenRouter leg, at every tier, always reasons at "high" -- see that
+    constant's own comment). `fallback` is `True` iff an OpenRouter leg
+    served this call, `False` iff the Claude primary did -- the single bit
+    a reader actually scans for ("did the chain have to reach past the
+    primary this time?") without parsing `model` against whatever the
+    deployment's current `primary_model`/fallback list happen to be.
+    """
+
+    model: str
+    effort: str
+    fallback: bool
+
+
 def run_with_fallbacks(
     primary: Callable[[], str],
     fallbacks: Sequence[FallbackLeg],
     prompt: str,
     budget_seconds: int,
+    primary_model: str,
+    primary_effort: str,
     validate: Callable[[str], None] | None = None,
-) -> str:
+) -> tuple[str, ModelRun]:
     """Call `primary()`; on failure, retry `prompt` against each of `fallbacks` in order.
 
-    Five load-bearing design points, each explained below because getting
+    Returns `(output, ModelRun)`, not a bare string -- see point 6 below for
+    the full shape and why `primary_model`/`primary_effort` exist as
+    separate arguments rather than something this function infers on its
+    own.
+
+    Six load-bearing design points, each explained below because getting
     any one of them backwards silently breaks either the ~145 existing
     tests that monkeypatch `run_claude`, or the byte-for-byte-unchanged
     behavior an unconfigured (no OPENROUTER_API_KEY) deployment must keep.
@@ -819,12 +859,42 @@ def run_with_fallbacks(
        most recent, most likely still-relevant cause, exactly like Python's
        own exception-chaining convention already favors the innermost
        `raise ... from`.
+    6. WHY THE RETURN VALUE IS `(output, ModelRun)`, AND WHY
+       `primary_model`/`primary_effort` ARE ARGUMENTS INSTEAD OF SOMETHING
+       DERIVED. The whole feature this pair of fields exists for is: with a
+       fallback chain configured, an owner looking at a finished digest
+       cannot otherwise tell whether the PRIMARY served it or the chain had
+       to reach past a failed/refused/rate-limited primary to a DIFFERENT
+       model on OpenRouter -- `model`/`effort` on a fallback leg are already
+       known locally (`leg.model`, `digest.openrouter.REASONING_EFFORT`),
+       but the primary's own identity is NOT: point 1 above is exactly why
+       this function only ever holds an opaque, zero-argument `primary`
+       closure, never a `(model, effort)` pair it could call itself. That
+       same indirection means this function has no way to learn what
+       `primary_model`/`primary_effort` for a successful primary call
+       actually WERE by inspecting `primary` -- it is a closure, not
+       introspectable data -- so the caller, which already knows exactly
+       what it captured into that closure, must hand the pair in explicitly.
+       They are used for EXACTLY ONE thing: building the `ModelRun` this
+       function returns on the primary-success path
+       (`ModelRun(primary_model, primary_effort, fallback=False)`) --
+       never to call anything, never to select which model `primary()`
+       itself invokes (that choice was already baked into the closure by
+       the caller before this function was ever entered). Passing the wrong
+       values here cannot break `primary()`'s own behavior, only mislabel
+       the provenance this function reports for it -- but getting them right
+       is still what makes the returned `ModelRun` trustworthy for the one
+       thing it exists to answer: "which model actually produced this
+       digest?" On a fallback path, `ModelRun` is instead built from that
+       leg's own `FallbackLeg.model` and `digest.openrouter.REASONING_EFFORT`
+       (see `ModelRun`'s own docstring for why the fallback effort is
+       always that constant, never `primary_effort`), with `fallback=True`.
     """
     try:
         output = primary()
         if validate is not None:
             validate(output)
-        return output
+        return output, ModelRun(model=primary_model, effort=primary_effort, fallback=False)
     except Exception as primary_exc:
         if not fallbacks:
             raise
@@ -876,7 +946,7 @@ def run_with_fallbacks(
                 leg.model,
                 type(primary_exc).__name__,
             )
-            return output
+            return output, ModelRun(model=leg.model, effort=REASONING_EFFORT, fallback=True)
 
         raise SummarizeError(
             "every model in the fallback chain failed: " + "; ".join(failures)
@@ -2214,7 +2284,7 @@ def summarize(
     recent_arcs: str = "",
     fallbacks: Sequence[FallbackLeg] = (),
     fallback_budget_seconds: int = 180,
-) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
+) -> tuple[str, list[dict[str, str]], list[dict[str, str]], ModelRun]:
     """Build the prompt, run it through Claude, validate and repair the
     contract, and deterministically prepend the collector-failure banner.
 
@@ -2230,8 +2300,8 @@ def summarize(
     None`) passes `fallbacks=()`, which is exactly this default -- so this
     call behaves byte-for-byte as it did before the chain existed.
 
-    Returns `(body_md, deltas, arc_keys)`, NOT a bare string -- PLAN.md §11.3
-    added a second return value, `deltas`, the `extract_deltas`-parsed list
+    Returns `(body_md, deltas, arc_keys, model_run)`, NOT a bare string --
+    PLAN.md §11.3 added a second return value, `deltas`, the `extract_deltas`-parsed list
     of `{"heading", "previously", "now"}` entries pulled off the model's
     machine-facing ```deltas fence (see that function's own docstring); the
     stable-arc-keys feature adds a THIRD, `arc_keys`, the
@@ -2254,6 +2324,15 @@ def summarize(
     result (digest/state.py's `write_deltas`/`write_arc_keys`) --
     summarize() itself does no slug mapping or persistence for either; it
     only parses and strips.
+
+    The FOURTH return value, `model_run`, is unrelated to any of the above:
+    it is `run_with_fallbacks`' own `ModelRun`, reporting which model
+    (`model`, on the primary path, or a fallback leg's own model id) and
+    effort actually produced `body_md`, and whether a fallback fired at all
+    -- see `run_with_fallbacks`'s docstring (point 6) and `ModelRun`'s own
+    docstring for the full shape. summarize() does nothing with it beyond
+    passing it straight through in the returned tuple; digest/main.py's
+    `_deliver` is what persists it (`create_digest`'s `provenance` column).
 
     `recent_coverage` is passed straight through to build_prompt (see that
     function's docstring for the substitution-ordering hazard it addresses,
@@ -2313,11 +2392,13 @@ def summarize(
     (validated) model output unchanged.
     """
     prompt = build_prompt(items, failed_sources, recent_coverage, recent_arcs)
-    output = run_with_fallbacks(
+    output, model_run = run_with_fallbacks(
         primary=lambda: run_claude(prompt, model, timeout_seconds, effort),
         fallbacks=fallbacks,
         prompt=prompt,
         budget_seconds=fallback_budget_seconds,
+        primary_model=model,
+        primary_effort=effort,
         validate=validate_output,
     )
     # extract_arc_keys and extract_deltas both run FIRST, before
@@ -2364,5 +2445,5 @@ def summarize(
     output = renumber_citations(strip_tldr_citations(output))
     if failed_sources:
         banner = "".join(f"⚠ {source} collection failed this run\n" for source in failed_sources)
-        return banner + "\n" + output, deltas, arc_keys
-    return output, deltas, arc_keys
+        return banner + "\n" + output, deltas, arc_keys, model_run
+    return output, deltas, arc_keys, model_run

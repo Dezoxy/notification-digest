@@ -312,11 +312,21 @@ def summarize_positions(
     its own `_fallback_legs` helper.
     """
     prompt = build_prompt(items, recent_coverage)
-    output = run_with_fallbacks(
+    # `run_with_fallbacks` now also returns a `ModelRun` reporting which
+    # model/effort actually served -- discarded here, not threaded through
+    # `summarize_positions`' own return: the positions tracker is
+    # Telegram-only (`_POSITIONS_HIDDEN_CHANNELS`), never published to the
+    # site, and model provenance is a site-facing feature (digest/main.py's
+    # `_deliver`/`run_daily`/`run_weekly` are the only callers that persist
+    # it via `create_digest`'s `provenance` column) -- there is nowhere for
+    # this kind's provenance to go.
+    output, _model_run = run_with_fallbacks(
         primary=lambda: run_claude(prompt, model, timeout_seconds, effort=_POSITIONS_EFFORT),
         fallbacks=fallbacks,
         prompt=prompt,
         budget_seconds=fallback_budget_seconds,
+        primary_model=model,
+        primary_effort=_POSITIONS_EFFORT,
         validate=_validate_positions_output,
     )
     if is_no_signal(output):

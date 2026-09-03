@@ -16,6 +16,8 @@
 //     on the HU twin (deltasRenderableIn)
 //   - failed_sources (235) -> degraded badge + source-key failed pills
 //   - source_counts (all) -> source key swatches
+//   - provenance (235) -> the "WRITTEN" row, exercising both the plain
+//     summarize chip and the muted ↻ fallback chip on the translate leg
 //   - NULL _hu fields (234) -> the /hu/ EN-fallback note
 //   - arc_context row -> the arc page's context primer disclosure
 //   - a body with an inline style attr (235 s2) -> stripInlineStyles
@@ -106,6 +108,21 @@ export const DIGESTS = [
     deltas: JSON.stringify([
       { slug: "markets-slide-continues", previously: "Down two percent", now: "Down four percent" },
     ]),
+    // Model provenance (ingest v5): summarize served straight from the
+    // primary Claude call; translate fell back to an OpenRouter model. The
+    // fallback leg deliberately carries a real OpenRouter "<provider>/<model>"
+    // id rather than a bare Claude name: `fallback: true` MEANS an OpenRouter
+    // leg served, so a Claude model name there is a combination the app can
+    // never actually produce, and this golden doubles as the reference render
+    // people read. It also exercises the longest id shape the row has to lay
+    // out. This is the
+    // one fixture row that needs to exercise BOTH the plain chip and the
+    // muted/↻ fallback chip in one golden render (digest 235 is the only
+    // digest with a golden-covered own page — see GOLDEN_PAGES in env.mjs).
+    provenance: JSON.stringify({
+      summarize: { model: "claude-opus-5", effort: "high", fallback: false },
+      translate: { model: "openai/gpt-5.6-terra", effort: "high", fallback: true },
+    }),
   },
   {
     id: 234,
@@ -127,6 +144,7 @@ export const DIGESTS = [
       { slug: "markets-slide-day-two", label: "Markets slide, day two", key: ARC_IDENTITY },
     ]),
     deltas: null,
+    provenance: null,
   },
   {
     id: 233,
@@ -145,6 +163,7 @@ export const DIGESTS = [
     failed_sources: null,
     topics: null,
     deltas: null,
+    provenance: null,
   },
   {
     id: 232,
@@ -163,6 +182,7 @@ export const DIGESTS = [
     failed_sources: null,
     topics: null,
     deltas: null,
+    provenance: null,
   },
   {
     id: 231,
@@ -181,6 +201,7 @@ export const DIGESTS = [
     failed_sources: null,
     topics: null,
     deltas: null,
+    provenance: null,
   },
 ];
 

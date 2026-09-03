@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 from digest.summarize import (
     FallbackLeg,
+    ModelRun,
     enforce_link_allowlist,
     renumber_citations,
     run_claude,
@@ -167,8 +168,16 @@ def summarize_daily(
     now: datetime | None = None,
     fallbacks: Sequence[FallbackLeg] = (),
     fallback_budget_seconds: int = 180,
-) -> str:
+) -> tuple[str, ModelRun]:
     """Build the daily prompt, run it through Claude, validate and repair the contract.
+
+    Returns `(body_md, model_run)`, NOT a bare string -- `model_run` (a
+    `digest.summarize.ModelRun`) reports which model/effort actually
+    produced this brief and whether a fallback leg fired, exactly like
+    `summarize()`'s own fourth return value -- see that function's
+    docstring and `run_with_fallbacks`'s (point 6) for the full shape.
+    digest/main.py's `run_daily` persists it alongside the digest
+    (`create_digest`'s `provenance` column).
 
     `fallbacks` (default `()`, matching every existing direct call and
     test) is this daily brief's own OpenRouter fallback chain -- see
@@ -229,13 +238,15 @@ def summarize_daily(
     # the historical 20:00 being briefed, not the wall-clock moment the
     # backfill happens to run. Live callers omit it.
     prompt = build_daily_prompt(digest_rows, now if now is not None else datetime.now(UTC))
-    output = run_with_fallbacks(
+    output, model_run = run_with_fallbacks(
         primary=lambda: run_claude(prompt, model, timeout_seconds, effort),
         fallbacks=fallbacks,
         prompt=prompt,
         budget_seconds=fallback_budget_seconds,
+        primary_model=model,
+        primary_effort=effort,
         validate=validate_output,
     )
     output = output.replace("\\u0060", "`")
     output = enforce_link_allowlist(output, allowed_urls)
-    return renumber_citations(strip_tldr_citations(output))
+    return renumber_citations(strip_tldr_citations(output)), model_run

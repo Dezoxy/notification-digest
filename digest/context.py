@@ -285,11 +285,21 @@ def generate_arc_context(
     """
     try:
         prompt = build_context_prompt(label)
-        output = run_with_fallbacks(
+        # `run_with_fallbacks` now also returns a `ModelRun` reporting which
+        # model/effort actually served -- discarded here, not threaded
+        # through `generate_arc_context`'s own return: a primer is
+        # background enrichment, not a digest (see this function's own
+        # docstring), and model provenance is a per-DIGEST feature
+        # (digest/main.py's `_deliver`/`run_daily`/`run_weekly` persist it
+        # via `create_digest`'s `provenance` column) -- there is no digest
+        # row here for a primer's provenance to attach to.
+        output, _model_run = run_with_fallbacks(
             primary=lambda: run_claude(prompt, model, timeout_seconds, effort=_CONTEXT_EFFORT),
             fallbacks=fallbacks,
             prompt=prompt,
             budget_seconds=fallback_budget_seconds,
+            primary_model=model,
+            primary_effort=_CONTEXT_EFFORT,
             validate=_validate_context_output,
         )
     # Broad on purpose, not just SummarizeError: this function's contract is

@@ -1088,6 +1088,27 @@ export const CSS = `
      baked into the string (not CSS) is what marks it, same "color is not
      the warning signal" decision as .flag-degraded on the index. */
 
+  /* Model provenance (owner-requested "WRITTEN" byline): a SECOND digest-
+     page colophon row, sitting directly below .sourcekey (renderProvenance
+     renders nothing when the digest carries no provenance data — see the
+     function for the fail-safe JSON.parse contract shared with
+     renderSourceKey). A sibling ruleset, not a shared class, so a future
+     change to one row's spacing/color never silently drags the other — but
+     it copies .sourcekey's exact typography/layout (font-data, 0.75em,
+     muted, flex-wrap gap) so the two rows read as one family of colophon
+     lines. Tighter top margin than .sourcekey's own (which is spaced off
+     the article above it): this row is spaced off the ROW above it, not a
+     block of prose. */
+  .provenance {
+    font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; align-items: center;
+    margin: 0.5em 0 0;
+  }
+  /* .sk-fallback gets no color override either — same "muted stays muted,
+     the glyph is the marker" posture .sk-failed established just above: the
+     ↻ baked into the chip text (not CSS) is what marks an OpenRouter
+     fallback leg, not a color change. */
+
   /* Floating back-to-index button (digest pages only): fixed bottom-right
      in one-thumb reach, clear of the iPhone home bar via safe-area insets.
      Hidden until the reader scrolls past the top nav (the inline script in
@@ -1814,10 +1835,11 @@ export const CSS = `
     .deltalabel, .deltatext, .deltaprev, .deltaarrow, .deltanow {
       color: #000;
     }
-    /* Numbers are provenance and stay visible in print; the swatches print
-       gray (acceptable) but the text itself forces to ink like every other
-       digest-page text block above. */
-    .sourcekey { color: #000; }
+    /* Source counts and the model-provenance byline are both record-
+       keeping, not decoration, so both colophon rows stay visible in
+       print; the swatches print gray (acceptable) but the text itself
+       forces to ink like every other digest-page text block above. */
+    .sourcekey, .provenance { color: #000; }
     /* TL;DR/attention are tinted boxes on screen — print swaps the fills
        for thin bordered outlines: a colored background wastes ink and
        won't reproduce reliably across printers anyway. */

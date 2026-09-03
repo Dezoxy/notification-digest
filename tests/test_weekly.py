@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import digest.weekly as weekly_mod
-from digest.summarize import SummarizeError
+from digest.summarize import ModelRun, SummarizeError
 from digest.weekly import build_weekly_prompt, summarize_weekly
 
 _VALID_OUTPUT = (
@@ -134,7 +134,7 @@ def test_summarize_weekly_success_returns_repaired_markdown(monkeypatch):
     monkeypatch.setattr(weekly_mod, "run_claude", fake_run_claude)
 
     rows = [_row(digest_id=1, item_count=50), _row(digest_id=2, item_count=50)]
-    result = summarize_weekly(
+    result, model_run = summarize_weekly(
         rows,
         allowed_urls={"https://known.example/a"},
         model="claude-opus-5",
@@ -149,6 +149,8 @@ def test_summarize_weekly_success_returns_repaired_markdown(monkeypatch):
     # at the SAME effort tier as window/daily summarization, never a fixed
     # cheaper one (unlike translate.py's translation step).
     assert captured["effort"] == "high"
+    # The primary (run_claude) served -- model_run reports its identity.
+    assert model_run == ModelRun(model="claude-opus-5", effort="high", fallback=False)
 
 
 def test_summarize_weekly_raises_on_refusal_output(monkeypatch):
@@ -185,7 +187,7 @@ def test_summarize_weekly_applies_link_allowlist_repair(monkeypatch):
         ),
     )
 
-    result = summarize_weekly(
+    result, _model_run = summarize_weekly(
         [_row()],
         allowed_urls={"https://known.example/a"},
         model="m",
@@ -204,7 +206,7 @@ def test_summarize_weekly_reverses_backtick_escape_in_output(monkeypatch):
         lambda *a, **k: "## Section\n\nSome \\u0060code\\u0060 snippet.\n",
     )
 
-    result = summarize_weekly(
+    result, _model_run = summarize_weekly(
         [_row()], allowed_urls=set(), model="m", timeout_seconds=60, effort="high"
     )
 
@@ -241,7 +243,7 @@ def test_summarize_weekly_end_to_end_tldr_is_citation_free_and_body_renumbers_fr
     )
     monkeypatch.setattr(weekly_mod, "run_claude", lambda *a, **k: model_output)
 
-    result = summarize_weekly(
+    result, _model_run = summarize_weekly(
         [_row()],
         allowed_urls={"https://known.example/a", "https://known.example/b"},
         model="m",

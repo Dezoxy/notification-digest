@@ -6,6 +6,7 @@ import {
   MAX_ARC_CONTEXTS,
   MAX_BODY_FIELD_BYTES,
   MAX_DELTAS,
+  MAX_PROVENANCE_BYTES,
   MAX_REQUEST_BYTES,
   MAX_SOURCE_ENTRIES,
   MAX_TLDR_BYTES,
@@ -66,8 +67,8 @@ export async function handleIngest(request, env, idParam, ctx) {
   try {
     await env.DB.prepare(
       `INSERT INTO digests
-         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas, provenance)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          created_at     = excluded.created_at,
          tldr           = excluded.tldr,
@@ -83,7 +84,8 @@ export async function handleIngest(request, env, idParam, ctx) {
          source_counts  = excluded.source_counts,
          failed_sources = excluded.failed_sources,
          topics         = excluded.topics,
-         deltas         = excluded.deltas`,
+         deltas         = excluded.deltas,
+         provenance     = excluded.provenance`,
     )
       .bind(
         id,
@@ -115,6 +117,10 @@ export async function handleIngest(request, env, idParam, ctx) {
         // delta persistence, ingest v4) — already JSON-stringified (or null)
         // by validateDigestPayload.
         d.deltas,
+        // Same NULL-on-absence, NULL-back-out-on-re-ingest contract (model-
+        // provenance byline, ingest v5) — already JSON-stringified (or null)
+        // by validateDigestPayload.
+        d.provenance,
       )
       .run();
   } catch {
@@ -212,6 +218,7 @@ export function validateDigestPayload(payload) {
     failed_sources,
     topics,
     deltas,
+    provenance,
     arc_contexts,
   } = payload;
 
@@ -310,6 +317,15 @@ export function validateDigestPayload(payload) {
     return { ok: false, error: deltasResult.error };
   }
 
+  // provenance (model-provenance byline, ingest v5): optional, independent
+  // of every field above — see validateProvenance for the per-leg shape
+  // rules. Same JSON-stringified-TEXT-or-null storage as source_counts/
+  // failed_sources/topics/deltas.
+  const provenanceResult = validateProvenance(provenance);
+  if (!provenanceResult.ok) {
+    return { ok: false, error: provenanceResult.error };
+  }
+
   // arc_contexts (PLAN.md §11.6 context mode): optional, independent of
   // every field above — see validateArcContexts for the per-entry shape
   // rules. UNLIKE source_counts/failed_sources/topics/deltas, this is not a
@@ -339,6 +355,7 @@ export function validateDigestPayload(payload) {
       failed_sources: failedSourcesResult.value ? JSON.stringify(failedSourcesResult.value) : null,
       topics: topicsResult.value ? JSON.stringify(topicsResult.value) : null,
       deltas: deltasResult.value ? JSON.stringify(deltasResult.value) : null,
+      provenance: provenanceResult.value ? JSON.stringify(provenanceResult.value) : null,
       arc_contexts: arcContextsResult.value,
     },
   };
@@ -531,6 +548,54 @@ export function validateDeltas(value) {
     normalized.push({ slug, previously: previously.trim(), now: now.trim() });
   }
   return { ok: true, value: normalized.length === 0 ? null : normalized };
+}
+
+// provenance (model-provenance byline, ingest v5): absent/null is valid
+// (older app version, stored NULL — see the schema.sql comment). Present,
+// it must be a plain JSON object (not an array — typeof [] === "object"
+// too, same explicit Array.isArray check as source_counts/topics above),
+// within MAX_PROVENANCE_BYTES once JSON-stringified. `summarize` is always
+// present on a payload that sends provenance at all (app contract — the
+// app never publishes a digest without a summarizer), and `translate` is
+// present only when this digest also got a Hungarian translation — but
+// this validator doesn't enforce either presence rule itself, only the
+// shape of whichever legs actually showed up, the same "trust the caller's
+// business logic, police only shape" posture every other validator in this
+// file takes. Each PRESENT leg must itself be a plain object (not an
+// array, not null) carrying a non-empty string `model`, a non-empty string
+// `effort`, and a boolean `fallback` (true when an OpenRouter fallback
+// model served that leg instead of the primary Claude call). Unlike
+// topics/deltas' `...rest` check, unknown keys are tolerated both on a leg
+// and on the top-level object — the app may grow a third `verify` leg (or
+// extra per-leg metadata) before this Worker's validator and renderer know
+// about it, and rejecting an otherwise-valid ingest over a field this site
+// doesn't render yet would be exactly the brittleness SOURCE_NAME_RE's
+// open-ended source list already avoids for a growing collector list.
+export function validateProvenance(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, error: "provenance must be a JSON object" };
+  }
+  if (byteLength(JSON.stringify(value)) > MAX_PROVENANCE_BYTES) {
+    return { ok: false, error: "provenance must be within size limits" };
+  }
+  for (const leg of ["summarize", "translate"]) {
+    const entry = value[leg];
+    if (entry === undefined) continue;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, error: `provenance.${leg} must be an object` };
+    }
+    if (typeof entry.model !== "string" || entry.model.length === 0) {
+      return { ok: false, error: `provenance.${leg}.model must be a non-empty string` };
+    }
+    if (typeof entry.effort !== "string" || entry.effort.length === 0) {
+      return { ok: false, error: `provenance.${leg}.effort must be a non-empty string` };
+    }
+    if (typeof entry.fallback !== "boolean") {
+      return { ok: false, error: `provenance.${leg}.fallback must be a boolean` };
+    }
+  }
+  return { ok: true, value };
 }
 
 // arc_contexts (PLAN.md §11.6 context mode): absent/null is valid (no

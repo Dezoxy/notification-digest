@@ -183,6 +183,16 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
     "inline style stripped from body",
   );
   assert.match(html, /example\.com\/markets-report/, "citation link survives");
+  // Model provenance (ingest v5): the "WRITTEN" row directly below the
+  // source key — see the DIGESTS fixture, digest 235's provenance object
+  // (summarize plain, translate fell back to an OpenRouter model).
+  assert.match(html, /class="provenance"/, "model-provenance row");
+  assert.match(html, /✎ claude-opus-5 · high/, "summarize chip, no fallback marker");
+  assert.match(
+    html,
+    /sk sk-fallback">↻ HU openai\/gpt-5\.6-terra · high/,
+    "fallback leg gets ↻ and the muted class",
+  );
 });
 
 test("digest 235 HU: deltas suppressed, translated body used", async () => {
@@ -192,6 +202,48 @@ test("digest 235 HU: deltas suppressed, translated body used", async () => {
   // class= form, not the bare name — the shipped CSS defines .en-only-note
   // on every page, so a bare-substring check would always match.
   assert.ok(!html.includes('class="en-only-note"'), "no fallback note when translation exists");
+  // Model provenance renders on the HU digest page too, with the HU chrome
+  // label ("Írta") — it's a fact about the whole digest, not per-language
+  // prose, so both editions carry the same row (translate marker text stays
+  // "HU" either way, see strings.js's provenanceHuMarker comment).
+  assert.match(html, /class="provenance"/, "model-provenance row on the HU page too");
+  assert.match(html, /Írta/, "HU provenance row label");
+});
+
+test("renderProvenance: absent translate, no fallback, and malformed input", async () => {
+  // No fixture digest carries a summarize-only provenance (235 is the only
+  // digest with a golden-covered own page, and its own fixture exercises
+  // the fallback branch instead — see the DIGESTS comment). renderProvenance
+  // is asserted directly, same reasoning as renderLedgerFor's own
+  // direct-import test above.
+  const { renderProvenance } = await import("../src/render-index.js");
+  const { STRINGS } = await import("../src/strings.js");
+  const strings = STRINGS.en;
+
+  const summarizeOnly = renderProvenance(
+    JSON.stringify({ summarize: { model: "sonnet", effort: "medium", fallback: false } }),
+    strings,
+  );
+  assert.match(summarizeOnly, /✎ sonnet · medium/, "summarize chip, no fallback marker");
+  // (?!label) excludes the row's own <span class="sklabel"> — only counting
+  // actual chip spans (class="sk" / class="sk sk-fallback").
+  assert.equal(
+    (summarizeOnly.match(/class="sk(?!label)/g) ?? []).length,
+    1,
+    "absent translate renders exactly one chip",
+  );
+  assert.ok(!summarizeOnly.includes("sk-fallback"), "no fallback class when nothing fell back");
+
+  for (const bad of [
+    null,
+    "",
+    "not json",
+    "[]",
+    '{"summarize":"nope"}',
+    '{"summarize":{"model":5,"effort":"x","fallback":false}}',
+  ]) {
+    assert.equal(renderProvenance(bad, strings), "", `malformed input renders nothing: ${bad}`);
+  }
 });
 
 test("digest 234 HU: falls back to EN body with the note", async () => {
@@ -271,11 +323,48 @@ test("ingest: each validator rejects its malformed field", async () => {
     ["failed_sources", { ...VALID_INGEST_PAYLOAD, failed_sources: "rss" }],
     ["topics", { ...VALID_INGEST_PAYLOAD, topics: [{ label: "no slug" }] }],
     ["deltas", { ...VALID_INGEST_PAYLOAD, deltas: [{ slug: "x" }] }],
+    ["provenance (array)", { ...VALID_INGEST_PAYLOAD, provenance: [] }],
+    [
+      "provenance.summarize.model",
+      {
+        ...VALID_INGEST_PAYLOAD,
+        provenance: { summarize: { model: 5, effort: "high", fallback: false } },
+      },
+    ],
+    [
+      "provenance.summarize.fallback",
+      {
+        ...VALID_INGEST_PAYLOAD,
+        provenance: { summarize: { model: "sonnet", effort: "high", fallback: "no" } },
+      },
+    ],
   ];
   for (const [label, payload] of cases) {
     const res = await fetchPath("/ingest/300", { init: ingestInit(payload) });
     assert.equal(res.status, 400, `${label} rejected`);
   }
+});
+
+test("ingest: provenance accepts a valid object, absent translate, and unknown keys", async () => {
+  const worker = await loadWorker();
+  const writes = [];
+  // translate carries an unrecognized extra key (`verify`) — forward-
+  // compatible tolerance for a future third leg, see validateProvenance's
+  // comment — and summarize is present without translate, which is the
+  // normal shape for a digest that got no Hungarian translation.
+  const payload = {
+    ...VALID_INGEST_PAYLOAD,
+    provenance: {
+      summarize: { model: "claude-opus-5", effort: "high", fallback: false },
+      translate: { model: "sonnet", effort: "medium", fallback: true, verify: "future-leg" },
+    },
+  };
+  const res = await worker.fetch(
+    new Request(`${ORIGIN}/ingest/301`, ingestInit(payload)),
+    makeEnv({ writes }),
+  );
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.equal(writes.length, 1);
 });
 
 // ── PWA shell (PLAN.md §11.7) ─────────────────────────────────────────────
