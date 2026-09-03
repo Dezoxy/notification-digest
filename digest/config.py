@@ -211,6 +211,15 @@ class Config:
     #
     # Empty tuple = no keyword axis; the tracker then claims by source only.
     positions_keywords: tuple[str, ...] = ()
+    # Telegram public-channel usernames (same bare-username shape as
+    # positions_tg_channels, parsed by the SAME _optional_tg_channel_tuple)
+    # whose new posts the `relay` run mode (digest/relay.py) forwards
+    # VERBATIM into the hub group's forum topic -- no summarization, no
+    # `items`/`digests` rows at all, an entirely separate pipeline from
+    # everything else this dataclass configures. Empty tuple = the relay
+    # lane is unconfigured, mirroring positions_tg_channels' own
+    # empty-means-disabled shape (there is no sane default channel list).
+    relay_tg_channels: tuple[str, ...] = ()
     # How old an unsummarized item must get before digest/main.py's `_deliver`
     # logs a `stale_backlog` WARNING naming its source. Purely a reporting
     # threshold -- nothing schedules, retries, or fails on it, and the run's
@@ -352,6 +361,14 @@ class Config:
     # items would sit unclaimed until the 14-day prune -- so an unset topic
     # degrades to "delivered to the group root", never to "not delivered".
     telegram_positions_thread_id: int | None = None
+    # Forum topic for the `relay` run mode (digest/relay.py) -- the owner's
+    # dedicated topic for verbatim-forwarded channel posts. Same shape and
+    # fallback as the four thread ids directly above: 0 is a legitimate
+    # "post to the group root" value, so None is the only honest "unset"
+    # sentinel, and main.py falls back to telegram_notify_thread_id with an
+    # INFO log rather than a ConfigError -- a single-topic deployment is a
+    # completely valid configuration, not a misconfiguration.
+    telegram_relay_thread_id: int | None = None
     # Reddit collector (digest/collectors/reddit.py). Like x_enabled/
     # polymarket_enabled, this is an explicit on/off flag rather than an
     # empty-means-disabled sentinel -- REDDIT_SUBREDDITS has no natural
@@ -500,6 +517,7 @@ class Config:
         positions_x_accounts = _optional_x_handle_tuple("POSITIONS_X_ACCOUNTS")
         positions_keywords = _optional_keyword_tuple("POSITIONS_KEYWORDS")
         stale_backlog_warn_hours = _optional_positive_int("STALE_BACKLOG_WARN_HOURS", default=24)
+        relay_tg_channels = _optional_tg_channel_tuple("RELAY_TG_CHANNELS")
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
         translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
@@ -570,6 +588,28 @@ class Config:
             raise ConfigError(
                 "TELEGRAM_NOTIFY_CHAT_ID is required when TELEGRAM_NOTIFY_BOT_TOKEN is set"
             )
+        # The relay run mode forwards INTO telegram_notify_chat_id via the
+        # owner's own USER session (TG_SESSION), never via the bot -- so this
+        # does not require TELEGRAM_NOTIFY_BOT_TOKEN, only the chat id itself
+        # (a bot-free deployment can still configure relay).
+        # And it needs the chat id as an INTEGER: the Bot API senders accept
+        # either an integer or an "@username" here, so the field itself stays
+        # an opaque str, but Telethon's `get_input_entity` wants the numeric
+        # marked id -- so the numeric shape is asserted at startup, only
+        # when relay is actually configured, rather than surfacing on the
+        # first forwarded chunk of an hourly run.
+        if relay_tg_channels:
+            if telegram_notify_chat_id is None:
+                raise ConfigError(
+                    "TELEGRAM_NOTIFY_CHAT_ID is required when RELAY_TG_CHANNELS is set"
+                )
+            try:
+                int(telegram_notify_chat_id)
+            except ValueError:
+                raise ConfigError(
+                    "TELEGRAM_NOTIFY_CHAT_ID must be a numeric chat id when RELAY_TG_CHANNELS "
+                    "is set (the relay resolves it through the user session, not the Bot API)"
+                ) from None
         telegram_notify_thread_id = _optional_nonnegative_int(
             "TELEGRAM_NOTIFY_THREAD_ID", default=0
         )
@@ -579,6 +619,7 @@ class Config:
         telegram_positions_thread_id = _optional_nonnegative_int_or_none(
             "TELEGRAM_POSITIONS_THREAD_ID"
         )
+        telegram_relay_thread_id = _optional_nonnegative_int_or_none("TELEGRAM_RELAY_THREAD_ID")
         patreon_campaign_id = os.environ.get("PATREON_CAMPAIGN_ID", "").strip()
         patreon_session_cookie = _optional_secret("PATREON_SESSION_COOKIE") or ""
         if patreon_campaign_id and not patreon_session_cookie:
@@ -636,6 +677,7 @@ class Config:
             positions_x_accounts=positions_x_accounts,
             positions_keywords=positions_keywords,
             stale_backlog_warn_hours=stale_backlog_warn_hours,
+            relay_tg_channels=relay_tg_channels,
             polymarket_enabled=polymarket_enabled,
             polymarket_api_base=polymarket_api_base,
             polymarket_proxy_key=polymarket_proxy_key,
@@ -663,6 +705,7 @@ class Config:
             telegram_weekly_thread_id=telegram_weekly_thread_id,
             telegram_patreon_thread_id=telegram_patreon_thread_id,
             telegram_positions_thread_id=telegram_positions_thread_id,
+            telegram_relay_thread_id=telegram_relay_thread_id,
             patreon_campaign_id=patreon_campaign_id,
             patreon_session_cookie=patreon_session_cookie,
         )
@@ -888,16 +931,22 @@ _X_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 def _optional_tg_channel_tuple(name: str) -> tuple[str, ...]:
     """Read an optional comma-separated list of Telegram public-channel usernames.
 
-    Unset or blank -> `()`, meaning "no positions lane configured" (see
-    Config.positions_tg_channels' own comment). Each entry must be a bare
-    username -- no "@", no "t.me/" prefix -- matching Telegram's own public
-    username shape (letters, digits, underscore, 5-32 chars,
-    _TG_CHANNEL_NAME_RE): these names are compared against t.me item URLs in
-    digest/summarize.py's allocate_by_source, and a prefixed or malformed
-    entry would silently never match anything, quietly disabling the lane it
-    was meant to configure -- exactly the "surface a typo at startup, not as
-    a silent no-op deep inside a scheduled run" rationale behind
-    _optional_url_tuple's own validation.
+    Shared by two independent lanes: POSITIONS_TG_CHANNELS (see
+    Config.positions_tg_channels' own comment) and RELAY_TG_CHANNELS (see
+    Config.relay_tg_channels' own comment) -- both are bare-username lists
+    with the identical validation need, so this parser takes the env var
+    NAME rather than being hardcoded to either one.
+
+    Unset or blank -> `()`, meaning "this lane is not configured". Each
+    entry must be a bare username -- no "@", no "t.me/" prefix -- matching
+    Telegram's own public username shape (letters, digits, underscore, 5-32
+    chars, _TG_CHANNEL_NAME_RE): positions names are compared against t.me
+    item URLs in digest/state.py's positions_match_sql, and relay names
+    are resolved directly via client.get_entity in digest/relay.py -- either
+    way, a prefixed or malformed entry would silently never match/resolve
+    anything, quietly disabling the lane it was meant to configure -- exactly
+    the "surface a typo at startup, not as a silent no-op deep inside a
+    scheduled run" rationale behind _optional_url_tuple's own validation.
     """
     raw = os.environ.get(name)
     if raw is None or not raw.strip():

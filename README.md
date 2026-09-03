@@ -37,6 +37,7 @@ homelab repo, not here):
 | weekly | `python -m digest weekly` | Sun 21:45 Budapest | the week's daily briefs | weekly |
 | patreon | `python -m digest patreon` | hourly (:50) | one paid post each | patreon |
 | positions | `python -m digest positions` | every 4h (:25) | raw items matching the tracked channels, accounts or keywords | positions |
+| relay | `python -m digest relay` | hourly | new posts in `RELAY_TG_CHANNELS`, forwarded verbatim (no summarization) | relay |
 | backfill/ops | `scripts/*.py` | manual | — | — |
 
 The first three form a cascade: each rung consumes the one below, so the
@@ -49,6 +50,12 @@ structurally excluded from the window sweep so nothing is ever covered
 twice. `positions` additionally stays SILENT when the window held only
 chatter (see `prompts/positions.md`), which is what lets it run every 4
 hours without becoming noise.
+
+`relay` is not a lane at all: it forwards every new post from the configured
+public channels into its topic with Telegram's native forward (media,
+albums and the "Forwarded from" header intact), no model in the loop, no
+`items`/`digests` rows — only a cursor per channel. First run seeds the
+cursor and forwards nothing; there is never a history backfill.
 
 ### Run-mode arguments
 
@@ -106,7 +113,7 @@ deploy time and must never be committed or logged.
 | `STATE_DB_PATH` | SQLite state database (`./state.db`). |
 | `ARCHIVE_DIR` | Where markdown digest copies are archived (`./archive`). |
 
-**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `PATREON_*`, `POSITIONS_TG_CHANNELS`, `POSITIONS_X_ACCOUNTS` and `POSITIONS_KEYWORDS` use an empty-means-disabled shape instead of a flag.
+**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `PATREON_*`, `POSITIONS_TG_CHANNELS`, `POSITIONS_X_ACCOUNTS`, `POSITIONS_KEYWORDS` and `RELAY_TG_CHANNELS` use an empty-means-disabled shape instead of a flag.
 
 | Variable | Description |
 |---|---|
@@ -125,6 +132,7 @@ deploy time and must never be committed or logged.
 | `POSITIONS_TG_CHANNELS` | Telegram usernames (no `@`) claimed by the positions tracker instead of the window digest. |
 | `POSITIONS_X_ACCOUNTS` | X screen names (`@` optional) claimed the same way. **Requires post notifications (the bell) enabled for each account in the X app** — the collector only fetches an account's posts when a notification names it. |
 | `POSITIONS_KEYWORDS` | Free-text terms (min 4 chars) that claim an item from **any** source, so the project's news is pulled out of general channels and feeds too. Keep them distinctive — cashtags and proper names, never a bare `ASI`/`FET`; an over-broad term can make unrelated stories vanish from every channel. |
+| `RELAY_TG_CHANNELS` | Telegram usernames (no `@`) whose new posts the `relay` run mode forwards verbatim into the hub topic via the user session. Requires a numeric `TELEGRAM_NOTIFY_CHAT_ID`; does **not** need the bot token. |
 
 **Summarization**
 
@@ -157,7 +165,7 @@ deploy time and must never be committed or logged.
 | `TELEGRAM_NOTIFY_CHAT_ID` | Target chat/group. |
 | `TELEGRAM_NOTIFY_THREAD_ID` | Forum topic for window digests. |
 | `TELEGRAM_DAILY_THREAD_ID` / `TELEGRAM_WEEKLY_THREAD_ID` | Separate topics for the daily and weekly briefs; unset means they land in the window topic. |
-| `TELEGRAM_PATREON_THREAD_ID` / `TELEGRAM_POSITIONS_THREAD_ID` | Same, for the Patreon posts and the positions tracker. `0` is a real value (post to the group root), so unset is the only "not configured" state. |
+| `TELEGRAM_PATREON_THREAD_ID` / `TELEGRAM_POSITIONS_THREAD_ID` / `TELEGRAM_RELAY_THREAD_ID` | Same, for the Patreon posts, the positions tracker and the relay. `0` is a real value (post to the group root), so unset is the only "not configured" state. |
 
 **Operations**
 
@@ -256,9 +264,10 @@ touch it, and vice versa.
 
 ## Status
 
-In production on the owner's VM. All five run modes — window (three timers,
+In production on the owner's VM. Five run modes — window (three timers,
 two of them `hide:`-suppressed), daily, weekly, patreon and positions — are on
-their own systemd timers; the live delivery channels are the Telegram TL;DR
+their own systemd timers; `relay` (added 2026-09) runs there only once the
+homelab repo adds its hourly timer. The live delivery channels are the Telegram TL;DR
 ping and the news site, with email implemented but disabled there. Hungarian
 translation, the daily verification pass and story-arc context primers are all
 enabled on that deployment, though each defaults off here.
