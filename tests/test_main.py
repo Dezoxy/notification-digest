@@ -53,10 +53,16 @@ from digest.state import (
     write_arc_context,
     write_arc_keys,
 )
-from digest.summarize import SummarizeError
+from digest.summarize import ModelRun, SummarizeError
 from digest.verify import VerificationUnavailable
 
 _NO_CHANNELS_DONE = {"email": False, "site": False, "telegram": False}
+
+# A stand-in ModelRun for fakes/monkeypatches of summarize()/summarize_daily()/
+# summarize_weekly()/translate_digest() that don't care about provenance
+# specifics -- most call sites in this file. Tests that DO care (asserting
+# what create_digest/publish_to_site received) build their own.
+_MODEL_RUN = ModelRun(model="claude-opus-5", effort="high", fallback=False)
 
 
 def _fresh_telegram_state() -> TelegramRunState:
@@ -233,7 +239,9 @@ def test_deliver_zero_unsummarized_items_sends_nothing(conn, monkeypatch):
 def test_deliver_smtp_failure_leaves_digest_row_unsent(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], [], _MODEL_RUN)
+    )
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
@@ -261,13 +269,20 @@ def test_deliver_success_path_creates_digest_sends_marks_sent_and_archives(conn,
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         # cfg.claude_effort must reach summarize() unchanged -- the only hop
         # between Config.claude_effort and the eventual `--effort` argv flag
         # in digest/summarize.py's run_claude.
         summarize_calls.append(effort)
-        return "## Needs attention\n...", [], []
+        return "## Needs attention\n...", [], [], _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
 
@@ -553,7 +568,9 @@ def test_deliver_logs_digest_delivery_line_matching_success_path(conn, monkeypat
     # _multichannel_cfg so all three statuses are exercised at once.
     commit_new_items(conn, [_item("1"), _item("2")], {("telegram", "123"): "2"})
 
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], [], _MODEL_RUN)
+    )
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -578,7 +595,9 @@ def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypa
     # translate_digest -- and by extension the run_claude call inside it --
     # is never even invoked.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], [], _MODEL_RUN)
+    )
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
@@ -599,16 +618,18 @@ def test_deliver_translate_hu_disabled_skips_translation_entirely(conn, monkeypa
 def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     monkeypatch.setattr(
-        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [])
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [], _MODEL_RUN)
     )
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
 
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append((body_md, allowed_urls, model, timeout_seconds, fallback_model))
-        return "**TL;DR:** szia\n\n## Sz\n\ny"
+        return "**TL;DR:** szia\n\n## Sz\n\ny", _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
 
@@ -630,11 +651,79 @@ def test_deliver_translate_hu_enabled_stores_translation_before_channels(conn, m
     assert row == ("**TL;DR:** szia\n\n## Sz\n\ny",)
 
 
+# --- provenance column (model-provenance feature) ---
+
+
+def test_deliver_stores_provenance_naming_summarize_and_translate_models(conn, monkeypatch):
+    # End-to-end through _provenance/create_digest: a window run with
+    # translation enabled must persist BOTH legs' ModelRuns, keyed by name,
+    # exactly as digest/state.py's `provenance` column comment promises.
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    summarize_run = ModelRun(model="claude-opus-5", effort="high", fallback=False)
+    translate_run = ModelRun(model="openai/gpt-5.6-terra", effort="high", fallback=True)
+
+    monkeypatch.setattr(
+        main_mod,
+        "summarize",
+        lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [], summarize_run),
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    monkeypatch.setattr(
+        main_mod,
+        "translate_digest",
+        lambda *a, **k: ("**TL;DR:** szia\n\n## Sz\n\ny", translate_run),
+    )
+
+    cfg = replace(_cfg(), translate_hu_enabled=True, translate_model="sonnet")
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    row = conn.execute("SELECT provenance FROM digests").fetchone()
+    stored = json.loads(row[0])
+    assert stored == {
+        "summarize": {"model": "claude-opus-5", "effort": "high", "fallback": False},
+        "translate": {"model": "openai/gpt-5.6-terra", "effort": "high", "fallback": True},
+    }
+
+
+def test_deliver_translation_disabled_stores_no_translate_key_in_provenance(conn, monkeypatch):
+    # `translate_hu_enabled=False` means translate_digest is never called at
+    # all -- the stored provenance object must carry no "translate" key,
+    # never a null placeholder for it (see _provenance's own docstring).
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    summarize_run = ModelRun(model="claude-opus-5", effort="high", fallback=False)
+
+    monkeypatch.setattr(
+        main_mod,
+        "summarize",
+        lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [], summarize_run),
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    def boom_translate(*a, **k):
+        raise AssertionError("translate_digest must not be called when the flag is off")
+
+    monkeypatch.setattr(main_mod, "translate_digest", boom_translate)
+
+    cfg = replace(_cfg(), translate_hu_enabled=False)
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    row = conn.execute("SELECT provenance FROM digests").fetchone()
+    stored = json.loads(row[0])
+    assert stored == {"summarize": {"model": "claude-opus-5", "effort": "high", "fallback": False}}
+    assert "translate" not in stored
+
+
 def test_deliver_translate_hu_failure_leaves_body_md_hu_null_english_still_ships(conn, monkeypatch):
     # Soft-fail contract: translate_digest returning None must not affect
     # the English digest's own success at all.
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
-    monkeypatch.setattr(main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], []))
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("## Needs attention\n...", [], [], _MODEL_RUN)
+    )
     sent = {}
     monkeypatch.setattr(
         deliver_mod, "send_digest", lambda *a, **k: sent.update(called=True) or None
@@ -680,6 +769,7 @@ def test_deliver_pending_resend_carries_body_md_hu_to_site(conn, monkeypatch):
         topics=None,
         deltas=None,
         arc_contexts=None,
+        provenance=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -719,10 +809,17 @@ def test_deliver_threads_real_recent_coverage_from_prior_digests(conn, monkeypat
     captured = {}
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         captured["recent_coverage"] = recent_coverage
-        return "## Needs attention\n...", [], []
+        return "## Needs attention\n...", [], [], _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -751,10 +848,17 @@ def test_deliver_pending_digest_and_new_items_sends_both_in_same_run(conn, monke
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append((items, failed_sources))
-        return "## Needs attention\n...new...", [], []
+        return "## Needs attention\n...new...", [], [], _MODEL_RUN
 
     sends = []
 
@@ -808,10 +912,17 @@ def test_deliver_pending_digest_sent_then_current_collection_failed_passes_faile
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append(failed_sources)
-        return "## Needs attention\n...new...", [], []
+        return "## Needs attention\n...new...", [], [], _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -846,10 +957,17 @@ def test_deliver_pending_digest_send_fails_new_items_still_summarized_and_delive
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append(items)
-        return "## Needs attention\n...new...", [], []
+        return "## Needs attention\n...new...", [], [], _MODEL_RUN
 
     def failing_send(*args, **kwargs):
         raise OSError("smtp connection refused")
@@ -895,10 +1013,17 @@ def test_deliver_bounds_batch_to_max_items_per_digest_leaving_remainder_unsummar
     summarize_calls = []
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_calls.append(items)
-        return "## Needs attention\n...batch...", [], []
+        return "## Needs attention\n...batch...", [], [], _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
@@ -945,10 +1070,17 @@ def test_deliver_passes_the_same_selected_subset_to_summarize_and_create_digest(
     summarize_received = {}
 
     def fake_summarize(
-        items, failed_sources, recent_coverage, model, timeout_seconds, effort, recent_arcs=""
+        items,
+        failed_sources,
+        recent_coverage,
+        model,
+        timeout_seconds,
+        effort,
+        recent_arcs="",
+        **_kwargs,
     ):
         summarize_received["items"] = items
-        return "## Needs attention\n...selected...", [], []
+        return "## Needs attention\n...selected...", [], [], _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "select_balanced_items_for_prompt", fake_select_items_for_prompt)
     monkeypatch.setattr(main_mod, "summarize", fake_summarize)
@@ -1149,6 +1281,7 @@ def test_deliver_site_publishes_rendered_html_and_marks_site_published(conn, mon
         topics=None,
         deltas=None,
         arc_contexts=None,
+        provenance=None,
     ):
         captured.update(
             digest_id=digest_id_,
@@ -1216,6 +1349,7 @@ def test_deliver_site_renders_and_forwards_hu_fields_when_body_md_hu_given(conn,
         topics=None,
         deltas=None,
         arc_contexts=None,
+        provenance=None,
     ):
         captured.update(body_md_hu=body_md_hu, body_html_hu=body_html_hu)
 
@@ -1266,6 +1400,7 @@ def test_deliver_site_forwards_derive_topics_output_to_publish_to_site(conn, mon
         topics=None,
         deltas=None,
         arc_contexts=None,
+        provenance=None,
     ):
         captured.update(topics=topics)
 
@@ -1311,6 +1446,7 @@ def test_deliver_site_forwards_arc_contexts_from_storage(conn, monkeypatch):
         topics=None,
         deltas=None,
         arc_contexts=None,
+        provenance=None,
     ):
         captured.update(arc_contexts=arc_contexts)
 
@@ -1884,7 +2020,7 @@ def test_deliver_run_failure_propagates_from_a_single_failed_channel(conn, monke
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
 
     monkeypatch.setattr(
-        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## Section", [], [])
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## Section", [], [], _MODEL_RUN)
     )
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -3251,7 +3387,7 @@ def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatc
 
     daily_calls = []
 
-    def fake_summarize_daily(digest_rows, allowed_urls, model, timeout_seconds, effort):
+    def fake_summarize_daily(digest_rows, allowed_urls, model, timeout_seconds, effort, **_kwargs):
         daily_calls.append(
             dict(
                 digest_rows=digest_rows,
@@ -3261,7 +3397,7 @@ def test_run_daily_happy_path_creates_and_delivers_daily_digest(conn, monkeypatc
                 effort=effort,
             )
         )
-        return "**TL;DR:** the day\n\n## An arc\n\nstuff"
+        return "**TL;DR:** the day\n\n## An arc\n\nstuff", _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "summarize_daily", fake_summarize_daily)
 
@@ -3388,7 +3524,9 @@ def test_run_daily_older_than_guard_window_proceeds_normally(conn, monkeypatch, 
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** today\n\n## An arc\n\nstuff"
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: ("**TL;DR:** today\n\n## An arc\n\nstuff", _MODEL_RUN),
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -3420,7 +3558,10 @@ def test_run_daily_first_ever_run_no_prior_daily_digest_proceeds_normally(
     monkeypatch.setattr(
         main_mod,
         "summarize_daily",
-        lambda *a, **k: summarize_calls.append(1) or "**TL;DR:** today\n\n## An arc\n\nstuff",
+        lambda *a, **k: (
+            summarize_calls.append(1),
+            ("**TL;DR:** today\n\n## An arc\n\nstuff", _MODEL_RUN),
+        )[1],
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -3447,7 +3588,10 @@ def test_run_daily_force_bypasses_duplicate_guard(conn, monkeypatch, tmp_path):
     monkeypatch.setattr(
         main_mod,
         "summarize_daily",
-        lambda *a, **k: summarize_calls.append(1) or "**TL;DR:** forced\n\n## An arc\n\nstuff",
+        lambda *a, **k: (
+            summarize_calls.append(1),
+            ("**TL;DR:** forced\n\n## An arc\n\nstuff", _MODEL_RUN),
+        )[1],
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -3536,7 +3680,9 @@ def test_run_daily_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## An arc\n\nstuff"
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: ("**TL;DR:** the day\n\n## An arc\n\nstuff", _MODEL_RUN),
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -3609,7 +3755,7 @@ def test_generate_arc_context_primers_success_writes_and_returns_count(conn, mon
 
     captured = {}
 
-    def fake_generate(label, model, timeout_seconds):
+    def fake_generate(label, model, timeout_seconds, **_kwargs):
         captured.update(label=label, model=model, timeout_seconds=timeout_seconds)
         return "Background about the strait."
 
@@ -3656,7 +3802,9 @@ def test_run_daily_context_disabled_never_calls_generate_arc_context(conn, monke
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## Today\n\nstuff"
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: ("**TL;DR:** the day\n\n## Today\n\nstuff", _MODEL_RUN),
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -3699,7 +3847,9 @@ def test_run_daily_context_enabled_generates_bounded_to_max_per_run(conn, monkey
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## Today\n\nstuff"
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: ("**TL;DR:** the day\n\n## Today\n\nstuff", _MODEL_RUN),
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -3707,7 +3857,7 @@ def test_run_daily_context_enabled_generates_bounded_to_max_per_run(conn, monkey
 
     calls = []
 
-    def fake_generate(label, model, timeout_seconds):
+    def fake_generate(label, model, timeout_seconds, **_kwargs):
         calls.append((label, model, timeout_seconds))
         return f"background for {label}"
 
@@ -3773,7 +3923,7 @@ def test_run_daily_delivery_uses_non_empty_allowed_urls_from_source_window_diges
     real_conn.close()
 
     body_md = f"**TL;DR:** the day\n\n## An arc\n\n[cite]({item_url})"
-    monkeypatch.setattr(main_mod, "summarize_daily", lambda *a, **k: body_md)
+    monkeypatch.setattr(main_mod, "summarize_daily", lambda *a, **k: (body_md, _MODEL_RUN))
 
     render_calls = []
     real_render_body_html = deliver_mod.render_body_html
@@ -3809,13 +3959,17 @@ def test_run_daily_translation_enabled_threads_hu_body_to_site(conn, monkeypatch
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_daily", lambda *a, **k: "**TL;DR:** the day\n\n## An arc\n\nstuff"
+        main_mod,
+        "summarize_daily",
+        lambda *a, **k: ("**TL;DR:** the day\n\n## An arc\n\nstuff", _MODEL_RUN),
     )
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append((body_md, fallback_model))
-        return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
+        return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog", _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
 
@@ -3912,7 +4066,7 @@ def _verify_daily_setup(
     _window_digest(real_conn, "window one", 3, _recent_created_at(hours_ago=6))
     real_conn.close()
 
-    monkeypatch.setattr(main_mod, "summarize_daily", lambda *a, **k: draft_body_md)
+    monkeypatch.setattr(main_mod, "summarize_daily", lambda *a, **k: (draft_body_md, _MODEL_RUN))
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
@@ -4111,9 +4265,11 @@ def test_run_daily_flag_on_translation_uses_widened_allowlist(conn, monkeypatch,
 
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append(set(allowed_urls))
-        return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog"
+        return "**TL;DR:** a nap\n\n## Egy szál\n\ndolog", _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
 
@@ -4207,7 +4363,7 @@ def test_run_weekly_happy_path_creates_and_delivers_weekly_digest(conn, monkeypa
 
     weekly_calls = []
 
-    def fake_summarize_weekly(daily_rows, allowed_urls, model, timeout_seconds, effort):
+    def fake_summarize_weekly(daily_rows, allowed_urls, model, timeout_seconds, effort, **_kwargs):
         weekly_calls.append(
             dict(
                 daily_rows=daily_rows,
@@ -4217,7 +4373,7 @@ def test_run_weekly_happy_path_creates_and_delivers_weekly_digest(conn, monkeypa
                 effort=effort,
             )
         )
-        return "**TL;DR:** the week\n\n## A thread\n\nstuff"
+        return "**TL;DR:** the week\n\n## A thread\n\nstuff", _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "summarize_weekly", fake_summarize_weekly)
 
@@ -4282,7 +4438,9 @@ def test_run_weekly_never_writes_to_arc_keys_table(conn, monkeypatch, tmp_path):
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_weekly", lambda *a, **k: "**TL;DR:** the week\n\n## A thread\n\nstuff"
+        main_mod,
+        "summarize_weekly",
+        lambda *a, **k: ("**TL;DR:** the week\n\n## A thread\n\nstuff", _MODEL_RUN),
     )
     monkeypatch.setattr(deliver_mod, "publish_to_site", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_telegram_tldr", lambda *a, **k: None)
@@ -4361,7 +4519,7 @@ def test_run_weekly_delivery_uses_allowed_urls_from_window_digest_not_daily(
     real_conn.close()
 
     body_md = f"**TL;DR:** the week\n\n## A thread\n\n[cite]({window_item_url})"
-    monkeypatch.setattr(main_mod, "summarize_weekly", lambda *a, **k: body_md)
+    monkeypatch.setattr(main_mod, "summarize_weekly", lambda *a, **k: (body_md, _MODEL_RUN))
 
     render_calls = []
     real_render_body_html = deliver_mod.render_body_html
@@ -4400,13 +4558,17 @@ def test_run_weekly_translation_enabled_threads_hu_body_to_site(conn, monkeypatc
     real_conn.close()
 
     monkeypatch.setattr(
-        main_mod, "summarize_weekly", lambda *a, **k: "**TL;DR:** the week\n\n## A thread\n\nstuff"
+        main_mod,
+        "summarize_weekly",
+        lambda *a, **k: ("**TL;DR:** the week\n\n## A thread\n\nstuff", _MODEL_RUN),
     )
     translate_calls = []
 
-    def fake_translate(body_md, allowed_urls, model, timeout_seconds, fallback_model=None):
+    def fake_translate(
+        body_md, allowed_urls, model, timeout_seconds, fallback_model=None, **_kwargs
+    ):
         translate_calls.append((body_md, fallback_model))
-        return "**TL;DR:** a het\n\n## Egy szal\n\ndolog"
+        return "**TL;DR:** a het\n\n## Egy szal\n\ndolog", _MODEL_RUN
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
 
@@ -4584,3 +4746,97 @@ def test_deliver_channels_hidden_channel_does_not_suppress_the_others(conn, monk
 
     assert ok is True
     assert emailed == ["sent"]
+
+
+# --- OpenRouter fallback chain wiring (digest/main.py's _fallback_legs) ---
+
+
+def test_deliver_summarize_receives_fallback_legs_when_openrouter_configured(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    captured = {}
+
+    def fake_summarize(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "## Needs attention\n...", [], [], _MODEL_RUN
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+
+    cfg = replace(_cfg(), openrouter_api_key="sk-or-test-key")
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] != ()
+    assert all(leg.model in cfg.fallback_models for leg in captured["fallbacks"])
+
+
+def test_deliver_summarize_receives_empty_fallbacks_when_openrouter_unconfigured(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    captured = {}
+
+    def fake_summarize(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "## Needs attention\n...", [], [], _MODEL_RUN
+
+    monkeypatch.setattr(main_mod, "summarize", fake_summarize)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+
+    cfg = _cfg()  # openrouter_api_key defaults to None -- unconfigured
+
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] == ()
+
+
+def test_deliver_translate_digest_receives_fallback_legs_when_openrouter_configured(
+    conn, monkeypatch
+):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [], _MODEL_RUN)
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    captured = {}
+
+    def fake_translate(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "**TL;DR:** szia\n\n## Sz\n\ny", _MODEL_RUN
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    cfg = replace(_cfg(), translate_hu_enabled=True, openrouter_api_key="sk-or-test-key")
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] != ()
+    assert all(leg.model in cfg.fallback_light_models for leg in captured["fallbacks"])
+
+
+def test_deliver_translate_digest_receives_empty_fallbacks_when_openrouter_unconfigured(
+    conn, monkeypatch
+):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    monkeypatch.setattr(
+        main_mod, "summarize", lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [], _MODEL_RUN)
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    captured = {}
+
+    def fake_translate(*args, **kwargs):
+        captured["fallbacks"] = kwargs.get("fallbacks")
+        return "**TL;DR:** szia\n\n## Sz\n\ny", _MODEL_RUN
+
+    monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
+
+    cfg = replace(_cfg(), translate_hu_enabled=True)  # openrouter_api_key unset
+    ok = _deliver(conn, cfg, [])
+
+    assert ok is True
+    assert captured["fallbacks"] == ()

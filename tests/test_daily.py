@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import digest.daily as daily_mod
 from digest.daily import build_daily_prompt, summarize_daily
-from digest.summarize import SummarizeError
+from digest.summarize import ModelRun, SummarizeError
 
 _VALID_OUTPUT = (
     "**TL;DR:** Something happened today.\n\n"
@@ -134,7 +134,7 @@ def test_summarize_daily_success_returns_repaired_markdown(monkeypatch):
     monkeypatch.setattr(daily_mod, "run_claude", fake_run_claude)
 
     rows = [_row(digest_id=1, item_count=50), _row(digest_id=2, item_count=50)]
-    result = summarize_daily(
+    result, model_run = summarize_daily(
         rows,
         allowed_urls={"https://known.example/a"},
         model="claude-opus-5",
@@ -149,6 +149,8 @@ def test_summarize_daily_success_returns_repaired_markdown(monkeypatch):
     # the SAME effort tier as window summarization, never a fixed cheaper
     # one (unlike translate.py's translation step).
     assert captured["effort"] == "high"
+    # The primary (run_claude) served -- model_run reports its identity.
+    assert model_run == ModelRun(model="claude-opus-5", effort="high", fallback=False)
 
 
 def test_summarize_daily_raises_on_refusal_output(monkeypatch):
@@ -185,7 +187,7 @@ def test_summarize_daily_applies_link_allowlist_repair(monkeypatch):
         ),
     )
 
-    result = summarize_daily(
+    result, _model_run = summarize_daily(
         [_row()],
         allowed_urls={"https://known.example/a"},
         model="m",
@@ -204,7 +206,7 @@ def test_summarize_daily_reverses_backtick_escape_in_output(monkeypatch):
         lambda *a, **k: "## Section\n\nSome \\u0060code\\u0060 snippet.\n",
     )
 
-    result = summarize_daily(
+    result, _model_run = summarize_daily(
         [_row()], allowed_urls=set(), model="m", timeout_seconds=60, effort="high"
     )
 
@@ -241,7 +243,7 @@ def test_summarize_daily_end_to_end_tldr_is_citation_free_and_body_renumbers_fro
     )
     monkeypatch.setattr(daily_mod, "run_claude", lambda *a, **k: model_output)
 
-    result = summarize_daily(
+    result, _model_run = summarize_daily(
         [_row()],
         allowed_urls={"https://known.example/a", "https://known.example/b"},
         model="m",

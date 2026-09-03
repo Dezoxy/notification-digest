@@ -42,13 +42,15 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
 
 from digest.state import Item
 from digest.summarize import (
+    FallbackLeg,
     SummarizeError,
     run_claude,
+    run_with_fallbacks,
     truncate_item_text,
     validate_output,
 )
@@ -253,8 +255,34 @@ def is_no_signal(output: str) -> bool:
     return False
 
 
+def _validate_positions_output(output: str) -> None:
+    """Accept either the NO-SIGNAL sentinel or a real briefing; reject everything else.
+
+    `run_with_fallbacks` (digest/summarize.py) needs a single `validate`
+    callable to decide, per leg, whether that leg's output counts as a
+    success -- and for this kind, "success" is NOT the same thing as "a
+    real briefing with a `## ` heading" the way it is for every other kind.
+    A fallback model that correctly judges a quiet window immaterial and
+    returns the `NO-SIGNAL` sentinel (see `is_no_signal`) has done its job
+    CORRECTLY -- exactly as correctly as the primary would have -- and must
+    not be treated as a failed leg the chain then discards in favor of
+    trying yet another model on content that has nothing to report. Only a
+    validate_output failure on non-sentinel text (a refusal, an empty
+    answer, a stray apology -- something that is neither the sentinel nor a
+    real briefing) counts as this leg failing.
+    """
+    if is_no_signal(output):
+        return
+    validate_output(output)
+
+
 def summarize_positions(
-    items: list[Item], recent_coverage: str, model: str, timeout_seconds: int
+    items: list[Item],
+    recent_coverage: str,
+    model: str,
+    timeout_seconds: int,
+    fallbacks: Sequence[FallbackLeg] = (),
+    fallback_budget_seconds: int = 180,
 ) -> str | None:
     """Summarize one positions window. Returns None when the window held no news.
 
@@ -270,13 +298,39 @@ def summarize_positions(
     and unlike digest/translate.py's soft-failing `translate_digest`, this
     does NOT swallow that: the summary is the deliverable itself, so its
     failure must propagate and fail the run.
+
+    `fallbacks` (default `()`, matching every existing direct call and
+    test) is this window's own OpenRouter fallback chain -- see
+    digest/summarize.py's `run_with_fallbacks` for the full mechanics, and
+    `fallback_budget_seconds` (default 180) the SHARED wall-clock budget
+    every leg of that chain draws from together. Validated with
+    `_validate_positions_output` (above), NOT the bare `validate_output`
+    every other editorial-tier kind passes -- see that function's own
+    docstring for why NO-SIGNAL must count as a leg succeeding, not
+    failing. digest/main.py's `run_positions` passes
+    `cfg.fallback_timeout_seconds` and the editorial-tier chain built by
+    its own `_fallback_legs` helper.
     """
-    output = run_claude(
-        build_prompt(items, recent_coverage), model, timeout_seconds, effort=_POSITIONS_EFFORT
+    prompt = build_prompt(items, recent_coverage)
+    # `run_with_fallbacks` now also returns a `ModelRun` reporting which
+    # model/effort actually served -- discarded here, not threaded through
+    # `summarize_positions`' own return: the positions tracker is
+    # Telegram-only (`_POSITIONS_HIDDEN_CHANNELS`), never published to the
+    # site, and model provenance is a site-facing feature (digest/main.py's
+    # `_deliver`/`run_daily`/`run_weekly` are the only callers that persist
+    # it via `create_digest`'s `provenance` column) -- there is nowhere for
+    # this kind's provenance to go.
+    output, _model_run = run_with_fallbacks(
+        primary=lambda: run_claude(prompt, model, timeout_seconds, effort=_POSITIONS_EFFORT),
+        fallbacks=fallbacks,
+        prompt=prompt,
+        budget_seconds=fallback_budget_seconds,
+        primary_model=model,
+        primary_effort=_POSITIONS_EFFORT,
+        validate=_validate_positions_output,
     )
     if is_no_signal(output):
         return None
-    validate_output(output)
     return output
 
 

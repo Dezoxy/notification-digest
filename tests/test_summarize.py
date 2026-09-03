@@ -9,8 +9,11 @@ import pytest
 
 import digest.summarize as summarize_mod
 from digest.emailer import render_html
+from digest.openrouter import OpenRouterError
 from digest.state import Item
 from digest.summarize import (
+    FallbackLeg,
+    ModelRun,
     SafeguardsRefusalError,
     SummarizeError,
     _real_heading_lines,
@@ -23,6 +26,7 @@ from digest.summarize import (
     format_recent_coverage,
     renumber_citations,
     run_claude,
+    run_with_fallbacks,
     select_balanced_items_for_prompt,
     select_items_for_prompt,
     strip_tldr_citations,
@@ -896,7 +900,9 @@ def test_summarize_builds_prompt_and_runs_claude(monkeypatch):
     monkeypatch.setattr(summarize_mod, "run_claude", fake_run_claude)
 
     items = [_item()]
-    result, deltas, arc_keys = summarize(items, ["telegram"], "", "claude-opus-5", 300, "high")
+    result, deltas, arc_keys, _model_run = summarize(
+        items, ["telegram"], "", "claude-opus-5", 300, "high"
+    )
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert deltas == []
@@ -938,7 +944,9 @@ def test_summarize_prepends_banner_for_single_failed_source(monkeypatch):
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result, deltas, arc_keys = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
+    result, deltas, arc_keys, _model_run = summarize(
+        [_item()], ["telegram"], "", "claude-opus-5", 300, "high"
+    )
 
     assert result == "⚠ telegram collection failed this run\n\n" + _MODEL_OUTPUT
     assert result.startswith("⚠ telegram collection failed this run\n\n")
@@ -957,7 +965,9 @@ def test_summarize_no_failed_sources_returns_model_output_unchanged(monkeypatch)
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result, deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    result, deltas, arc_keys, _model_run = summarize(
+        [_item()], [], "", "claude-opus-5", 300, "high"
+    )
 
     assert result == _MODEL_OUTPUT
     assert "⚠" not in result
@@ -976,7 +986,7 @@ def test_summarize_prepends_one_banner_line_per_failed_source_in_order(monkeypat
         lambda prompt, model, timeout_seconds, effort: _MODEL_OUTPUT,
     )
 
-    result, _deltas, _arc_keys = summarize(
+    result, _deltas, _arc_keys, _model_run = summarize(
         [_item()], ["telegram", "x"], "", "claude-opus-5", 300, "high"
     )
 
@@ -1338,7 +1348,9 @@ def test_summarize_returns_parsed_deltas_and_strips_fence_from_body(monkeypatch)
     )
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
 
-    body_md, deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    body_md, deltas, arc_keys, _model_run = summarize(
+        [_item()], [], "", "claude-opus-5", 300, "high"
+    )
 
     assert "```deltas" not in body_md
     assert deltas == [{"heading": "Section", "previously": "old", "now": "new"}]
@@ -1359,7 +1371,9 @@ def test_summarize_with_failed_sources_banner_still_strips_deltas_and_returns_th
     )
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
 
-    body_md, deltas, arc_keys = summarize([_item()], ["telegram"], "", "claude-opus-5", 300, "high")
+    body_md, deltas, arc_keys, _model_run = summarize(
+        [_item()], ["telegram"], "", "claude-opus-5", 300, "high"
+    )
 
     assert body_md.startswith("⚠ telegram collection failed this run\n\n")
     assert "```deltas" not in body_md
@@ -1382,7 +1396,9 @@ def test_summarize_returns_parsed_arc_keys_and_strips_fence_from_body(monkeypatc
     )
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
 
-    body_md, _deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    body_md, _deltas, arc_keys, _model_run = summarize(
+        [_item()], [], "", "claude-opus-5", 300, "high"
+    )
 
     assert "```arcs" not in body_md
     assert arc_keys == [{"heading": "Section", "key": "valid-key"}]
@@ -1402,7 +1418,9 @@ def test_summarize_strips_both_arcs_and_deltas_fences_arcs_extracted_first(monke
     )
     monkeypatch.setattr(summarize_mod, "run_claude", lambda *a, **k: model_output)
 
-    body_md, deltas, arc_keys = summarize([_item()], [], "", "claude-opus-5", 300, "high")
+    body_md, deltas, arc_keys, _model_run = summarize(
+        [_item()], [], "", "claude-opus-5", 300, "high"
+    )
 
     assert "```arcs" not in body_md
     assert "```deltas" not in body_md
@@ -1861,7 +1879,9 @@ def test_summarize_end_to_end_strips_unknown_link_but_keeps_known_one(monkeypatc
         lambda prompt, model, timeout_seconds, effort: model_output,
     )
 
-    result, _deltas, _arc_keys = summarize([known_item], [], "", "claude-opus-5", 300, "high")
+    result, _deltas, _arc_keys, _model_run = summarize(
+        [known_item], [], "", "claude-opus-5", 300, "high"
+    )
 
     assert f"[known]({known_item.url})" in result
     assert "https://attacker.example/phish" not in result
@@ -1884,7 +1904,9 @@ async def test_summarize_missing_tldr_logs_warning_but_still_ships(monkeypatch, 
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out, _deltas, _arc_keys = summarize_mod.summarize(items, [], "", "m", 10, "high")
+        out, _deltas, _arc_keys, _model_run = summarize_mod.summarize(
+            items, [], "", "m", 10, "high"
+        )
     assert out == valid_no_tldr
     assert any("TL;DR opener" in r.message for r in caplog.records)
 
@@ -1929,7 +1951,9 @@ async def test_summarize_zero_links_logs_warning_but_still_ships(monkeypatch, ca
         Item("telegram", "1:1", "1", "a", "t", "https://t.me/c/1/1", "2026-07-29T00:00:00+00:00")
     ]
     with caplog.at_level(logging.WARNING):
-        out, _deltas, _arc_keys = summarize_mod.summarize(items, [], "", "m", 10, "high")
+        out, _deltas, _arc_keys, _model_run = summarize_mod.summarize(
+            items, [], "", "m", 10, "high"
+        )
     assert out == no_links
     assert any("no citation links" in r.message for r in caplog.records)
 
@@ -2698,7 +2722,7 @@ def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
         dataclasses.replace(_item("a"), url="https://known.example/a"),
         dataclasses.replace(_item("b"), url="https://known.example/b"),
     ]
-    result, _deltas, _arc_keys = summarize(items, [], "", "claude-opus-5", 300, "high")
+    result, _deltas, _arc_keys, _model_run = summarize(items, [], "", "claude-opus-5", 300, "high")
 
     tldr_paragraph = result.split("\n\n", 1)[0]
     assert "[¹]" not in tldr_paragraph
@@ -2708,3 +2732,259 @@ def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
     # the two citations stripped out of the TL;DR.
     assert "[¹](https://known.example/a)" in result
     assert "[²](https://known.example/b)" in result
+
+
+# --- run_with_fallbacks ---
+
+
+def _leg(model: str = "openai/gpt-5.6-sol") -> FallbackLeg:
+    return FallbackLeg(model=model, api_key="sk-test-key")
+
+
+class TestRunWithFallbacks:
+    def test_primary_succeeds_legs_never_called(self, monkeypatch):
+        leg_calls = []
+        monkeypatch.setattr(
+            summarize_mod,
+            "run_openrouter",
+            lambda *a, **k: leg_calls.append(a) or "should not be used",
+        )
+
+        result, model_run = run_with_fallbacks(
+            primary=lambda: "primary output",
+            fallbacks=(_leg(),),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+        )
+
+        assert result == "primary output"
+        assert leg_calls == []
+        # The primary served: model_run must be built from primary_model/
+        # primary_effort exactly as passed in, never inferred, with
+        # fallback=False.
+        assert model_run == ModelRun(model="claude-opus-5", effort="high", fallback=False)
+
+    def test_primary_raises_first_leg_serves(self, monkeypatch):
+        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+            return f"output from {model}"
+
+        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+
+        def boom_primary():
+            raise SummarizeError("claude -p returned empty output")
+
+        result, model_run = run_with_fallbacks(
+            primary=boom_primary,
+            fallbacks=(_leg("openai/gpt-5.6-sol"),),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+        )
+
+        assert result == "output from openai/gpt-5.6-sol"
+        # A fallback leg served: model_run names THAT leg's own model, at
+        # digest.openrouter.REASONING_EFFORT (never primary_effort), with
+        # fallback=True.
+        assert model_run == ModelRun(
+            model="openai/gpt-5.6-sol", effort=summarize_mod.REASONING_EFFORT, fallback=True
+        )
+
+    def test_first_leg_raises_second_leg_serves(self, monkeypatch):
+        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+            if model == "openai/gpt-5.6-sol":
+                raise OpenRouterError("openrouter call failed with status 500")
+            return f"output from {model}"
+
+        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+
+        def boom_primary():
+            raise SummarizeError("claude -p returned empty output")
+
+        result, model_run = run_with_fallbacks(
+            primary=boom_primary,
+            fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+        )
+
+        assert result == "output from z-ai/glm-5.3"
+        assert model_run == ModelRun(
+            model="z-ai/glm-5.3", effort=summarize_mod.REASONING_EFFORT, fallback=True
+        )
+
+    def test_first_leg_output_fails_validate_second_leg_serves(self, monkeypatch):
+        # An OpenRouter model declining returns ordinary prose with HTTP 200
+        # -- a "successful" call whose output is unusable. validate() must
+        # treat that exactly like a leg that raised, and move on.
+        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+            if model == "openai/gpt-5.6-sol":
+                return "I can't help with that."
+            return "## Real heading\n\nreal content"
+
+        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+
+        def boom_primary():
+            raise SummarizeError("claude -p returned empty output")
+
+        result, model_run = run_with_fallbacks(
+            primary=boom_primary,
+            fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+            validate=validate_output,
+        )
+
+        assert result == "## Real heading\n\nreal content"
+        assert model_run == ModelRun(
+            model="z-ai/glm-5.3", effort=summarize_mod.REASONING_EFFORT, fallback=True
+        )
+
+    def test_all_legs_fail_raises_summarize_error_naming_each_model_and_type(self, monkeypatch):
+        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+            raise OpenRouterError("openrouter call failed with status 500")
+
+        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+
+        def boom_primary():
+            raise SummarizeError("claude -p returned empty output, prompt was SECRET-PROMPT-TEXT")
+
+        with pytest.raises(SummarizeError) as exc_info:
+            run_with_fallbacks(
+                primary=boom_primary,
+                fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+                prompt="the prompt containing SECRET-PROMPT-TEXT",
+                budget_seconds=180,
+                primary_model="claude-opus-5",
+                primary_effort="high",
+            )
+
+        message = str(exc_info.value)
+        assert "openai/gpt-5.6-sol: OpenRouterError" in message
+        assert "z-ai/glm-5.3: OpenRouterError" in message
+        assert "SECRET-PROMPT-TEXT" not in message
+        # Chained from the LAST leg's own exception.
+        assert isinstance(exc_info.value.__cause__, OpenRouterError)
+
+    def test_empty_fallbacks_reraises_the_exact_primary_exception_object(self):
+        the_original = SummarizeError("claude -p returned empty output")
+
+        def boom_primary():
+            raise the_original
+
+        with pytest.raises(SummarizeError) as exc_info:
+            run_with_fallbacks(
+                primary=boom_primary,
+                fallbacks=(),
+                prompt="p",
+                budget_seconds=180,
+                primary_model="claude-opus-5",
+                primary_effort="high",
+            )
+
+        assert exc_info.value is the_original
+
+    def test_slow_first_leg_leaves_second_leg_skipped_for_insufficient_budget(self, monkeypatch):
+        # start=0.0, leg 1's remaining-budget check also reads 0.0 (full
+        # 180s available, so leg 1 is attempted), then leg 1's own call
+        # "takes" a long time -- by the time leg 2's remaining-budget check
+        # runs, only 10s of the 180s budget is left (< the 15s minimum), so
+        # leg 2 must be skipped rather than attempted.
+        times = iter([0.0, 0.0, 170.0])
+        monkeypatch.setattr(summarize_mod.time, "monotonic", lambda: next(times))
+
+        leg_calls = []
+
+        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+            leg_calls.append(model)
+            raise OpenRouterError("openrouter call failed with status 500")
+
+        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+
+        def boom_primary():
+            raise SummarizeError("claude -p returned empty output")
+
+        with pytest.raises(SummarizeError) as exc_info:
+            run_with_fallbacks(
+                primary=boom_primary,
+                fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+                prompt="p",
+                budget_seconds=180,
+                primary_model="claude-opus-5",
+                primary_effort="high",
+            )
+
+        assert leg_calls == ["openai/gpt-5.6-sol"]
+        assert "z-ai/glm-5.3: skipped" in str(exc_info.value)
+
+    def test_a_timing_out_primary_still_gets_the_full_fallback_budget(self, monkeypatch):
+        # REGRESSION (bug found in review, before this feature ever shipped):
+        # the shared budget clock must start when the PRIMARY FAILS, not when
+        # run_with_fallbacks is entered. With the clock above the `try`, the
+        # primary's own runtime was charged against the fallbacks' budget --
+        # and in production that silently disabled the chain for the failure
+        # mode it most needs to cover, because CLAUDE_TIMEOUT_SECONDS is 600
+        # against a FALLBACK_TIMEOUT_SECONDS of 180: `180 - 600` is negative,
+        # so EVERY leg was skipped as "budget exhausted" without one request
+        # being sent.
+        #
+        # The clock is a mutable "now" the PRIMARY itself advances by 600s
+        # before raising -- which is precisely how the bug manifested, and
+        # something a fixed monotonic() sequence cannot express (with the fix
+        # in place, monotonic is not called at all until the primary has
+        # already failed).
+        now = [1000.0]
+        monkeypatch.setattr(summarize_mod.time, "monotonic", lambda: now[0])
+
+        leg_calls = []
+
+        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+            leg_calls.append((model, timeout_seconds))
+            return "## Fallback briefing"
+
+        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+
+        def timing_out_primary():
+            now[0] += 600.0  # CLAUDE_TIMEOUT_SECONDS in production
+            raise SummarizeError("claude -p timed out after 600s")
+
+        output, model_run = run_with_fallbacks(
+            primary=timing_out_primary,
+            fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+        )
+
+        assert output == "## Fallback briefing"
+        assert leg_calls == [("openai/gpt-5.6-sol", 180)]
+        assert model_run == ModelRun(
+            model="openai/gpt-5.6-sol", effort=summarize_mod.REASONING_EFFORT, fallback=True
+        )
+
+    def test_fallback_serving_logs_a_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            summarize_mod, "run_openrouter", lambda *a, **k: "output from the fallback"
+        )
+
+        def boom_primary():
+            raise SummarizeError("claude -p returned empty output")
+
+        with caplog.at_level("WARNING"):
+            run_with_fallbacks(
+                primary=boom_primary,
+                fallbacks=(_leg("openai/gpt-5.6-sol"),),
+                prompt="p",
+                budget_seconds=180,
+                primary_model="claude-opus-5",
+                primary_effort="high",
+            )
+
+        assert any("openai/gpt-5.6-sol" in r.message for r in caplog.records)

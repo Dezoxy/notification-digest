@@ -46,7 +46,14 @@ CREATE TABLE IF NOT EXISTS digests (
   -- renderDeltas/renderArcAppearance for how it turns into the digest page's
   -- "What changed" block and the arc page's per-appearance previously/now
   -- line.
-  deltas TEXT
+  deltas TEXT,
+  -- Optional ingest v5 field (model-provenance byline), app-produced. NULL
+  -- when the digest app didn't send provenance for this digest (older app
+  -- version). JSON object of {summarize, translate?} legs, each carrying
+  -- {model, effort, fallback} -- see validateProvenance in src/ingest.js for
+  -- the shape rules, and renderProvenance for how it turns into the digest
+  -- page's "WRITTEN" colophon row, directly below the source key.
+  provenance TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at DESC);
 

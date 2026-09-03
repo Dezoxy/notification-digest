@@ -186,7 +186,9 @@ class TestPerPostIsolation:
             lambda *a, **k: PatreonCollectResult(items=[make_item("3"), make_item("2")]),
         )
         monkeypatch.setattr(
-            digest_main, "summarize_post", lambda item, *a: seen.append(item.source_id) or SUMMARY
+            digest_main,
+            "summarize_post",
+            lambda item, *a, **k: seen.append(item.source_id) or SUMMARY,
         )
         monkeypatch.setattr(digest_main, "deliver_channels", lambda *a, **k: True)
         digest_main.run_patreon(cfg)

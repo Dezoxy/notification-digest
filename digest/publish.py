@@ -705,6 +705,7 @@ def publish_to_site(
     topics: list[dict[str, str]] | None = None,
     deltas: list[dict[str, str]] | None = None,
     arc_contexts: list[dict[str, str]] | None = None,
+    provenance: dict | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     """PUT one digest to the owner's Cloudflare Worker ingest endpoint. Raises on failure.
@@ -826,6 +827,23 @@ def publish_to_site(
     unflagged-shipping precedent, not `topics["key"]`'s gated one. No config
     flag gates this field's inclusion as a result.
 
+    `provenance` (keyword-only, default None) is digest/state.py's
+    `get_digest_provenance` output -- the `{"summarize": {"model", "effort",
+    "fallback"}, "translate": {...}}` object recording which model/effort
+    actually produced this digest's summarize and (optional) translate legs
+    (digest/main.py's `_provenance` helper builds it from the
+    `digest.summarize.ModelRun`(s) those calls return; see `_SCHEMA`'s
+    `digests.provenance` comment in digest/state.py for the exact shape and
+    why it is one JSON object rather than several fields). Included under
+    the IDENTICAL truthy-only rule as `source_counts`/`failed_sources`/
+    `topics`/`deltas`/`arc_contexts` above: an empty dict or None both mean
+    "omit the field entirely". A field the site does not yet know about is
+    silently ignored, not rejected, per the same `validateDigestPayload`
+    finding `deltas`'/`arc_contexts`' own docstring paragraphs cite -- so
+    sending this before the site's own ingest/rendering support for it
+    lands is harmless for the identical reason those two fields shipping
+    early was. No config flag gates this field's inclusion either.
+
     Raises whatever `urllib.request.urlopen` raises (network error, a
     non-2xx status via `urllib.error.HTTPError`, ...) completely
     unguarded -- matching digest/collectors/polymarket.py's `_fetch_markets`
@@ -873,6 +891,8 @@ def publish_to_site(
         payload["deltas"] = deltas
     if arc_contexts:
         payload["arc_contexts"] = arc_contexts
+    if provenance:
+        payload["provenance"] = provenance
     data = json.dumps(payload).encode("utf-8")
     url = f"{publish_url}/ingest/{digest_id}"
     headers = {

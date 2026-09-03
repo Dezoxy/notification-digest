@@ -18,6 +18,7 @@ from digest.state import (
     get_daily_allowed_urls,
     get_daily_digests_since,
     get_deltas,
+    get_digest_provenance,
     get_digest_source_counts,
     get_latest_arc_occurrence,
     get_pending_digests,
@@ -1158,11 +1159,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1240,7 +1241,7 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     preserved = old_conn.execute("SELECT id, source FROM items WHERE id = ?", (row_id,)).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
@@ -1286,7 +1287,7 @@ def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Pa
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
@@ -1320,7 +1321,7 @@ def test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it(tmp_path: 
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
     arc_keys_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
     ).fetchone()
@@ -1354,7 +1355,7 @@ def test_init_db_migrates_v3_db_predating_arc_context_table_by_adding_it(tmp_pat
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
     arc_context_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
     ).fetchone()
@@ -1670,6 +1671,58 @@ def test_init_db_migrates_pre_translation_digests_table_missing_body_md_hu(tmp_p
     assert row == ("fordítás",)
 
     old_conn.close()
+
+
+# --- provenance column (model-provenance feature) ---
+
+
+def test_create_digest_provenance_round_trips_through_get_digest_provenance(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    items = get_unsummarized_items(conn)
+    provenance = {
+        "summarize": {"model": "claude-opus-5", "effort": "high", "fallback": False},
+        "translate": {"model": "openai/gpt-5.6-terra", "effort": "high", "fallback": True},
+    }
+
+    digest_id = create_digest(conn, "english body", items, provenance=provenance)
+
+    assert get_digest_provenance(conn, digest_id) == provenance
+
+
+def test_create_digest_provenance_defaults_to_none_stores_null(conn):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    items = get_unsummarized_items(conn)
+
+    digest_id = create_digest(conn, "english body", items)
+
+    row = conn.execute("SELECT provenance FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row == (None,)  # SQL NULL, not the string "null"
+    assert get_digest_provenance(conn, digest_id) is None
+
+
+def test_get_digest_provenance_returns_none_for_malformed_json(conn):
+    # Defensive: a hand-edited row or a future storage-layer bug must
+    # degrade to "nothing to show", never raise.
+    digest_id = create_digest(conn, "english body", [])
+    conn.execute("UPDATE digests SET provenance = ? WHERE id = ?", ("{not valid json", digest_id))
+    conn.commit()
+
+    assert get_digest_provenance(conn, digest_id) is None
+
+
+def test_get_digest_provenance_returns_none_for_non_dict_json(conn):
+    # A JSON array (or any other non-object value) is syntactically valid
+    # JSON but not the shape this column's contract promises -- must also
+    # degrade to None, not raise or return something callers can't index.
+    digest_id = create_digest(conn, "english body", [])
+    conn.execute("UPDATE digests SET provenance = ? WHERE id = ?", ("[1, 2, 3]", digest_id))
+    conn.commit()
+
+    assert get_digest_provenance(conn, digest_id) is None
+
+
+def test_get_digest_provenance_returns_none_for_unknown_digest_id(conn):
+    assert get_digest_provenance(conn, 999999) is None
 
 
 # --- kind column (daily-brief feature) ---
@@ -2720,8 +2773,70 @@ def test_init_db_migrates_v5_db_predating_synced_at_column_by_adding_it(tmp_path
 
     cols = {row[1] for row in conn.execute("PRAGMA table_info(arc_context)")}
     assert "synced_at" in cols
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
     conn.close()
+
+
+def test_init_db_migrates_v6_db_predating_provenance_column_by_adding_it(tmp_path):
+    # A live state.db reaches the version-7 step with `digests` already
+    # present but without the `provenance` column -- CREATE TABLE IF NOT
+    # EXISTS never alters an existing table, so without this migration every
+    # create_digest INSERT on an upgraded pre-provenance database would fail.
+    #
+    # Unlike the version-5/synced_at migration test's `ALTER TABLE ... DROP
+    # COLUMN` approach, this one rebuilds `digests` from a literal
+    # CREATE TABLE (matching test_init_db_migrates_v4_db_predating_
+    # embed_url_column_by_adding_it's own pattern for `items`) rather than
+    # dropping the real column off the real table: SQLite 3.47's DROP
+    # COLUMN implementation mis-scans this table's PRE-EXISTING `kind`
+    # column comment (a parenthesized aside split across two `--` lines --
+    # unrelated to this feature, not touched here) whenever `provenance` is
+    # the table's last column, raising a spurious "incomplete input" error
+    # on an otherwise valid table. Rebuilding from a literal CREATE TABLE
+    # sidesteps that scan entirely, exactly like the v4 test already does
+    # for `items`.
+    db_path = str(tmp_path / "v6.db")
+    old_conn = connect(db_path)
+    init_db(old_conn)
+    old_conn.execute("DROP TABLE digests")
+    old_conn.execute(
+        """
+        CREATE TABLE digests (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at      TEXT NOT NULL,
+            item_count      INTEGER NOT NULL,
+            email_sent      INTEGER NOT NULL DEFAULT 0,
+            site_published  INTEGER NOT NULL DEFAULT 0,
+            telegram_sent   INTEGER NOT NULL DEFAULT 0,
+            body_md         TEXT NOT NULL,
+            body_md_hu      TEXT,
+            kind            TEXT NOT NULL DEFAULT 'window'
+        )
+        """
+    )
+    old_conn.execute("PRAGMA user_version = 6")
+    old_conn.commit()
+    columns = {row[1] for row in old_conn.execute("PRAGMA table_info(digests)").fetchall()}
+    assert "provenance" not in columns
+
+    init_db(old_conn)
+
+    columns = {row[1] for row in old_conn.execute("PRAGMA table_info(digests)").fetchall()}
+    assert "provenance" in columns
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+
+    # The column is fully usable post-migration.
+    digest_id = create_digest(
+        old_conn,
+        "body",
+        [],
+        provenance={"summarize": {"model": "m", "effort": "high", "fallback": False}},
+    )
+    assert get_digest_provenance(old_conn, digest_id) == {
+        "summarize": {"model": "m", "effort": "high", "fallback": False}
+    }
+
+    old_conn.close()
 
 
 def test_migration_leaves_pre_existing_primers_unsynced(conn):
@@ -2771,7 +2886,7 @@ def test_init_db_migrates_v4_db_predating_embed_url_column_by_adding_it(tmp_path
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
     columns = {r[1] for r in old_conn.execute("PRAGMA table_info(items)").fetchall()}
     assert "embed_url" in columns
 

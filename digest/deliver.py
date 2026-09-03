@@ -44,6 +44,7 @@ from digest.state import (
     get_deltas,
     get_digest_item_urls,
     get_digest_post_link,
+    get_digest_provenance,
     get_digest_source_counts,
     get_pending_digests,
     get_unsynced_arc_contexts,
@@ -336,6 +337,18 @@ def _deliver_site(
     the STEADY STATE now, not just "CONTEXT_ENABLED off or nothing
     qualified yet" -- omits the field entirely, so the ordinary payload is
     byte-identical to one from before this feature existed.
+
+    `provenance` (digest/state.py's `get_digest_provenance`) is read back by
+    `digest_id`, the SAME "read stored state instead of re-deriving it"
+    shape `deltas`/`topics["key"]` above already use, and for the identical
+    reason: it is written once, by `create_digest`, at the moment this
+    digest was originally created (digest/main.py's `_deliver`/`run_daily`/
+    `run_weekly`), so a much-later pending resend has to read it back rather
+    than re-derive it from `body_md` -- there is nothing in `body_md` to
+    re-derive it FROM, model provenance was never part of the briefing text
+    in the first place. Forwarded to `publish_to_site` unconditionally
+    (`None` on a digest predating this feature, exactly like every other
+    field here), which applies its own truthy-only inclusion rule.
     """
     body_html = render_body_html(body_md, allowed_urls)
     body_html_hu = (
@@ -354,12 +367,19 @@ def _deliver_site(
                 topic["key"] = key
     deltas = get_deltas(conn, digest_id)
     arc_contexts = get_unsynced_arc_contexts(conn)
+    # Model provenance (digest/state.py's `get_digest_provenance`), the same
+    # "read a stored column back by digest_id" shape `source_counts` uses
+    # immediately above -- covers the fresh-digest and pending-resend paths
+    # identically, since `digest/main.py`'s `_deliver`/`run_daily`/
+    # `run_weekly` already persisted it into THIS digest_id's row via
+    # `create_digest` before either path ever reaches here.
+    provenance = get_digest_provenance(conn, digest_id)
 
     def _put(contexts: list[dict[str, str]] | None) -> None:
         """One PUT of this digest, with `contexts` as the `arc_contexts` field.
 
         A closure purely so the degraded retry below cannot drift from the
-        primary call: every other one of these fifteen arguments must be
+        primary call: every other one of these sixteen arguments must be
         byte-identical between the two attempts, and two hand-maintained
         copies of that call is how they would stop being.
         """
@@ -379,6 +399,7 @@ def _deliver_site(
             topics=topics,
             deltas=deltas,
             arc_contexts=contexts,
+            provenance=provenance,
         )
 
     try:

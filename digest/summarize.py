@@ -13,11 +13,14 @@ import logging
 import re
 import subprocess
 import tempfile
-from collections.abc import Collection
+import time
+from collections.abc import Callable, Collection, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from digest.config import claude_subprocess_env
+from digest.openrouter import REASONING_EFFORT, run_openrouter
 from digest.state import Item
 
 logger = logging.getLogger(__name__)
@@ -679,6 +682,275 @@ def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> st
         raise SummarizeError("claude -p returned empty output")
 
     return stdout
+
+
+# Below the minimum a fallback leg can be given from the shared budget
+# (run_with_fallbacks, below), a leg is skipped rather than attempted. A
+# model call that CANNOT possibly finish in the time left is worse than not
+# trying it at all: it still burns wall clock (the request goes out, the
+# subprocess/socket spins up) and returns nothing, which is strictly worse
+# than spending that same handful of seconds moving straight to the NEXT
+# leg, which might actually have enough runway to succeed. 15s is a rough
+# floor under any real OpenRouter completion -- see digest/openrouter.py's
+# run_openrouter and _REASONING_EFFORT's own comment for why every fallback
+# leg reasons at "high" and is not a fast call to begin with.
+_MIN_FALLBACK_SECONDS = 15
+
+
+@dataclass(frozen=True)
+class FallbackLeg:
+    """One OpenRouter model in a fallback chain: which model, and the key to call it with.
+
+    `api_key` is `repr=False`: this dataclass's default `__repr__` would
+    otherwise print the raw OpenRouter API key verbatim, and a dataclass
+    repr is exactly the kind of thing that ends up in a traceback or a debug
+    log line without anyone deliberately choosing to print it (CLAUDE.md's
+    secrets-never-logged hard rule doesn't stop at code that explicitly
+    calls `logger.info` -- an accidental repr is just as real a leak).
+    """
+
+    model: str
+    api_key: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class ModelRun:
+    """Which model actually produced a `run_with_fallbacks` call's output, and how.
+
+    Provenance, not configuration: with a fallback chain in play, the model
+    named in a caller's OWN `model`/`primary_model` argument is only ever
+    the one ASKED first, not necessarily the one that ANSWERED -- an owner
+    (or a Loki dashboard) looking at a finished digest has no way to tell
+    "the primary served this" from "the primary hit a Max-subscription
+    limit and OpenRouter's third fallback model quietly wrote it instead"
+    without this. `run_with_fallbacks` returns one of these alongside its
+    output on every successful call (see that function's own docstring,
+    point 6) so a caller can persist it (digest/state.py's `create_digest`'s
+    `provenance` column) and the site can show it.
+
+    `model` is the model id that actually served -- `primary_model` verbatim
+    on the primary path, or `FallbackLeg.model` verbatim on a fallback path.
+    `effort` is the reasoning/thinking effort that leg actually ran at --
+    `primary_effort` verbatim on the primary path, or
+    `digest.openrouter.REASONING_EFFORT` on a fallback path (every
+    OpenRouter leg, at every tier, always reasons at "high" -- see that
+    constant's own comment). `fallback` is `True` iff an OpenRouter leg
+    served this call, `False` iff the Claude primary did -- the single bit
+    a reader actually scans for ("did the chain have to reach past the
+    primary this time?") without parsing `model` against whatever the
+    deployment's current `primary_model`/fallback list happen to be.
+    """
+
+    model: str
+    effort: str
+    fallback: bool
+
+
+def run_with_fallbacks(
+    primary: Callable[[], str],
+    fallbacks: Sequence[FallbackLeg],
+    prompt: str,
+    budget_seconds: int,
+    primary_model: str,
+    primary_effort: str,
+    validate: Callable[[str], None] | None = None,
+) -> tuple[str, ModelRun]:
+    """Call `primary()`; on failure, retry `prompt` against each of `fallbacks` in order.
+
+    Returns `(output, ModelRun)`, not a bare string -- see point 6 below for
+    the full shape and why `primary_model`/`primary_effort` exist as
+    separate arguments rather than something this function infers on its
+    own.
+
+    Six load-bearing design points, each explained below because getting
+    any one of them backwards silently breaks either the ~145 existing
+    tests that monkeypatch `run_claude`, or the byte-for-byte-unchanged
+    behavior an unconfigured (no OPENROUTER_API_KEY) deployment must keep.
+
+    1. WHY `primary` IS A CALLABLE, NOT `(model, effort)` ARGS THIS FUNCTION
+       RESOLVES ITSELF. Every one of this codebase's seven summarization
+       call sites (digest/summarize.py's own `summarize`, digest/daily.py's
+       `summarize_daily`, digest/weekly.py's `summarize_weekly`,
+       digest/patreon.py's `summarize_post`, digest/positions.py's
+       `summarize_positions`, digest/translate.py's `translate_digest`,
+       digest/context.py's `generate_arc_context`) has its own test module
+       that monkeypatches `run_claude` as a MODULE GLOBAL -- `summarize_mod
+       .run_claude`, `daily_mod.run_claude`, `weekly_mod.run_claude`,
+       `translate_mod.run_claude`, `context_mod.run_claude`,
+       `positions_mod.run_claude`, `patreon_kind.run_claude` -- roughly 145
+       references across the suite. If this function called `run_claude`
+       itself (imported here, or reached via `digest.summarize.run_claude`),
+       every one of those patches would be silently bypassed: the REAL CLI
+       subprocess would run in every test that exercises a call site through
+       this chain, and the suite would test nothing while still reporting
+       green. Requiring each caller to pass a zero-argument closure over ITS
+       OWN already-imported `run_claude` name (e.g.
+       `lambda: run_claude(prompt, model, timeout_seconds, effort)` written
+       inside digest/daily.py, capturing THAT module's `run_claude`) means
+       the closure resolves the name at CALL time through the calling
+       module's own globals -- exactly what `monkeypatch.setattr(daily_mod,
+       "run_claude", fake)` already patches, unchanged.
+    2. WHY `validate` RUNS INSIDE THE LOOP, NOT AFTER THIS FUNCTION RETURNS.
+       `run_claude` signals a refusal STRUCTURALLY: a non-zero exit plus the
+       `API Error:`/`safeguards flagged` marker raises
+       `SafeguardsRefusalError` before any text ever reaches a caller (see
+       that function's own docstring). An OpenRouter model declining the
+       same content has no equivalent structural signal -- it returns
+       ordinary prose ("I can't help with that") with HTTP 200, which
+       `run_openrouter` sees as a perfectly successful call. If validation
+       ran only after THIS function returned, that leg's unusable prose
+       would be accepted as the chain's result, and the failure would
+       surface later, downstream, on `validate_output` (or the
+       kind-specific check each call site passes) -- by which point the
+       chain has already stopped, even though the NEXT leg might have
+       produced a usable briefing. So a leg whose output fails `validate`
+       is treated exactly like a leg that raised: recorded as a failure,
+       and the loop moves on to the next one.
+    3. SHARED BUDGET, NOT ONE PER LEG, AND IT STARTS WHEN THE PRIMARY
+       FAILS. Every fallback leg together gets `budget_seconds`, never
+       `budget_seconds` each: leg N is given `budget_seconds - elapsed`,
+       where `elapsed` is measured from the moment the PRIMARY raised (via
+       `time.monotonic()`, immune to wall-clock adjustments), NOT from the
+       moment this function was entered -- see the comment at the clock's
+       own assignment for the production failure that distinction prevents.
+       A leg is SKIPPED -- logged, not attempted -- when that remainder is
+       below `_MIN_FALLBACK_SECONDS`
+       (see that constant's own comment). This is what keeps one call's
+       total worst-case wall-clock bounded at exactly one budget, which is
+       what the homelab's systemd `TimeoutStartSec` assertions are sized
+       against (mirroring, at the fallback-chain level, the exact reasoning
+       Config.translate_timeout_seconds' own comment gives for capping
+       BOTH of translate_digest's legs together rather than each
+       separately). A per-leg budget instead of a shared one would make the
+       worst case scale with `len(fallbacks)` -- silently invalidating
+       every one of those ceilings the moment the owner added a third or
+       fourth fallback model, with no code change anywhere near the systemd
+       unit to make that obvious.
+    4. EMPTY `fallbacks` RE-RAISES THE PRIMARY'S EXCEPTION UNCHANGED -- the
+       exact same exception OBJECT (a bare `raise` inside the `except`
+       block that first caught it, not a new instance of the same type,
+       and not any kind of wrapper). This is the whole mechanism behind
+       "unset OPENROUTER_API_KEY = today's behavior, byte for byte":
+       digest/translate.py's `translate_digest` catches
+       `SafeguardsRefusalError` SPECIFICALLY (to decide whether to attempt
+       its own existing `fallback_model` retry), and every existing test
+       across this suite asserts on the primary's own exception TYPE. A
+       caller passed `fallbacks=()` (digest/main.py's `_fallback_legs`
+       returns exactly that when `cfg.openrouter_api_key is None`) must see
+       precisely the exception `run_claude` itself would have raised, not
+       some new `RuntimeError` or `SummarizeError` this function
+       synthesized -- otherwise every one of those existing catches and
+       assertions breaks the moment this function is introduced, even
+       though the feature is fully unconfigured.
+    5. ALL LEGS FAILED -> `SummarizeError` LISTING EACH LEG AS
+       `<model>: <ExceptionTypeName>` -- TYPE NAMES ONLY, NEVER `str(exc)`.
+       A model's own exception message can quote the prompt it was given
+       (`SummarizeError`'s docstring, `OpenRouterError`'s docstring in
+       digest/openrouter.py -- both make the identical promise for the
+       identical reason): the prompt is built from scraped Telegram/X
+       message text, and this codebase's hard rule is that such content
+       must never reach a log line or an exception message that gets
+       shipped to Loki. Only the exception CLASS name (`TimeoutError`,
+       `OpenRouterError`, `SummarizeError`, ...) is safe to include, and
+       that is exactly what this final message carries, one entry per
+       attempted (or budget-skipped) leg. Chained `from` the LAST leg's own
+       exception (`raise SummarizeError(...) from last_exc`) -- not the
+       primary's -- so a traceback inspecting this failure lands on the
+       most recent, most likely still-relevant cause, exactly like Python's
+       own exception-chaining convention already favors the innermost
+       `raise ... from`.
+    6. WHY THE RETURN VALUE IS `(output, ModelRun)`, AND WHY
+       `primary_model`/`primary_effort` ARE ARGUMENTS INSTEAD OF SOMETHING
+       DERIVED. The whole feature this pair of fields exists for is: with a
+       fallback chain configured, an owner looking at a finished digest
+       cannot otherwise tell whether the PRIMARY served it or the chain had
+       to reach past a failed/refused/rate-limited primary to a DIFFERENT
+       model on OpenRouter -- `model`/`effort` on a fallback leg are already
+       known locally (`leg.model`, `digest.openrouter.REASONING_EFFORT`),
+       but the primary's own identity is NOT: point 1 above is exactly why
+       this function only ever holds an opaque, zero-argument `primary`
+       closure, never a `(model, effort)` pair it could call itself. That
+       same indirection means this function has no way to learn what
+       `primary_model`/`primary_effort` for a successful primary call
+       actually WERE by inspecting `primary` -- it is a closure, not
+       introspectable data -- so the caller, which already knows exactly
+       what it captured into that closure, must hand the pair in explicitly.
+       They are used for EXACTLY ONE thing: building the `ModelRun` this
+       function returns on the primary-success path
+       (`ModelRun(primary_model, primary_effort, fallback=False)`) --
+       never to call anything, never to select which model `primary()`
+       itself invokes (that choice was already baked into the closure by
+       the caller before this function was ever entered). Passing the wrong
+       values here cannot break `primary()`'s own behavior, only mislabel
+       the provenance this function reports for it -- but getting them right
+       is still what makes the returned `ModelRun` trustworthy for the one
+       thing it exists to answer: "which model actually produced this
+       digest?" On a fallback path, `ModelRun` is instead built from that
+       leg's own `FallbackLeg.model` and `digest.openrouter.REASONING_EFFORT`
+       (see `ModelRun`'s own docstring for why the fallback effort is
+       always that constant, never `primary_effort`), with `fallback=True`.
+    """
+    try:
+        output = primary()
+        if validate is not None:
+            validate(output)
+        return output, ModelRun(model=primary_model, effort=primary_effort, fallback=False)
+    except Exception as primary_exc:
+        if not fallbacks:
+            raise
+
+        # The shared budget starts HERE, when the primary has already
+        # failed -- deliberately NOT before `primary()` ran. Starting the
+        # clock earlier would charge the primary's own runtime against the
+        # fallbacks' budget, and in this deployment that silently disables
+        # the chain for the single failure mode it most needs to cover: the
+        # primary's own timeout is CLAUDE_TIMEOUT_SECONDS (600 in
+        # production, Config.claude_timeout_seconds) against a
+        # FALLBACK_TIMEOUT_SECONDS of 180, so `180 - 600` is negative and
+        # EVERY leg is skipped as "budget exhausted" without a single
+        # request being sent. Measured, not theorized -- the first draft of
+        # this function had the clock above the `try` and a timing-out
+        # primary attempted zero legs.
+        #
+        # The homelab's systemd TimeoutStartSec assertions are sized against
+        # exactly this shape: one call's worst case is the PRIMARY's own
+        # timeout PLUS one whole `budget_seconds`, never more, because the
+        # legs share the budget between them (point 3 above).
+        start = time.monotonic()
+        failures: list[str] = []
+        last_exc: Exception = primary_exc
+        for leg in fallbacks:
+            remaining = budget_seconds - (time.monotonic() - start)
+            if remaining < _MIN_FALLBACK_SECONDS:
+                logger.warning(
+                    "run_with_fallbacks: skipping %s -- only %.1fs left in the %ds "
+                    "shared budget (below the %ds minimum)",
+                    leg.model,
+                    remaining,
+                    budget_seconds,
+                    _MIN_FALLBACK_SECONDS,
+                )
+                failures.append(f"{leg.model}: skipped (budget exhausted)")
+                continue
+            try:
+                output = run_openrouter(prompt, leg.model, int(remaining), leg.api_key)
+                if validate is not None:
+                    validate(output)
+            except Exception as leg_exc:
+                last_exc = leg_exc
+                failures.append(f"{leg.model}: {type(leg_exc).__name__}")
+                continue
+
+            logger.warning(
+                "run_with_fallbacks: %s served this call after the primary failed with %s",
+                leg.model,
+                type(primary_exc).__name__,
+            )
+            return output, ModelRun(model=leg.model, effort=REASONING_EFFORT, fallback=True)
+
+        raise SummarizeError(
+            "every model in the fallback chain failed: " + "; ".join(failures)
+        ) from last_exc
 
 
 def _leading_whitespace_column(line: str) -> int:
@@ -2010,12 +2282,26 @@ def summarize(
     timeout_seconds: int,
     effort: str,
     recent_arcs: str = "",
-) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
+    fallbacks: Sequence[FallbackLeg] = (),
+    fallback_budget_seconds: int = 180,
+) -> tuple[str, list[dict[str, str]], list[dict[str, str]], ModelRun]:
     """Build the prompt, run it through Claude, validate and repair the
     contract, and deterministically prepend the collector-failure banner.
 
-    Returns `(body_md, deltas, arc_keys)`, NOT a bare string -- PLAN.md §11.3
-    added a second return value, `deltas`, the `extract_deltas`-parsed list
+    `fallbacks` (default `()`, matching every existing direct call and test)
+    is this window digest's own OpenRouter fallback chain -- see
+    `run_with_fallbacks`'s own docstring for the full mechanics.
+    `fallback_budget_seconds` (default 180) is the SHARED wall-clock budget
+    for every leg of that chain together, not per leg -- see point 3 of that
+    same docstring. digest/main.py's `_deliver` passes
+    `cfg.fallback_timeout_seconds` and a chain built from
+    `Config.fallback_models`/`Config.openrouter_api_key` (see main.py's
+    `_fallback_legs`); an unconfigured deployment (`openrouter_api_key is
+    None`) passes `fallbacks=()`, which is exactly this default -- so this
+    call behaves byte-for-byte as it did before the chain existed.
+
+    Returns `(body_md, deltas, arc_keys, model_run)`, NOT a bare string --
+    PLAN.md §11.3 added a second return value, `deltas`, the `extract_deltas`-parsed list
     of `{"heading", "previously", "now"}` entries pulled off the model's
     machine-facing ```deltas fence (see that function's own docstring); the
     stable-arc-keys feature adds a THIRD, `arc_keys`, the
@@ -2038,6 +2324,15 @@ def summarize(
     result (digest/state.py's `write_deltas`/`write_arc_keys`) --
     summarize() itself does no slug mapping or persistence for either; it
     only parses and strips.
+
+    The FOURTH return value, `model_run`, is unrelated to any of the above:
+    it is `run_with_fallbacks`' own `ModelRun`, reporting which model
+    (`model`, on the primary path, or a fallback leg's own model id) and
+    effort actually produced `body_md`, and whether a fallback fired at all
+    -- see `run_with_fallbacks`'s docstring (point 6) and `ModelRun`'s own
+    docstring for the full shape. summarize() does nothing with it beyond
+    passing it straight through in the returned tuple; digest/main.py's
+    `_deliver` is what persists it (`create_digest`'s `provenance` column).
 
     `recent_coverage` is passed straight through to build_prompt (see that
     function's docstring for the substitution-ordering hazard it addresses,
@@ -2097,7 +2392,15 @@ def summarize(
     (validated) model output unchanged.
     """
     prompt = build_prompt(items, failed_sources, recent_coverage, recent_arcs)
-    output = run_claude(prompt, model, timeout_seconds, effort)
+    output, model_run = run_with_fallbacks(
+        primary=lambda: run_claude(prompt, model, timeout_seconds, effort),
+        fallbacks=fallbacks,
+        prompt=prompt,
+        budget_seconds=fallback_budget_seconds,
+        primary_model=model,
+        primary_effort=effort,
+        validate=validate_output,
+    )
     # extract_arc_keys and extract_deltas both run FIRST, before
     # validate_output or any other pass: see this function's own docstring
     # for why this exact position is the single choke point both the
@@ -2142,5 +2445,5 @@ def summarize(
     output = renumber_citations(strip_tldr_citations(output))
     if failed_sources:
         banner = "".join(f"⚠ {source} collection failed this run\n" for source in failed_sources)
-        return banner + "\n" + output, deltas, arc_keys
-    return output, deltas, arc_keys
+        return banner + "\n" + output, deltas, arc_keys, model_run
+    return output, deltas, arc_keys, model_run

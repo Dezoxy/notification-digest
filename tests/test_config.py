@@ -1235,3 +1235,108 @@ def test_telegram_patreon_thread_id_is_parsed(monkeypatch):
     monkeypatch.setenv("TELEGRAM_PATREON_THREAD_ID", "317")
 
     assert Config.from_env().telegram_patreon_thread_id == 317
+
+
+# --- OpenRouter fallback chain (OPENROUTER_API_KEY / FALLBACK_MODELS / FALLBACK_LIGHT_MODELS) ---
+
+
+def test_openrouter_api_key_unset_defaults_to_none(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    assert Config.from_env().openrouter_api_key is None
+
+
+def test_openrouter_api_key_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-key")
+
+    assert Config.from_env().openrouter_api_key == "sk-or-secret-key"
+
+
+def test_openrouter_api_key_excluded_from_repr(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-key")
+
+    assert "sk-or-secret-key" not in repr(Config.from_env())
+
+
+def test_fallback_models_unset_falls_back_to_the_owner_default(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("FALLBACK_MODELS", raising=False)
+
+    assert Config.from_env().fallback_models == ("openai/gpt-5.6-sol", "z-ai/glm-5.3")
+
+
+def test_fallback_models_explicitly_empty_means_no_legs(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_MODELS", "   ")
+
+    assert Config.from_env().fallback_models == ()
+
+
+def test_fallback_models_custom_list_is_parsed_and_stripped(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_MODELS", " openai/gpt-5.6-sol , mistralai/mistral-large ")
+
+    assert Config.from_env().fallback_models == (
+        "openai/gpt-5.6-sol",
+        "mistralai/mistral-large",
+    )
+
+
+def test_fallback_models_bad_model_id_raises_config_error_naming_the_variable(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_MODELS", "not-a-valid-model-id")
+
+    with pytest.raises(ConfigError, match="FALLBACK_MODELS"):
+        Config.from_env()
+
+
+def test_fallback_light_models_unset_falls_back_to_the_owner_default(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("FALLBACK_LIGHT_MODELS", raising=False)
+
+    assert Config.from_env().fallback_light_models == (
+        "openai/gpt-5.6-terra",
+        "deepseek/deepseek-v4-flash",
+    )
+
+
+def test_fallback_light_models_explicitly_empty_means_no_legs(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_LIGHT_MODELS", "")
+
+    assert Config.from_env().fallback_light_models == ()
+
+
+def test_fallback_light_models_bad_model_id_raises_config_error_naming_the_variable(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_LIGHT_MODELS", "UPPER/case")
+
+    with pytest.raises(ConfigError, match="FALLBACK_LIGHT_MODELS"):
+        Config.from_env()
+
+
+def test_fallback_timeout_seconds_unset_falls_back_to_180(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("FALLBACK_TIMEOUT_SECONDS", raising=False)
+
+    assert Config.from_env().fallback_timeout_seconds == 180
+
+
+def test_fallback_timeout_seconds_custom_value_is_used(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_TIMEOUT_SECONDS", "90")
+
+    assert Config.from_env().fallback_timeout_seconds == 90
+
+
+def test_openrouter_api_key_not_in_claude_subprocess_env_allowlist(monkeypatch):
+    # The `claude -p` subprocess must never see a different provider's own
+    # credential -- see claude_subprocess_env's own docstring.
+    from digest.config import claude_subprocess_env
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-key")
+
+    assert "OPENROUTER_API_KEY" not in claude_subprocess_env()

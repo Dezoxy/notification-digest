@@ -12,7 +12,12 @@ import {
 import { arcHref, digestHref, indexHref, renderSwitchers } from "./hrefs.js";
 import { deltasRenderableIn, renderDeltaLine } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
-import { deriveHeadline, renderDegradedBadge, renderSourceKey } from "./render-index.js";
+import {
+  deriveHeadline,
+  renderDegradedBadge,
+  renderProvenance,
+  renderSourceKey,
+} from "./render-index.js";
 
 // Inline per-section arc links (this feature): complements renderArcs' own
 // top-of-page "Story threads" chip line by putting a small link right at
@@ -296,6 +301,11 @@ export function renderDigestPage(digest, older, newer, token, host, lang, view, 
   // older digest with no source_counts/failed_sources.
   const sourceKeyHtml = renderSourceKey(digest.source_counts, digest.failed_sources, strings);
 
+  // Model-provenance row (owner-requested "WRITTEN" byline): same fail-safe
+  // absent-data contract as sourceKeyHtml just above — renders "" on a
+  // digest with no provenance (every digest before this feature, forever).
+  const provenanceHtml = renderProvenance(digest.provenance, strings);
+
   // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics
   // — see renderArcs and the topicArcs computation in handleDigestPage. Each
   // recurring chip links to that slug's arc page (§11.1 PR A).
@@ -322,7 +332,7 @@ export function renderDigestPage(digest, older, newer, token, host, lang, view, 
 ${arcsHtml}${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
-${sourceKeyHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
+${sourceKeyHtml}${provenanceHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
 <a class="backfab" href="${indexHref(token, lang, view)}" aria-label="${esc(strings.backFabLabel)}">←</a>`;
 
   return pageChrome(

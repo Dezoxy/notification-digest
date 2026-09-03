@@ -11,6 +11,7 @@ import json
 import logging
 import sqlite3
 import sys
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
@@ -78,6 +79,8 @@ from digest.state import (
 )
 from digest.summarize import (
     _MAX_PROMPT_BYTES,
+    FallbackLeg,
+    ModelRun,
     SummarizeError,
     format_recent_arcs,
     format_recent_coverage,
@@ -233,6 +236,81 @@ _MAX_ITEMS_PER_DIGEST = 250
 # it can actually see, so the pool read must be wide enough to reach past
 # one source's backlog to the items behind it.
 _MAX_ITEMS_FETCH_POOL = 1000
+
+
+def _fallback_legs(cfg: Config, *, light: bool) -> tuple[FallbackLeg, ...]:
+    """Build one call site's OpenRouter fallback chain, or none if the feature is off.
+
+    `cfg.openrouter_api_key` is the master switch (see that field's own
+    comment in digest/config.py): unset (`None`) means every one of this
+    run's model calls gets `fallbacks=()`, which is exactly the default
+    every one of the seven `summarize*`/`translate_digest`/
+    `generate_arc_context` signatures already carries -- so an unconfigured
+    deployment is unaffected by this helper existing at all, byte for byte
+    (digest/summarize.py's `run_with_fallbacks`, point 4 of its own
+    docstring, is what actually guarantees that once the empty tuple
+    arrives there).
+
+    `light` selects which of the two model tiers this particular call site
+    needs: `False` (the default shape callers reach for) returns
+    `cfg.fallback_models`, the EDITORIAL tier every window/daily/weekly/
+    positions/patreon call uses (they all summarize with
+    `cfg.anthropic_model`); `True` returns `cfg.fallback_light_models`, the
+    tier `translate_digest`/`generate_arc_context` use instead (they
+    summarize with `cfg.translate_model`/`cfg.context_model`) -- see those
+    two Config fields' own comments for why the tiers are split rather than
+    sharing one list.
+
+    Every leg in the returned tuple carries the SAME `cfg.openrouter_api_key`
+    -- there is exactly one OpenRouter account configured for this
+    deployment, never a per-model key.
+    """
+    if cfg.openrouter_api_key is None:
+        return ()
+    models = cfg.fallback_light_models if light else cfg.fallback_models
+    return tuple(FallbackLeg(model=model, api_key=cfg.openrouter_api_key) for model in models)
+
+
+def _provenance(
+    summarize_run: ModelRun, translate_run: ModelRun | None
+) -> dict[str, dict[str, object]]:
+    """Build the `create_digest(..., provenance=...)` object from this digest's ModelRuns.
+
+    Shape (see `_SCHEMA`'s `digests.provenance` comment in digest/state.py
+    for the full storage rationale):
+
+        {"summarize": {"model": ..., "effort": ..., "fallback": ...},
+         "translate": {"model": ..., "effort": ..., "fallback": ...}}
+
+    `summarize_run` is required -- every digest this codebase ever stores
+    with a `provenance` object went through `summarize()`/`summarize_daily()`
+    /`summarize_weekly()`, all three of which now always return a
+    `ModelRun` alongside their body_md (never optionally), so there is no
+    "no summarize provenance" case to represent. `translate_run` is `None`
+    when this digest has no Hungarian translation at all -- either
+    `cfg.translate_hu_enabled` is off, or `translate_digest` itself
+    soft-failed (see that function's own "never raises; None on any
+    failure" contract) -- and the ABSENT-KEY rule for that case is
+    deliberate, not an oversight: a missing `"translate"` key and a
+    present-but-null one would both have to be handled identically by any
+    reader (this codebase's own `get_digest_provenance`, or the site), so
+    there is no reason to pay the extra byte of a `null` value when simply
+    omitting the key says the same thing -- the exact truthy-only precedent
+    `publish_to_site`'s own `source_counts`/`topics`/`deltas`/`arc_contexts`
+    fields already establish (digest/publish.py).
+
+    Each `ModelRun` is turned into a plain dict (`dataclasses.asdict`,
+    keying on the SAME field names `ModelRun` itself declares --
+    `model`/`effort`/`fallback` -- so this function's output shape and
+    `ModelRun`'s own shape can never silently drift apart) rather than
+    stored as the dataclass instance itself, since `create_digest` hands
+    this straight to `json.dumps`, which has no idea how to serialize a
+    dataclass on its own.
+    """
+    provenance: dict[str, dict[str, object]] = {"summarize": asdict(summarize_run)}
+    if translate_run is not None:
+        provenance["translate"] = asdict(translate_run)
+    return provenance
 
 
 async def _client_ready(client: TelegramClient) -> bool:
@@ -426,7 +504,7 @@ def _deliver(
     )
 
     try:
-        body_md, deltas, arc_keys = summarize(
+        body_md, deltas, arc_keys, summarize_run = summarize(
             items,
             failed_sources,
             recent_coverage,
@@ -434,6 +512,8 @@ def _deliver(
             cfg.claude_timeout_seconds,
             cfg.claude_effort,
             recent_arcs=recent_arcs,
+            fallbacks=_fallback_legs(cfg, light=False),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
         )
     except SummarizeError as exc:
         logger.error("summarization failed: %s", exc)
@@ -449,16 +529,27 @@ def _deliver(
     # forever; translate_digest already logs its own WARNING on failure, so
     # nothing further is logged here.
     body_md_hu: str | None = None
+    translate_run: ModelRun | None = None
     if cfg.translate_hu_enabled:
-        body_md_hu = translate_digest(
+        translated = translate_digest(
             body_md,
             {item.url for item in items},
             cfg.translate_model,
             cfg.translate_timeout_seconds,
             fallback_model=cfg.translate_model_fallback,
+            fallbacks=_fallback_legs(cfg, light=True),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
         )
+        if translated is not None:
+            body_md_hu, translate_run = translated
 
-    digest_id = create_digest(conn, body_md, items, body_md_hu=body_md_hu)
+    digest_id = create_digest(
+        conn,
+        body_md,
+        items,
+        body_md_hu=body_md_hu,
+        provenance=_provenance(summarize_run, translate_run),
+    )
     # PLAN.md §11.3 fencing guardrail: this is the ONLY call to write_deltas
     # in this codebase -- deltas are a WINDOW-digest-only concept (they
     # reason about {{RECENT_COVERAGE}}, which is itself window-only, see
@@ -996,7 +1087,13 @@ def _generate_arc_context_primers(conn: sqlite3.Connection, cfg: Config, now: da
         if label is None:
             continue
 
-        context_md = generate_arc_context(label, cfg.context_model, cfg.context_timeout_seconds)
+        context_md = generate_arc_context(
+            label,
+            cfg.context_model,
+            cfg.context_timeout_seconds,
+            fallbacks=_fallback_legs(cfg, light=True),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
+        )
         if context_md is None:
             continue
 
@@ -1196,12 +1293,14 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
             allowed_urls |= get_digest_item_urls(conn, source_digest_id)
 
         try:
-            body_md = summarize_daily(
+            body_md, summarize_run = summarize_daily(
                 rows,
                 allowed_urls,
                 cfg.anthropic_model,
                 cfg.claude_timeout_seconds,
                 cfg.claude_effort,
+                fallbacks=_fallback_legs(cfg, light=False),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
         except SummarizeError as exc:
             logger.error("daily brief summarization failed: %s", exc)
@@ -1255,18 +1354,29 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
         # `allowed_urls`, so a verified brief's translation isn't stripped
         # of citations the English verified body was allowed to keep.
         body_md_hu: str | None = None
+        translate_run: ModelRun | None = None
         if cfg.translate_hu_enabled:
-            body_md_hu = translate_digest(
+            translated = translate_digest(
                 body_md,
                 delivery_allowed_urls,
                 cfg.translate_model,
                 cfg.translate_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
+                fallbacks=_fallback_legs(cfg, light=True),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
+            if translated is not None:
+                body_md_hu, translate_run = translated
 
         total_items = sum(item_count for _, _, item_count, _ in rows)
         digest_id = create_digest(
-            conn, body_md, [], body_md_hu=body_md_hu, kind="daily", item_count=total_items
+            conn,
+            body_md,
+            [],
+            body_md_hu=body_md_hu,
+            kind="daily",
+            item_count=total_items,
+            provenance=_provenance(summarize_run, translate_run),
         )
         archive(body_md, cfg.archive_dir, digest_id)
 
@@ -1473,12 +1583,14 @@ def run_weekly(cfg: Config) -> bool:
             allowed_urls |= get_digest_item_urls(conn, source_digest_id)
 
         try:
-            body_md = summarize_weekly(
+            body_md, summarize_run = summarize_weekly(
                 rows,
                 allowed_urls,
                 cfg.anthropic_model,
                 cfg.claude_timeout_seconds,
                 cfg.claude_effort,
+                fallbacks=_fallback_legs(cfg, light=False),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
         except SummarizeError as exc:
             logger.error("weekly brief summarization failed: %s", exc)
@@ -1488,18 +1600,29 @@ def run_weekly(cfg: Config) -> bool:
         # `run_daily` runs for a daily brief -- see that call site's own
         # comment for the full rationale, identical here.
         body_md_hu: str | None = None
+        translate_run: ModelRun | None = None
         if cfg.translate_hu_enabled:
-            body_md_hu = translate_digest(
+            translated = translate_digest(
                 body_md,
                 allowed_urls,
                 cfg.translate_model,
                 cfg.translate_timeout_seconds,
                 fallback_model=cfg.translate_model_fallback,
+                fallbacks=_fallback_legs(cfg, light=True),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
+            if translated is not None:
+                body_md_hu, translate_run = translated
 
         total_items = sum(item_count for _, _, item_count, _ in rows)
         digest_id = create_digest(
-            conn, body_md, [], body_md_hu=body_md_hu, kind="weekly", item_count=total_items
+            conn,
+            body_md,
+            [],
+            body_md_hu=body_md_hu,
+            kind="weekly",
+            item_count=total_items,
+            provenance=_provenance(summarize_run, translate_run),
         )
         archive(body_md, cfg.archive_dir, digest_id)
 
@@ -1662,7 +1785,13 @@ def _deliver_one_post(conn, cfg: Config, item, telegram_state) -> bool:
     leaves the item's `digest_id` NULL and makes the next run retry it.
     """
     try:
-        body_md = summarize_post(item, cfg.anthropic_model, cfg.claude_timeout_seconds)
+        body_md = summarize_post(
+            item,
+            cfg.anthropic_model,
+            cfg.claude_timeout_seconds,
+            fallbacks=_fallback_legs(cfg, light=False),
+            fallback_budget_seconds=cfg.fallback_timeout_seconds,
+        )
     except SummarizeError as exc:
         logger.error("patreon: summarizing post %s failed: %s", item.source_id, exc)
         return False
@@ -1897,6 +2026,8 @@ def run_positions(cfg: Config) -> bool:
                 recent_coverage,
                 cfg.anthropic_model,
                 cfg.claude_timeout_seconds,
+                fallbacks=_fallback_legs(cfg, light=False),
+                fallback_budget_seconds=cfg.fallback_timeout_seconds,
             )
         except SummarizeError as exc:
             logger.error("positions: summarization failed: %s", exc)

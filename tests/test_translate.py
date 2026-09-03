@@ -1,5 +1,5 @@
 import digest.translate as translate_mod
-from digest.summarize import SafeguardsRefusalError, SummarizeError
+from digest.summarize import ModelRun, SafeguardsRefusalError, SummarizeError
 from digest.translate import build_translate_prompt, translate_digest
 
 _VALID_HU_OUTPUT = "**TL;DR:** Valami történt.\n\n## Egy szakasz\n\nSzöveg.\n"
@@ -83,7 +83,7 @@ def test_translate_digest_success_returns_repaired_markdown(monkeypatch):
 
     monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
 
-    result = translate_digest(
+    result, model_run = translate_digest(
         "**TL;DR:** Something happened.\n\n## A section\n\ntext\n",
         allowed_urls=set(),
         model="sonnet",
@@ -97,6 +97,9 @@ def test_translate_digest_success_returns_repaired_markdown(monkeypatch):
     # translation is mechanically easier than summarization (see
     # _TRANSLATE_EFFORT's comment).
     assert captured["effort"] == "medium"
+    # The primary (run_claude with `model`) served, with no internal
+    # safeguards-refusal retry -- model_run names `model` itself.
+    assert model_run == ModelRun(model="sonnet", effort="medium", fallback=False)
 
 
 def test_translate_digest_run_claude_failure_returns_none_and_logs_warning(monkeypatch, caplog):
@@ -138,7 +141,9 @@ def test_translate_digest_reverses_backtick_escape_in_output(monkeypatch):
         lambda *a, **k: "## Fejléc\n\nEz egy \\u0060kód\\u0060 részlet.\n",
     )
 
-    result = translate_digest("body", allowed_urls=set(), model="sonnet", timeout_seconds=60)
+    result, _model_run = translate_digest(
+        "body", allowed_urls=set(), model="sonnet", timeout_seconds=60
+    )
 
     assert result == "## Fejléc\n\nEz egy `kód` részlet.\n"
     assert "\\u0060" not in result
@@ -158,7 +163,7 @@ def test_translate_digest_applies_link_allowlist_repair(monkeypatch):
         ),
     )
 
-    result = translate_digest(
+    result, _model_run = translate_digest(
         "body", allowed_urls={"https://known.example/a"}, model="sonnet", timeout_seconds=60
     )
 
@@ -198,7 +203,7 @@ def test_translate_digest_refusal_retries_with_fallback_model_same_prompt(monkey
 
     monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
 
-    result = translate_digest(
+    result, model_run = translate_digest(
         "body",
         allowed_urls=set(),
         model="sonnet",
@@ -215,6 +220,15 @@ def test_translate_digest_refusal_retries_with_fallback_model_same_prompt(monkey
     # The fallback call must use the IDENTICAL prompt as the primary call --
     # this is a same-content, different-model retry, not a rebuilt prompt.
     assert second_prompt == first_prompt
+    # REGRESSION: run_with_fallbacks itself only ever sees ONE opaque
+    # `_primary` closure and has no visibility into `_primary`'s own inner
+    # SafeguardsRefusalError -> fallback_model retry, so it would otherwise
+    # mislabel this call's provenance as `model` ("sonnet") even though
+    # `fallback_model` ("claude-sonnet-4-6") is what actually produced the
+    # output -- translate_digest's own `served_model` tracking must correct
+    # this. `fallback=False` because no OpenRouter leg was involved; this is
+    # still, from run_with_fallbacks' point of view, the primary path.
+    assert model_run == ModelRun(model="claude-sonnet-4-6", effort="medium", fallback=False)
 
 
 def test_translate_digest_refusal_with_no_fallback_model_returns_none(monkeypatch, caplog):

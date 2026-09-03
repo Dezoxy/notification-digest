@@ -379,6 +379,7 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | `0006-topics.sql` | `topics` (nullable) on `digests`, for the ingest v3 story-arc line. |
 | `0007-deltas.sql` | `deltas` (nullable) on `digests`, for ingest v4 delta persistence — the digest page's "What changed" block and the arc page's per-appearance previously/now line. |
 | `0008-arc-context.sql` | `arc_context`, a new table (not a column) holding one durable background primer per *arc identity*, pushed as an optional `arc_contexts` field on ingest. |
+| `0010-provenance.sql` | `provenance` (nullable) on `digests`, for ingest v5 model provenance — the digest page's "WRITTEN" row naming which model summarized (and, when translated, which model translated) the brief, and whether an OpenRouter fallback model served instead of the primary Claude call. |
 
 ## Key rotation
 
@@ -731,6 +732,14 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   per arc in the `arc_context` table, upserted alongside a normal ingest.
   `context_md` is untrusted model output: this Worker has no markdown renderer and
   renders it as escaped plain-text paragraphs, never HTML.
+- **Model provenance** (migration `0010`) — an optional `provenance` object per
+  digest (`{summarize: {model, effort, fallback}, translate?: {...}}`),
+  rendering a "WRITTEN" colophon row directly below the source key: which
+  model summarized the brief, which model translated it (when this digest
+  has a Hungarian version), and whether an OpenRouter fallback model served
+  in place of the primary Claude call for either leg (marked with `↻` and a
+  muted chip, same "glyph is the marker, not color" posture as the source
+  key's failed-source pills).
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command

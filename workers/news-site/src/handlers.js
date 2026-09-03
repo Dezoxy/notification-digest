@@ -32,7 +32,7 @@ import { handleIngest } from "./ingest.js";
 // The index/daily/weekly ledger row shape — one definition for the three
 // list queries below, which are the same SELECT contract with different
 // WHERE clauses. The digest PAGE query deliberately stays separate: it
-// fetches the body/topics/deltas columns this list never needs.
+// fetches the body/topics/deltas/provenance columns this list never needs.
 export const DIGEST_LIST_COLUMNS =
   "id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources";
 
@@ -224,8 +224,13 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
   const id = Number(idParam);
   if (!Number.isInteger(id) || id <= 0) return notFound();
 
+  // provenance (model-provenance byline, ingest v5) rides along here, not
+  // in DIGEST_LIST_COLUMNS above — same "digest PAGE only" carve-out that
+  // comment already calls out for body/topics/deltas: the ledger/NOW-arc
+  // list queries never render a "WRITTEN" row, only handleDigestPage does
+  // (renderProvenance, called from renderDigestPage).
   const digest = await env.DB.prepare(
-    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources, topics, deltas FROM digests WHERE id = ?",
+    "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources, topics, deltas, provenance FROM digests WHERE id = ?",
   )
     .bind(id)
     .first();
