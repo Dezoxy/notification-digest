@@ -18,6 +18,7 @@ from telethon import TelegramClient
 from telethon import utils as telethon_utils
 from telethon.sessions import StringSession
 
+from digest import relay
 from digest.collectors import hackernews as hackernews_collector
 from digest.collectors import patreon as patreon_collector
 from digest.collectors import polymarket as polymarket_collector
@@ -1940,6 +1941,135 @@ def run_positions(cfg: Config) -> bool:
         conn.close()
 
 
+async def _relay_all(cfg: Config, conn: sqlite3.Connection) -> bool:
+    """Connect once, resolve the hub peer, and forward every configured channel.
+
+    Called from `run_relay`'s own `asyncio.run` wrapper, mirroring the
+    `run_positions` / `_collect_positions_chats` split -- this coroutine does
+    the actual work, `run_relay` just supplies the sync entry point argv
+    dispatch needs.
+
+    The client is built from `cfg.tg_session` -- the owner's own USER
+    session, the SAME one every other Telegram-touching run mode uses --
+    not the notify bot. The bot cannot read the source channels (it is not a
+    member of them, and a bot cannot join a channel on its own), so it has
+    nothing to forward; the user session can read any public channel and
+    forwards exactly the way the owner would by hand in the Telegram app.
+
+    `client.get_dialogs()` runs once, before `hub_peer` is resolved, for the
+    identical reason digest/collectors/telegram.py's `collect()` runs its own
+    `_prefetch_dialogs` first (see that function's docstring): a client
+    rebuilt from a `StringSession` carries no entity cache, and
+    `telegram_notify_chat_id` below is a NUMERIC chat id -- unresolvable
+    without the cache unless already seen this session. The relay channels
+    THEMSELVES are bare public usernames (resolved per-channel inside
+    `relay.relay_channel`, which needs no cache for that), so this prefetch
+    exists solely to make the hub peer resolvable. Reused directly rather
+    than duplicated: its FloodWait/auth abort policy is exactly the policy
+    this run needs too, and it is already the tested source of that policy.
+
+    `telegram_notify_chat_id` is stored as an opaque `str` (the Bot API
+    senders accept "@username" too) but Telethon needs the numeric marked
+    id; `Config.from_env` already asserts it parses as an int whenever
+    `relay_tg_channels` is set, so the bare `int()` below cannot fail on a
+    config that passed startup. Resolving `hub_peer` once up front, rather
+    than letting each chunk's `ForwardMessagesRequest.resolve` do it, fails
+    fast with one clear error instead of one per channel.
+
+    `top_msg_id` follows the identical unset-falls-back-to-notify-thread
+    contract as every other kind (see digest/deliver.py's
+    `_telegram_thread_id_for_kind`): `cfg.telegram_relay_thread_id` when set
+    (0 is a legitimate explicit "group root" choice), otherwise
+    `cfg.telegram_notify_thread_id` with an INFO log. Either way, a
+    resolved `0` becomes `None` before reaching `relay.relay_channel` --
+    `ForwardMessagesRequest.top_msg_id=0` is not a valid topic id, matching
+    `send_telegram_tldr`'s own `if thread_id:` omission rule.
+
+    The cursor is committed PER CHUNK, not once at the end: `advance` is
+    handed to `relay.relay_channel` as its `advance_cursor` callback and
+    calls `commit_new_items(conn, [], {(relay.SOURCE, str(chat_id)):
+    str(last_seen_msg_id)})` -- the documented empty-items call shape --
+    immediately after each chunk's forward RPC succeeds (see that function's
+    own docstring for why). So a crash mid-run loses at most one chunk's
+    worth of progress, and `relay.deterministic_random_id` (see its
+    docstring) makes re-forwarding that one chunk on the next run's retry
+    harmless rather than a duplicate post.
+
+    One channel failing (unresolvable username, flood wait, forwarding
+    disabled, ...) never aborts the others -- every configured channel is
+    attempted regardless of how the previous one went, mirroring
+    `_collect_positions_chats`'s identical rule for its own per-channel loop.
+    Returns True iff every configured channel relayed without failure.
+    """
+    client = TelegramClient(StringSession(cfg.tg_session), cfg.tg_api_id, cfg.tg_api_hash)
+    try:
+        if not await _client_ready(client):
+            logger.warning("relay: telegram session not authorized / connect failed")
+            return False
+
+        if await telegram_collector._prefetch_dialogs(client):
+            logger.warning("relay: get_dialogs failed, aborting")
+            return False
+
+        hub_peer = await client.get_input_entity(int(cfg.telegram_notify_chat_id))
+
+        if cfg.telegram_relay_thread_id is not None:
+            top_msg_id = cfg.telegram_relay_thread_id
+        else:
+            top_msg_id = cfg.telegram_notify_thread_id
+            logger.info(
+                "TELEGRAM_RELAY_THREAD_ID unset, falling back to the window digest's "
+                "telegram thread for relay"
+            )
+
+        cursors = get_cursors(conn, relay.SOURCE)
+
+        def advance(chat_id: int, last_seen_msg_id: int) -> None:
+            commit_new_items(conn, [], {(relay.SOURCE, str(chat_id)): str(last_seen_msg_id)})
+
+        ok = True
+        total = 0
+        for username in cfg.relay_tg_channels:
+            channel_ok, forwarded = await relay.relay_channel(
+                client, username, hub_peer, top_msg_id or None, cursors, advance
+            )
+            total += forwarded
+            if not channel_ok:
+                ok = False
+        logger.info(
+            "relay: forwarded %d message(s) across %d channel(s)", total, len(cfg.relay_tg_channels)
+        )
+        return ok
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+
+
+def run_relay(cfg: Config) -> bool:
+    """Forward new posts from every configured public channel, verbatim, into the hub topic.
+
+    Invoked by `python -m digest relay` -- its own hourly systemd timer on
+    the homelab side (see CLAUDE.md's Deploy note), independent of every
+    other run mode's schedule. See digest/relay.py's module docstring for
+    why this exists as a separate, non-summarizing pipeline: no `items` or
+    `digests` rows, no Claude call, only the `cursors` table.
+
+    Disabled-by-config is SUCCESS, not failure, matching `run_patreon` /
+    `run_positions`: an owner with an empty RELAY_TG_CHANNELS is not using
+    this feature, and a timer firing against it must not alert.
+    """
+    if not cfg.relay_tg_channels:
+        logger.info("relay not configured, nothing to do")
+        return True
+
+    conn = connect(cfg.state_db_path)
+    try:
+        init_db(conn)
+        return asyncio.run(_relay_all(cfg, conn))
+    finally:
+        conn.close()
+
+
 def main() -> None:
     load_dotenv()
 
@@ -1951,11 +2081,13 @@ def main() -> None:
 
     # argv-based mode dispatch: `python -m digest daily` runs the once-a-day
     # brief (run_daily); `python -m digest weekly` runs the once-a-week
-    # report (run_weekly); no argument (or anything else) keeps today's
-    # behavior exactly -- the every-6-hours collect+deliver cycle (_run),
-    # unchanged. The scheduling itself (which timer fires which mode, and
-    # when) lives entirely outside this repo (see CLAUDE.md's Deploy note);
-    # this is just the dispatch a systemd unit's ExecStart invokes into.
+    # report (run_weekly); `python -m digest relay` runs the verbatim-forward
+    # pipeline (run_relay, digest/relay.py); no argument (or anything else)
+    # keeps today's behavior exactly -- the every-6-hours collect+deliver
+    # cycle (_run), unchanged. The scheduling itself (which timer fires which
+    # mode, and when) lives entirely outside this repo (see CLAUDE.md's
+    # Deploy note); this is just the dispatch a systemd unit's ExecStart
+    # invokes into.
     #
     # `python -m digest daily --force` bypasses run_daily's own
     # duplicate-fire guard (see that function's docstring, step 2, and
@@ -1981,6 +2113,8 @@ def main() -> None:
         ok = run_daily(cfg, force="--force" in sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "weekly":
         ok = run_weekly(cfg)
+    elif len(sys.argv) > 1 and sys.argv[1] == "relay":
+        ok = run_relay(cfg)
     else:
         try:
             hidden = _parse_hidden_channels(sys.argv[1:])

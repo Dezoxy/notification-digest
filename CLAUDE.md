@@ -9,7 +9,9 @@ summarizes new items with the Claude CLI headless (`claude -p`), and delivers a
 structured digest with deep links. Two lanes run outside that cascade on their
 own timers and into their own Telegram topics: `patreon` (one paid post per
 message) and `positions` (the tracked-project tracker, silent when nothing
-material happened). See PLAN.md for the full plan and current phase status.
+material happened). A third mode, `relay`, forwards public-channel posts
+verbatim into a hub topic — no summarization, no state beyond a cursor.
+See PLAN.md for the full plan and current phase status.
 
 Delivery is multi-channel (PR #25). On the real VM the live channels are a
 **Telegram TL;DR ping** and the **news site**; **email is disabled**

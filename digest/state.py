@@ -245,7 +245,7 @@ WEEKLY_LOOKBACK_WINDOW = timedelta(days=7)
 # commit_new_items's docstring) -- adding a new source is a one-line edit
 # here instead of a full-table rebuild migration.
 _KNOWN_SOURCES = frozenset(
-    {"telegram", "x", "news", "polymarket", "reddit", "hackernews", "patreon"}
+    {"telegram", "x", "news", "polymarket", "reddit", "hackernews", "patreon", "relay"}
 )
 
 # Sources that run their OWN delivery pipeline rather than feeding the
