@@ -44,7 +44,7 @@ from digest.positions import (
 from digest.positions import (
     select_items as select_positions_items,
 )
-from digest.publish import derive_topics, map_deltas_to_slugs
+from digest.publish import derive_topics, map_deltas_to_slugs, send_relay_ping
 from digest.state import (
     _ITEMS_PRUNE_DAYS,
     DAILY_LOOKBACK_WINDOW,
@@ -2075,6 +2075,47 @@ def run_positions(cfg: Config) -> bool:
         conn.close()
 
 
+def _ping_relay_batch(cfg: Config, channel: str, count: int, thread_id: int) -> None:
+    """Announce a relay batch via the notify bot. NEVER raises -- see below.
+
+    The relay forwards as the OWNER's own user session, and Telegram does not
+    notify an account about its own outgoing messages, so without this the
+    owner is the only member of the hub who is never told a post arrived (see
+    `digest/publish.py`'s `send_relay_ping` for the full reasoning and the
+    measurement behind it). This is that notification, sent by the bot -- a
+    different sender, therefore a real notification.
+
+    SOFT-FAILING, deliberately, and this is the load-bearing part: the
+    forwarded posts are ALREADY in the topic and their cursor is ALREADY
+    committed by the time this runs. A failed ping costs the owner one
+    notification about content that is sitting there regardless -- so letting
+    a Telegram 429, a revoked token, or any other send failure fail the run
+    would turn a cosmetic miss into an OnFailure alert and a red unit, for
+    nothing. Same posture `translate_digest` takes toward a failed
+    translation: the deliverable already landed, the extra is optional.
+
+    Skipped entirely when the notify bot is not configured -- there is no
+    separate RELAY_NOTIFY_ENABLED flag, because "the bot exists" is already
+    the only condition under which a ping is possible, and a second switch
+    would only ever be a way for the two to disagree.
+    """
+    if not (cfg.telegram_notify_bot_token and cfg.telegram_notify_chat_id):
+        return
+    try:
+        send_relay_ping(
+            channel,
+            count,
+            cfg.telegram_notify_bot_token,
+            cfg.telegram_notify_chat_id,
+            thread_id,
+        )
+    except Exception as exc:
+        # Type name only, never str(exc): publish.py's senders already
+        # guarantee their exceptions carry no token or response body, and
+        # this log line keeps that promise rather than re-widening it.
+        logger.warning("relay: ping for %s failed: %s", channel, type(exc).__name__)
+
+
 async def _relay_all(cfg: Config, conn: sqlite3.Connection) -> bool:
     """Connect once, resolve the hub peer, and forward every configured channel.
 
@@ -2170,6 +2211,8 @@ async def _relay_all(cfg: Config, conn: sqlite3.Connection) -> bool:
             total += forwarded
             if not channel_ok:
                 ok = False
+            if forwarded:
+                _ping_relay_batch(cfg, username, forwarded, top_msg_id)
         logger.info(
             "relay: forwarded %d message(s) across %d channel(s)", total, len(cfg.relay_tg_channels)
         )

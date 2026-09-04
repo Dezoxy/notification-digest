@@ -1325,6 +1325,62 @@ def send_telegram_post(
     _send_as_reply_chain(parts, keyboard, bot_token, chat_id, thread_id, timeout_seconds)
 
 
+def send_relay_ping(
+    channel: str,
+    count: int,
+    bot_token: str,
+    chat_id: str,
+    thread_id: int,
+    timeout_seconds: int = 30,
+) -> None:
+    """POST one short "N new posts" ping for a relay batch. Raises TelegramSendError on failure.
+
+    WHY THIS EXISTS AT ALL, when the posts it announces are already sitting
+    in the very same topic. The relay forwards through the owner's own USER
+    session (`TG_SESSION`) -- it has to, because a bot cannot read a public
+    channel it is not a member of (measured against the live Bot API on
+    2026-09-04: `forwardMessages` with `from_chat_id=@<channel>` answers
+    `400 Bad Request: message to forward not found`, since the bot cannot
+    see the source message even though the channel itself resolves). But
+    Telegram never notifies an account about its OWN outgoing messages, on
+    any device -- so the one person guaranteed NOT to be told about a
+    forwarded post was the owner it was forwarded for. Every other member of
+    the hub got a notification; the owner got silence.
+
+    A second message from a DIFFERENT sender is what fixes that, and the
+    notify bot is already configured, already an admin of this group, and
+    already posts every other digest kind. So the relay forwards as the
+    owner (keeping the media, the album grouping and the "Forwarded from"
+    header a bot re-post would destroy) and the bot immediately says, in the
+    same topic, that it happened.
+
+    Deliberately ONE ping per channel per run, not one per message: a batch
+    of five forwards is one event to the reader, and five pings under five
+    posts would be worse than the silence this replaces.
+
+    No link and no button, unlike every other sender in this module. The
+    thing being announced is directly above this message in the same topic --
+    tapping the notification lands the reader on it. `send_telegram_tldr`
+    needs a button because a window digest's home is the site; a relay post's
+    home is the very topic this ping is posted into.
+
+    Plain text, no parse_mode, for the identical reason its three siblings
+    document at length: a parse mode rejects the whole message over one
+    unescaped character, and a public channel username is not something this
+    codebase gets to assume is markdown-safe.
+    """
+    label = "post" if count == 1 else "posts"
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": f"\U0001f514 {channel} \u00b7 {count} new {label}",
+        "disable_web_page_preview": True,
+    }
+    if thread_id:
+        payload["message_thread_id"] = thread_id
+
+    _send_message(payload, bot_token, timeout_seconds)
+
+
 def send_telegram_tracker(
     body_md: str,
     created_at: str,
