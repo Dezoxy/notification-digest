@@ -88,13 +88,35 @@ class Config:
     # digest/translate.py's translate_digest for the fallback call itself).
     # Default is claude-sonnet-4-6 because it predates Sonnet 5's real-time
     # cyber safeguards, is still an active model, and translation needs no
-    # frontier capability (see _TRANSLATE_EFFORT's own comment in
+    # frontier capability (see _TRANSLATE_EFFORT_DEFAULT's own comment in
     # digest/translate.py) -- an older Sonnet is an acceptable quality
     # trade for keeping the Hungarian channel alive on content the primary
     # model won't touch. Set to an empty string to disable the fallback
     # entirely (translate_digest treats a falsy fallback_model as "none
     # configured" and re-raises the refusal instead of retrying).
     translate_model_fallback: str = "claude-sonnet-4-6"
+    # `--effort` for the translation call, its own knob rather than a module
+    # constant in digest/translate.py (which is what it was until this field
+    # existed) or a reuse of claude_effort. Two reasons, in order of weight:
+    # this app ships as a container image, so a hardcoded effort costs a full
+    # release train (tag -> homelab bump -> deploy) every time it is
+    # re-tuned, whereas an env var is a homelab var change and a restart --
+    # and effort is exactly the kind of value that gets re-tuned by feel
+    # after reading a few translated digests. Second, it completes the set:
+    # translate_model and translate_model_fallback are already independently
+    # configurable, so the effort being the one hardcoded piece of the
+    # translation call was the odd one out.
+    #
+    # Defaults to "high" -- an owner decision that supersedes the earlier
+    # fixed "medium" and the "translation is mechanically easier than
+    # summarization" reasoning behind it (kept, with that history, on
+    # `_TRANSLATE_EFFORT_DEFAULT` in digest/translate.py). Deliberately a
+    # literal, NOT a dynamic fallback to claude_effort the way
+    # verify_daily_effort does it: translate_model is already independent of
+    # anthropic_model, so coupling only the effort to the summarizer's
+    # setting would be a half-coupling, and a future CLAUDE_EFFORT change
+    # must not silently move translation with it.
+    translate_effort: str = "high"
     # Its own timeout rather than a reuse of claude_timeout_seconds, for the
     # same reason context_timeout_seconds is separate (see its comment): the
     # call shape differs. Translation is a fixed-size rewrite of one already-
@@ -574,6 +596,9 @@ class Config:
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
         translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
         translate_model_fallback = os.environ.get("TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6")
+        translate_effort = _optional_choice(
+            "TRANSLATE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES
+        )
         translate_timeout_seconds = _optional_positive_int("TRANSLATE_TIMEOUT_SECONDS", default=300)
 
         verify_daily_enabled = _parse_bool(os.environ.get("VERIFY_DAILY_ENABLED", "false"))
@@ -727,6 +752,7 @@ class Config:
             translate_hu_enabled=translate_hu_enabled,
             translate_model=translate_model,
             translate_model_fallback=translate_model_fallback,
+            translate_effort=translate_effort,
             translate_timeout_seconds=translate_timeout_seconds,
             verify_daily_enabled=verify_daily_enabled,
             verify_daily_timeout_seconds=verify_daily_timeout_seconds,

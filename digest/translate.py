@@ -34,15 +34,23 @@ logger = logging.getLogger(__name__)
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "translate-hu.md"
 
-# Fixed at `medium`, not threaded through from Config the way
-# digest/summarize.py's `run_claude` effort is (CLAUDE_EFFORT): translation
-# is mechanically easier than summarization -- there is no editorial
-# judgment to exercise (clustering stories, weighting significance, deciding
-# what to cut), only a faithful rewrite of already-finished prose into
-# Hungarian while leaving structure/links/numbers untouched -- so a lower,
-# fixed effort level is the right default and not worth a second config knob
-# on top of CLAUDE_EFFORT.
-_TRANSLATE_EFFORT = "medium"
+# The `effort` default for `translate_digest`, used by any caller that does
+# not pass one (direct calls and tests; digest/main.py always passes
+# `cfg.translate_effort`, see Config.translate_effort for why that knob
+# exists at all).
+#
+# This was a fixed `medium` until TRANSLATE_EFFORT existed, on the reasoning
+# that translation is mechanically easier than summarization -- there is no
+# editorial judgment to exercise (clustering stories, weighting
+# significance, deciding what to cut), only a faithful rewrite of
+# already-finished prose into Hungarian while leaving structure/links/
+# numbers untouched. That reasoning is sound about the SHAPE of the task and
+# is still why translation runs a cheaper model tier (`translate_model`), but
+# the owner's call is that a faithful rewrite still benefits from the higher
+# effort level -- Hungarian is the harder direction, and a mechanical task
+# done badly is still done badly. Kept as a named default rather than
+# inlined so the two call sites below and `primary_effort` cannot drift.
+_TRANSLATE_EFFORT_DEFAULT = "high"
 
 
 def build_translate_prompt(body_md: str) -> str:
@@ -105,6 +113,7 @@ def translate_digest(
     fallback_model: str | None = None,
     fallbacks: Sequence[FallbackLeg] = (),
     fallback_budget_seconds: int = 180,
+    effort: str = _TRANSLATE_EFFORT_DEFAULT,
 ) -> tuple[str, ModelRun] | None:
     """Translate a validated English digest to Hungarian. Never raises; None on any failure.
 
@@ -141,14 +150,14 @@ def translate_digest(
     independent of the first call's outcome, not a repeat of the same
     doomed bet. Translation needs no frontier capability -- it is a
     faithful structural rewrite, not an editorial judgment call (see
-    `_TRANSLATE_EFFORT`'s own comment) -- so falling back to an older Sonnet
+    `_TRANSLATE_EFFORT_DEFAULT`'s own comment) -- so falling back to an older Sonnet
     is an acceptable quality trade for keeping the Hungarian channel alive
     on content the primary model won't touch.
 
     Pipeline: build the prompt (`build_translate_prompt`), run it through
-    `claude -p` at a fixed `medium` effort (see `_TRANSLATE_EFFORT`'s
-    comment -- translation is mechanically easier than summarization, no
-    editorial judgment involved), then apply the IDENTICAL two-stage
+    `claude -p` at `effort` (TRANSLATE_EFFORT via digest/main.py, default
+    `high` -- see `_TRANSLATE_EFFORT_DEFAULT`'s comment for the history
+    behind that default), then apply the IDENTICAL two-stage
     contract enforcement digest/summarize.py's `summarize()` applies to the
     English output: `validate_output` (at least one real `## ` heading -- a
     refusal or empty output must not be mistaken for a translated briefing)
@@ -200,8 +209,8 @@ def translate_digest(
     test) is this translation's own OpenRouter chain, on the LIGHT tier
     (`Config.fallback_light_models`, the same tier `generate_arc_context`
     uses -- see digest/main.py's `_fallback_legs`): translation is a
-    mechanical rewrite, not editorial judgment (`_TRANSLATE_EFFORT`'s own
-    comment), so it does not need the heavier editorial-tier models
+    mechanical rewrite, not editorial judgment (`_TRANSLATE_EFFORT_DEFAULT`'s
+    own comment), so it does not need the heavier editorial-tier models
     `summarize`/`summarize_daily`/etc. fall back to. `fallback_budget_seconds`
     (default 180) is the SHARED wall-clock budget every leg of THAT chain
     draws from together -- see digest/summarize.py's `run_with_fallbacks`
@@ -253,7 +262,7 @@ def translate_digest(
         def _primary() -> str:
             nonlocal served_model
             try:
-                return run_claude(prompt, model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+                return run_claude(prompt, model, timeout_seconds, effort=effort)
             except SafeguardsRefusalError:
                 if not fallback_model:
                     raise
@@ -264,7 +273,7 @@ def translate_digest(
                     fallback_model,
                 )
                 served_model = fallback_model
-                return run_claude(prompt, fallback_model, timeout_seconds, effort=_TRANSLATE_EFFORT)
+                return run_claude(prompt, fallback_model, timeout_seconds, effort=effort)
 
         output, model_run = run_with_fallbacks(
             primary=_primary,
@@ -272,7 +281,7 @@ def translate_digest(
             prompt=prompt,
             budget_seconds=fallback_budget_seconds,
             primary_model=model,
-            primary_effort=_TRANSLATE_EFFORT,
+            primary_effort=effort,
             validate=validate_output,
         )
     # Broad on purpose, not just SummarizeError: this function's contract is

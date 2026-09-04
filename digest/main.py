@@ -539,6 +539,7 @@ def _deliver(
             fallback_model=cfg.translate_model_fallback,
             fallbacks=_fallback_legs(cfg, light=True),
             fallback_budget_seconds=cfg.fallback_timeout_seconds,
+            effort=cfg.translate_effort,
         )
         if translated is not None:
             body_md_hu, translate_run = translated
@@ -1364,6 +1365,7 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
                 fallback_model=cfg.translate_model_fallback,
                 fallbacks=_fallback_legs(cfg, light=True),
                 fallback_budget_seconds=cfg.fallback_timeout_seconds,
+                effort=cfg.translate_effort,
             )
             if translated is not None:
                 body_md_hu, translate_run = translated
@@ -1610,6 +1612,7 @@ def run_weekly(cfg: Config) -> bool:
                 fallback_model=cfg.translate_model_fallback,
                 fallbacks=_fallback_legs(cfg, light=True),
                 fallback_budget_seconds=cfg.fallback_timeout_seconds,
+                effort=cfg.translate_effort,
             )
             if translated is not None:
                 body_md_hu, translate_run = translated
