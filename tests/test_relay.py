@@ -11,6 +11,7 @@ window collector.
 
 from __future__ import annotations
 
+import logging
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ from telethon.errors import ChatForwardsRestrictedError, FloodWaitError
 import digest.relay as relay_mod
 from digest import main as digest_main
 from digest.config import Config, ConfigError
+from digest.publish import TelegramSendError
 from digest.state import commit_new_items, connect, get_cursors, init_db
 
 HUB_PEER = object()
@@ -502,6 +504,93 @@ class TestConfig:
 
 
 # --- run_relay ---
+
+
+class TestRelayPing:
+    """The bot ping that exists because the owner's own forwards never notify them."""
+
+    def _cfg_with_bot(self, tmp_path, monkeypatch):
+        _set_env(
+            monkeypatch,
+            tmp_path,
+            {
+                "RELAY_TG_CHANNELS": "newschannel",
+                "TELEGRAM_NOTIFY_CHAT_ID": "-1009999",
+                "TELEGRAM_NOTIFY_BOT_TOKEN": "bot-token",
+                "SITE_PUBLIC_BASE": "https://news.example.com",
+            },
+        )
+        return Config.from_env()
+
+    def test_ping_is_sent_once_per_channel_that_forwarded(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_bot(tmp_path, monkeypatch)
+        sent = []
+        monkeypatch.setattr(
+            digest_main,
+            "send_relay_ping",
+            lambda channel, count, token, chat, thread, **k: sent.append((channel, count, thread)),
+        )
+
+        digest_main._ping_relay_batch(cfg, "newschannel", 3, 555)
+
+        assert sent == [("newschannel", 3, 555)]
+
+    def test_no_ping_when_the_notify_bot_is_unconfigured(self, tmp_path, monkeypatch):
+        _set_env(
+            monkeypatch,
+            tmp_path,
+            {"RELAY_TG_CHANNELS": "newschannel", "TELEGRAM_NOTIFY_CHAT_ID": "-1009999"},
+        )
+        monkeypatch.delenv("TELEGRAM_NOTIFY_BOT_TOKEN", raising=False)
+        cfg = Config.from_env()
+
+        def boom(*a, **k):
+            raise AssertionError("send_relay_ping must not be called without a bot token")
+
+        monkeypatch.setattr(digest_main, "send_relay_ping", boom)
+
+        digest_main._ping_relay_batch(cfg, "newschannel", 1, 555)  # must not raise
+
+    def test_a_failing_ping_never_raises(self, tmp_path, monkeypatch, caplog):
+        # The forwarded posts and their cursor are already committed by the
+        # time the ping runs, so a send failure must cost one notification --
+        # never the run's exit code.
+        cfg = self._cfg_with_bot(tmp_path, monkeypatch)
+
+        def boom(*a, **k):
+            raise TelegramSendError("telegram sendMessage failed with status 429")
+
+        monkeypatch.setattr(digest_main, "send_relay_ping", boom)
+
+        with caplog.at_level(logging.WARNING):
+            digest_main._ping_relay_batch(cfg, "newschannel", 1, 555)
+
+        assert "TelegramSendError" in caplog.text
+        # The failure's own message must not widen the secrets posture.
+        assert "429" not in caplog.text
+
+    def test_run_relay_pings_after_a_real_forward(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_bot(tmp_path, monkeypatch)
+        chat_id = -1001111
+        client = FakeRelayClient(
+            channels={"newschannel": chat_id}, messages={chat_id: [FakeMessage(1)]}
+        )
+        monkeypatch.setattr(digest_main, "StringSession", lambda *a, **k: None)
+        monkeypatch.setattr(digest_main, "TelegramClient", lambda *a, **k: client)
+        sent = []
+        monkeypatch.setattr(
+            digest_main,
+            "send_relay_ping",
+            lambda channel, count, *a, **k: sent.append((channel, count)),
+        )
+
+        assert digest_main.run_relay(cfg) is True  # first run seeds
+        assert sent == []  # nothing forwarded, so nothing to announce
+
+        client.messages[chat_id].extend([FakeMessage(2), FakeMessage(3)])
+        assert digest_main.run_relay(cfg) is True
+
+        assert sent == [("newschannel", 2)]
 
 
 class TestRunRelay:
