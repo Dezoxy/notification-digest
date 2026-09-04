@@ -148,6 +148,7 @@ that needs live web tools, which no fallback can provide.
 | `CLAUDE_EFFORT` | `low`/`medium`/`high`/`xhigh`/`max` (`high`). |
 | `TRANSLATE_HU_ENABLED` | Hungarian translation pass (`false`). |
 | `TRANSLATE_MODEL` / `TRANSLATE_MODEL_FALLBACK` | Primary (`sonnet`) and the model retried on a safeguards refusal (`claude-sonnet-4-6`; empty disables the retry). |
+| `TRANSLATE_EFFORT` | `low`/`medium`/`high`/`xhigh`/`max` (`high`). Independent of `CLAUDE_EFFORT`, which drives the summarizer. |
 | `TRANSLATE_TIMEOUT_SECONDS` | Per translate leg (`300`) — **applies to each leg, so the worst case is 2×**. |
 | `VERIFY_DAILY_ENABLED` | Web-verification pass over the daily brief (`false`). |
 | `VERIFY_DAILY_TIMEOUT_SECONDS` / `VERIFY_DAILY_MAX_WEB_OPS` | Its budget (`600`) and its self-policed tool-call guidance (`20`). |

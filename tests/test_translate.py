@@ -93,13 +93,41 @@ def test_translate_digest_success_returns_repaired_markdown(monkeypatch):
     assert result == _VALID_HU_OUTPUT
     assert captured["model"] == "sonnet"
     assert captured["timeout_seconds"] == 120
-    # Fixed at medium effort, never threaded from a caller-supplied value --
-    # translation is mechanically easier than summarization (see
-    # _TRANSLATE_EFFORT's comment).
-    assert captured["effort"] == "medium"
+    # No `effort` passed by this caller, so the _TRANSLATE_EFFORT_DEFAULT
+    # default applies -- see its comment for why that default is "high".
+    assert captured["effort"] == "high"
     # The primary (run_claude with `model`) served, with no internal
     # safeguards-refusal retry -- model_run names `model` itself.
-    assert model_run == ModelRun(model="sonnet", effort="medium", fallback=False)
+    assert model_run == ModelRun(model="sonnet", effort="high", fallback=False)
+
+
+def test_translate_digest_honours_caller_supplied_effort(monkeypatch):
+    """A caller-supplied `effort` reaches run_claude AND the provenance ModelRun.
+
+    The knob exists so the deployed TRANSLATE_EFFORT (digest/main.py passes
+    `cfg.translate_effort`) actually changes the call -- and so the effort the
+    site's "WRITTEN" byline reports is the one that really ran, not the
+    module default it used to be hardcoded to.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_run_claude(prompt, model, timeout_seconds, effort):
+        captured.update(effort=effort)
+        return _VALID_HU_OUTPUT
+
+    monkeypatch.setattr(translate_mod, "run_claude", fake_run_claude)
+
+    result, model_run = translate_digest(
+        "**TL;DR:** Something happened.\n\n## A section\n\ntext\n",
+        allowed_urls=set(),
+        model="sonnet",
+        timeout_seconds=120,
+        effort="low",
+    )
+
+    assert result == _VALID_HU_OUTPUT
+    assert captured["effort"] == "low"
+    assert model_run == ModelRun(model="sonnet", effort="low", fallback=False)
 
 
 def test_translate_digest_run_claude_failure_returns_none_and_logs_warning(monkeypatch, caplog):
@@ -228,7 +256,7 @@ def test_translate_digest_refusal_retries_with_fallback_model_same_prompt(monkey
     # output -- translate_digest's own `served_model` tracking must correct
     # this. `fallback=False` because no OpenRouter leg was involved; this is
     # still, from run_with_fallbacks' point of view, the primary path.
-    assert model_run == ModelRun(model="claude-sonnet-4-6", effort="medium", fallback=False)
+    assert model_run == ModelRun(model="claude-sonnet-4-6", effort="high", fallback=False)
 
 
 def test_translate_digest_refusal_with_no_fallback_model_returns_none(monkeypatch, caplog):
