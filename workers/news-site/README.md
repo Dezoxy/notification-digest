@@ -256,12 +256,10 @@ specific failure:
    on merge, so the code always lands before the secrets — that window is the
    default path through every deployment, not an edge case.
 2. **Newest?** Only the highest `id` in `digests` rings. A historical backfill
-   carries lower ids and claims silently; a backlog flush after an outage
-   collapses to one notification, which is correct rather than lossy — the
-   push is payload-less, so all of them would render the same newest brief
-   anyway. Deliberately **not** a `created_at` freshness check: that column is
-   backfillable for daily and weekly briefs, so a freshness window would
-   suppress exactly the briefs most worth announcing.
+   carries lower ids and claims silently. Deliberately **not** a `created_at`
+   freshness check: that column is backfillable for daily and weekly briefs,
+   so a freshness window would suppress exactly the briefs most worth
+   announcing.
 3. **Claimed?** `INSERT OR IGNORE INTO push_sent` — an atomic claim, because
    `PUT /ingest/:id` is idempotent by contract and the app retries failed
    publishes. Claiming *before* sending makes this at-most-once: if every send
@@ -269,7 +267,16 @@ specific failure:
    notification is not the delivery (the site has it, and Telegram still
    pings), whereas at-least-once means re-ringing a phone for a digest already
    read.
-4. **Signable?** The VAPID token is minted once per push-service origin,
+4. **Not a burst?** A backlog flush after an outage republishes N digests in
+   one run, and each is briefly the newest — so newest-only alone rings N
+   times, not once (measured: two digests 575ms apart both rang on
+   2026-09-04). `PUSH_COALESCE_SECONDS` (60s) closes that: a digest claiming
+   within a minute of the previous push skips the fan-out. Lossless, because
+   the push is payload-less — every one of those N would render the same
+   newest brief anyway. Fails open on a bad timestamp. Runs AFTER the claim, deliberately: skipping
+   the fan-out without claiming would leave the row for the next retry to ring
+   all over again.
+5. **Signable?** The VAPID token is minted once per push-service origin,
    before the fan-out. A signing failure aborts the whole run and touches no
    subscription: signing depends only on configuration, so it fails for every
    device or none, and charging it to the per-device error path would delete

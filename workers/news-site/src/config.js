@@ -220,3 +220,19 @@ export const PUSH_TTL_SECONDS = 4 * 60 * 60;
 // fan-outs is over a day of a device being unreachable, which is a dead
 // subscription rather than a bad afternoon.
 export const MAX_PUSH_FAILURES = 5;
+
+// How close together two ingests have to be for the SECOND one to ring
+// silently (PLAN.md §11.7 follow-up). notify.js's newest-only rule intends
+// that a backlog flush produces ONE notification, but it cannot achieve that
+// on its own: it compares each digest against MAX(id) at ITS OWN ingest
+// moment, and in a flush every digest is briefly the newest, so every one of
+// them rings. Measured live on 2026-09-04 -- digests 341 and 344 were
+// republished 575ms apart after a site outage and BOTH rang, showing
+// identical content (the payload-less service worker fetches push/latest, so
+// each notification renders whatever is newest by the time it opens).
+//
+// 60s is chosen from the same incident's real spacing: the burst was under
+// one second apart, while the next GENUINELY new digest that run produced
+// landed 8.5 minutes later and deserves its own ring. A minute sits far from
+// both, so this can collapse a flush without ever swallowing a real digest.
+export const PUSH_COALESCE_SECONDS = 60;

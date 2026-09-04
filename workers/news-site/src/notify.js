@@ -1,4 +1,4 @@
-import { MAX_PUSH_FAILURES, PUSH_TTL_SECONDS } from "./config.js";
+import { MAX_PUSH_FAILURES, PUSH_COALESCE_SECONDS, PUSH_TTL_SECONDS } from "./config.js";
 import { pushConfigured } from "./push.js";
 import { vapidAuthorization, vapidSubject } from "./vapid.js";
 
@@ -79,6 +79,37 @@ export async function notifyForDigest(env, id, siteOrigin) {
       .bind(id, new Date().toISOString())
       .run();
     if (claim?.meta?.changes !== 1) return { skipped: "already-sent" };
+
+    // COALESCE A BURST -- what actually delivers the "one ring per flush"
+    // the newest-only comment above promises but cannot keep on its own.
+    // Newest-only compares each digest against MAX(id) at ITS OWN ingest
+    // moment, so in a backlog flush every digest is briefly the newest and
+    // every one of them claims and rings. Live proof (2026-09-04): digests
+    // 341 and 344 were republished 575ms apart after a site outage and both
+    // rang, both rendering the same brief -- because a payload-less push
+    // makes the service worker fetch push/latest, which returns whatever is
+    // newest by the time the reader opens it.
+    //
+    // Deliberately AFTER the claim, not before it. The claim is what makes
+    // this digest permanently handled; suppressing the send without claiming
+    // would leave the row unclaimed for the next retry to ring all over
+    // again, which is the exact repetition this is here to stop.
+    //
+    // Fails OPEN on anything unexpected (an unparseable timestamp, a clock
+    // that went backwards): a notification wrongly sent is a duplicate the
+    // reader can dismiss, while one wrongly suppressed is a brief they never
+    // hear about. The asymmetry decides the direction.
+    const previous = await env.DB.prepare(
+      "SELECT MAX(sent_at) AS last_at FROM push_sent WHERE digest_id != ?",
+    )
+      .bind(id)
+      .first();
+    if (previous?.last_at) {
+      const sinceMs = Date.now() - Date.parse(previous.last_at);
+      if (Number.isFinite(sinceMs) && sinceMs >= 0 && sinceMs < PUSH_COALESCE_SECONDS * 1000) {
+        return { skipped: "coalesced" };
+      }
+    }
 
     const subs = await env.DB.prepare("SELECT endpoint, fail_count FROM push_subscriptions").all();
     const rows = subs?.results ?? [];

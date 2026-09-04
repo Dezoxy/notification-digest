@@ -54,7 +54,7 @@ function identityOf(topic) {
 const M1 = String.fromCharCode(1);
 const M2 = String.fromCharCode(2);
 
-export function makeDb({ writes, pushSubs, pushSentIds } = {}) {
+export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {} } = {}) {
   // Web Push (PLAN.md §11.7 PR B). Unlike every other arm in this file,
   // these need real MUTABLE state: subscribe/unsubscribe are the first
   // handlers whose whole behavior is what the table contains afterwards
@@ -113,6 +113,20 @@ export function makeDb({ writes, pushSubs, pushSentIds } = {}) {
     }
 
     if (/push_sent/.test(s)) {
+      // The coalesce probe (MAX(sent_at) of every OTHER digest) has to be
+      // matched BEFORE the claim arm below, since both mention push_sent.
+      // pushSentAt is the caller's { id: isoString } map; absent entries
+      // simply do not participate, which is the "no previous push" case.
+      if (/MAX\(sent_at\)/.test(s)) {
+        const selfId = Number(binds[0]);
+        const others = Object.entries(pushSentAt)
+          .filter(([id]) => Number(id) !== selfId)
+          .map(([, at]) => at);
+        // Lexicographic max over ISO-8601 == chronological max, the same
+        // trick the rest of this stub and the real queries both rely on.
+        const lastAt = others.length ? others.sort().at(-1) : null;
+        return { first: async () => ({ last_at: lastAt }) };
+      }
       // Claim-once. INSERT OR IGNORE semantics, and meta.changes is what
       // the sender actually branches on — returning a constant 1 here would
       // make the "a retried ingest does not re-notify" test meaningless.
