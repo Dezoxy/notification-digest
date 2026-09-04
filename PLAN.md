@@ -1276,10 +1276,21 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
   `meta.changes === 1`) covers the app's own retry path
   (`get_pending_digests`); newest-only (`id = MAX(id)`) covers historical
   backfill, whose lower ids must claim silently and never ring.
-- Newest-only means a BACKLOG FLUSH collapses to one notification, and that
-  is deliberate, not a dropped digest: after a VM outage the app republishes
-  N digests in one run, and because the push is payload-less every one of
-  those N would render the same newest brief anyway. Stated here so it is
+- A BACKLOG FLUSH collapses to one notification, and that is deliberate, not
+  a dropped digest: after a VM outage the app republishes N digests in one
+  run, and because the push is payload-less every one of those N would render
+  the same newest brief anyway. NEWEST-ONLY ALONE DOES NOT ACHIEVE THAT, and
+  originally did not: it compares each digest against `MAX(id)` at ITS OWN
+  ingest moment, so in a flush every digest is briefly the newest and every
+  one of them rings. Measured live 2026-09-04 — digests 341 and 344 were
+  republished 575ms apart after the site outage below and BOTH rang, showing
+  identical content. The collapse is delivered by a second guard,
+  `PUSH_COALESCE_SECONDS` (60s): a digest that claims within a minute of the
+  previous push claims normally but skips the fan-out, so the flush rings
+  once. Sized from that same incident — the burst was under a second apart
+  while the run's own genuinely-new digest landed 8.5 minutes later and still
+  rings. Fails OPEN on an unparseable or backwards timestamp: a duplicate is
+  dismissible, a silently dropped brief is not. Stated here so it is
   not later rediscovered as "push lost my digests".
 - The Sunday 20:00/20:30/21:00 cascade produces three ascending ids, each
   newest at its own ingest, so all three ring within the hour. A fixed

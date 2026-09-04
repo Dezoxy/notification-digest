@@ -504,6 +504,80 @@ async function pushFetch(action, body, env) {
   );
 }
 
+// ── notify: burst coalescing (the double-ring fix) ──────────────────────
+
+test("notifyForDigest: rings for a digest when nothing was pushed recently", async () => {
+  const { notifyForDigest } = await import("../src/notify.js");
+  const subs = [{ endpoint: "https://web.push.apple.com/one", fail_count: 0 }];
+  const env = makeEnv({ pushSubs: subs, pushSentAt: {} });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => (calls.push(String(url)), new Response(null, { status: 201 }));
+  try {
+    const result = await notifyForDigest(env, 235, ORIGIN);
+    assert.equal(result.sent, 1, "the one subscribed device is pushed");
+    assert.equal(calls.length, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("notifyForDigest: a second digest seconds later claims but does NOT ring", async () => {
+  // The live 2026-09-04 case, replayed on fixture ids: digests 341 and 344
+  // were republished 575ms apart after a site outage and BOTH rang, showing
+  // identical content. Here 234 stands in for the first, 235 (the fixtures'
+  // newest, which newest-only requires) for the second.
+  const { notifyForDigest } = await import("../src/notify.js");
+  const subs = [{ endpoint: "https://web.push.apple.com/one", fail_count: 0 }];
+  const env = makeEnv({
+    pushSubs: subs,
+    pushSentAt: { 234: new Date(Date.now() - 575).toISOString() },
+  });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => (calls.push(String(url)), new Response(null, { status: 201 }));
+  try {
+    const result = await notifyForDigest(env, 235, ORIGIN);
+    assert.equal(result.skipped, "coalesced");
+    assert.equal(calls.length, 0, "no push is sent for the coalesced digest");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("notifyForDigest: a genuinely later digest still rings", async () => {
+  // Same run, 8.5 minutes later -- the real spacing between the flushed
+  // backlog and that run's own new digest. Must NOT be swallowed.
+  const { notifyForDigest } = await import("../src/notify.js");
+  const subs = [{ endpoint: "https://web.push.apple.com/one", fail_count: 0 }];
+  const env = makeEnv({
+    pushSubs: subs,
+    pushSentAt: { 234: new Date(Date.now() - 8.5 * 60 * 1000).toISOString() },
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 201 });
+  try {
+    const result = await notifyForDigest(env, 235, ORIGIN);
+    assert.equal(result.sent, 1, "8.5 minutes is well outside the coalesce window");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("notifyForDigest: an unparseable previous timestamp fails OPEN and rings", async () => {
+  const { notifyForDigest } = await import("../src/notify.js");
+  const subs = [{ endpoint: "https://web.push.apple.com/one", fail_count: 0 }];
+  const env = makeEnv({ pushSubs: subs, pushSentAt: { 234: "not-a-timestamp" } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 201 });
+  try {
+    const result = await notifyForDigest(env, 235, ORIGIN);
+    assert.equal(result.sent, 1, "a duplicate beats a silently dropped brief");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("push/key: serves the VAPID key, 503 when unconfigured", async () => {
   const worker = await loadWorker();
   const ok = await worker.fetch(new Request(`${ORIGIN}/t/${SITE_TOKEN}/push/key`), makeEnv());

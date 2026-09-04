@@ -49,7 +49,7 @@ export function loadWorker(entry = new URL("../worker.js", import.meta.url).href
   return workerPromise;
 }
 
-export function makeEnv({ writes, pushSubs, pushSentIds, push = true } = {}) {
+export function makeEnv({ writes, pushSubs, pushSentIds, pushSentAt, push = true } = {}) {
   return {
     SITE_TOKEN,
     INGEST_KEY,
@@ -60,7 +60,7 @@ export function makeEnv({ writes, pushSubs, pushSentIds, push = true } = {}) {
     // being set — the Worker auto-deploys on merge, so that window always
     // exists and must degrade to 503 rather than 500.
     ...(push ? { VAPID_PUBLIC_KEY, VAPID_PRIVATE_JWK } : {}),
-    DB: makeDb({ writes, pushSubs, pushSentIds }),
+    DB: makeDb({ writes, pushSubs, pushSentIds, pushSentAt }),
   };
 }
 
