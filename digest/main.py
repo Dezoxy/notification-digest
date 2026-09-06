@@ -691,10 +691,22 @@ async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResu
         return CollectResult(failed=True)
 
     try:
-        return await x_collector.collect(client, x_cursors)
+        result = await x_collector.collect(client, x_cursors)
     except Exception as exc:
         logger.warning("x collection crashed unexpectedly: %s", type(exc).__name__)
         return CollectResult(failed=True)
+
+    # Persist the rotated cookie jar, but ONLY after a clean collect. X hands
+    # back refreshed cookies through `Set-Cookie` during a healthy run and
+    # `persist_cookies` is what stops them being discarded at process exit
+    # (see its docstring -- this is the fix for the 2026-09-06 expiry). On a
+    # FAILED collect the in-memory jar may be whatever a logged-out or
+    # rate-limited response left behind, and writing that would overwrite a
+    # good live jar with a dead one -- so a failure simply persists nothing
+    # and the next healthy run does it instead.
+    if not result.failed:
+        x_collector.persist_cookies(client, cfg.x_cookies_path)
+    return result
 
 
 def _run_news_collector(cfg: Config) -> CollectResult:

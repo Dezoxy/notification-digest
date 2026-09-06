@@ -31,14 +31,19 @@ same public surface as upstream for this).
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import stat
 import subprocess
 import sys
+import time
 from typing import Any
 
 import pytest
 
 from digest.collectors import x as x_module
-from digest.collectors.x import build_client, collect
+from digest.collectors.x import build_client, collect, persist_cookies, resolve_cookie_path
 
 
 class _PageBuilder:
@@ -1157,6 +1162,29 @@ async def test_auth_error_unauthorized_flags_failed_no_retry():
     assert client.calls == 1
 
 
+async def test_invalid_session_classified_as_auth_error_not_generic(caplog):
+    """A dead cookie jar must alert as cookie death, not as the catch-all.
+
+    `InvalidSession` sits under `ClientTransactionError`, NOT under
+    `Unauthorized`/`Forbidden`, so it was missing from the auth tuple and the
+    2026-09-06 expiry logged as "x notification collection failed" -- the same
+    bucket as a transient network blip. The distinction is the whole
+    difference between an alert that says "refresh the cookies" and one that
+    needs an SSH session to interpret.
+    """
+    from twikit.errors import InvalidSession
+
+    client = FakeXClient(error_at_call=1, error=InvalidSession("logged-out shell"))
+
+    with caplog.at_level(logging.WARNING):
+        result = await collect(client, cursors={"notifications": "0"})
+
+    assert result.failed is True
+    assert client.calls == 1
+    assert "x auth/cookie error: InvalidSession" in caplog.text
+    assert "x notification collection failed" not in caplog.text
+
+
 async def test_auth_error_forbidden_flags_failed():
     from twikit.errors import Forbidden
 
@@ -1252,6 +1280,117 @@ def test_build_client_loads_from_inline_json():
     client = build_client(None, '{"ct0": "abc", "auth_token": "def"}')
 
     assert client.get_cookies() == {"ct0": "abc", "auth_token": "def"}
+
+
+# --- cookie persistence (the 2026-09-06 InvalidSession expiry) ---
+
+
+def test_resolve_cookie_path_prefers_the_live_jar_when_newer(tmp_path):
+    """Steady state: a run has persisted a rotated jar, so it wins over the seed."""
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "seed"}')
+    live = tmp_path / "x-cookies.json.live"
+    live.write_text('{"ct0": "rotated"}')
+    os.utime(seed, (1_000_000, 1_000_000))
+    os.utime(live, (2_000_000, 2_000_000))
+
+    assert resolve_cookie_path(str(seed)) == str(live)
+
+
+def test_resolve_cookie_path_prefers_a_freshly_rotated_seed(tmp_path):
+    """A human rotating the Key Vault secret must win over a stale live jar.
+
+    Ansible rewrites the seed on the next deploy, making it newer -- that has
+    to flip the preference back automatically, or a refreshed credential would
+    sit unused behind a dead live jar until someone deleted it by hand.
+    """
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "refreshed"}')
+    live = tmp_path / "x-cookies.json.live"
+    live.write_text('{"ct0": "dead"}')
+    os.utime(live, (1_000_000, 1_000_000))
+    os.utime(seed, (2_000_000, 2_000_000))
+
+    assert resolve_cookie_path(str(seed)) == str(seed)
+
+
+def test_resolve_cookie_path_falls_back_to_seed_when_no_live_jar(tmp_path):
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "seed"}')
+
+    assert resolve_cookie_path(str(seed)) == str(seed)
+
+
+def test_persist_cookies_writes_the_live_jar_at_0600(tmp_path):
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "seed", "auth_token": "old"}')
+    client = build_client(str(seed), None)
+    client.set_cookies({"ct0": "rotated", "auth_token": "new"}, clear_cookies=True)
+
+    persist_cookies(client, str(seed))
+
+    live = tmp_path / "x-cookies.json.live"
+    assert json.loads(live.read_text()) == {"ct0": "rotated", "auth_token": "new"}
+    # A live credential, and save_cookies would otherwise create it umask-wide.
+    assert stat.S_IMODE(live.stat().st_mode) == 0o600
+    # The seed is the Key Vault-owned file and must never be touched.
+    assert json.loads(seed.read_text()) == {"ct0": "seed", "auth_token": "old"}
+
+
+def test_persist_cookies_leaves_no_temp_file_behind(tmp_path):
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "seed"}')
+    client = build_client(str(seed), None)
+
+    persist_cookies(client, str(seed))
+
+    assert not (tmp_path / "x-cookies.json.live.tmp").exists()
+
+
+def test_persist_cookies_never_raises_and_is_a_noop_without_a_path():
+    """Inline X_COOKIES mode has no file to persist to; must not blow up."""
+    client = build_client(None, '{"ct0": "abc"}')
+
+    persist_cookies(client, None)
+
+
+def test_persist_cookies_swallows_write_failures(tmp_path, caplog):
+    """A persistence failure must never turn a good collect into a failed run."""
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "seed"}')
+
+    class Boom:
+        def save_cookies(self, path):
+            raise OSError("disk full")
+
+    with caplog.at_level(logging.WARNING):
+        persist_cookies(Boom(), str(seed))
+
+    assert "x cookie persistence failed" in caplog.text
+    # Type name only -- never the message, which could embed cookie material.
+    assert "disk full" not in caplog.text
+
+
+def test_build_client_warns_when_the_jar_is_stale(tmp_path, caplog):
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "abc"}')
+    ancient = time.time() - (40 * 86400)
+    os.utime(seed, (ancient, ancient))
+
+    with caplog.at_level(logging.WARNING):
+        build_client(str(seed), None)
+
+    assert "x cookie jar last refreshed 40 days ago" in caplog.text
+
+
+def test_build_client_does_not_warn_on_a_fresh_jar(tmp_path, caplog):
+    seed = tmp_path / "x-cookies.json"
+    seed.write_text('{"ct0": "abc"}')
+
+    with caplog.at_level(logging.WARNING):
+        build_client(str(seed), None)
+
+    assert "last refreshed" not in caplog.text
 
 
 # --- X_ENABLED=false: zero twikit import side effects (Phase 3 acceptance)

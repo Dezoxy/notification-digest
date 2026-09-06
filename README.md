@@ -125,7 +125,7 @@ deploy time and must never be committed or logged.
 | Variable | Description |
 |---|---|
 | `X_ENABLED` | Master switch for the X collector (`false`). |
-| `X_COOKIES_PATH` / `X_COOKIES` | X session cookies — supply exactly one. **(secret)** |
+| `X_COOKIES_PATH` / `X_COOKIES` | X session cookies — supply exactly one. **(secret)** With `X_COOKIES_PATH`, the rotated jar is persisted alongside it as `<path>.live` after every successful collect, and whichever of the two is newer is used — so refreshing the seed file automatically takes precedence again. |
 | `NEWS_FEEDS` | Comma-separated RSS/Atom URLs. Enables the news collector iff non-empty. |
 | `REDDIT_ENABLED` | Reddit collector switch (`false`). |
 | `REDDIT_SESSION_COOKIE` | Required when Reddit is enabled. **(secret)** |
