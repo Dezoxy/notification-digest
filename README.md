@@ -319,26 +319,84 @@ Exactly two keys, which is what `load_cookies` expects:
 {"auth_token":"...","ct0":"..."}
 ```
 
-Via a file, so the credential never enters shell history:
+Capture the two values without either the shell or your history seeing
+them — the prompts are hidden, and the readout at the end is how you
+confirm the paste landed. (Pasting raw JSON at a zsh prompt is a trap:
+`{...}` is brace expansion, so it is mangled into a "command not found"
+that embeds the credential in your history.)
 
 ```bash
-cat > /tmp/x-cookies.json <<'EOF'
-{"auth_token":"...","ct0":"..."}
-EOF
+python3 - <<'PY'
+import getpass, json, os, sys
 
+DEST = "/tmp/x-cookies.json"
+at  = getpass.getpass("paste auth_token, then Enter: ").strip()
+ct0 = getpass.getpass("paste ct0,        then Enter: ").strip()
+
+errs = []
+if not at:  errs.append("auth_token is empty")
+if not ct0: errs.append("ct0 is empty")
+if at  and any(c.isspace() for c in at):  errs.append("auth_token contains whitespace")
+if ct0 and any(c.isspace() for c in ct0): errs.append("ct0 contains whitespace")
+if at and at == ct0: errs.append("same value pasted twice")
+if at.startswith('{') or ct0.startswith('{'):
+    errs.append("paste the bare VALUES, one per prompt - not the whole JSON")
+if errs:
+    print("\nNOT written:", file=sys.stderr)
+    for e in errs: print("  -", e, file=sys.stderr)
+    sys.exit(1)
+
+fd = os.open(DEST, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump({"auth_token": at, "ct0": ct0}, f)
+print(f"\nwrote {DEST} (0600)")
+print(f"  auth_token: {len(at)} chars, ends ...{at[-4:]}")
+print(f"  ct0:        {len(ct0)} chars, ends ...{ct0[-4:]}")
+PY
+```
+
+**`--tags` is mandatory, not decoration.** `az keyvault secret set` creates a
+new secret VERSION, and versions do not inherit tags. The deploy discovers
+secrets with `[?tags.folder=='digest'].{id:name, envvar:tags.envvar}`
+(`.github/actions/azure-secrets` in the homelab repo), so a rotation that
+drops those tags makes the secret invisible to the fetch: `DIGEST_X_COOKIES`
+is never exported, the Ansible task's `when` guard fails, and
+`Write notification-digest X cookies file` reports **`skipping`** while the
+deploy still goes green. That is exactly what happened on 2026-09-06 —
+`file-encoding` survived only because `--file` re-adds it automatically.
+
+```bash
 az keyvault secret set \
   --vault-name kv-homelab-prod-th \
   --name digest-x-cookies \
-  --file /tmp/x-cookies.json
+  --file /tmp/x-cookies.json \
+  --tags envvar=DIGEST_X_COOKIES folder=digest file-encoding=utf-8 \
+  --output none && echo uploaded
 
 rm -f /tmp/x-cookies.json
 ```
 
-Verify shape without printing values:
+`--output none` because the default prints the secret value back at you.
+
+Verify BOTH the shape and the tags — the tags are what the deploy needs, and
+a jar with the right keys but no tags will silently not deploy:
 
 ```bash
 az keyvault secret show --vault-name kv-homelab-prod-th --name digest-x-cookies \
+  --query "tags" -o json
+
+az keyvault secret show --vault-name kv-homelab-prod-th --name digest-x-cookies \
   --query value -o tsv | python3 -c "import json,sys; print('keys:', sorted(json.load(sys.stdin)))"
+```
+
+Want `envvar`/`folder`/`file-encoding` present, and
+`keys: ['auth_token', 'ct0']`. If the tags were already lost, restore them
+without touching the value:
+
+```bash
+az keyvault secret set-attributes --vault-name kv-homelab-prod-th \
+  --name digest-x-cookies \
+  --tags envvar=DIGEST_X_COOKIES folder=digest file-encoding=utf-8
 ```
 
 ### 4. Deploy
@@ -349,7 +407,13 @@ rewrites the seed file, whose mtime then jumps ahead of the stale
 automatically — no need to delete the old live jar by hand. From the first
 clean collect onward the app persists rotations again.
 
-Confirm with the next digest's `source_counts`, which should carry an `x` key.
+Check the deploy summary artifact before trusting it: the task
+`Write notification-digest X cookies file` must report **`changed`**. If it
+says `skipping`, the tags are missing (see above) — the deploy will still be
+green, and the old jar will still be in place.
+
+Then confirm with the next digest's `source_counts`, which should carry an
+`x` key.
 
 ### The other session credentials
 
