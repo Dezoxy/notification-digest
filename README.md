@@ -279,6 +279,90 @@ here ships the Python service only. Deploying the site is `wrangler deploy`
 from `workers/news-site` (see its README) — cutting a release tag does not
 touch it, and vice versa.
 
+## Runbook: refreshing the X session cookies
+
+The X collector authenticates with a browser session cookie jar, never a
+login (`build_client` deliberately never performs anything login-shaped —
+see its docstring). Sessions die eventually, and when one does the collector
+fails with `x auth/cookie error: InvalidSession` and X contributes zero items
+until the jar is replaced. Since 0.26.3 the rotated jar is persisted after
+every clean collect, so this should be rare — but it is still the recovery
+procedure when it happens.
+
+**Symptom:** `x auth/cookie error: InvalidSession` in the journal, `"x": "failed"`
+in `run_summary`, and `failed_sources: ["x"]` on the digest.
+
+### 1. Use a dedicated browser session
+
+Logging out of the browser session these cookies came from invalidates them.
+Export from a **separate Chrome profile** (or an Incognito window), then close
+the window *without* logging out — that session then lives independently of
+everyday browsing. Avoid X → Settings → Security → "Log out of all other
+sessions" afterwards, which revokes it.
+
+### 2. Read the cookies from DevTools
+
+`auth_token` is **HttpOnly**, so `document.cookie` in the Console returns only
+`ct0` — a jar built that way looks plausible and fails with `InvalidSession`.
+Use the Application panel, which reads the cookie store below that boundary:
+
+1. On `https://x.com`, logged in → `F12` → **Application**
+2. **Storage → Cookies → `https://x.com`**
+3. Copy the **Value** of `auth_token` and `ct0`, in one sitting — `ct0` is the
+   CSRF token paired to that session.
+
+### 3. Store the jar
+
+Exactly two keys, which is what `load_cookies` expects:
+
+```json
+{"auth_token":"...","ct0":"..."}
+```
+
+Via a file, so the credential never enters shell history:
+
+```bash
+cat > /tmp/x-cookies.json <<'EOF'
+{"auth_token":"...","ct0":"..."}
+EOF
+
+az keyvault secret set \
+  --vault-name kv-homelab-prod-th \
+  --name digest-x-cookies \
+  --file /tmp/x-cookies.json
+
+rm -f /tmp/x-cookies.json
+```
+
+Verify shape without printing values:
+
+```bash
+az keyvault secret show --vault-name kv-homelab-prod-th --name digest-x-cookies \
+  --query value -o tsv | python3 -c "import json,sys; print('keys:', sorted(json.load(sys.stdin)))"
+```
+
+### 4. Deploy
+
+Deploy `01-myapps-vm` (Configuration only) from the homelab repo. Ansible
+rewrites the seed file, whose mtime then jumps ahead of the stale
+`x-cookies.json.live`, so `resolve_cookie_path` picks the fresh seed
+automatically — no need to delete the old live jar by hand. From the first
+clean collect onward the app persists rotations again.
+
+Confirm with the next digest's `source_counts`, which should carry an `x` key.
+
+### The other session credentials
+
+`REDDIT_SESSION_COOKIE`, `PATREON_SESSION_COOKIE` and `TG_SESSION` are also
+long-lived session credentials refreshed the same way (update the Key Vault
+secret, deploy), but they have none of the mechanics above: they are env vars
+rather than files, sent as hand-built headers over stateless `urllib` (or, for
+Telegram, an MTProto auth key), so nothing rotates and there is no live jar.
+Each already reports its own auth death explicitly — see `reddit.py`'s 401/403
+branch, `patreon.py`'s `current_user_can_view` check (Patreon degrades to
+HTTP 200 with empty bodies rather than erroring), and `telegram.py`'s
+prefetch abort.
+
 ## Status
 
 In production on the owner's VM. Five run modes — window (three timers,
