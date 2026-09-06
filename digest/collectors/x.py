@@ -84,9 +84,20 @@ call):
   here is simple enough not to warrant depending on an internal.
 - Exceptions (``twikit.errors``, unchanged by the twifork fork -- confirmed
   by reading the installed package): ``Unauthorized`` (401), ``Forbidden``
-  (403), ``AccountLocked`` (Arkose challenge lock), ``AccountSuspended`` --
-  all auth/cookie-failure signals per PLAN §4.3 ("account may be locked/
-  challenged"). ``TooManyRequests`` (429) is the rate-limit signal. Neither
+  (403), ``AccountLocked`` (Arkose challenge lock), ``AccountSuspended``,
+  ``InvalidSession`` -- all auth/cookie-failure signals per PLAN §4.3
+  ("account may be locked/challenged"). ``InvalidSession`` is the one that
+  does NOT come back as an HTTP status: it is raised from twikit's
+  X-Client-Transaction-Id handshake when x.com serves the logged-out page
+  shell, and its own docstring says outright that "the cookies are missing,
+  expired or rejected". It sits under ``ClientTransactionError``, NOT under
+  ``Unauthorized``/``Forbidden``, so it has to be named explicitly -- it was
+  missed in the original enumeration here, and the 2026-09-06 cookie
+  expiry consequently alerted as the generic "collection failed" catch-all
+  instead of as the cookie death it was. ``LoginRetired`` is deliberately
+  NOT in that set: it fires only when password login is attempted, and
+  `build_client` never logs in (see its docstring). ``TooManyRequests``
+  (429) is the rate-limit signal. Neither
   twikit nor twifork retries these internally when no ``captcha_solver`` is
   configured, which this module never configures -- so a single failed
   call here really is a single network round trip, matching the "no retry
@@ -128,9 +139,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from digest.collectors.base import CollectResult
@@ -222,6 +234,107 @@ class XClientLike(Protocol):
     gql: _GqlClientLike
 
 
+# The runtime cookie jar, written next to the seeded one after every
+# successful collection. TWO files rather than one because the writers have
+# genuinely different owners: Ansible owns the SEED (`cookies_path`, rewritten
+# from the digest-x-cookies Key Vault secret whenever a human rotates it),
+# this module owns the LIVE jar. Persisting over the seed instead would mean
+# every deploy silently reverted the session to whatever snapshot Key Vault
+# still held -- undoing persistence entirely, since `ansible.builtin.copy`
+# rewrites any file whose checksum no longer matches its `content`.
+_LIVE_COOKIE_SUFFIX = ".live"
+
+# How long an effective jar may go unrefreshed before it is worth saying so.
+# With persistence working, a healthy deployment rewrites the live jar on
+# EVERY successful run (6-hourly), so this can only trip when something has
+# actually stopped: X collection failing quietly, the flag turned off, or the
+# live jar not being writable. Deliberately a "something is wrong" signal and
+# NOT a countdown to expiry -- expiry is not knowable here, because
+# load_cookies/save_cookies round-trip bare name->value pairs and the jar
+# therefore carries no expiry metadata to check.
+_COOKIE_STALE_AFTER = timedelta(days=14)
+
+
+def _live_cookie_path(cookies_path: str) -> str:
+    """Path of the runtime jar shadowing `cookies_path`."""
+    return cookies_path + _LIVE_COOKIE_SUFFIX
+
+
+def resolve_cookie_path(cookies_path: str) -> str:
+    """Pick whichever of the seed/live jars is newer.
+
+    The live jar wins while it is at least as new as the seed -- the ordinary
+    steady state once a run has persisted anything. A human rotating the Key
+    Vault secret makes the SEED newer (Ansible rewrites it on the next
+    deploy), which flips the preference back automatically, so a refreshed
+    credential lands without anyone having to delete the stale live jar
+    first. Any stat failure (no live jar yet, unreadable) falls back to the
+    seed, the file always guaranteed to exist.
+    """
+    live = _live_cookie_path(cookies_path)
+    try:
+        if os.path.getmtime(live) >= os.path.getmtime(cookies_path):
+            return live
+    except OSError:
+        return cookies_path
+    return cookies_path
+
+
+def _warn_if_stale(path: str) -> None:
+    """Log when the effective jar has not been refreshed in `_COOKIE_STALE_AFTER`."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return
+    age = datetime.now(UTC) - datetime.fromtimestamp(mtime, UTC)
+    if age > _COOKIE_STALE_AFTER:
+        logger.warning(
+            "x cookie jar last refreshed %d days ago -- a healthy run rewrites "
+            "it every collection, so X has likely been failing or disabled since",
+            age.days,
+        )
+
+
+def persist_cookies(client: Any, cookies_path: str | None) -> None:
+    """Write the client's live cookie jar back to disk. Never raises.
+
+    This is the whole reason a session survives past its first rotation.
+    twikit's jar IS httpx's, which absorbs every ``Set-Cookie`` x.com returns
+    during a run, and ``get_cookies`` walks that live jar -- so with no call
+    here the process exits, the rotation is discarded, and the next run
+    replays the same frozen snapshot. Forever. That is precisely how the
+    2026-09-06 ``InvalidSession`` expiry happened: a jar seeded on
+    2026-07-30 and never once written back.
+
+    Written to a temp file and `os.replace`d (atomic on POSIX) rather than
+    letting ``save_cookies`` write in place: its own plain ``open(..., "w")``
+    truncates first, so a crash mid-write would leave a corrupt jar that
+    `resolve_cookie_path` would then PREFER over the good seed -- turning one
+    lost run into a permanently broken collector. `chmod` to 0600 before the
+    rename, matching the seed's own mode: this file is a live credential and
+    ``save_cookies`` creates it with whatever the umask allows.
+
+    No-ops when the cookies came from X_COOKIES rather than X_COOKIES_PATH:
+    there is no file to persist to, and that jar is Key Vault's to rotate.
+    """
+    if not cookies_path:
+        return
+    live = _live_cookie_path(cookies_path)
+    tmp = live + ".tmp"
+    try:
+        client.save_cookies(tmp)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, live)
+    except Exception as exc:
+        # Type name only, never the exception's message -- it could embed
+        # cookie material, the same posture every other log line here takes.
+        logger.warning("x cookie persistence failed: %s", type(exc).__name__)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def build_client(cookies_path: str | None, cookies_inline: str | None) -> Any:
     """Build a twifork Client authenticated via persisted cookies.
 
@@ -250,7 +363,9 @@ def build_client(cookies_path: str | None, cookies_inline: str | None) -> Any:
 
     client = Client()
     if cookies_path:
-        client.load_cookies(cookies_path)
+        effective = resolve_cookie_path(cookies_path)
+        _warn_if_stale(effective)
+        client.load_cookies(effective)
     else:
         client.set_cookies(json.loads(cookies_inline))
     return client
@@ -1423,6 +1538,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
         AccountLocked,
         AccountSuspended,
         Forbidden,
+        InvalidSession,
         TooManyRequests,
         Unauthorized,
     )
@@ -1437,7 +1553,7 @@ async def collect(client: XClientLike, cursors: dict[str, str]) -> CollectResult
 
     try:
         resp, _ = await client.v11.notifications_all(_NOTIFICATION_COUNT, None)
-    except (Unauthorized, Forbidden, AccountLocked, AccountSuspended) as exc:
+    except (Unauthorized, Forbidden, AccountLocked, AccountSuspended, InvalidSession) as exc:
         logger.warning("x auth/cookie error: %s", type(exc).__name__)
         result.failed = True
         return result
