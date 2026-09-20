@@ -37,6 +37,14 @@ true at the multi-channel cutover.
   Never call `os.environ` / `os.getenv` from other modules — pass values in.
 - All timestamps are stored in UTC. Convert to Europe/Budapest only at
   render/email time, never in storage or state comparisons.
+- Architecture lives in `docs/architecture/`: a Structurizr model, the ADRs and
+  the knowledge base around them. Use the `architecture-views` skill
+  (.agents/skills/architecture-views/SKILL.md) for model and view work, and
+  `architecture-docs` (.agents/skills/architecture-docs/SKILL.md) for the prose.
+  Both are copied from architecture-base, which stays their canonical home;
+  `model/styles-shared.dsl` is canonical there and is never edited here.
+  A view is split at its budget, never enlarged without rendered evidence
+  recorded in the view register.
 
 ## Hard rules
 
@@ -151,6 +159,20 @@ a change that should not alter rendered output must produce a ZERO golden
 diff, and a change that should alter it regenerates the goldens
 (`npm run golden`) so the diff itself is the review artifact. See
 `workers/news-site/test/README.md`.
+
+If anything under `docs/architecture/` changed, validate the model and the docs
+(needs Docker for the pinned Structurizr image):
+
+```
+make check && make docs
+```
+
+`make check` is validate + inspect and must report zero ERROR lines. `make docs`
+runs the counted half of /docs-sync. Neither proves a diagram communicates
+anything: a view whose layout changed needs `make view` and an actual look, and
+the register in `docs/architecture/README.md` records which views have been
+verified at reading size and which have not. Do not upgrade a register row to
+verified without looking at the rendered view.
 
 ## Deploy note
 

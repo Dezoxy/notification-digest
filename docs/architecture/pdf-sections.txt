@@ -1,0 +1,11 @@
+# Extra pages for the architecture PDF, after the ADRs and before the views.
+# One path per line, relative to this directory. See scripts/build_architecture_pdf_source.py.
+requirements/constraints.md
+requirements/quality-attributes.md
+requirements/assumptions.md
+security/trust-boundaries.md
+data/data-architecture.md
+deployment/deployment-architecture.md
+reliability/disaster-recovery.md
+risks/architecture-risks.md
+risks/technical-debt.md

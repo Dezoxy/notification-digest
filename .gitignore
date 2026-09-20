@@ -32,3 +32,10 @@ dist/
 # untracked and un-ignored, carrying the Cloudflare account id. Unanchored so
 # it matches at any depth.
 .wrangler/
+
+# Structurizr working state and rendered output. The DSL in docs/architecture/
+# is the source; workspace.json, the lock dir and generated/ are all derived,
+# and `make export` rewrites them wholesale.
+docs/architecture/workspace.json
+docs/architecture/.structurizr/
+docs/architecture/generated/
