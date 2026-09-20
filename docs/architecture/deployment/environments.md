@@ -1,6 +1,11 @@
 # Environments
 
-There are two environments, not a graduated pipeline: production, and whatever a developer runs locally. There is no staging tier and no separate integration environment — the homelab deploy invocation (`make deploy TARGET=01-myapps-vm MODE=config`, [deployment-architecture.md](deployment-architecture.md)) has no review gate between a local `make deploy` run and the production host. `MODE` is mandatory there; there is no `MODE=staging`.
+There are two environments, not a graduated pipeline: production, and whatever a
+developer runs locally. There is no staging tier and no separate integration
+environment — the homelab deploy invocation (`make deploy TARGET=01-myapps-vm
+MODE=config`, [deployment-architecture.md](deployment-architecture.md)) has no
+review gate between a local `make deploy` run and the production host. `MODE` is
+mandatory there; there is no `MODE=staging`.
 
 | | Production | Local development |
 |---|---|---|
@@ -15,8 +20,19 @@ There are two environments, not a graduated pipeline: production, and whatever a
 
 ## Rules
 
-- Production data (`state.db`, archived digests, session secrets) is never copied into local development. A local run starts from an empty volume.
-- Secrets never appear in this repository. Production secrets come from Azure Key Vault at deploy time; local secrets live only in the developer's own untracked `.env`.
-- `X_ENABLED`, `REDDIT_ENABLED`, `POLYMARKET_ENABLED`, `HACKERNEWS_ENABLED` and the Patreon/positions/relay allowlists are empty/off unless explicitly configured — a fresh local checkout runs with almost every optional collector disabled until the developer opts in, same as a fresh production deploy would.
-- There is nothing to rehearse disaster recovery against in a lower environment ([disaster-recovery.md](../reliability/disaster-recovery.md) is exercised directly against production backups, because no scaled-down production look-alike exists).
-- A CI job (`pr-summary.yml`) runs on GitHub-hosted runners against `main` after merge; it is a documentation job (`scripts/pr_summary.py`), not a deployment or a third environment.
+- Production data (`state.db`, archived digests, session secrets) is never
+  copied into local development. A local run starts from an empty volume.
+- Secrets never appear in this repository. Production secrets come from Azure
+  Key Vault at deploy time; local secrets live only in the developer's own
+  untracked `.env`.
+- `X_ENABLED`, `REDDIT_ENABLED`, `POLYMARKET_ENABLED`, `HACKERNEWS_ENABLED` and
+  the Patreon/positions/relay allowlists are empty/off unless explicitly
+  configured — a fresh local checkout runs with almost every optional collector
+  disabled until the developer opts in, same as a fresh production deploy would.
+- There is nothing to rehearse disaster recovery against in a lower environment
+  ([disaster-recovery.md](../reliability/disaster-recovery.md) is exercised
+  directly against production backups, because no scaled-down production
+  look-alike exists).
+- A CI job (`pr-summary.yml`) runs on GitHub-hosted runners against `main` after
+  merge; it is a documentation job (`scripts/pr_summary.py`), not a deployment
+  or a third environment.

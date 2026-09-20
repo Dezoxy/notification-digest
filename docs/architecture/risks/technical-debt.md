@@ -1,6 +1,7 @@
 # Technical Debt
 
-Debt that affects architecture, not code-level cleanups — those belong in the repository's own backlog.
+Debt that affects architecture, not code-level cleanups — those belong in the
+repository's own backlog.
 
 | ID | Debt | Why it exists | Cost of keeping it | Plan |
 |---|---|---|---|---|
@@ -13,4 +14,7 @@ Debt that affects architecture, not code-level cleanups — those belong in the 
 
 ## Review
 
-Reviewed together with [architecture-risks.md](architecture-risks.md) whenever PLAN.md's own roadmap is revisited. Debt tracked here is either scheduled in PLAN.md, explicitly accepted, or removed from this list — nothing appears here that PLAN.md itself doesn't evidence.
+Reviewed together with [architecture-risks.md](architecture-risks.md) whenever
+PLAN.md's own roadmap is revisited. Debt tracked here is either scheduled in
+PLAN.md, explicitly accepted, or removed from this list — nothing appears here
+that PLAN.md itself doesn't evidence.

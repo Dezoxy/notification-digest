@@ -1,6 +1,6 @@
-# Scope
+## Scope
 
-## In scope
+### In scope
 
 - Collecting new items from the owner's own accounts and from public feeds.
 - Keeping enough state to guarantee that a re-run duplicates nothing.
@@ -11,7 +11,7 @@
 - The Cloudflare Worker in `workers/news-site/`, because it is a delivery
   channel of this system and lives in this repository.
 
-## Out of scope
+### Out of scope
 
 | Not covered here | Where it lives instead |
 |---|---|
@@ -19,19 +19,19 @@
 | The Proxmox node, the home network and its boundary | The same `homelab` repository |
 | Anything that happens inside a source platform | Telegram, X, Reddit, Patreon, Polymarket, Hacker News and the feed publishers |
 | Model behaviour and pricing | The model providers |
-| The content itself | Third parties wrote it; this system summarizes and links to it ([C-04](../requirements/constraints.md)) |
+| The content itself | Third parties wrote it; this system summarizes and links to it ([C-04](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)) |
 
-## Deliberately not built
+### Deliberately not built
 
 These are decisions, not gaps. Each one is a consequence of a single owner and
 a single node.
 
 - **No high-availability or failover tier.** See
-  [availability](../reliability/availability.md).
+  [availability](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/reliability/availability.md).
 - **No staging environment.** There is production and there is a local
-  throwaway run; see [environments](../deployment/environments.md).
+  throwaway run; see [environments](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/deployment/environments.md).
 - **No multi-tenancy, no accounts, no login on the public site.** The site
   publishes; it does not authenticate readers.
-- **No alerting stack inside this repository.** What failure actually looks like
-  is described honestly in
-  [observability](../observability/observability-architecture.md).
+- **No alerting stack in this repository.** What failure actually looks like is
+  described honestly in
+  [observability](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/observability/observability-architecture.md).

@@ -1,6 +1,10 @@
 # Transition Plan
 
-From [current-state.md](current-state.md) to [target-state.md](target-state.md). Every item below is independent — none blocks another, and none carries an owner-set deadline. This differs from a system with a multi-quarter build-out: PLAN.md's own roadmap (§11) is nearly fully executed, so what remains is a short list of individually optional closeout items, not a phased plan.
+From [current-state.md](current-state.md) to [target-state.md](target-state.md).
+Every item below is independent — none blocks another, and none carries an
+owner-set deadline. This differs from a system with a multi-quarter build-out:
+PLAN.md's own roadmap (§11) is nearly fully executed, so what remains is a short
+list of individually optional closeout items, not a phased plan.
 
 | # | Step | Outcome | Closes | Depends on | Status |
 |---|---|---|---|---|---|
@@ -11,10 +15,20 @@ From [current-state.md](current-state.md) to [target-state.md](target-state.md).
 
 ## What this plan deliberately does not include
 
-- **No fix for TD-001/TD-002/TD-003.** PLAN.md records these as debt without proposing a remediation step; inventing a plan for them here would misrepresent what the owner has actually committed to. If the owner schedules a fix, it becomes a new row above.
-- **No revival of community engagement signals (§11.5).** It was rejected on evidence (PLAN.md §9, decision 6), not deferred; reopening it needs new evidence, not an implementation step.
-- **No infrastructure change** — a second node, a staging tier, a hard spend cap. None is planned in PLAN.md, so none appears here ([target-state.md](target-state.md)).
+- **No fix for TD-001/TD-002/TD-003.** PLAN.md records these as debt without
+  proposing a remediation step; inventing a plan for them here would
+  misrepresent what the owner has actually committed to. If the owner schedules
+  a fix, it becomes a new row above.
+- **No revival of community engagement signals (§11.5).** It was rejected on
+  evidence (PLAN.md §9, decision 6), not deferred; reopening it needs new
+  evidence, not an implementation step.
+- **No infrastructure change** — a second node, a staging tier, a hard spend
+  cap. None is planned in PLAN.md, so none appears here
+  ([target-state.md](target-state.md)).
 
 ## Review
 
-Revisited whenever PLAN.md's own roadmap section is next revised by the owner. There is no separate quarterly or scheduled review cadence for a single-owner service — [architecture-risks.md](../risks/architecture-risks.md) and [technical-debt.md](../risks/technical-debt.md) follow the same rule.
+Revisited whenever PLAN.md's own roadmap section is next revised by the owner.
+There is no separate quarterly or scheduled review cadence for a single-owner
+service — [architecture-risks.md](../risks/architecture-risks.md) and
+[technical-debt.md](../risks/technical-debt.md) follow the same rule.

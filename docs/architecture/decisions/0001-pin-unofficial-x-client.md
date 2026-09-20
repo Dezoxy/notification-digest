@@ -84,10 +84,16 @@ Negative / accepted trade-offs:
 
 ## Risks
 
-- Not recorded: `risks/architecture-risks.md` on this branch currently holds generic template content unrelated to this repository (it describes a payments/rides system), so no digest-specific risk ID could be confirmed to cover an X-account-ban or fork-abandonment scenario at the time of writing. That register is being written in parallel with this ADR; link it here once it carries a matching entry.
+- Not recorded: `risks/architecture-risks.md` on this branch currently holds
+  generic template content unrelated to this repository (it describes a
+  payments/rides system), so no digest-specific risk ID could be confirmed to
+  cover an X-account-ban or fork-abandonment scenario at the time of writing.
+  That register is being written in parallel with this ADR; link it here once it
+  carries a matching entry.
 
 ## Related
 
-- Requirements: [C-02](../requirements/constraints.md), [C-03](../requirements/constraints.md), [A-02](../requirements/assumptions.md)
+- Requirements: [C-02](../requirements/constraints.md),
+  [C-03](../requirements/constraints.md), [A-02](../requirements/assumptions.md)
 - Architecture views: not recorded
 - Other ADRs: none

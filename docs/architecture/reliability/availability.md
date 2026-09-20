@@ -2,20 +2,44 @@
 
 ## What "available" means here
 
-notification-digest is not a request-serving system, so an uptime percentage does not apply to it ([QA-06](../requirements/quality-attributes.md)). "Available" means: each scheduled run starts on its timer, completes, and exits 0. There is no traffic to lose, no request to time out, and no customer waiting on a response — so the framing used for a service (SLO, error budget) does not transfer, and this document does not invent one.
+notification-digest is not a request-serving system, so an uptime percentage
+does not apply to it ([QA-06](../requirements/quality-attributes.md)).
+"Available" means: each scheduled run starts on its timer, completes, and exits
+0. There is no traffic to lose, no request to time out, and no customer waiting
+on a response — so the framing used for a service (SLO, error budget) does not
+transfer, and this document does not invent one.
 
 What matters instead, in order:
 
-1. **A digest is never delivered twice.** This is a hard rule, not a target ([QA-01](../requirements/quality-attributes.md)). A duplicate Telegram ping or a duplicate site entry is a worse failure than a missed run, because it is visible and cannot be un-sent.
-2. **A missed run is tolerable.** The next window's collectors pick up everything the failed run didn't, because collection is cursor-based, not queue-based. Nothing is lost as long as the source itself (Telegram, X, an RSS feed) still has the content when the next run reads it.
-3. **One failing source must not suppress everything else.** Each of the six window collectors is isolated and failure-flagged independently ([README](../../../README.md), `digest/main.py`); a Telegram outage still lets the X/news/Reddit/Polymarket/Hacker News items ship, with a failure banner rather than silence.
+1. **A digest is never delivered twice.** This is a hard rule, not a target
+   ([QA-01](../requirements/quality-attributes.md)). A duplicate Telegram ping
+   or a duplicate site entry is a worse failure than a missed run, because it is
+   visible and cannot be un-sent.
+2. **A missed run is tolerable.** The next window's collectors pick up
+   everything the failed run didn't, because collection is cursor-based, not
+   queue-based. Nothing is lost as long as the source itself (Telegram, X, an
+   RSS feed) still has the content when the next run reads it.
+3. **One failing source must not suppress everything else.** Each of the six
+   window collectors is isolated and failure-flagged independently
+   ([README](../../../README.md), `digest/main.py`); a Telegram outage still
+   lets the X/news/Reddit/Polymarket/Hacker News items ship, with a failure
+   banner rather than silence.
 
 ## What is deliberately absent
 
-- **No high availability.** One process, one Proxmox node, no redundant compute, no failover target. This is a direct consequence of [C-01](../requirements/constraints.md) and [C-05](../requirements/constraints.md) — a single-owner, single-reader service — not an oversight. Building HA for a job that runs a few times a day for one reader would add operational complexity nothing in this system needs.
-- **No health check or liveness probe.** There is no long-running process to probe; the unit of work is the process itself, and its exit code is the entire health signal ([observability-architecture.md](../observability/observability-architecture.md)).
+- **No high availability.** One process, one Proxmox node, no redundant compute,
+  no failover target. This is a direct consequence of
+  [C-01](../requirements/constraints.md) and
+  [C-05](../requirements/constraints.md) — a single-owner, single-reader service
+  — not an oversight. Building HA for a job that runs a few times a day for one
+  reader would add operational complexity nothing in this system needs.
+- **No health check or liveness probe.** There is no long-running process to
+  probe; the unit of work is the process itself, and its exit code is the entire
+  health signal
+  ([observability-architecture.md](../observability/observability-architecture.md)).
 - **No load balancing or autoscaling.** There is no load to balance.
-- **No SLA.** Nobody outside the owner depends on this system, so there is nothing to commit to.
+- **No SLA.** Nobody outside the owner depends on this system, so there is
+  nothing to commit to.
 
 ## Failure modes
 
@@ -30,10 +54,15 @@ What matters instead, in order:
 
 ## Degraded operation
 
-There is no degraded mode distinct from "some collectors failed, digest ships anyway with a banner" — that partial-failure tolerance *is* the degraded mode, and it is the normal, designed behavior described above, not an exception path.
+There is no degraded mode distinct from "some collectors failed, digest ships
+anyway with a banner" — that partial-failure tolerance *is* the degraded mode,
+and it is the normal, designed behavior described above, not an exception path.
 
 ## Not measured
 
-- Run success rate (fraction of scheduled runs that exit 0) — no dashboard or report in this repo computes it.
-- End-to-end freshness (time from window close to delivery) — the timer schedule is declared in the homelab role; latency has not been measured ([QA-02](../requirements/quality-attributes.md)).
+- Run success rate (fraction of scheduled runs that exit 0) — no dashboard or
+  report in this repo computes it.
+- End-to-end freshness (time from window close to delivery) — the timer schedule
+  is declared in the homelab role; latency has not been measured
+  ([QA-02](../requirements/quality-attributes.md)).
 - Any historical count of missed or duplicate runs.

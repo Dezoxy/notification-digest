@@ -57,6 +57,15 @@ ID_OWNERS = {
 ADR_NAME = re.compile(r"^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 ADR_STATUSES = {"Proposed", "Accepted", "Rejected", "Deprecated", "Superseded"}
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+# Documents imported into Structurizr's Documentation tab cannot use relative
+# links: the tab renders them outside the repository tree, so `../risks/x.md`
+# resolves to nothing for the reader. They link to this repository by absolute
+# URL instead, which check_links() skips along with every other http(s) link.
+# That would leave the most-linked documents in the repository unchecked, so
+# self-links are turned back into a path and checked on disk.
+SELF_BLOB = re.compile(
+    r"https://github\.com/Dezoxy/notification-digest/blob/main/([^)#\s]+)"
+)
 FENCE = re.compile(r"^\s*(```|~~~)")
 
 
@@ -297,10 +306,72 @@ def check_ids(f: Failures) -> None:
                     )
 
 
+INLINE_CODE = re.compile(r"`[^`]*`")
+
+
+def check_self_links(f: Failures) -> None:
+    """Absolute links back into this repository resolve to a real file.
+
+    Inline code is stripped first: a URL inside backticks is an example of the
+    form to use, not a claim that a file exists. Writing the convention down
+    must not fail the check that enforces it.
+    """
+    for src in markdown_files():
+        text = INLINE_CODE.sub("", prose(read(src)))
+        for path in SELF_BLOB.findall(text):
+            if not (REPO / path).exists():
+                f.add(
+                    "self-links",
+                    f"{rel(src)}: https://.../blob/main/{path} does not resolve",
+                )
+
+
+PROSE_WIDTH = 80
+# Copied skills stay byte-identical to their canonical source in
+# architecture-base, so this repository does not get to rewrap them.
+SKILL_DIRS = (REPO / ".claude" / "skills", REPO / ".agents" / "skills")
+
+
+def check_line_width(f: Failures) -> None:
+    """Prose wraps, so a one-word edit does not rewrite a whole paragraph's diff.
+
+    Only prose. A table row is as wide as its widest cell and a fenced block is
+    code; neither can wrap, and a formatter that pads them makes the problem
+    worse rather than better. A line held over the limit by a single
+    unbreakable token -- an absolute URL, which every file in overview/ must
+    use -- is left alone too, because there is nowhere to break it.
+    """
+    for src in markdown_files():
+        if any(d in src.parents for d in SKILL_DIRS):
+            continue
+        fenced = False
+        for number, line in enumerate(read(src).splitlines(), 1):
+            if FENCE.match(line):
+                fenced = not fenced
+                continue
+            # An image line cannot wrap: splitting `![alt](embed:Key)` stops
+            # the PDF builder recognising the embed, and the view silently
+            # falls out of the document into the appendix.
+            if fenced or line.lstrip().startswith(("|", "#", "![")):
+                continue
+            if len(line) <= PROSE_WIDTH:
+                continue
+            longest = max((len(word) for word in line.split()), default=0)
+            if len(line) - longest <= PROSE_WIDTH:
+                continue
+            f.add(
+                "line-width",
+                f"{rel(src)}:{number}: prose line is {len(line)} columns, "
+                f"over {PROSE_WIDTH}; wrap it",
+            )
+
+
 CHECKS = (
     check_twins,
     check_skill_mirror,
     check_links,
+    check_self_links,
+    check_line_width,
     check_docs_index,
     check_adrs,
     check_view_register,

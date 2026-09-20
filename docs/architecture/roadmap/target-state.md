@@ -1,8 +1,21 @@
 # Target State
 
-There is no forward-looking target architecture beyond what is already running. PLAN.md's redesign roadmap (§11) is, as of its own latest status lines, almost entirely executed: §11.1 through §11.7 are shipped, and the one entry that didn't ship (§11.5, community engagement signals) was rejected outright rather than left half-built, once the owner observed that the community doesn't react or reply on Telegram at all (PLAN.md §9, decision 6). No second region, no second Proxmox node, no horizontal scaling, and no multi-tenancy appear anywhere in PLAN.md — each is explicitly ruled out as a consequence of [C-01](../requirements/constraints.md) and [C-05](../requirements/constraints.md), not an omission this document is filling in.
+There is no forward-looking target architecture beyond what is already running.
+PLAN.md's redesign roadmap (§11) is, as of its own latest status lines, almost
+entirely executed: §11.1 through §11.7 are shipped, and the one entry that
+didn't ship (§11.5, community engagement signals) was rejected outright rather
+than left half-built, once the owner observed that the community doesn't react
+or reply on Telegram at all (PLAN.md §9, decision 6). No second region, no
+second Proxmox node, no horizontal scaling, and no multi-tenancy appear anywhere
+in PLAN.md — each is explicitly ruled out as a consequence of
+[C-01](../requirements/constraints.md) and
+[C-05](../requirements/constraints.md), not an omission this document is filling
+in.
 
-What follows is the complete list of items PLAN.md records as open, in whatever form it records them — an owner decision not yet taken, an explicitly optional rider, or work not yet started. None of these should be read as already deployed.
+What follows is the complete list of items PLAN.md records as open, in whatever
+form it records them — an owner decision not yet taken, an explicitly optional
+rider, or work not yet started. None of these should be read as already
+deployed.
 
 ## Open decisions (owner-gated, no target date)
 
@@ -20,7 +33,8 @@ What follows is the complete list of items PLAN.md records as open, in whatever 
 
 ## Technical debt with no proposed remediation
 
-PLAN.md logs these as debt without committing to a fix. The honest target state is that they remain accepted and unscheduled unless the owner revisits them:
+PLAN.md logs these as debt without committing to a fix. The honest target state
+is that they remain accepted and unscheduled unless the owner revisits them:
 
 - [TD-001](../risks/technical-debt.md) — `arc_context` has no prune.
 - [TD-002](../risks/technical-debt.md) — the D1 rebuild-from-VM path has never been exercised end to end.
@@ -35,4 +49,6 @@ PLAN.md logs these as debt without committing to a fix. The honest target state 
 | Reviving community engagement signals (§11.5) as designed | Rejected on evidence, not deferred — see PLAN.md §9, decision 6. A revival needs new evidence that Telegram engagement actually happens, not an implementation retry |
 | A hard spend cap on summarization | Recorded as an accepted, unmeasured exposure ([RISK-004](../risks/architecture-risks.md), [QA-07](../requirements/quality-attributes.md)), not as planned work |
 
-A target-state document with no "not doing" section invites scope creep from every direction — there isn't one missing here because PLAN.md itself already draws these lines explicitly.
+A target-state document with no "not doing" section invites scope creep from
+every direction — there isn't one missing here because PLAN.md itself already
+draws these lines explicitly.

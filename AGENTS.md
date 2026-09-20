@@ -45,6 +45,17 @@ true at the multi-channel cutover.
   `model/styles-shared.dsl` is canonical there and is never edited here.
   A view is split at its budget, never enlarged without rendered evidence
   recorded in the view register.
+- **The Documentation tab and the PDF are the same document.** Structurizr
+  imports `docs/architecture/overview/` and nothing else — `!docs` does not
+  recurse into subfolders — and the PDF is built from that same folder, so the
+  architecture description lives there: `01-*.md` carries the single `#`, every
+  later file is a `## ` section, and the numeric prefixes are what order them.
+  `pdf-sections.txt` is deliberately empty; a line in it is a page the PDF has
+  and the tab does not. Grow a reading path instead.
+- Files in `overview/` link to the registers by **absolute** URL
+  (`https://github.com/Dezoxy/notification-digest/blob/main/...`), because a
+  relative link does not resolve inside the rendered tab. `make docs` checks
+  those resolve on disk, so they are not exempt from the audit.
 
 ## Hard rules
 

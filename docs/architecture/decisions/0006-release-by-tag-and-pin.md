@@ -96,6 +96,7 @@ Negative / accepted trade-offs:
 
 ## Related
 
-- Requirements: [C-06](../requirements/constraints.md), [C-07](../requirements/constraints.md), [C-01](../requirements/constraints.md)
+- Requirements: [C-06](../requirements/constraints.md),
+  [C-07](../requirements/constraints.md), [C-01](../requirements/constraints.md)
 - Architecture views: not recorded
 - Other ADRs: none
