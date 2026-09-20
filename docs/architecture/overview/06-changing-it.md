@@ -81,19 +81,9 @@ appear here — each is explicitly ruled out, not simply unlisted.
 
 ### What a change must satisfy before it merges
 
-- **`/docs-sync`** before opening or updating any PR — audits the branch diff
-  for documentation it falsifies (README, PLAN.md, CLAUDE.md, worker READMEs).
-- **`make check`** whenever `docs/architecture/` changes — parses and inspects
-  the Structurizr model; `make docs` runs docs-sync's mechanical half.
-- **`uv run ruff check . && uv run pytest`** for the Python service — tests
-  must never call the real Telegram/X APIs or send real email; mock at the
-  collector and emailer boundaries.
-- **The news-site golden-diff contract**, for anything under
-  `workers/news-site/`: `npm test` runs invariant tests, a byte-comparison
-  against committed golden pages, and a prettier check. A change that should
-  not alter rendered output must produce a **zero** golden diff; a change that
-  should alter it regenerates the goldens (`npm run golden`), so the diff
-  itself is the review artifact.
-- A merge to `main` **ships nothing by itself** — a release is a tag, a built
-  image, a pin bump in the separate homelab repository, and a deploy
+- **`/docs-sync`** before any PR — audits the branch diff for documentation it falsifies (README, PLAN.md, CLAUDE.md, worker READMEs).
+- **`make check`** whenever `docs/architecture/` changes, to inspect the Structurizr model; `make docs` runs docs-sync's mechanical half.
+- **`uv run ruff check . && uv run pytest`** for the Python service — tests must never call real Telegram/X APIs or send real email.
+- **The news-site golden-diff contract** under `workers/news-site/`: `npm test` runs invariants, a byte-comparison against golden pages, and prettier. A change that shouldn't alter output must produce a **zero** diff; one that should regenerates the goldens (`npm run golden`) so the diff is the review artifact.
+- A merge to `main` **ships nothing by itself** — a release is a tag, a built image, a homelab pin bump, and a deploy
   ([ADR 6](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0006-release-by-tag-and-pin.md)).
