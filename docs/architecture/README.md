@@ -4,19 +4,32 @@ The architecture of notification-digest: a single-owner service that collects
 the owner's own notifications on a schedule, summarizes each window with a
 language model, and delivers a digest with deep links.
 
-Start with [the architecture overview](overview/architecture-overview.md). It is
+Start with [the architecture overview](overview/01-notification-digest.md). It is
 also the Documentation tab of the Structurizr workspace and the opening pages of
 the exported PDF.
 
 ## Reading paths
 
-| If you are | Read |
-|---|---|
-| Meeting the system | [Overview](overview/architecture-overview.md), [scope](overview/scope.md), [glossary](overview/glossary.md) |
-| Reviewing the design | Overview, then [constraints](requirements/constraints.md), [quality attributes](requirements/quality-attributes.md) and the [decisions](#decisions) |
-| Operating it | [Deployment](deployment/deployment-architecture.md), [environments](deployment/environments.md), [availability](reliability/availability.md), [backups](reliability/backup-strategy.md), [disaster recovery](reliability/disaster-recovery.md), [observability](observability/observability-architecture.md) |
-| Assessing exposure | [Security architecture](security/security-architecture.md), [trust boundaries](security/trust-boundaries.md), [data classification](security/data-classification.md), [risks](risks/architecture-risks.md) |
-| Changing it | [Principles](principles/architecture-principles.md), [integration contracts](integration/integration-architecture.md), [technical debt](risks/technical-debt.md), [transition plan](roadmap/transition-plan.md) |
+The architecture description itself lives in [`overview/`](overview/), which is
+what Structurizr imports as its Documentation tab and what the PDF is built
+from — the two render the same seven files, in this order. Each section after
+the overview is a route for one job.
+
+| Section | For | File |
+|---|---|---|
+| Notification Digest | What the system is, its context, building blocks and one run | [01](overview/01-notification-digest.md) |
+| Scope | What is covered, what is not, and what was deliberately not built | [02](overview/02-scope.md) |
+| Reviewing the design | Deciding whether the design is sound | [03](overview/03-reviewing-the-design.md) |
+| Operating it | Running it, and fixing it when it breaks | [04](overview/04-operating-it.md) |
+| Assessing exposure | Asking what could hurt | [05](overview/05-assessing-exposure.md) |
+| Changing it | Modifying it without breaking its contracts | [06](overview/06-changing-it.md) |
+| Glossary | Terms used with a specific meaning here | [07](overview/07-glossary.md) |
+
+Those sections link out to the registers below, which hold the detail behind
+each claim and are the single source of truth for every cited ID. They are not
+copied into the reading paths, and `pdf-sections.txt` is deliberately empty so
+the PDF cannot acquire a page the Documentation tab does not have.
+
 
 ## View register
 
@@ -87,7 +100,7 @@ numbering without gaps.
 
 | Area | Documents |
 |---|---|
-| Overview | [Architecture overview](overview/architecture-overview.md) · [scope](overview/scope.md) · [glossary](overview/glossary.md) |
+| Overview (the Documentation tab and the PDF) | [01 overview](overview/01-notification-digest.md) · [02 scope](overview/02-scope.md) · [03 reviewing the design](overview/03-reviewing-the-design.md) · [04 operating it](overview/04-operating-it.md) · [05 assessing exposure](overview/05-assessing-exposure.md) · [06 changing it](overview/06-changing-it.md) · [07 glossary](overview/07-glossary.md) |
 | Requirements | [Constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) · [assumptions](requirements/assumptions.md) |
 | Principles | [Architecture principles](principles/architecture-principles.md) |
 | Security | [Security architecture](security/security-architecture.md) · [trust boundaries](security/trust-boundaries.md) · [data classification](security/data-classification.md) |

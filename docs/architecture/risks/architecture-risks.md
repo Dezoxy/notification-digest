@@ -14,4 +14,4 @@ One owner reviews and owns every row below — there is no separate risk board. 
 
 ## Review
 
-Reviewed together with [technical-debt.md](technical-debt.md) whenever PLAN.md's own roadmap is revisited. There is no separate quarterly cadence for a single-owner service — see [architecture-overview.md](../overview/architecture-overview.md) for why the operating model doesn't carry that governance.
+Reviewed together with [technical-debt.md](technical-debt.md) whenever PLAN.md's own roadmap is revisited. There is no separate quarterly cadence for a single-owner service — see [the overview](../overview/01-notification-digest.md) for why the operating model doesn't carry that governance.

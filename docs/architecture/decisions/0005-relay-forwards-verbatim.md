@@ -87,7 +87,7 @@ Negative / accepted trade-offs:
   translation applied to relay content, unlike every other lane.
 - The owner receives no native Telegram notification for their own forward
   (a forward sent from the owner's own user session generates no
-  notification for that session); a separate bot-posted `🔔` line exists
+  notification for that session); a separate bot-posted bell-emoji line exists
   purely to work around this (`README.md`'s relay section) — a workaround
   for a limitation of the chosen mechanism, not something upstream can fix.
 - `ChatForwardsRestrictedError` (a channel owner disabling forwarding) has

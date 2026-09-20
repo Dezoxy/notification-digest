@@ -57,6 +57,15 @@ ID_OWNERS = {
 ADR_NAME = re.compile(r"^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 ADR_STATUSES = {"Proposed", "Accepted", "Rejected", "Deprecated", "Superseded"}
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+# Documents imported into Structurizr's Documentation tab cannot use relative
+# links: the tab renders them outside the repository tree, so `../risks/x.md`
+# resolves to nothing for the reader. They link to this repository by absolute
+# URL instead, which check_links() skips along with every other http(s) link.
+# That would leave the most-linked documents in the repository unchecked, so
+# self-links are turned back into a path and checked on disk.
+SELF_BLOB = re.compile(
+    r"https://github\.com/Dezoxy/notification-digest/blob/main/([^)#\s]+)"
+)
 FENCE = re.compile(r"^\s*(```|~~~)")
 
 
@@ -297,10 +306,31 @@ def check_ids(f: Failures) -> None:
                     )
 
 
+INLINE_CODE = re.compile(r"`[^`]*`")
+
+
+def check_self_links(f: Failures) -> None:
+    """Absolute links back into this repository resolve to a real file.
+
+    Inline code is stripped first: a URL inside backticks is an example of the
+    form to use, not a claim that a file exists. Writing the convention down
+    must not fail the check that enforces it.
+    """
+    for src in markdown_files():
+        text = INLINE_CODE.sub("", prose(read(src)))
+        for path in SELF_BLOB.findall(text):
+            if not (REPO / path).exists():
+                f.add(
+                    "self-links",
+                    f"{rel(src)}: https://.../blob/main/{path} does not resolve",
+                )
+
+
 CHECKS = (
     check_twins,
     check_skill_mirror,
     check_links,
+    check_self_links,
     check_docs_index,
     check_adrs,
     check_view_register,

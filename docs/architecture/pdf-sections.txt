@@ -1,11 +1,11 @@
 # Extra pages for the architecture PDF, after the ADRs and before the views.
 # One path per line, relative to this directory. See scripts/build_architecture_pdf_source.py.
-requirements/constraints.md
-requirements/quality-attributes.md
-requirements/assumptions.md
-security/trust-boundaries.md
-data/data-architecture.md
-deployment/deployment-architecture.md
-reliability/disaster-recovery.md
-risks/architecture-risks.md
-risks/technical-debt.md
+#
+# DELIBERATELY EMPTY. Structurizr's Documentation tab imports overview/ and
+# nothing else, so every path listed here would be a page the PDF has and the
+# tab does not -- the two would describe the same system differently. The
+# architecture description lives in overview/ instead, and the registers it
+# links to stay in the repository as the detail behind each claim.
+#
+# Adding a line here is a decision to let the two renderings diverge. Prefer
+# growing a reading path in overview/ and linking to the document.
