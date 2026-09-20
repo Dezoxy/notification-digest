@@ -11,7 +11,7 @@
     "deploy:preview": "wrangler versions upload"
   },
   "devDependencies": {
-    "prettier": "3.9.6",
-    "wrangler": "4.129.0"
+    "prettier": "3.9.8",
+    "wrangler": "4.135.0"
   }
 }
