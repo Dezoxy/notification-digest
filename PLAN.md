@@ -102,6 +102,11 @@ notification-digest/
 │       └── pr-summary.yml        # post-merge PR summary -> docs/pr-summaries/pr-<n>.md
 ├── .githooks/
 │   └── pre-push                  # blocks direct pushes to main (ALLOW_MAIN_PUSH=1 for bootstrap)
+├── .claude/
+│   ├── settings.json             # project permission allowlist; see CLAUDE.md "Agent harness"
+│   └── skills/                   # docs-sync, pr-summary — invocable as /docs-sync, /pr-summary
+├── .agents/
+│   └── skills/                   # byte-identical mirror of .claude/skills, for non-Claude agents
 ├── digest/
 │   ├── __init__.py
 │   ├── __main__.py               # `python -m digest [daily [--force]|weekly|patreon|positions|relay|hide:<ch>]`

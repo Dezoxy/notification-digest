@@ -101,6 +101,32 @@ true at the multi-channel cutover.
   persist it, in which case prepend it to `docs/pr-summaries/pr-<n>.md` via a
   small docs PR (direct pushes to main stay hook-blocked).
 
+## Agent harness
+
+- ECC (`~/Documents/development-base/agent-base`) is used as a **globally
+  installed plugin**: its agents, skills and commands are already reachable as
+  `ecc:<name>`. Do NOT run ECC's `/project-init` against this repo. It was
+  evaluated on 2026-09-20 and rejected — `install-apply.js --target
+  claude-project` plans **825 operations**, copying all 22 languages' rule
+  files, ~130 skill directories, 68 agents and 160 script libs into
+  `.claude/`. That is a second, divergent copy of what the plugin already
+  serves, committed to a repo that tracks 281 files in total, and ECC updates
+  would never reach it.
+- Its Python rules also contradict the Conventions above outright: `black` +
+  `isort` against the ruff-only rule, `os.environ`/`dotenv` at call sites
+  against the `config.py`-only rule, and `pytest --cov=src` against a package
+  that is `digest/`. Adopting them would import guidance this repo has
+  deliberately rejected.
+- `.claude/settings.json` is the one piece of that surface worth keeping: a
+  narrow permission allowlist for the real toolchain (uv, ruff, pytest, the
+  worker's npm scripts, read-only git/gh), plus denies for pushes to main,
+  package publishes and the secret files `.gitignore` already covers. It is
+  project policy; per-clone state belongs in `.claude/settings.local.json`,
+  which stays untracked.
+- ECC's installer also sets `includeCoAuthoredBy: false`. That is deliberately
+  NOT adopted here — it is an attribution choice for the owner to make, not a
+  side effect of a tooling install.
+
 ## Verification
 
 Before declaring any task done:
