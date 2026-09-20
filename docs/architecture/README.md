@@ -38,9 +38,13 @@ the whole system.
 | Delivery | Operators | How does a code change reach the running host? | Owner, Actions, registry, the deploy role, Key Vault, the runner | Everything that happens during a run — none of this does | The release or deploy procedure changes | Rendered, not reviewed |
 | ProductionDeployment | Operators, reviewer | Where does the digest run, and what fails together? | The single node, the VM, its two paths, and the Cloudflare edge | Backup destinations; see [backup strategy](reliability/backup-strategy.md) | Hosting, placement or failure domains change | Verified 2026-09-20 |
 
-**Visual verification status:** the model parses and inspects clean
-against the pinned Structurizr image (`make check`: 0 errors, 0 warnings), and
-all eight views were rendered with `make export`.
+**Visual verification status:** verification is version-specific, so it names
+the version. Against **structurizr/structurizr:2026.09.19**, the pin in the
+Makefile and the version the homelab Structurizr server runs, the model parses
+and inspects clean (`make check`: 0 errors, 0 warnings) and all eight views
+render with `make export`. Re-rendering after the bump from `2026.06.28` left
+every view structurally identical — same elements, same relationships — so the
+reviews below carry over rather than being redone.
 
 Five were then reviewed at reading size — Landscape, Containers, Security,
 DigestRun and ProductionDeployment — and two defects were found and fixed:

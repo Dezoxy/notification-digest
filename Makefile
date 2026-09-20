@@ -8,7 +8,7 @@
 # The Structurizr image your viewer runs. Keep it identical to the server's pin
 # so the parser here is the parser there. The PNG/SVG export uses its
 # -playwright tag.
-STRUCTURIZR_IMAGE ?= structurizr/structurizr:2026.06.28
+STRUCTURIZR_IMAGE ?= structurizr/structurizr:2026.09.19
 # Pandoc with LaTeX and the Eisvogel template, for `make pdf` (~2 GB).
 PANDOC_IMAGE      ?= pandoc/extra:3.11.0.0-debian
 
