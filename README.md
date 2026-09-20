@@ -120,7 +120,9 @@ deploy time and must never be committed or logged.
 | `STATE_DB_PATH` | SQLite state database (`./state.db`). |
 | `ARCHIVE_DIR` | Where markdown digest copies are archived (`./archive`). |
 
-**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `PATREON_*`, `POSITIONS_TG_CHANNELS`, `POSITIONS_X_ACCOUNTS`, `POSITIONS_KEYWORDS` and `RELAY_TG_CHANNELS` use an empty-means-disabled shape instead of a flag.
+**Collectors** — each is off unless enabled; `NEWS_FEEDS`, `PATREON_*`,
+`POSITIONS_TG_CHANNELS`, `POSITIONS_X_ACCOUNTS`, `POSITIONS_KEYWORDS` and
+`RELAY_TG_CHANNELS` use an empty-means-disabled shape instead of a flag.
 
 | Variable | Description |
 |---|---|

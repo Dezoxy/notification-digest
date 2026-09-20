@@ -1,6 +1,8 @@
 # Architecture Risks
 
-One owner reviews and owns every row below — there is no separate risk board. "Accepted" means a deliberate decision not to mitigate further, recorded here rather than left implicit.
+One owner reviews and owns every row below — there is no separate risk board.
+"Accepted" means a deliberate decision not to mitigate further, recorded here
+rather than left implicit.
 
 | ID | Risk | Likelihood | Impact | Mitigation or accepted decision | Related |
 |---|---|---|---|---|---|
@@ -14,4 +16,7 @@ One owner reviews and owns every row below — there is no separate risk board. 
 
 ## Review
 
-Reviewed together with [technical-debt.md](technical-debt.md) whenever PLAN.md's own roadmap is revisited. There is no separate quarterly cadence for a single-owner service — see [the overview](../overview/01-notification-digest.md) for why the operating model doesn't carry that governance.
+Reviewed together with [technical-debt.md](technical-debt.md) whenever PLAN.md's
+own roadmap is revisited. There is no separate quarterly cadence for a
+single-owner service — see [the overview](../overview/01-notification-digest.md)
+for why the operating model doesn't carry that governance.

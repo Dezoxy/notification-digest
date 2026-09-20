@@ -77,9 +77,17 @@ not gaps waiting to be filled. A compromised session surfaces only as a
 collector auth failure in a run's own logs, or not at all if the attacker is
 quiet; every secret is rotated by hand. Explicitly **ACCEPTED**:
 
-- [RISK-001](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md) — the single Proxmox node is the entire failure domain; no second node is planned.
-- [RISK-002](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md) — personal-account credential compromise; no service-credential model exists for a personal account.
-- [RISK-003](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md) / [RISK-006](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md) — X account suspension, or any source losing free access; no technical mitigation and no budget line to replace one.
+- [RISK-001](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)
+  — the single Proxmox node is the entire failure domain; no second node is
+  planned.
+- [RISK-002](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)
+  — personal-account credential compromise; no service-credential model exists
+  for a personal account.
+- [RISK-003](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)
+  /
+  [RISK-006](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)
+  — X account suspension, or any source losing free access; no technical
+  mitigation and no budget line to replace one.
 - [RISK-004](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md) — unbounded summarization spend; unmeasured, accepted exposure.
 
 Not marked accepted: [RISK-005](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)

@@ -1,6 +1,13 @@
 # Integration Architecture
 
-Every contract in this document is with a system the owner does not control. Several are explicitly **unofficial** — reverse-engineered or ToS-violating access the owner has accepted the risk of ([C-03](../requirements/constraints.md)) — and can break without notice. None of them is documented as an OpenAPI spec; there is no `api/` directory in this repository. The two ends this system does own — `digest/publish.py` and `workers/news-site/src/ingest.js` — are the closest thing to a contract this repository can itself change.
+Every contract in this document is with a system the owner does not control.
+Several are explicitly **unofficial** — reverse-engineered or ToS-violating
+access the owner has accepted the risk of
+([C-03](../requirements/constraints.md)) — and can break without notice. None of
+them is documented as an OpenAPI spec; there is no `api/` directory in this
+repository. The two ends this system does own — `digest/publish.py` and
+`workers/news-site/src/ingest.js` — are the closest thing to a contract this
+repository can itself change.
 
 ## Collection sources (inbound — this system only ever reads from them)
 
@@ -30,4 +37,9 @@ Every contract in this document is with a system the owner does not control. Sev
 
 ## What is deliberately not here
 
-API contracts this repository does not own are not restated as OpenAPI or an equivalent spec — there is no `api/` directory in this repository, and a previous version of this document's link to one did not correspond to anything on disk. The exact request/response shapes summarized above live in the source modules cited in each row (`digest/collectors/*.py`, `digest/publish.py`, `workers/news-site/src/ingest.js`), not here.
+API contracts this repository does not own are not restated as OpenAPI or an
+equivalent spec — there is no `api/` directory in this repository, and a
+previous version of this document's link to one did not correspond to anything
+on disk. The exact request/response shapes summarized above live in the source
+modules cited in each row (`digest/collectors/*.py`, `digest/publish.py`,
+`workers/news-site/src/ingest.js`), not here.

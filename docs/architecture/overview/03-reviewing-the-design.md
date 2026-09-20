@@ -53,12 +53,34 @@ promise. See
 
 Six ADRs, each accepted, each naming what it gave up:
 
-- [ADR 1](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0001-pin-unofficial-x-client.md) — pin the unofficial X client exactly and gate every bump behind a manual hand-audit, trading automation for a bump that can never look routine.
-- [ADR 2](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0002-summarizer-fallback-chain.md) — fall back through a chain of different models on refusal or outage, trading a hard cost cap for availability.
-- [ADR 3](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0003-sqlite-is-the-source-of-truth.md) — SQLite on the VM is the one system of record; Cloudflare D1 is a one-way, disposable rendering copy, trading a real recovery rehearsal (never done) for a simple ownership rule.
-- [ADR 4](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0004-multi-channel-delivery.md) — keep email fully implemented as the default channel even though the live deployment disables it, trading ongoing maintenance of an unused path for a deployment that never fails to start with zero configuration.
-- [ADR 5](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0005-relay-forwards-verbatim.md) — one lane forwards public posts verbatim with no model in the loop, trading the summarized lanes' "never verbatim" posture (C-04) for handling media the model cannot caption.
-- [ADR 6](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0006-release-by-tag-and-pin.md) — release by git tag, deploy by a separate pin bump in another repository, trading one-step deploy convenience for a reproducible, auditable release history.
+- [ADR
+  1](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0001-pin-unofficial-x-client.md)
+  — pin the unofficial X client exactly and gate every bump behind a manual
+  hand-audit, trading automation for a bump that can never look routine.
+- [ADR
+  2](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0002-summarizer-fallback-chain.md)
+  — fall back through a chain of different models on refusal or outage, trading
+  a hard cost cap for availability.
+- [ADR
+  3](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0003-sqlite-is-the-source-of-truth.md)
+  — SQLite on the VM is the one system of record; Cloudflare D1 is a one-way,
+  disposable rendering copy, trading a real recovery rehearsal (never done) for
+  a simple ownership rule.
+- [ADR
+  4](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0004-multi-channel-delivery.md)
+  — keep email fully implemented as the default channel even though the live
+  deployment disables it, trading ongoing maintenance of an unused path for a
+  deployment that never fails to start with zero configuration.
+- [ADR
+  5](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0005-relay-forwards-verbatim.md)
+  — one lane forwards public posts verbatim with no model in the loop, trading
+  the summarized lanes' "never verbatim" posture (C-04) for handling media the
+  model cannot caption.
+- [ADR
+  6](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0006-release-by-tag-and-pin.md)
+  — release by git tag, deploy by a separate pin bump in another repository,
+  trading one-step deploy convenience for a reproducible, auditable release
+  history.
 
 ### What the design does not do, and why
 

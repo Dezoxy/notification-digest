@@ -121,6 +121,8 @@ Negative / accepted trade-offs:
 
 ## Related
 
-- Requirements: [QA-01](../requirements/quality-attributes.md), [QA-05](../requirements/quality-attributes.md), [A-03](../requirements/assumptions.md), [C-05](../requirements/constraints.md)
+- Requirements: [QA-01](../requirements/quality-attributes.md),
+  [QA-05](../requirements/quality-attributes.md),
+  [A-03](../requirements/assumptions.md), [C-05](../requirements/constraints.md)
 - Architecture views: not recorded
 - Other ADRs: none

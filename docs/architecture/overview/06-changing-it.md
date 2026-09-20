@@ -9,12 +9,29 @@ still open, and what a change must satisfy before it merges. Five stops.
 These are read from the codebase's own conventions and history, not aspiration
 — each has a concrete implication for a change you're about to make.
 
-- **[P-01](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md) Simplicity over redundancy.** No HA tier, no staging environment; idempotency is the one property this never trades away.
-- **[P-02](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md) Idempotency is a hard, enforced contract.** Cursors advance only after commit, inserts are `ON CONFLICT DO NOTHING`; this is covered by `tests/test_state.py`, not a documentation promise.
-- **[P-03](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md) Config is read in exactly one place.** `digest/config.py` is the only module allowed to call `os.environ`; a new setting is added to `Config`, never read ad hoc.
-- **[P-04](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md) No secrets in git, logs, or images.** Every collection credential is a personal account session, so a leak is an account takeover, not a rotatable key.
-- **[P-05](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md) Isolate and surface failure, never suppress it.** A collector's failure is caught, flagged, and banner-reported — it must never crash the run or be swallowed silently.
-- **[P-06](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md) Delete or flag a lane rather than half-maintain it.** New capabilities ship behind a default-off flag; a design that turns out to rest on a signal that doesn't exist is dropped outright, not shipped half-built.
+- **[P-01](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md)
+  Simplicity over redundancy.** No HA tier, no staging environment; idempotency
+  is the one property this never trades away.
+- **[P-02](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md)
+  Idempotency is a hard, enforced contract.** Cursors advance only after commit,
+  inserts are `ON CONFLICT DO NOTHING`; this is covered by
+  `tests/test_state.py`, not a documentation promise.
+- **[P-03](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md)
+  Config is read in exactly one place.** `digest/config.py` is the only module
+  allowed to call `os.environ`; a new setting is added to `Config`, never read
+  ad hoc.
+- **[P-04](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md)
+  No secrets in git, logs, or images.** Every collection credential is a
+  personal account session, so a leak is an account takeover, not a rotatable
+  key.
+- **[P-05](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md)
+  Isolate and surface failure, never suppress it.** A collector's failure is
+  caught, flagged, and banner-reported — it must never crash the run or be
+  swallowed silently.
+- **[P-06](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/principles/architecture-principles.md)
+  Delete or flag a lane rather than half-maintain it.** New capabilities ship
+  behind a default-off flag; a design that turns out to rest on a signal that
+  doesn't exist is dropped outright, not shipped half-built.
 
 ### The contracts you do not control
 
@@ -43,10 +60,18 @@ Six items of technical debt are tracked, each with a plan or an explicit
 non-plan — no silent gaps:
 
 - **[TD-001](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)** — `arc_context` has no prune; it grows without bound and no fix is proposed.
-- **[TD-002](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)** — the "D1 is disposable and rebuildable" design intent has never been exercised end to end.
-- **[TD-003](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)** — end-to-end run latency has never been measured; a slow run would currently go unnoticed.
-- **[TD-004](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)** — Hungarian readers never see the "What changed" delta block; an open, unapproved owner decision.
-- **[TD-005](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)** — `config.py`'s in-repo defaults for two flags don't match what's actually live in production.
+- **[TD-002](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)**
+  — the "D1 is disposable and rebuildable" design intent has never been
+  exercised end to end.
+- **[TD-003](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)**
+  — end-to-end run latency has never been measured; a slow run would currently
+  go unnoticed.
+- **[TD-004](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)**
+  — Hungarian readers never see the "What changed" delta block; an open,
+  unapproved owner decision.
+- **[TD-005](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)**
+  — `config.py`'s in-repo defaults for two flags don't match what's actually
+  live in production.
 - **[TD-006](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/technical-debt.md)** — a restore from backup can re-deliver an already-delivered digest.
 
 **TD-006 matters most before you touch delivery or backup code.** It directly
@@ -81,9 +106,17 @@ appear here — each is explicitly ruled out, not simply unlisted.
 
 ### What a change must satisfy before it merges
 
-- **`/docs-sync`** before any PR — audits the branch diff for documentation it falsifies (README, PLAN.md, CLAUDE.md, worker READMEs).
-- **`make check`** whenever `docs/architecture/` changes, to inspect the Structurizr model; `make docs` runs docs-sync's mechanical half.
-- **`uv run ruff check . && uv run pytest`** for the Python service — tests must never call real Telegram/X APIs or send real email.
-- **The news-site golden-diff contract** under `workers/news-site/`: `npm test` runs invariants, a byte-comparison against golden pages, and prettier. A change that shouldn't alter output must produce a **zero** diff; one that should regenerates the goldens (`npm run golden`) so the diff is the review artifact.
-- A merge to `main` **ships nothing by itself** — a release is a tag, a built image, a homelab pin bump, and a deploy
+- **`/docs-sync`** before any PR — audits the branch diff for documentation it
+  falsifies (README, PLAN.md, CLAUDE.md, worker READMEs).
+- **`make check`** whenever `docs/architecture/` changes, to inspect the
+  Structurizr model; `make docs` runs docs-sync's mechanical half.
+- **`uv run ruff check . && uv run pytest`** for the Python service — tests must
+  never call real Telegram/X APIs or send real email.
+- **The news-site golden-diff contract** under `workers/news-site/`: `npm test`
+  runs invariants, a byte-comparison against golden pages, and prettier. A
+  change that shouldn't alter output must produce a **zero** diff; one that
+  should regenerates the goldens (`npm run golden`) so the diff is the review
+  artifact.
+- A merge to `main` **ships nothing by itself** — a release is a tag, a built
+  image, a homelab pin bump, and a deploy
   ([ADR 6](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0006-release-by-tag-and-pin.md)).
