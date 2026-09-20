@@ -102,6 +102,10 @@ def markdown_files() -> list[Path]:
             for p in root.rglob("*.md")
             if not SKIP_DIRS.intersection(p.relative_to(REPO).parts)
             and VENDORED not in p.parents
+            # A symlink into overview/ is an alias for a document that already
+            # appears under its own folder. Counting it twice would demand its
+            # own index entry and report every finding in it twice.
+            and not p.is_symlink()
         ]
     return [p for p in files if p.exists()]
 
@@ -366,6 +370,44 @@ def check_line_width(f: Failures) -> None:
             )
 
 
+OVERVIEW = ARCH / "overview"
+# overview/ IS the imported folder, so its own files need no pointer. ADRs are
+# imported by `!adrs`, not `!docs`, so they reach the document by their own route.
+NOT_SYMLINKED = {"overview", "decisions"}
+
+
+def check_overview_complete(f: Failures) -> None:
+    """Every architecture document reaches the Documentation tab and the PDF.
+
+    Structurizr imports overview/ and does not recurse, so a document is in the
+    tab -- and therefore in the PDF, which is built from the same folder -- only
+    if a file in overview/ points at it. The registers stay in their own folders
+    and are symlinked in, so each one is authored once. A register nobody
+    symlinked is invisible in the artifact people are handed, while still
+    looking present in the repository.
+    """
+    if not OVERVIEW.is_dir():
+        return
+    linked = {
+        link.resolve()
+        for link in OVERVIEW.iterdir()
+        if link.is_symlink() and link.suffix == ".md"
+    }
+    for doc in sorted(ARCH.rglob("*.md")):
+        parts = doc.relative_to(ARCH).parts
+        if len(parts) == 1 or parts[0] in NOT_SYMLINKED:
+            continue  # ARCH/README.md, or an ADR
+        if SKIP_DIRS.intersection(parts) or doc.is_symlink():
+            continue
+        if doc.resolve() not in linked:
+            f.add(
+                "overview-complete",
+                f"{rel(doc)} is in no reading path: symlink it into "
+                f"docs/architecture/overview/ (NN-name.md) or it stays out of "
+                f"the PDF",
+            )
+
+
 CHECKS = (
     check_twins,
     check_skill_mirror,
@@ -373,6 +415,7 @@ CHECKS = (
     check_self_links,
     check_line_width,
     check_docs_index,
+    check_overview_complete,
     check_adrs,
     check_view_register,
     check_speaker_notes,

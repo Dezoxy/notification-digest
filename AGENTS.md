@@ -52,6 +52,18 @@ true at the multi-channel cutover.
   later file is a `## ` section, and the numeric prefixes are what order them.
   `pdf-sections.txt` is deliberately empty; a line in it is a page the PDF has
   and the tab does not. Grow a reading path instead.
+- **The PDF is the deliverable, and it is complete.** It is handed to people at
+  different levels, so it must stand alone: no section may require opening a
+  link to be understood. `overview/` therefore holds the audience reading paths
+  as real files, and **symlinks every register into itself** — `NN-name.md ->
+  ../<folder>/<name>.md`. Each document is authored once, in its own folder,
+  where its IDs are owned; the symlink only puts it in the imported folder and
+  fixes its order. `check_overview_complete` fails when a register has no
+  symlink, because an unlinked register is invisible in the artifact people are
+  handed while still looking present in the repository.
+- Keep every `![alt](embed:Key)` on ONE line. Structurizr tolerates a wrapped
+  image; the PDF builder matches an embed per line, so a wrapped one drops the
+  view out of the document into the appendix, and the build still exits 0.
 - Files in `overview/` link to the registers by **absolute** URL
   (`https://github.com/Dezoxy/notification-digest/blob/main/...`), because a
   relative link does not resolve inside the rendered tab. `make docs` checks
