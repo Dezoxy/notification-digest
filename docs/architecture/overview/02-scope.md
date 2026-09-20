@@ -1,6 +1,6 @@
-## Scope
+# Scope
 
-### In scope
+## In scope
 
 - Collecting new items from the owner's own accounts and from public feeds.
 - Keeping enough state to guarantee that a re-run duplicates nothing.
@@ -11,7 +11,7 @@
 - The Cloudflare Worker in `workers/news-site/`, because it is a delivery
   channel of this system and lives in this repository.
 
-### Out of scope
+## Out of scope
 
 | Not covered here | Where it lives instead |
 |---|---|
@@ -21,7 +21,7 @@
 | Model behaviour and pricing | The model providers |
 | The content itself | Third parties wrote it; this system summarizes and links to it ([C-04](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)) |
 
-### Deliberately not built
+## Deliberately not built
 
 These are decisions, not gaps. Each one is a consequence of a single owner and
 a single node.

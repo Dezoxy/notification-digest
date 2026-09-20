@@ -75,14 +75,21 @@ delivers nothing twice — the system's one absolute guarantee
 
 ## Reading paths
 
-The sections that follow are routes through this architecture, each for a
-different job. Take the one that matches yours.
+This document is complete on its own. The sections below are routes through it
+for different readers; after them, every reference section they cite follows in
+full, so nothing here depends on opening a link.
 
 | Section | For |
 |---|---|
 | **Scope** | What this system covers, and what it deliberately does not |
-| **Reviewing the design** | Deciding whether the design is sound |
-| **Operating it** | Running it, and fixing it when it breaks |
-| **Assessing exposure** | Asking what could hurt |
-| **Changing it** | Modifying it without breaking its contracts |
+| **For stakeholders** | What it is, what it produces, what it costs, what could go wrong. No protocols |
+| **For the CTO** | Exposure, data, recovery, the risks accepted rather than mitigated, and cost |
+| **For engineers** | The design, the runtime, the decisions, and what a change must satisfy |
+| **For operators** | How a change reaches the host, what fails together, backups and recovery |
 | **Glossary** | Terms used with a specific meaning here |
+
+Then the reference sections, in order: the requirements and principles the
+design answers to; security, data and integration; deployment, reliability and
+observability; and finally the risks, the debt and the roadmap. Each is the
+single authored copy of that material — the reading paths above cite them
+rather than repeating them.

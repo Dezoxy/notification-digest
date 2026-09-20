@@ -10,25 +10,31 @@ the exported PDF.
 
 ## Reading paths
 
-The architecture description itself lives in [`overview/`](overview/), which is
-what Structurizr imports as its Documentation tab and what the PDF is built
-from — the two render the same seven files, in this order. Each section after
-the overview is a route for one job.
+The architecture description lives in [`overview/`](overview/). Structurizr
+imports that folder as its Documentation tab and the PDF is built from it, so
+the two render the same document — and the PDF is complete on its own: no
+section needs a link followed to be understood.
 
-| Section | For | File |
-|---|---|---|
-| Notification Digest | What the system is, its context, building blocks and one run | [01](overview/01-notification-digest.md) |
-| Scope | What is covered, what is not, and what was deliberately not built | [02](overview/02-scope.md) |
-| Reviewing the design | Deciding whether the design is sound | [03](overview/03-reviewing-the-design.md) |
-| Operating it | Running it, and fixing it when it breaks | [04](overview/04-operating-it.md) |
-| Assessing exposure | Asking what could hurt | [05](overview/05-assessing-exposure.md) |
-| Changing it | Modifying it without breaking its contracts | [06](overview/06-changing-it.md) |
-| Glossary | Terms used with a specific meaning here | [07](overview/07-glossary.md) |
+It opens with routes for different readers:
 
-Those sections link out to the registers below, which hold the detail behind
-each claim and are the single source of truth for every cited ID. They are not
-copied into the reading paths, and `pdf-sections.txt` is deliberately empty so
-the PDF cannot acquire a page the Documentation tab does not have.
+| Section | For |
+|---|---|
+| [Notification Digest](overview/01-notification-digest.md) | What the system is, its context, building blocks and one run |
+| [Scope](overview/02-scope.md) | What is covered, what is not, what was deliberately not built |
+| [For stakeholders](overview/03-for-stakeholders.md) | What it produces, what it costs, what could go wrong. No protocols |
+| [For the CTO](overview/04-for-the-cto.md) | Exposure, data, recovery, accepted risk, cost |
+| [For engineers](overview/05-for-engineers.md) | The design, the runtime, the decisions, the merge gate |
+| [For operators](overview/06-for-operators.md) | How a change ships, what fails together, backup and recovery |
+| [Glossary](overview/07-glossary.md) | Terms used with a specific meaning here |
+
+Every register below then follows **in the same document**. Each is authored
+once, in its own folder where its IDs are owned, and symlinked into `overview/`
+as `NN-name.md` so it appears in the tab and the PDF in a fixed order. That is
+what `check_overview_complete` enforces: a register nobody symlinked is
+invisible in the artifact people are handed, while still looking present here.
+
+`pdf-sections.txt` stays empty. It exists only to append pages the tab does not
+have, and nothing should.
 
 
 ## View register
@@ -100,7 +106,7 @@ numbering without gaps.
 
 | Area | Documents |
 |---|---|
-| Overview (the Documentation tab and the PDF) | [01 overview](overview/01-notification-digest.md) · [02 scope](overview/02-scope.md) · [03 reviewing the design](overview/03-reviewing-the-design.md) · [04 operating it](overview/04-operating-it.md) · [05 assessing exposure](overview/05-assessing-exposure.md) · [06 changing it](overview/06-changing-it.md) · [07 glossary](overview/07-glossary.md) |
+| Narrative (opens the tab and the PDF) | [01 overview](overview/01-notification-digest.md) · [02 scope](overview/02-scope.md) · [03 stakeholders](overview/03-for-stakeholders.md) · [04 CTO](overview/04-for-the-cto.md) · [05 engineers](overview/05-for-engineers.md) · [06 operators](overview/06-for-operators.md) · [07 glossary](overview/07-glossary.md) |
 | Requirements | [Constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) · [assumptions](requirements/assumptions.md) |
 | Principles | [Architecture principles](principles/architecture-principles.md) |
 | Security | [Security architecture](security/security-architecture.md) · [trust boundaries](security/trust-boundaries.md) · [data classification](security/data-classification.md) |
