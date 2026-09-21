@@ -180,6 +180,72 @@ export function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
   return `<div class="sourcekey"><span class="sklabel">${esc(strings.sourcesLabel)}</span>${countSpans}${failedSpans}</div>`;
 }
 
+// Model display names (model-display-names pass): the provenance row below
+// used to show the raw recorded model id verbatim ("claude-opus-5",
+// "openai/gpt-5.6-terra") — accurate, but not something a reader parses at a
+// glance. This maps a raw id to a short human name; the raw id itself is
+// never dropped, it just moves to the chip's `title` attribute (see
+// renderProvenance below) so it's one hover away. Pure and total: every
+// input, including ones this map has never seen, produces SOME string —
+// never throws, never returns blank. Order matters — first matching rule
+// wins:
+//   1. non-string (or empty string) -> returned unchanged, fail-safe for a
+//      caller that skips its own guard.
+//   2. provider prefix ("openai/", "z-ai/", …) stripped: everything up to
+//      and including the LAST "/".
+//   3. Claude family (claude-opus-5, claude-sonnet-4-6, claude-haiku-4-5,
+//      …) -> "<Family> <version>", version's internal "-" joined as ".".
+//   4. the historical bare alias "sonnet" -> "Sonnet 5" — see the dedicated
+//      comment on that branch below for why this one alias is safe to map.
+//   5. GPT ids (gpt-5, gpt-5.6-sol, …) -> "GPT-<version>[ <Capitalized
+//      suffix words>]".
+//   6. GLM ids (glm-5.3) -> "GLM-<version>".
+//   7. anything else (an id this map has never seen, or a hostile string) ->
+//      the ORIGINAL id, untouched — never blank, never mangled, and safe
+//      because the caller esc()'s whatever this returns before it reaches
+//      the page.
+export function modelDisplayName(id) {
+  if (typeof id !== "string" || id.length === 0) return id;
+
+  const lastSlash = id.lastIndexOf("/");
+  const stripped = lastSlash === -1 ? id : id.slice(lastSlash + 1);
+
+  const claudeMatch = stripped.match(/^claude-(opus|sonnet|haiku)-(\d+(?:-\d+)*)$/);
+  if (claudeMatch) {
+    const family = claudeMatch[1].charAt(0).toUpperCase() + claudeMatch[1].slice(1);
+    const version = claudeMatch[2].split("-").join(".");
+    return `${family} ${version}`;
+  }
+
+  // Historical alias: model provenance only started being recorded on
+  // 2026-09-04, and back then the app pinned the CLI alias "sonnet" rather
+  // than an explicit dated id — every row carrying this bare alias falls in
+  // the Sonnet 5 era (translate_model_fallback's own comment in
+  // digest/config.py contrasts this alias's Sonnet 5 against the older
+  // 4.6-era pin). The app now records "claude-sonnet-5" directly instead of
+  // the alias, so this mapping only ever serves existing historical rows and
+  // will never need to grow a new one. Deliberately NOT extended to "opus"
+  // or "haiku" bare aliases — no such rows exist, and guessing a mapping for
+  // an alias that was never actually recorded would just go stale.
+  if (stripped === "sonnet") return "Sonnet 5";
+
+  const gptMatch = stripped.match(/^gpt-(\d+(?:\.\d+)*)(?:-(.+))?$/);
+  if (gptMatch) {
+    const [, version, suffix] = gptMatch;
+    if (!suffix) return `GPT-${version}`;
+    const words = suffix
+      .split("-")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+    return `GPT-${version} ${words}`;
+  }
+
+  const glmMatch = stripped.match(/^glm-(\d+(?:\.\d+)*)$/);
+  if (glmMatch) return `GLM-${glmMatch[1]}`;
+
+  return id;
+}
+
 // Model provenance ("Written by"/"Translated with" byline, PLAN.md
 // OpenRouter-fallback work): a SECOND digest-page colophon row, directly
 // below the source key above — which model wrote this brief, and (when the
@@ -207,6 +273,14 @@ export function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
 // that leg — a fact the label can't carry, so it keeps its own marker,
 // shown only when that leg's `fallback === true`. See .provline/.provenance
 // in the CSS for the two-line grid layout this markup lays out into.
+//
+// Model display names (model-display-names pass): the visible chip text is
+// now a short human name (modelDisplayName(leg.model)) rather than the raw
+// recorded id — "Opus 5" instead of "claude-opus-5", "GPT-5.6 Terra"
+// instead of "openai/gpt-5.6-terra". The raw id isn't lost: it lands on the
+// chip's `title` attribute, one hover away. Both the display name and the
+// raw-id title go through esc() — the model id is stored data, not markup,
+// same trust posture as every other D1-sourced string this file inserts.
 export function renderProvenance(provenanceJson, strings) {
   if (!provenanceJson) return "";
   let parsed;
@@ -235,7 +309,8 @@ export function renderProvenance(provenanceJson, strings) {
     const fallback = leg.fallback === true;
     const prefix = fallback ? "↻ " : "";
     const cls = fallback ? "sk sk-fallback" : "sk";
-    return `<div class="provline"><span class="sklabel">${esc(label)}</span><span class="${cls}">${prefix}${esc(leg.model)} · ${esc(leg.effort)}</span></div>`;
+    const displayName = modelDisplayName(leg.model);
+    return `<div class="provline"><span class="sklabel">${esc(label)}</span><span class="${cls}" title="${esc(leg.model)}">${prefix}${esc(displayName)} · ${esc(leg.effort)}</span></div>`;
   };
 
   const summarizeHtml = legLine(parsed.summarize, strings.provenanceLabel);
