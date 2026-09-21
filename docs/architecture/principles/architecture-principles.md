@@ -1,10 +1,10 @@
-# Architecture Principles
+## Architecture Principles
 
 Each principle has a rationale and an implication. A principle without an
 implication is a slogan. These are the principles this codebase's own
 conventions and history actually evidence — not an aspirational list.
 
-## P-01 Simplicity over redundancy
+### P-01 Simplicity over redundancy
 
 - **Rationale:** There is one owner, who is also the only operator and the only
   reader ([C-01](../requirements/constraints.md)). Time spent on resilience
@@ -16,7 +16,7 @@ conventions and history actually evidence — not an aspirational list.
 - **Exception:** Idempotency (P-02) is never traded away for simplicity — it is
   the one property this system will not compromise on.
 
-## P-02 Idempotency is a hard, enforced contract
+### P-02 Idempotency is a hard, enforced contract
 
 - **Rationale:** A crashed or re-run process must never duplicate an item or a
   delivery. Silent duplication is worse than a missed run, because the reader
@@ -28,7 +28,7 @@ conventions and history actually evidence — not an aspirational list.
   This is enforced in code and covered by `tests/test_state.py`, not left as a
   documentation promise.
 
-## P-03 Config is read in exactly one place
+### P-03 Config is read in exactly one place
 
 - **Rationale:** A setting with two ways to reach the code has two ways to
   disagree with itself.
@@ -37,7 +37,7 @@ conventions and history actually evidence — not an aspirational list.
   (CLAUDE.md, Conventions). Adding a setting means adding it to `Config`, never
   reading it ad hoc wherever it happens to be needed.
 
-## P-04 No secrets in git, logs, or images
+### P-04 No secrets in git, logs, or images
 
 - **Rationale:** Every collection credential in this system authenticates as the
   owner's own personal account, not a service principal
@@ -49,7 +49,7 @@ conventions and history actually evidence — not an aspirational list.
   `repr=False`; error messages name the offending variable and never echo its
   value.
 
-## P-05 Isolate and surface failure, never suppress it
+### P-05 Isolate and surface failure, never suppress it
 
 - **Rationale:** A digest built from several independent, uncontrolled
   third-party sources will have a source fail on any given run. What matters is
@@ -60,7 +60,7 @@ conventions and history actually evidence — not an aspirational list.
   nothing in the application second-guesses it with a separate,
   independently-maintained alert path.
 
-## P-06 Delete or flag a lane rather than half-maintain it
+### P-06 Delete or flag a lane rather than half-maintain it
 
 - **Rationale:** A single-owner codebase has no spare capacity to carry a
   feature that is neither fully supported nor removed.

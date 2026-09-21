@@ -1,11 +1,11 @@
-# Backup Strategy
+## Backup Strategy
 
 The only store this system needs to back up is `state.db` — the SQLite system of
 record at `/srv/appdata/digest` ([ADR
 0003](../decisions/0003-sqlite-is-the-source-of-truth.md)). Everything else is
 either disposable, replaceable from that file, or out of this repo's scope.
 
-## What is backed up
+### What is backed up
 
 | What | Method | Schedule | Retention | Where | Verified |
 |---|---|---|---|---|---|
@@ -26,7 +26,7 @@ docstring, "so an external `sqlite3 .backup` snapshot run against the live file
 process," with `busy_timeout=5000` absorbing any brief lock contention between a
 backup job and a timer-driven run. Snapshots are root-owned.
 
-## The VirtIO-FS gotcha
+### The VirtIO-FS gotcha
 
 SQLite must never be opened directly on the VirtIO-FS share used for the offsite
 copy — it fails there with `disk I/O error`, which looks like corruption but is
@@ -39,7 +39,7 @@ backup.
 There is also no `sqlite3` binary on the VM — inspection there is done with
 `python3`'s `sqlite3` module.
 
-## Restore
+### Restore
 
 The application code has no restore path of its own — restoring means stopping
 the digest timers, copying the chosen snapshot back over
@@ -61,7 +61,7 @@ automatically avoid; there is no automated safeguard against it today
 manual check of which digests were pending as of the snapshot before the next
 scheduled run fires.
 
-## What restoring does *not* recover
+### What restoring does *not* recover
 
 - Items collected and delivered between the snapshot and the loss are gone from
   `state.db`, though most sources (notably Telegram, since messages remain in

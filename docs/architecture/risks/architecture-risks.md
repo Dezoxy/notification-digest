@@ -1,4 +1,4 @@
-# Architecture Risks
+## Architecture Risks
 
 One owner reviews and owns every row below — there is no separate risk board.
 "Accepted" means a deliberate decision not to mitigate further, recorded here
@@ -14,7 +14,7 @@ rather than left implicit.
 | RISK-006 | A third-party source removes free access | Observed in practice — Reddit's Data Team formally refused the owner's official API application (2026-08-06), which is why that collector now runs on a cookie session instead of OAuth | Medium — the affected collector's items stop appearing; every other collector and the run itself continue unaffected | Each collector is gated behind its own flag with isolated failure handling; RSS and Hacker News carry no auth dependency and are the lowest-exposure sources. **ACCEPTED** — [A-06](../requirements/assumptions.md) records that there is no budget line to replace a source that starts requiring paid access |
 | RISK-007 | Reddit and Patreon carry the same unofficial-access, ToS-violation posture as X, but CLAUDE.md's hard rules name only the X collector explicitly | Confirmed in the collectors' own code: `digest/collectors/reddit.py`'s module docstring states it "mirrors the ToS-risk posture `digest/collectors/x.py` already takes... cookie session, unofficial API, ToS risk accepted by the owner"; `digest/collectors/patreon.py`'s docstring records "the same accepted-risk stance CLAUDE.md records for the X collector" | Medium for Reddit; for Patreon, the collector's own docstring notes the account is a **paid subscription**, so an adverse platform action costs more than X's free account does | Same collector-isolation and enable-flag pattern as X; the Patreon collector reads an explicit `current_user_can_view` field rather than inferring success from a 200 response. Not separately named as an accepted risk anywhere CLAUDE.md's hard rules are stated — **this is the gap this row exists to record**, not a resolved item |
 
-## Review
+### Review
 
 Reviewed together with [technical-debt.md](technical-debt.md) whenever PLAN.md's
 own roadmap is revisited. There is no separate quarterly cadence for a

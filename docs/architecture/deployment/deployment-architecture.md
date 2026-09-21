@@ -1,4 +1,4 @@
-# Deployment Architecture
+## Deployment Architecture
 
 Modelled in [`../model/deployment.dsl`](../model/deployment.dsl); see the
 **ProductionDeployment** view (`docs/architecture/model/views.dsl`). This
@@ -7,7 +7,7 @@ running container, and the schedule/locking model on the host. Local development
 is covered separately in [environments.md](environments.md) — it is not part of
 this model.
 
-## What runs where
+### What runs where
 
 | Component | Runs on | Technology | Notes |
 |---|---|---|---|
@@ -24,7 +24,7 @@ or replicated. See [availability.md](../reliability/availability.md) and
 [disaster-recovery.md](../reliability/disaster-recovery.md) for the
 consequences.
 
-## Tag → image → pin → deploy
+### Tag → image → pin → deploy
 
 This repository cannot deploy itself ([C-07](../requirements/constraints.md),
 [ADR 0006](../decisions/0006-release-by-tag-and-pin.md)). A merge to `main` here
@@ -56,7 +56,7 @@ repo bumps and deploys. See `homelabDeploy` in
 [model/people-systems.dsl](../model/people-systems.dsl) and the **Delivery**
 view for the full chain outside a run.
 
-## Schedule and locking model
+### Schedule and locking model
 
 Scheduling itself — which systemd timer fires which mode, and when — is
 homelab-repo configuration, not this repo's. This repo only defines what each
@@ -91,7 +91,7 @@ run mode does (`python -m digest
   with exactly one exit code
   ([observability-architecture.md](../observability/observability-architecture.md)).
 
-## Container shape
+### Container shape
 
 - `Dockerfile` builds a non-root (`uid 1000`) image with Python 3.14,
   `uv`-managed dependencies, Node.js + the Claude Code CLI (pinned to the same

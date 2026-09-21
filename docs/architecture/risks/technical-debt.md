@@ -1,4 +1,4 @@
-# Technical Debt
+## Technical Debt
 
 Debt that affects architecture, not code-level cleanups — those belong in the
 repository's own backlog.
@@ -12,7 +12,7 @@ repository's own backlog.
 | TD-005 | `config.py`'s in-repo defaults for `VERIFY_DAILY_ENABLED` and `CONTEXT_ENABLED` (both off) don't match what actually runs in production (both on) | Each flag shipped default-off pending live validation against real output; validation succeeded and the flags were flipped on for the VM in the separate homelab repository's host variables, but the in-repo default was deliberately left unchanged (PLAN.md §11.4, §11.6) | Reading `config.py` alone misrepresents production behavior for two features that are, in fact, live and shipping every day | PLAN.md §11.4 records "flipping the in-repo default remains open and owner-gated" — no date, no committed step |
 | TD-006 | A restore from backup can re-deliver a digest that was already delivered | `digests` rows carry per-channel delivery flags, and the pending-digest retry pass re-sends anything not flagged. Restoring a snapshot taken before a digest was flagged makes an already-sent digest look pending again. Backups and the retry pass were each designed correctly in isolation; nothing reconciles them | Directly contradicts [QA-01](../requirements/quality-attributes.md), the one absolute guarantee this system makes. Latent: it costs nothing until the first real restore, which is also when it is hardest to notice | None. Today the mitigation is manual — after a restore, check which digests were pending as of the snapshot before the next timer fires. See [backup-strategy.md](../reliability/backup-strategy.md) |
 
-## Review
+### Review
 
 Reviewed together with [architecture-risks.md](architecture-risks.md) whenever
 PLAN.md's own roadmap is revisited. Debt tracked here is either scheduled in

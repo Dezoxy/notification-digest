@@ -1,4 +1,4 @@
-# Disaster Recovery
+## Disaster Recovery
 
 Scope: scenarios where the running system, its host, or its state is lost
 outright — as opposed to [availability.md](availability.md), which covers a
@@ -14,9 +14,9 @@ unverified estimate of the steps involved, not a committed target. Where an RPO
 is stated, it follows directly from [backup-strategy.md](backup-strategy.md) or
 from how the source system itself retains data — it is not a target either.
 
-## Scenarios
+### Scenarios
 
-### 1. The VM is lost, the Proxmox node is fine
+#### 1. The VM is lost, the Proxmox node is fine
 
 Disk failure, accidental deletion, or a bad update inside `01-myapps-vm` itself.
 
@@ -33,7 +33,7 @@ Disk failure, accidental deletion, or a bad update inside `01-myapps-vm` itself.
   re-triggering an already-delivered digest — this scenario is exactly where
   that matters.
 
-### 2. The Proxmox node itself is lost
+#### 2. The Proxmox node itself is lost
 
 Hardware failure. Because the runner, its state, and the *local* backup copy all
 sit on this one node ([C-05](../requirements/constraints.md)), this scenario
@@ -46,7 +46,7 @@ depends entirely on the **offsite** copy of the snapshot surviving.
   happen. No procedure for this step exists in either repository as far as this
   document can confirm.
 
-### 3. `state.db` is corrupt
+#### 3. `state.db` is corrupt
 
 A bad shutdown mid-write, a mistaken write to the VirtIO-FS share (see
 [backup-strategy.md](backup-strategy.md)'s gotcha), or a disk-level fault on
@@ -57,7 +57,7 @@ A bad shutdown mid-write, a mistaken write to the VirtIO-FS share (see
   the latest known-good snapshot over the corrupt file, restart.
 - **Gap:** identical to scenario 1's restore/duplicate-delivery tension.
 
-### 4. Cloudflare D1 (Site Database) is lost
+#### 4. Cloudflare D1 (Site Database) is lost
 
 D1 is explicitly disposable by design — the rendering copy, not the source of
 truth ([ADR 0003](../decisions/0003-sqlite-is-the-source-of-truth.md)).
@@ -69,7 +69,7 @@ truth ([ADR 0003](../decisions/0003-sqlite-is-the-source-of-truth.md)).
   has never been exercised end to end ([TD-002](../risks/technical-debt.md)).
   "Disposable" describes the intended architecture, not a tested recovery.
 
-### 5. A source session or cookie dies
+#### 5. A source session or cookie dies
 
 Not an infrastructure loss, but the failure this system is most exposed to day
 to day: the Telegram `StringSession` or the X cookie jar stops working
@@ -98,14 +98,14 @@ to day: the Telegram `StringSession` or the X cookie jar stops working
   window collectors, and the `patreon`/`positions`/`relay` lanes that do not
   depend on the same session state in the same way, are unaffected.
 
-### 6. Runtime secrets (Key Vault) become unavailable
+#### 6. Runtime secrets (Key Vault) become unavailable
 
 Out of scope for this document — Azure Key Vault's own availability and recovery
 are Microsoft's responsibility, not this system's. If Key Vault is unreachable
 at deploy time, the affected deploy fails closed (no secrets, no start); this
 has no bearing on an already-running deployment.
 
-## What this document does not cover
+### What this document does not cover
 
 Command-by-command restore procedures belong in an operational runbook, not here
 — none is known to exist in either repository at the time of writing, which is

@@ -64,6 +64,9 @@ true at the multi-channel cutover.
 - Keep every `![alt](embed:Key)` on ONE line. Structurizr tolerates a wrapped
   image; the PDF builder matches an embed per line, so a wrapped one drops the
   view out of the document into the appendix, and the build still exits 0.
+- Title documents under `docs/architecture/overview/` with `##`, not `#`.
+  Structurizr hides a level-1 heading from the page and the navigation, and the
+  PDF will not show you the problem. `make docs` enforces it.
 - Files in `overview/` link to the registers by **absolute** URL
   (`https://github.com/Dezoxy/notification-digest/blob/main/...`), because a
   relative link does not resolve inside the rendered tab. `make docs` checks

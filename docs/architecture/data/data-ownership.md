@@ -1,4 +1,4 @@
-# Data Ownership
+## Data Ownership
 
 One owner, one operator, one reader ([C-01](../requirements/constraints.md)):
 there is no cross-team ownership question here in the usual sense. What this
@@ -16,7 +16,7 @@ the owner can and cannot actually delete once it exists.
 | Personal account credentials (`TG_SESSION`, X/Reddit/Patreon session cookies) | Azure Key Vault | The owner only | No — these are the owner's own accounts | Yes — rotated or revoked by the owner at any time; revocation also breaks collection from that source until re-authenticated |
 | News Site secrets (`SITE_TOKEN`, `INGEST_KEY`) | Azure Key Vault (source of truth for deploy) and Cloudflare's own secret store (live copy) | The owner only | No | Yes — rotated independently of each other; see `workers/news-site/README.md`, "Key rotation" |
 
-## Rules
+### Rules
 
 - **`state.db` is the only writable system of record.** Cloudflare D1 has no
   write path back into `state.db`; it receives whole-row upserts from the

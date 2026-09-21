@@ -1,9 +1,9 @@
-# For operators
+## For operators
 
 A reading path for the person who has to keep this service running and fix it
 when it breaks. Five stops.
 
-## How a change reaches the host
+### How a change reaches the host
 
 ![Delivery view: how a code change reaches the running host](embed:Delivery)
 
@@ -15,7 +15,7 @@ own manual step. Nothing here propagates a tag automatically into production.
 See ADR 6 and **Deployment Architecture**, later in this document
 ([source](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0006-release-by-tag-and-pin.md)).
 
-## Where it runs, and what fails together
+### Where it runs, and what fails together
 
 ![Deployment view: the single node, the VM, its two paths and the Cloudflare edge](embed:ProductionDeployment)
 
@@ -31,7 +31,7 @@ The wrapper's own script lives in the homelab repository, so its exact
 blocking behavior is not verifiable from here. See **Environments**, later in
 this document.
 
-## What "available" means for a one-shot job
+### What "available" means for a one-shot job
 
 There is no request to time out and no uptime percentage to hit — QA-06
 deliberately sets no availability target. What matters, in order: a digest is
@@ -44,7 +44,7 @@ retrying into a flood, and a freshness guard that marks a digest older than
 24h delivered without actually sending it to Telegram. See **Availability**,
 later in this document.
 
-## Backups and restore
+### Backups and restore
 
 The only store worth backing up is `state.db` — the SQLite system of record.
 A daily 04:15 UTC snapshot goes local and offsite, kept for 7 days; WAL mode
@@ -62,7 +62,7 @@ automated safeguard for this today — after any restore, check which digests
 were pending as of the snapshot before the next timer fires. See **Backup
 Strategy** and **Disaster Recovery**, later in this document.
 
-## How a failure actually becomes noticeable
+### How a failure actually becomes noticeable
 
 Honestly: mostly by the digest not arriving. The application emits an exit
 code (0 success, 1 a collector or delivery leg failed, 2 a config error before

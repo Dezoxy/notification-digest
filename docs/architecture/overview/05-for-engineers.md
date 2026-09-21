@@ -1,11 +1,11 @@
-# For engineers
+## For engineers
 
 A reading path for someone who would build or review this system's design:
 what bounds it, what it is built from, what a run actually guarantees, which
 trade-offs were made on purpose, what you do not control, and what a change
 must satisfy before it merges. Six stops.
 
-## What the system is and what bounds it
+### What the system is and what bounds it
 
 Almost every structural choice here follows from two facts: there is exactly
 one owner, who is also the only operator and the only reader (C-01), and
@@ -21,7 +21,7 @@ is wrong — A-03 (the site database is rebuildable) and A-04 (the LAN is
 trusted) carry the most structural weight. See **Constraints** and
 **Assumptions**, later in this document.
 
-## The building blocks and the trust split
+### The building blocks and the trust split
 
 Four containers do the work: the Digest Runner collects, summarizes and
 delivers; the State Database is the system of record; the News Site serves a
@@ -34,7 +34,7 @@ Cloudflare Worker that only ever receives already-summarized content.
 
 ![Containers view: the building blocks and the trust boundary between them](embed:Containers)
 
-## What one run does, and why a re-run is safe
+### What one run does, and why a re-run is safe
 
 ![Runtime view: what happens during one scheduled digest run](embed:DigestRun)
 
@@ -48,7 +48,7 @@ cursor advancement only after commit, and an idempotent delivery upsert
 (`PUT /ingest/:id`, plus `push_sent`'s claim-once insert). See **Data
 Architecture**, later in this document, for the exact mechanisms.
 
-## The decisions already made
+### The decisions already made
 
 Six ADRs, each accepted, each naming its trade-off:
 
@@ -60,7 +60,7 @@ Six ADRs, each accepted, each naming its trade-off:
 - **ADR 6** releases by tag, deploys by pin bump, trading speed for an
   auditable history.
 
-## The contracts you do not control
+### The contracts you do not control
 
 ![Sources view: which accounts and feeds a run collects from](embed:Sources)
 
@@ -76,7 +76,7 @@ Renovate's Dependency Dashboard with a mandatory hand audit before it can be
 trusted (ADR 1). See **Integration Architecture**, later in this document,
 for every source, provider and delivery contract in one table.
 
-## What is already known to be wrong, and what a change must satisfy
+### What is already known to be wrong, and what a change must satisfy
 
 Six principles (P-01 through P-06) are read from the codebase's own
 conventions, not aspiration, and six items of technical debt (TD-001

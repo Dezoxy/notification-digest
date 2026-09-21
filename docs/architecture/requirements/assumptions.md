@@ -1,4 +1,4 @@
-# Assumptions
+## Assumptions
 
 Each row is believed, not proven. An assumption that breaks is a change of
 architecture, not a bug, so each one names what would break and what it would

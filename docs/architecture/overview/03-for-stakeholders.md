@@ -1,10 +1,10 @@
-# For stakeholders
+## For stakeholders
 
 A reading path for someone who wants to know what this system is, what it
 produces, what it costs and what could go wrong — without host names,
 protocols or code. Four stops.
 
-## What it is, in one paragraph
+### What it is, in one paragraph
 
 One person follows a lot of sources: private group chats, a notifications
 timeline, a few paid and public feeds. Reading all of them is an obligation
@@ -21,7 +21,7 @@ document).
 
 ![Context view: who reads the digest, what writes it, and where it comes out](embed:Context)
 
-## What it produces, and where it goes
+### What it produces, and where it goes
 
 Two things reach a reader:
 
@@ -39,7 +39,7 @@ digest, one for paid posts, and one that tracks a small set of projects and
 stays **silent** when nothing meaningful happened. Silence is a feature — a
 tracker that reports "nothing today" every day stops being read.
 
-## What it costs, and what is not controlled
+### What it costs, and what is not controlled
 
 The running costs are a single machine the owner already owns, a free-tier
 website host, and payment per summary to a language-model provider.
@@ -50,7 +50,7 @@ to a second provider costs more again. This is a known, accepted exposure
 rather than an oversight — see **Architecture Risks** later in this document
 ([RISK-004](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)).
 
-## What could go wrong
+### What could go wrong
 
 Stated plainly, because a reader deserves the real list rather than a
 reassuring one:

@@ -1,4 +1,4 @@
-# Trust Boundaries
+## Trust Boundaries
 
 See the **Security** view (if registered) in
 [`../workspace.dsl`](../workspace.dsl) for the modelled version; the group
@@ -38,7 +38,7 @@ and "Cloudflare edge (internet-facing)".
 A second, unrelated set of crossings moves code and configuration, not
 digest data — see "Delivery tooling" below.
 
-## Boundaries
+### Boundaries
 
 | # | Boundary | Direction | What crosses it | Control |
 |---|---|---|---|---|
@@ -49,7 +49,7 @@ digest data — see "Delivery tooling" below.
 | 5 | Public internet ↔ News Site | Inbound to Cloudflare, outbound response | Reader HTTP requests and rendered HTML/JSON pages | Capability token in the URL path (`/t/<SITE_TOKEN>/…`); `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store`, `X-Robots-Tag: noindex, nofollow` on every HTML response; a wrong token 404s indistinguishably from any other unknown path (`workers/news-site/README.md`, "Trust model") |
 | 6 | News Site ↔ Site Database (D1) | Local to Cloudflare's platform | Digest rows, arc-context primers, push subscriptions | Cloudflare D1 binding; no external access path. D1 is a disposable rendering copy — `state.db` on the VM is the system of record ([`../data/data-architecture.md`](../data/data-architecture.md)) |
 
-## What never crosses a boundary
+### What never crosses a boundary
 
 - Nothing on the home LAN accepts an inbound connection from the internet;
   every source relationship in boundary 1 and every delivery relationship in
@@ -61,7 +61,7 @@ digest data — see "Delivery tooling" below.
   Site. It is never sent to, or accepted by, the Digest Runner, Telegram, or
   any collection source.
 
-## Where a boundary is weaker than it looks
+### Where a boundary is weaker than it looks
 
 - **The capability token is not a secret to every system that touches it.**
   It appears in the URL path, so it lands in Cloudflare's own request logs
@@ -84,7 +84,7 @@ digest data — see "Delivery tooling" below.
   [`../model/people-systems.dsl`](../model/people-systems.dsl) for those
   relationships; they are modelled separately from a digest run on purpose.
 
-## Rules
+### Rules
 
 - No component outside the Digest Runner and the State Database reads
   `state.db` directly; every other consumer of digest content goes through

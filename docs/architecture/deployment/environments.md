@@ -1,4 +1,4 @@
-# Environments
+## Environments
 
 There are two environments, not a graduated pipeline: production, and whatever a
 developer runs locally. There is no staging tier and no separate integration
@@ -18,7 +18,7 @@ mandatory there; there is no `MODE=staging`.
 | Delivery channels | Telegram TL;DR ping + news site live; email implemented but disabled (`myapps_digest_email_enabled: false` in homelab host_vars) | Whatever the developer's `.env` enables — typically a subset, or `hide:` flags, to avoid posting test digests to the real Telegram topic |
 | External calls | Real Telegram, X, Claude CLI, OpenRouter, news site | Also real, unless the developer disables a collector — this is not a mocked sandbox. Automated tests are the only place a hard rule applies: CLAUDE.md requires tests to never call the real Telegram or X APIs, or send real email; that mocking happens at the collector/emailer boundary in `tests/`, not in a local `docker compose run` |
 
-## Rules
+### Rules
 
 - Production data (`state.db`, archived digests, session secrets) is never
   copied into local development. A local run starts from an empty volume.

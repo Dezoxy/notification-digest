@@ -1,4 +1,4 @@
-# Glossary
+## Glossary
 
 Terms used across this repository with a specific meaning. Where a word is
 overloaded elsewhere, the row says what it does **not** mean here.

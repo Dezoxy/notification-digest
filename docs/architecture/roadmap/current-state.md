@@ -1,9 +1,9 @@
-# Current State
+## Current State
 
 What follows is what is actually deployed on the owner's VM today, not what the
 code is capable of if every flag were turned on.
 
-## Run modes and their schedule
+### Run modes and their schedule
 
 Nine systemd timers exist on `01-myapps-vm`, each serialized through the same
 host-level `flock` wrapper because every mode shares one Telegram user session
@@ -23,7 +23,7 @@ homelab-repo configuration and **not verifiable from this repository**; the
 existence of all nine units, including `digest-relay`, is confirmed in
 [deployment-architecture.md](../deployment/deployment-architecture.md).
 
-## What's collecting
+### What's collecting
 
 Seven collectors exist; five run inside the six-hourly window sweep, one runs
 only in its own dedicated mode, and one (Patreon) is excluded from the sweep
@@ -43,7 +43,7 @@ A single six-hourly window carries on the order of 100–200 items (PLAN.md §5)
 the only volume figure this repository has actually measured, against a live
 prompt-design validation.
 
-## What's delivering
+### What's delivering
 
 - **Telegram TL;DR ping** — live.
 - **News site** (`workers/news-site/`) — live; installable as a PWA with push
@@ -51,7 +51,7 @@ prompt-design validation.
 - **Email** — implemented, and still the Ansible role's default, but disabled on
   the real deployment (`myapps_digest_email_enabled: false`).
 
-## What's enabled beyond the shipped defaults
+### What's enabled beyond the shipped defaults
 
 Three features ship default-off in this repository but are turned on for the
 real deployment, per the separate homelab repository's host variables: Hungarian
@@ -60,7 +60,7 @@ translation (`TRANSLATE_HU_ENABLED`), the daily web-verification pass
 gap between the shipped default and the running configuration is tracked as
 [TD-005](../risks/technical-debt.md).
 
-## What's shipped on the site side
+### What's shipped on the site side
 
 Per PLAN.md §11, every redesign-roadmap entry except one is shipped:
 storyline-first arc pages with stable arc keys (§11.1), client-side catch-up
@@ -72,7 +72,7 @@ installable PWA with push notifications (§11.7). Community engagement signals
 once the owner observed the community doesn't react or reply on Telegram at all
 (PLAN.md §9, decision 6).
 
-## What works
+### What works
 
 - A re-run over the same window collects and delivers nothing twice — the one
   absolute guarantee ([QA-01](../requirements/quality-attributes.md)), enforced
@@ -82,7 +82,7 @@ once the owner observed the community doesn't react or reply on Telegram at all
   visible rather than silent ([ADR
   2](../decisions/0002-summarizer-fallback-chain.md)).
 
-## What doesn't (yet)
+### What doesn't (yet)
 
 | Gap | Reference |
 |---|---|
@@ -92,7 +92,7 @@ once the owner observed the community doesn't react or reply on Telegram at all
 | Hungarian readers never see the "What changed" delta block | [TD-004](../risks/technical-debt.md) |
 | Summarization spend has no hard cap | [RISK-004](../risks/architecture-risks.md) |
 
-## Numbers
+### Numbers
 
 | Measure | Value | Evidence |
 |---|---|---|

@@ -1,4 +1,4 @@
-# Data Classification
+## Data Classification
 
 This system has one owner, one operator, and one reader
 ([C-01](../requirements/constraints.md)); there is no multi-tenant data to
@@ -18,7 +18,7 @@ reach the public News Site.
 | Application/run logs | **Internal** | journald / Loki on the VM | Not defined by this repository; owned by the homelab deployment | No |
 | Digest markdown archive (optional, `ARCHIVE_DIR`) | Same classification as the digest body it copies | Local disk on the VM, best-effort write (`digest/emailer.py:archive`) | No scheduled deletion | No — a local operator convenience, not a delivery channel |
 
-## Rules
+### Rules
 
 - **Collected third-party content is never stored as an end in itself.** It
   exists only to be summarized (or, for `relay`, forwarded once) and then
@@ -37,7 +37,7 @@ reach the public News Site.
   losing one is an account compromise, not a credential rotation — see
   [security-architecture.md](security-architecture.md), "The sharpest risk."
 
-## GDPR posture (unverified beyond this reasoning)
+### GDPR posture (unverified beyond this reasoning)
 
 The owner is based in Hungary (EU), and a meaningful share of the data this
 system processes — messages and posts collected from Telegram, X, Reddit,
