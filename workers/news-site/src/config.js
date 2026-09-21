@@ -138,7 +138,7 @@ export const ARC_CONTEXT_MAX_BYTES = 8 * 1024;
 // validateDigestPayload/validateProvenance) — the digest app's own model,
 // effort, and OpenRouter-fallback flag for the summarize and (when this
 // digest was translated) translate legs, rendered as the digest page's
-// "WRITTEN" row directly below the source key (renderProvenance,
+// "Written by" / "Translated with" lines below the source key (renderProvenance,
 // src/render-index.js). Unlike source_counts/topics/deltas, this isn't a
 // bounded LIST of typed entries — it's at most two small legs, each a
 // handful of short strings — so one whole-object byte cap on the

@@ -16,12 +16,16 @@
 //     on the HU twin (deltasRenderableIn)
 //   - failed_sources (235) -> degraded badge + source-key failed pills
 //   - source_counts (all) -> source key swatches
-//   - provenance (235) -> the "WRITTEN" row, exercising both the plain
-//     summarize chip and the muted ↻ fallback chip on the translate leg
+//   - provenance (235) -> the "Written by"/"Translated with" rows,
+//     exercising both the plain summarize chip and the muted ↻ fallback
+//     chip on the translate leg
 //   - NULL _hu fields (234) -> the /hu/ EN-fallback note
 //   - arc_context row -> the arc page's context primer disclosure
 //   - a body with an inline style attr (235 s2) -> stripInlineStyles
 //   - a body with an external citation link (235 s1) -> addCiteTitles
+//   - a closing .foot paragraph with an inline style attr (235, both
+//     languages) -> stripInlineStyles + the .closing, .foot CSS rule, and
+//     the colophon div wrapping source key + provenance
 //   - a previous-ISO-week digest (231) -> week-rail "older" link + oldest
 //     probe; also 235's prev/next neighbors within the current week
 //   - daily (233) and weekly (232) kinds -> those views' lists + kind badges
@@ -43,6 +47,11 @@ const BODY_235 = [
   '<p>The council signed off <span style="color: red">overnight</span>, with disbursement gated on reforms.</p>',
   "<h2>Chip export rules tighten</h2>",
   "<p>New licensing requirements take effect next quarter.</p>",
+  // Closing coverage line (this feature): the exact shape the app emits —
+  // a .foot paragraph carrying an inline style attribute for the email
+  // half, which stripInlineStyles removes on this site while the class
+  // survives to pick up the .closing, .foot CSS rule. See the CSS comment.
+  '<p class="foot" style="margin-top:1.6em;padding-top:0.8em;border-top:1px solid #e5e7eb;font-size:0.85em;color:#8a8f9e;"><em>From 12 items; 5 informed this briefing, while 4 were chatter.</em></p>',
 ].join("\n");
 
 const BODY_235_HU = [
@@ -53,6 +62,10 @@ const BODY_235_HU = [
   "<p>A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</p>",
   "<h2>Szigorodnak a chipexport-szabályok</h2>",
   "<p>Az új engedélyezési követelmények a következő negyedévtől élnek.</p>",
+  // Same closing-line shape as BODY_235's English one, just translated —
+  // proves the HU page's stripInlineStyles pass and .closing, .foot CSS
+  // rule apply just as well to the translated body.
+  '<p class="foot" style="margin-top:1.6em;padding-top:0.8em;border-top:1px solid #e5e7eb;font-size:0.85em;color:#8a8f9e;"><em>12 elemből 5 formálta ezt az összefoglalót, 4 pedig háttérzaj volt.</em></p>',
 ].join("\n");
 
 const BODY_234 = [

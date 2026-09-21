@@ -183,14 +183,33 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
     "inline style stripped from body",
   );
   assert.match(html, /example\.com\/markets-report/, "citation link survives");
-  // Model provenance (ingest v5): the "WRITTEN" row directly below the
-  // source key — see the DIGESTS fixture, digest 235's provenance object
-  // (summarize plain, translate fell back to an OpenRouter model).
-  assert.match(html, /class="provenance"/, "model-provenance row");
-  assert.match(html, /✎ claude-opus-5 · high/, "summarize chip, no fallback marker");
+  // Closing coverage line (this feature): the app's .foot paragraph, style
+  // attribute stripped like every other inline style in the body, class
+  // surviving so the .closing, .foot CSS rule applies.
+  assert.match(html, /class="foot"/, "closing line keeps its class");
+  assert.ok(
+    !/<article[\s\S]*?class="foot" style=[\s\S]*?<\/article>/.test(html),
+    "closing line's inline style attribute is stripped",
+  );
+  // Colophon wrapper (this feature): both record-keeping rows sit inside
+  // ONE div.colophon, in source-key-then-provenance order.
   assert.match(
     html,
-    /sk sk-fallback">↻ HU openai\/gpt-5\.6-terra · high/,
+    /<div class="colophon"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div>/,
+    "colophon wraps both the source key and the provenance row",
+  );
+  // Model provenance (ingest v5): "Written by"/"Translated with" rows
+  // directly below the source key — see the DIGESTS fixture, digest 235's
+  // provenance object (summarize plain, translate fell back to an
+  // OpenRouter model).
+  assert.match(html, /class="provenance"/, "model-provenance row");
+  assert.match(html, /Written by/, "summarize leg label");
+  assert.match(html, /<span class="sk">claude-opus-5 · high<\/span>/, "summarize chip, no ↻");
+  assert.match(html, /Translated with/, "translate leg label");
+  assert.ok(!html.includes("HU openai"), "no in-chip HU marker on the translate leg");
+  assert.match(
+    html,
+    /class="sk sk-fallback">↻ openai\/gpt-5\.6-terra · high/,
     "fallback leg gets ↻ and the muted class",
   );
 });
@@ -203,11 +222,11 @@ test("digest 235 HU: deltas suppressed, translated body used", async () => {
   // on every page, so a bare-substring check would always match.
   assert.ok(!html.includes('class="en-only-note"'), "no fallback note when translation exists");
   // Model provenance renders on the HU digest page too, with the HU chrome
-  // label ("Írta") — it's a fact about the whole digest, not per-language
-  // prose, so both editions carry the same row (translate marker text stays
-  // "HU" either way, see strings.js's provenanceHuMarker comment).
+  // labels ("Írta"/"Fordította") — it's a fact about the whole digest, not
+  // per-language prose, so both editions carry the same row.
   assert.match(html, /class="provenance"/, "model-provenance row on the HU page too");
-  assert.match(html, /Írta/, "HU provenance row label");
+  assert.match(html, /Írta/, "HU summarize-leg label");
+  assert.match(html, /Fordította/, "HU translate-leg label");
 });
 
 test("renderProvenance: absent translate, no fallback, and malformed input", async () => {
@@ -224,15 +243,35 @@ test("renderProvenance: absent translate, no fallback, and malformed input", asy
     JSON.stringify({ summarize: { model: "sonnet", effort: "medium", fallback: false } }),
     strings,
   );
-  assert.match(summarizeOnly, /✎ sonnet · medium/, "summarize chip, no fallback marker");
-  // (?!label) excludes the row's own <span class="sklabel"> — only counting
-  // actual chip spans (class="sk" / class="sk sk-fallback").
+  // No glyph at all on a non-fallback leg (this feature: the label carries
+  // which leg this is, ↻ carries only the fallback fact) — just the label
+  // and the bare "model · effort" chip.
+  assert.match(summarizeOnly, /<span class="sklabel">Written by<\/span>/, "summarize label");
+  assert.match(summarizeOnly, /<span class="sk">sonnet · medium<\/span>/, "bare chip, no glyph");
   assert.equal(
-    (summarizeOnly.match(/class="sk(?!label)/g) ?? []).length,
+    (summarizeOnly.match(/class="provline"/g) ?? []).length,
     1,
-    "absent translate renders exactly one chip",
+    "absent translate renders exactly one line",
   );
   assert.ok(!summarizeOnly.includes("sk-fallback"), "no fallback class when nothing fell back");
+  assert.ok(!summarizeOnly.includes("Translated with"), "no translate line when absent");
+
+  // A translate leg that did NOT fall back: same "no glyph" treatment as a
+  // non-fallback summarize leg, proving the ↻ marker is keyed on `fallback`
+  // alone, not on which leg it is.
+  const translateNoFallback = renderProvenance(
+    JSON.stringify({
+      summarize: { model: "claude-opus-5", effort: "high", fallback: false },
+      translate: { model: "claude-opus-5", effort: "high", fallback: false },
+    }),
+    strings,
+  );
+  assert.match(
+    translateNoFallback,
+    /<span class="sklabel">Translated with<\/span><span class="sk">claude-opus-5 · high<\/span>/,
+    "non-fallback translate leg renders with no ↻ and no sk-fallback class",
+  );
+  assert.ok(!translateNoFallback.includes("↻"), "no ↻ glyph anywhere when neither leg fell back");
 
   for (const bad of [
     null,
@@ -244,6 +283,32 @@ test("renderProvenance: absent translate, no fallback, and malformed input", asy
   ]) {
     assert.equal(renderProvenance(bad, strings), "", `malformed input renders nothing: ${bad}`);
   }
+});
+
+test("colophon: absent from both fields renders no wrapper div at all", async () => {
+  // No fixture digest has BOTH source_counts and provenance absent (every
+  // DIGESTS row carries source_counts — see the fixtures.mjs comment), so
+  // this isn't reachable through a golden page. renderDigestPage is a pure
+  // string builder (same posture as renderProvenance/renderLedgerFor's own
+  // direct-import tests above), so a minimal digest object exercises the
+  // branch directly and cheaply instead.
+  const { renderDigestPage } = await import("../src/render-digest.js");
+  const digest = {
+    id: 999,
+    created_at: "2026-08-25T12:00:00Z",
+    kind: "window",
+    item_count: 1,
+    section_count: 1,
+    tldr: "A minimal digest with no colophon data at all.",
+    body_html: "<h2>Only section</h2><p>Body.</p>",
+    source_counts: null,
+    failed_sources: null,
+    provenance: null,
+  };
+  const html = renderDigestPage(digest, null, null, "tok", "example.com", "en", "all", [], null);
+  assert.ok(!html.includes('class="colophon"'), "no colophon div when neither row has data");
+  assert.ok(!html.includes('class="sourcekey"'), "no source key either");
+  assert.ok(!html.includes('class="provenance"'), "no provenance row either");
 });
 
 test("digest 234 HU: falls back to EN body with the note", async () => {

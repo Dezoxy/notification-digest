@@ -106,7 +106,7 @@ def test_translate_digest_honours_caller_supplied_effort(monkeypatch):
 
     The knob exists so the deployed TRANSLATE_EFFORT (digest/main.py passes
     `cfg.translate_effort`) actually changes the call -- and so the effort the
-    site's "WRITTEN" byline reports is the one that really ran, not the
+    site's "Translated with" byline reports is the one that really ran, not the
     module default it used to be hardcoded to.
     """
     captured: dict[str, object] = {}

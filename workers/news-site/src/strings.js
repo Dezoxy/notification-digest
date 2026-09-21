@@ -69,15 +69,14 @@ export const STRINGS = {
     weekLabel: "Week {w} · {range}",
     // Digest-page source key label (rendered uppercase via .sklabel's CSS).
     sourcesLabel: "Sources",
-    // Model-provenance row (owner-requested "WRITTEN" byline, rendered
-    // uppercase via the same .sklabel CSS as sourcesLabel above, directly
-    // below it). provenanceHuMarker is the short in-chip marker naming the
-    // translate leg ("HU sonnet · medium") — a language code, not a
-    // translatable word, so it stays "HU" on both language editions, same
-    // posture the untranslated "EN" fallback chip (renderExcerpt) already
-    // takes.
-    provenanceLabel: "Written",
-    provenanceHuMarker: "HU",
+    // Model-provenance row ("Written by"/"Translated with" byline, both
+    // rendered uppercase via the same .sklabel CSS as sourcesLabel above):
+    // two lines, one label each — see renderProvenance. provenanceLabel
+    // names the summarize leg, provenanceTranslateLabel the translate leg;
+    // the old in-chip "HU" marker naming the translate leg is gone — the
+    // label itself now says which line this is.
+    provenanceLabel: "Written by",
+    provenanceTranslateLabel: "Translated with",
     // Search (roadmap 4 step 7). searchResults is a placeholder template
     // ({n} = result count), same convention as weekLabel above.
     searchLabel: "Search the archive",
@@ -315,10 +314,11 @@ export const STRINGS = {
     weekLabel: "{w}. hét · {range}",
     sourcesLabel: "Források",
     // Owner: please review — new HU strings, model-provenance row, mirrors
-    // sourcesLabel's pattern. provenanceHuMarker stays "HU" here too — a
-    // language code, not a word to translate, same as the EN block.
+    // sourcesLabel's pattern. provenanceLabel ("Írta") already meant
+    // "written by" and needed no change for the two-line redesign.
     provenanceLabel: "Írta",
-    provenanceHuMarker: "HU",
+    // Owner: please review
+    provenanceTranslateLabel: "Fordította",
     // Search (roadmap 4 step 7) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     searchLabel: "Keresés az archívumban",
