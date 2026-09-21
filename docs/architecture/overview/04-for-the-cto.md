@@ -1,10 +1,10 @@
-# For the CTO
+## For the CTO
 
 A reading path for whoever is accountable for what could hurt this system and
 what it costs: an owner deciding whether to trust it with another account, or
 a reviewer judging the honest risk picture. Five stops.
 
-## What is reachable from outside, and what stays on the LAN
+### What is reachable from outside, and what stays on the LAN
 
 Exactly one container takes inbound traffic from the public internet: the News
 Site, a Cloudflare Worker with no login and no Cloudflare Access in front of
@@ -20,7 +20,7 @@ Detail lives in **Security Architecture** and **Trust Boundaries**, later in
 this document
 ([source](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/security/security-architecture.md)).
 
-## What the credentials actually are, and why that is the sharpest risk
+### What the credentials actually are, and why that is the sharpest risk
 
 ![Sources view: the accounts and feeds one run collects from](embed:Sources)
 
@@ -39,7 +39,7 @@ RISK-007 is **not** marked accepted — the risk register calls it an open gap,
 because CLAUDE.md's hard rules name only the X collector explicitly, not
 Reddit or Patreon.
 
-## Whose data this is, and where it goes
+### Whose data this is, and where it goes
 
 Collected item text — Telegram messages, X notifications, Reddit and Patreon
 posts — is written by people other than the owner (C-04). It is classified as
@@ -57,7 +57,7 @@ verbatim rather than summarizing. Nothing here can honor a deletion request
 against content already collected or published. See **Data Classification**
 and **Data Ownership**, later in this document.
 
-## Recovery, and what is not guaranteed
+### Recovery, and what is not guaranteed
 
 No scenario in **Disaster Recovery** has a measured RTO — every duration
 there is a rough, unrehearsed estimate, not a target. RPO is bounded by the
@@ -70,7 +70,7 @@ QA-01, the one absolute guarantee this system makes. There is no automated
 safeguard against this today. See **Backup Strategy** and **Disaster
 Recovery**, later in this document.
 
-## Risks accepted rather than mitigated, and cost exposure
+### Risks accepted rather than mitigated, and cost exposure
 
 This system runs no WAF, no intrusion detection, no SIEM, and no automated key
 rotation (C-01); a compromised session surfaces only as a collector auth

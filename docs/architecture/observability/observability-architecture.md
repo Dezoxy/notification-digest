@@ -1,4 +1,4 @@
-# Observability Architecture
+## Observability Architecture
 
 This document is deliberately modest. notification-digest has no metrics
 pipeline, no tracing, and no dashboard defined in this repository —
@@ -9,7 +9,7 @@ summary, stated plainly rather than implied: **a missed or broken run is noticed
 because the digest does not arrive, or arrives with a visible failure banner** —
 not because an alert fired.
 
-## What exists
+### What exists
 
 | Signal | Mechanism | Where it goes |
 |---|---|---|
@@ -25,7 +25,7 @@ it directly), to be queryable in Loki *if* the host ships journald into Loki.
 Whether that ingestion pipeline actually exists and is currently working is
 homelab-repo infrastructure and **is not verified from this repository**.
 
-## What the exit code alone is trusted to do
+### What the exit code alone is trusted to do
 
 The application's own code is explicit that the exit code is meant to be the
 *only* signal an alert acts on: `digest/main.py`'s docstrings state outright
@@ -41,7 +41,7 @@ matched against journal output for `digest.service`, firing on any failed run")
 in terms that read as a plan, not a confirmed deployment. Treat "an alert exists
 and pages the owner on a failed run" as **not confirmed**, not as fact.
 
-## How a failure actually becomes visible
+### How a failure actually becomes visible
 
 In order of what is actually known to happen, most to least reliable:
 
@@ -62,7 +62,7 @@ There is no mechanism in this repository that pushes a failure notification to
 the owner beyond the digest content itself and whatever the host-level pipeline
 in (4) does.
 
-## Gaps — explicitly not covered
+### Gaps — explicitly not covered
 
 - **No metrics.** No counters, gauges, or histograms; no request-rate, latency,
   or resource-usage signal (there is no request rate — see
@@ -87,7 +87,7 @@ in (4) does.
   chain's unbounded-cost exposure — that exposure is currently invisible until
   the owner notices a bill.
 
-## Where this fits
+### Where this fits
 
 See [deployment-architecture.md](../deployment/deployment-architecture.md) for
 where the container and its logs physically run, and

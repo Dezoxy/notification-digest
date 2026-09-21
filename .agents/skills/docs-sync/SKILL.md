@@ -58,6 +58,10 @@ docs explaining why a worker lives where it no longer lives.
      mutates something)
    - a list or table -> count the real thing and compare
    - a "twins" rule -> diff the two files' overlapping sections
+   - an imported architecture document -> `make view`, open the
+     Documentation tab, and confirm its title appears in both the page and
+     the navigation (the PDF normalises heading levels and cannot show this;
+     `make docs` rejects a hidden `#` title)
 
 4. Fix what the diff falsified, in this branch. Scope discipline:
 

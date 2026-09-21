@@ -1,6 +1,6 @@
-# Availability
+## Availability
 
-## What "available" means here
+### What "available" means here
 
 notification-digest is not a request-serving system, so an uptime percentage
 does not apply to it ([QA-06](../requirements/quality-attributes.md)).
@@ -25,7 +25,7 @@ What matters instead, in order:
    lets the X/news/Reddit/Polymarket/Hacker News items ship, with a failure
    banner rather than silence.
 
-## What is deliberately absent
+### What is deliberately absent
 
 - **No high availability.** One process, one Proxmox node, no redundant compute,
   no failover target. This is a direct consequence of
@@ -41,7 +41,7 @@ What matters instead, in order:
 - **No SLA.** Nobody outside the owner depends on this system, so there is
   nothing to commit to.
 
-## Failure modes
+### Failure modes
 
 | Failure | Detection | Behavior | Impact |
 |---|---|---|---|
@@ -52,13 +52,13 @@ What matters instead, in order:
 | Two runs would otherwise overlap | Host-level `flock` in `/usr/local/sbin/digest-run` ([deployment-architecture.md](../deployment/deployment-architecture.md)) | The lock prevents two processes from sharing one Telegram session concurrently | Contention delays a run rather than corrupting the session; exact wait/skip behavior of the wrapper is **not verified from this repository** (the script lives in the homelab repo) |
 | The VM or its host node is lost | Nothing automatic in this repo; the owner notices the digest stopped arriving | No failover. Recovery is a manual rebuild | See [disaster-recovery.md](disaster-recovery.md) |
 
-## Degraded operation
+### Degraded operation
 
 There is no degraded mode distinct from "some collectors failed, digest ships
 anyway with a banner" — that partial-failure tolerance *is* the degraded mode,
 and it is the normal, designed behavior described above, not an exception path.
 
-## Not measured
+### Not measured
 
 - Run success rate (fraction of scheduled runs that exit 0) — no dashboard or
   report in this repo computes it.

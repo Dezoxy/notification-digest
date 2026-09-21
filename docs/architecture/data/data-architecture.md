@@ -1,6 +1,6 @@
-# Data Architecture
+## Data Architecture
 
-## Stores
+### Stores
 
 | Store | Purpose | Technology | Consistency |
 |---|---|---|---|
@@ -11,7 +11,7 @@ Modelled in [`../model/containers.dsl`](../model/containers.dsl) (the
 "Layer Data,Database" containers) and
 [`../model/deployment.dsl`](../model/deployment.dsl) (placement).
 
-## Schema, conceptually
+### Schema, conceptually
 
 `state.db` (`digest/state.py`):
 
@@ -56,7 +56,7 @@ items. D1 additionally holds `push_subscriptions` and `push_sent`, which have
 no `state.db` counterpart at all, because push delivery is a site-only
 concern.
 
-## The idempotency contract
+### The idempotency contract
 
 A re-run over the same window must never duplicate items or re-deliver a
 digest ([QA-01](../requirements/quality-attributes.md)) — the one absolute
@@ -78,7 +78,7 @@ not one:
    (`INSERT OR IGNORE`) makes even the notification fan-out at-most-once
    against that same retry.
 
-## Retention and pruning
+### Retention and pruning
 
 | What | Cutoff | Mechanism |
 |---|---|---|
@@ -95,7 +95,7 @@ brief's 24-hour lookback (`DAILY_LOOKBACK_WINDOW`) — both comfortably inside
 to serve indefinitely, not an oversight; nothing in this repository currently
 bounds that table's size.
 
-## Content-integrity, not just storage
+### Content-integrity, not just storage
 
 Two checks run between a model's output and a stored/published digest body,
 described fully in
@@ -109,7 +109,7 @@ digests underneath it — `get_daily_allowed_urls` /
 security one: it is what keeps a digest body's outbound links traceable back
 to `items` rows that actually exist.
 
-## state.db vs. D1 — which one is authoritative
+### state.db vs. D1 — which one is authoritative
 
 `state.db` on the VM is the **system of record**. Cloudflare D1 is a
 **rendering copy**, populated only by the Digest Runner's own `PUT

@@ -1,4 +1,4 @@
-# Constraints
+## Constraints
 
 Constraints are fixed. They are not traded off; they limit the options. Most of
 this system's shape follows from C-01 and C-02 rather than from any preference.

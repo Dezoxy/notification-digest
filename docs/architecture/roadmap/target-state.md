@@ -1,4 +1,4 @@
-# Target State
+## Target State
 
 There is no forward-looking target architecture beyond what is already running.
 PLAN.md's redesign roadmap (§11) is, as of its own latest status lines, almost
@@ -17,7 +17,7 @@ form it records them — an owner decision not yet taken, an explicitly optional
 rider, or work not yet started. None of these should be read as already
 deployed.
 
-## Open decisions (owner-gated, no target date)
+### Open decisions (owner-gated, no target date)
 
 | Item | Status | Reference |
 |---|---|---|
@@ -25,13 +25,13 @@ deployed.
 | Flip `VERIFY_DAILY_ENABLED`'s in-repo default to match production | **Open, owner-gated.** The flag is already on for the real deployment; the in-repo default stays off deliberately until the owner makes this call | PLAN.md §11.4, [TD-005](../risks/technical-debt.md) |
 | Adopt a four-part structure (what happened / what changed / why it matters / what to watch) for repeat-story sections | **Optional rider**, explicitly: "skipping it is a fine outcome" per PLAN.md | PLAN.md §11.3 |
 
-## Not started, no blocker beyond scheduling
+### Not started, no blocker beyond scheduling
 
 | Item | Status | Reference |
 |---|---|---|
 | Site-side status chips rendering the verification pass's per-story corroboration output | Not started; explicitly deferred until after §11.4 shipped, which it now has | PLAN.md §11.4 |
 
-## Technical debt with no proposed remediation
+### Technical debt with no proposed remediation
 
 PLAN.md logs these as debt without committing to a fix. The honest target state
 is that they remain accepted and unscheduled unless the owner revisits them:
@@ -40,7 +40,7 @@ is that they remain accepted and unscheduled unless the owner revisits them:
 - [TD-002](../risks/technical-debt.md) — the D1 rebuild-from-VM path has never been exercised end to end.
 - [TD-003](../risks/technical-debt.md) — end-to-end run latency has never been measured.
 
-## What is explicitly not the target
+### What is explicitly not the target
 
 | Not doing | Why |
 |---|---|

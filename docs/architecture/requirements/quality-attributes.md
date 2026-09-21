@@ -1,4 +1,4 @@
-# Quality attributes
+## Quality attributes
 
 What "good" means here, and how it is measured. Where a target has never been
 measured, the row says so: a target is not a result.

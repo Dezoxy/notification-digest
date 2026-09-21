@@ -1,4 +1,4 @@
-# Security Architecture
+## Security Architecture
 
 Scope: the security posture of the notification-digest system — a single-owner
 service with one operator, one reader, and no other users
@@ -6,7 +6,7 @@ service with one operator, one reader, and no other users
 and no on-call rotation; the controls below are what a solo homelab operator
 maintains by hand, not an enterprise baseline.
 
-## What is exposed
+### What is exposed
 
 Exactly one container in this system accepts inbound traffic from the public
 internet: the **News Site**, a Cloudflare Worker. Everything else — the Digest
@@ -25,7 +25,7 @@ reader-facing routes sit under an unguessable capability token in the URL path
 (`/t/<SITE_TOKEN>/…`), not behind an identity check — see "Who authenticates
 to what" below.
 
-## Who authenticates to what
+### Who authenticates to what
 
 | Actor / caller | Authenticates to | Mechanism | What it grants |
 |---|---|---|---|
@@ -47,7 +47,7 @@ in the URL) and `INGEST_KEY` (write credential, sent only by the Digest
 Runner, never shown to a reader). Both are compared with the same
 hash-then-`timingSafeEqual` pattern in `workers/news-site/src/auth.js`.
 
-## Secret flow
+### Secret flow
 
 Every runtime secret this system uses is injected as an environment variable
 at container start, sourced from Azure Key Vault by the separate homelab
@@ -79,7 +79,7 @@ that holds `state.db`. `.gitignore` excludes `*cookies*.json` and `*.session`
 repository-wide as a backstop, not because either is expected to appear in
 a working tree.
 
-## Content-integrity control: the link allowlist
+### Content-integrity control: the link allowlist
 
 The summarizer's output is treated as untrusted before it is published. Two
 independent controls sit between a model's markdown and a rendered page:
@@ -102,7 +102,7 @@ This matters specifically because the content being defended against is the
 model's own output, not an external attacker's input — the closest thing this
 system has to an LLM-output sanitization boundary.
 
-## What is deliberately absent, and why
+### What is deliberately absent, and why
 
 This system runs no WAF, no intrusion detection, no SIEM, no automated key
 rotation, and no MFA on any of its cookie/session-based collector
@@ -126,7 +126,7 @@ credentials. None of these are gaps waiting to be filled; each follows from
   session — this is a property of the accounts being used unofficially, not
   a control this system chose to skip.
 
-## The sharpest risk: account-level compromise, not credential rotation
+### The sharpest risk: account-level compromise, not credential rotation
 
 Every collection secret in this system (`TG_SESSION`, the X/Reddit/Patreon
 cookies) authenticates as the **owner's own personal account**
@@ -145,7 +145,7 @@ See [trust-boundaries.md](trust-boundaries.md) for where these secrets travel
 and [data-classification.md](data-classification.md) for how the content they
 unlock is classified and where it ends up.
 
-## Open points
+### Open points
 
 - The X, Reddit, and Patreon collectors all depend on an unofficial,
   ToS-violating access path the owner has explicitly accepted the risk of
