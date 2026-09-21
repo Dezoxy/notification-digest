@@ -180,19 +180,33 @@ export function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
   return `<div class="sourcekey"><span class="sklabel">${esc(strings.sourcesLabel)}</span>${countSpans}${failedSpans}</div>`;
 }
 
-// Model provenance (owner-requested "WRITTEN" byline, PLAN.md OpenRouter-
-// fallback work): a SECOND digest-page colophon row, directly below the
-// source key above — which model wrote this brief, and (when the digest was
-// also translated) which model translated it, plus whether an OpenRouter
-// fallback model served in place of the primary Claude call for that leg.
-// Same fail-safe JSON.parse contract as renderSourceKey above: unparseable,
-// wrong-shaped, or an unrecognizable leg -> that leg (or the whole row)
-// renders nothing rather than throwing, so an old digest predating this
-// data (or a stored value from before a future validation change) still
-// renders cleanly. `summarize` is always present when `provenance` parses
-// at all (app contract); `translate` only shows up on a digest that also
-// got a Hungarian translation — see validateProvenance in src/ingest.js for
-// the shape this trusts but re-checks structurally anyway.
+// Model provenance ("Written by"/"Translated with" byline, PLAN.md
+// OpenRouter-fallback work): a SECOND digest-page colophon row, directly
+// below the source key above — which model wrote this brief, and (when the
+// digest was also translated) which model translated it, plus whether an
+// OpenRouter fallback model served in place of the primary Claude call for
+// that leg. Same fail-safe JSON.parse contract as renderSourceKey above:
+// unparseable, wrong-shaped, or an unrecognizable leg -> that leg (or the
+// whole row) renders nothing rather than throwing, so an old digest
+// predating this data (or a stored value from before a future validation
+// change) still renders cleanly. `summarize` is always present when
+// `provenance` parses at all (app contract); `translate` only shows up on a
+// digest that also got a Hungarian translation — see validateProvenance in
+// src/ingest.js for the shape this trusts but re-checks structurally
+// anyway.
+//
+// Two labelled lines (this feature, replacing the old single glyph-prefixed
+// row): each leg gets its own line — "Written by" for summarize,
+// "Translated with" for translate — instead of the old ✎/⇄ directional
+// glyphs. The label now carries the meaning those glyphs used to (which leg
+// this is), so they're gone; the in-chip "HU" marker on the translate leg
+// is gone too, for the same reason — "Translated with" already says this is
+// the translation line, and a bare language code next to it was redundant.
+// ↻ stays: it doesn't say WHICH leg this is, it says WHAT HAPPENED — an
+// OpenRouter fallback model served instead of the primary Claude call for
+// that leg — a fact the label can't carry, so it keeps its own marker,
+// shown only when that leg's `fallback === true`. See .provline/.provenance
+// in the CSS for the two-line grid layout this markup lays out into.
 export function renderProvenance(provenanceJson, strings) {
   if (!provenanceJson) return "";
   let parsed;
@@ -203,13 +217,12 @@ export function renderProvenance(provenanceJson, strings) {
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "";
 
-  // One leg's chip: glyph + (for the translate leg only) the localized "HU"
-  // marker + model · effort. A fallback swaps the leg's own directional
-  // glyph (✎ write / ⇄ translate) for ↻ and gets the muted .sk-fallback
-  // class — same "no new color, the glyph is the marker" posture
-  // renderSourceKey's .sk-failed pills already established for a failed
-  // source; the ↻ baked into the chip text (not CSS) is what marks it.
-  const legChip = (leg, glyph, markerHtml) => {
+  // One leg's line: a label span plus a chip span. A fallback prefixes the
+  // chip with "↻ " and gets the muted .sk-fallback class — same "no new
+  // color, the glyph is the marker" posture renderSourceKey's .sk-failed
+  // pills already established for a failed source; a leg that did NOT fall
+  // back gets no glyph at all, just "model · effort".
+  const legLine = (leg, label) => {
     if (
       typeof leg !== "object" ||
       leg === null ||
@@ -220,19 +233,19 @@ export function renderProvenance(provenanceJson, strings) {
       return "";
     }
     const fallback = leg.fallback === true;
-    const mark = fallback ? "↻" : glyph;
+    const prefix = fallback ? "↻ " : "";
     const cls = fallback ? "sk sk-fallback" : "sk";
-    return `<span class="${cls}">${mark} ${markerHtml}${esc(leg.model)} · ${esc(leg.effort)}</span>`;
+    return `<div class="provline"><span class="sklabel">${esc(label)}</span><span class="${cls}">${prefix}${esc(leg.model)} · ${esc(leg.effort)}</span></div>`;
   };
 
-  const summarizeHtml = legChip(parsed.summarize, "✎", "");
+  const summarizeHtml = legLine(parsed.summarize, strings.provenanceLabel);
   const translateHtml = parsed.translate
-    ? legChip(parsed.translate, "⇄", `${esc(strings.provenanceHuMarker)} `)
+    ? legLine(parsed.translate, strings.provenanceTranslateLabel)
     : "";
 
   if (!summarizeHtml && !translateHtml) return "";
 
-  return `<div class="provenance"><span class="sklabel">${esc(strings.provenanceLabel)}</span>${summarizeHtml}${translateHtml}</div>`;
+  return `<div class="provenance">${summarizeHtml}${translateHtml}</div>`;
 }
 
 export function renderIndexEntry(row, token, lang, view) {

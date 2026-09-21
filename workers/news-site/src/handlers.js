@@ -227,7 +227,7 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
   // provenance (model-provenance byline, ingest v5) rides along here, not
   // in DIGEST_LIST_COLUMNS above — same "digest PAGE only" carve-out that
   // comment already calls out for body/topics/deltas: the ledger/NOW-arc
-  // list queries never render a "WRITTEN" row, only handleDigestPage does
+  // list queries never render the provenance lines, only handleDigestPage does
   // (renderProvenance, called from renderDigestPage).
   const digest = await env.DB.prepare(
     "SELECT id, created_at, tldr, item_count, section_count, has_attention, body_html, body_html_hu, kind, source_counts, failed_sources, topics, deltas, provenance FROM digests WHERE id = ?",

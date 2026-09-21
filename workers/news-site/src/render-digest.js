@@ -296,15 +296,27 @@ export function renderDigestPage(digest, older, newer, token, host, lang, view, 
   // .closing, since it follows the article's closing line).
   const digestNavLinksHtml = navLinks.join("\n");
 
-  // Source key (roadmap 2 step 8 follow-up): the article's colophon, same
-  // fail-safe absent-data contract as renderDegradedBadge — renders "" on an
-  // older digest with no source_counts/failed_sources.
+  // Source key (roadmap 2 step 8 follow-up): one row of the article's
+  // colophon (see colophonHtml below), same fail-safe absent-data contract
+  // as renderDegradedBadge — renders "" on an older digest with no
+  // source_counts/failed_sources.
   const sourceKeyHtml = renderSourceKey(digest.source_counts, digest.failed_sources, strings);
 
-  // Model-provenance row (owner-requested "WRITTEN" byline): same fail-safe
-  // absent-data contract as sourceKeyHtml just above — renders "" on a
-  // digest with no provenance (every digest before this feature, forever).
+  // Model-provenance row ("Written by"/"Translated with" byline): same
+  // fail-safe absent-data contract as sourceKeyHtml just above — renders ""
+  // on a digest with no provenance (every digest before this feature,
+  // forever).
   const provenanceHtml = renderProvenance(digest.provenance, strings);
+
+  // Colophon wrapper (this feature): a divider between the article and its
+  // two record-keeping rows, only when at least one of them actually has
+  // something to say — an old digest with neither source_counts nor
+  // provenance must render no colophon div at all, exactly as it rendered
+  // nothing before this feature (see the .colophon CSS comment).
+  const colophonHtml =
+    sourceKeyHtml || provenanceHtml
+      ? `<div class="colophon">${sourceKeyHtml}${provenanceHtml}</div>`
+      : "";
 
   // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics
   // — see renderArcs and the topicArcs computation in handleDigestPage. Each
@@ -332,7 +344,7 @@ export function renderDigestPage(digest, older, newer, token, host, lang, view, 
 ${arcsHtml}${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
-${sourceKeyHtml}${provenanceHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
+${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
 <a class="backfab" href="${indexHref(token, lang, view)}" aria-label="${esc(strings.backFabLabel)}">←</a>`;
 
   return pageChrome(

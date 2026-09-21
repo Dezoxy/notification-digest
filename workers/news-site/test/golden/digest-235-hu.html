@@ -1087,10 +1087,43 @@
       hyphens: none; -webkit-hyphens: none;
     }
   }
-  .closing {
+  /* .closing is the About page's own italic caveat paragraph (renderAboutPage,
+     src/render-search.js). .foot is the DIFFERENT class the app emits for a
+     digest's closing coverage line ("From N items; …"), baked into body_html
+     with its own inline style attribute for the email half — see the
+     stripInlineStyles comment in render-digest.js. Stripping that attribute
+     hands presentation to the site's CSS, but until this rule the site had
+     never styled .foot at all: it only ever defined .closing, so every
+     digest's closing line rendered as plain unstyled body text once the
+     inline styles were stripped, a regression this joined selector fixes by
+     giving .foot the same italic/muted/hairline treatment .closing already
+     had.
+     Why .digest p.foot and not bare .foot: the digest's paragraph rule
+     .digest p (0,1,1) sets both color and margin, so a bare .foot (0,1,0)
+     lost both -- the line kept prose color and a 0.7em margin instead of
+     muted and 2.2em. And the closing line is entirely <em>, which
+     .digest p em deliberately brightens to --text for emphasis in prose,
+     so it rendered as the brightest text on the page. The em rule below
+     hands the muted color back to it. Measured, not assumed: before this,
+     the line painted rgb(236,237,240) against body text at (195,201,212). */
+  .closing, .digest p.foot {
     font-style: italic; color: var(--muted); border-top: 1px solid var(--hairline);
     padding-top: 1em; margin-top: 2.2em; font-size: 0.92em;
   }
+  .digest p.foot em { color: inherit; }
+
+  /* Colophon wrapper (this feature): a divider between the article and the
+     digest page's two record-keeping rows below it (the source key and the
+     model-provenance byline) — same hairline-rule vocabulary as every other
+     structural divider on this page (.digestnav-bottom, .closing/.foot).
+     renderDigestPage only wraps sourceKeyHtml/provenanceHtml in this div
+     when at least one of them is non-empty, so an old digest with neither
+     renders no colophon at all, exactly as before this feature. */
+  .colophon { border-top: 1px solid var(--hairline); padding-top: 1em; margin-top: 2.2em; }
+  /* .sourcekey carries its own top margin for when it renders standalone
+     (kept as-is below); inside the colophon that margin would stack on top
+     of the wrapper's own padding-top, doubling the gap under the article. */
+  .colophon > .sourcekey { margin-top: 0; }
 
   /* Source key (roadmap 2 step 8 follow-up): the digest page's colophon —
      source_counts/failed_sources spelled out as concrete per-source numbers
@@ -1113,22 +1146,35 @@
      baked into the string (not CSS) is what marks it, same "color is not
      the warning signal" decision as .flag-degraded on the index. */
 
-  /* Model provenance (owner-requested "WRITTEN" byline): a SECOND digest-
-     page colophon row, sitting directly below .sourcekey (renderProvenance
-     renders nothing when the digest carries no provenance data — see the
-     function for the fail-safe JSON.parse contract shared with
-     renderSourceKey). A sibling ruleset, not a shared class, so a future
-     change to one row's spacing/color never silently drags the other — but
-     it copies .sourcekey's exact typography/layout (font-data, 0.75em,
-     muted, flex-wrap gap) so the two rows read as one family of colophon
+  /* Model provenance ("Written by"/"Translated with" byline): a SECOND
+     digest-page colophon row, sitting directly below .sourcekey
+     (renderProvenance renders nothing when the digest carries no
+     provenance data — see the function for the fail-safe JSON.parse
+     contract shared with renderSourceKey). A sibling ruleset, not a shared
+     class, so a future change to one row's spacing/color never silently
+     drags the other — but it keeps .sourcekey's exact typography (font-
+     data, 0.75em, muted) so the two rows read as one family of colophon
      lines. Tighter top margin than .sourcekey's own (which is spaced off
      the article above it): this row is spaced off the ROW above it, not a
-     block of prose. */
+     block of prose.
+     Two-line layout (this feature, replacing the old single flex-wrap
+     row): each leg (write / translate) is its own line now that the label
+     names the leg instead of a directional glyph, and the two labels line
+     up in one column — a grid rather than flex, one row per .provline,
+     label column sized to its widest label (max-content) and the chip
+     column taking the rest. align-items: baseline keeps the label and the
+     mono chip text sitting on the same line even though they're different
+     font weights/sizes. */
   .provenance {
     font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
-    display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; align-items: center;
-    margin: 0.5em 0 0;
+    display: grid; grid-template-columns: max-content 1fr; gap: 0.35em 1.1em;
+    align-items: baseline; margin: 0.5em 0 0;
   }
+  /* display: contents so each leg's <span> pair lays out as two direct grid
+     cells (label column, chip column) instead of .provline itself becoming
+     a third column — the wrapper exists only to pair a label with its chip
+     in the markup, not to occupy grid space of its own. */
+  .provline { display: contents; }
   /* .sk-fallback gets no color override either — same "muted stays muted,
      the glyph is the marker" posture .sk-failed established just above: the
      ↻ baked into the chip text (not CSS) is what marks an OpenRouter
@@ -1942,8 +1988,9 @@
 <p>A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</p>
 <h2 id="s3">Szigorodnak a chipexport-szabályok</h2>
 <p>Az új engedélyezési követelmények a következő negyedévtől élnek.</p>
+<p class="foot"><em>12 elemből 5 formálta ezt az összefoglalót, 4 pedig háttérzaj volt.</em></p>
 </article>
-<div class="sourcekey"><span class="sklabel">Források</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><span class="sklabel">Írta</span><span class="sk">✎ claude-opus-5 · high</span><span class="sk sk-fallback">↻ HU openai/gpt-5.6-terra · high</span></div><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/hu/">← Minden hírlevél</a>
+<div class="colophon"><div class="sourcekey"><span class="sklabel">Források</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Írta</span><span class="sk">claude-opus-5 · high</span></div><div class="provline"><span class="sklabel">Fordította</span><span class="sk sk-fallback">↻ openai/gpt-5.6-terra · high</span></div></div></div><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/hu/">← Minden hírlevél</a>
 <span class="spacer"></span>
 <a class="nav-older" href="/t/goldentesttoken/hu/d/234">← 10:00</a></nav>
 <a class="backfab" href="/t/goldentesttoken/hu/" aria-label="Vissza a hírlevelekhez">←</a>
