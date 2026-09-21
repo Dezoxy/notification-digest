@@ -79,10 +79,15 @@ class Config:
     # clustering, weighting, cutting); translation is a faithful structural
     # rewrite with no editorial judgment involved, so it deliberately runs a
     # cheaper model tier by default rather than inheriting anthropic_model.
-    # "sonnet" is a model ALIAS the `claude` CLI itself resolves (see
-    # run_claude in digest/summarize.py) -- not a full model id, mirroring
-    # anthropic_model's own default of a bare alias-shaped string.
-    translate_model: str = "sonnet"
+    # A full, PINNED model id -- not the "sonnet" alias it used to be. An
+    # alias is resolved by the `claude` CLI at call time and silently moves
+    # when Anthropic ships a newer Sonnet, but this value is also what the
+    # digest's provenance records and the site labels "Translated with": an
+    # alias there names a model family, not the model that actually ran, and
+    # the label would go stale the day the alias moved. Pinned, the label is
+    # true by construction and upgrading is a deliberate one-line change --
+    # the same posture anthropic_model is deployed with (claude-opus-5).
+    translate_model: str = "claude-sonnet-5"
     # Used only when the primary TRANSLATE_MODEL is refused by the API
     # safety classifier (digest/summarize.py's SafeguardsRefusalError; see
     # digest/translate.py's translate_digest for the fallback call itself).
@@ -594,7 +599,7 @@ class Config:
         relay_tg_channels = _optional_tg_channel_tuple("RELAY_TG_CHANNELS")
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
-        translate_model = os.environ.get("TRANSLATE_MODEL", "sonnet")
+        translate_model = os.environ.get("TRANSLATE_MODEL", "claude-sonnet-5")
         translate_model_fallback = os.environ.get("TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6")
         translate_effort = _optional_choice(
             "TRANSLATE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES

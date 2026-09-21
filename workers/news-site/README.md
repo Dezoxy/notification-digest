@@ -747,8 +747,12 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   digest has a Hungarian version). A leg an OpenRouter fallback model served
   in place of the primary Claude call is marked with `↻` and a muted chip —
   the same "glyph is the marker, not color" posture as the source key's
-  failed-source pills. The colophon sits between two hairline rules, and the
-  article's closing coverage line (`p.foot`) gets a third above it.
+  failed-source pills. Model ids are shown by short name (`claude-opus-5` as
+  "Opus 5", `openai/gpt-5.6-terra` as "GPT-5.6 Terra" — see
+  `modelDisplayName`), with the exact id kept as a hover tooltip; an id the
+  map does not recognise renders unchanged. The colophon sits between two
+  hairline rules, and the article's closing coverage line (`p.foot`) gets a
+  third above it.
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command

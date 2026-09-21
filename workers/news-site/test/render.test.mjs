@@ -201,16 +201,23 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
   // Model provenance (ingest v5): "Written by"/"Translated with" rows
   // directly below the source key — see the DIGESTS fixture, digest 235's
   // provenance object (summarize plain, translate fell back to an
-  // OpenRouter model).
+  // OpenRouter model). Model display names (model-display-names pass): the
+  // visible chip text is the short display name, the raw recorded id moves
+  // to the chip's title attribute — see modelDisplayName's own tests below
+  // for the full mapping rules.
   assert.match(html, /class="provenance"/, "model-provenance row");
   assert.match(html, /Written by/, "summarize leg label");
-  assert.match(html, /<span class="sk">claude-opus-5 · high<\/span>/, "summarize chip, no ↻");
+  assert.match(
+    html,
+    /<span class="sk" title="claude-opus-5">Opus 5 · high<\/span>/,
+    "summarize chip shows the display name, raw id in the title, no ↻",
+  );
   assert.match(html, /Translated with/, "translate leg label");
   assert.ok(!html.includes("HU openai"), "no in-chip HU marker on the translate leg");
   assert.match(
     html,
-    /class="sk sk-fallback">↻ openai\/gpt-5\.6-terra · high/,
-    "fallback leg gets ↻ and the muted class",
+    /class="sk sk-fallback" title="openai\/gpt-5\.6-terra">↻ GPT-5\.6 Terra · high/,
+    "fallback leg gets ↻, the muted class, the display name, and the raw id in the title",
   );
 });
 
@@ -245,9 +252,15 @@ test("renderProvenance: absent translate, no fallback, and malformed input", asy
   );
   // No glyph at all on a non-fallback leg (this feature: the label carries
   // which leg this is, ↻ carries only the fallback fact) — just the label
-  // and the bare "model · effort" chip.
+  // and the bare "display name · effort" chip, with the raw id in the title.
+  // "sonnet" is the historical CLI alias -> displays as "Sonnet 5" (see
+  // modelDisplayName's own tests below).
   assert.match(summarizeOnly, /<span class="sklabel">Written by<\/span>/, "summarize label");
-  assert.match(summarizeOnly, /<span class="sk">sonnet · medium<\/span>/, "bare chip, no glyph");
+  assert.match(
+    summarizeOnly,
+    /<span class="sk" title="sonnet">Sonnet 5 · medium<\/span>/,
+    "bare chip, no glyph, display name with raw-id title",
+  );
   assert.equal(
     (summarizeOnly.match(/class="provline"/g) ?? []).length,
     1,
@@ -268,8 +281,8 @@ test("renderProvenance: absent translate, no fallback, and malformed input", asy
   );
   assert.match(
     translateNoFallback,
-    /<span class="sklabel">Translated with<\/span><span class="sk">claude-opus-5 · high<\/span>/,
-    "non-fallback translate leg renders with no ↻ and no sk-fallback class",
+    /<span class="sklabel">Translated with<\/span><span class="sk" title="claude-opus-5">Opus 5 · high<\/span>/,
+    "non-fallback translate leg renders with no ↻, no sk-fallback class, display name + raw-id title",
   );
   assert.ok(!translateNoFallback.includes("↻"), "no ↻ glyph anywhere when neither leg fell back");
 
@@ -283,6 +296,80 @@ test("renderProvenance: absent translate, no fallback, and malformed input", asy
   ]) {
     assert.equal(renderProvenance(bad, strings), "", `malformed input renders nothing: ${bad}`);
   }
+});
+
+test("modelDisplayName: every mapping rule, production ids, and the fail-safe fallback", async () => {
+  const { modelDisplayName } = await import("../src/render-index.js");
+
+  const cases = [
+    // Production ids recorded so far (see the digest-display-names task spec).
+    ["claude-opus-5", "Opus 5"],
+    ["sonnet", "Sonnet 5"], // historical CLI alias, not a Claude-family regex match
+    ["claude-sonnet-4-6", "Sonnet 4.6"],
+    ["openai/gpt-5.6-sol", "GPT-5.6 Sol"],
+    ["openai/gpt-5.6-terra", "GPT-5.6 Terra"],
+    ["z-ai/glm-5.3", "GLM-5.3"],
+    // Claude-family ids not yet seen in production but covered by the regex.
+    ["claude-haiku-4-5", "Haiku 4.5"],
+    ["claude-sonnet-5", "Sonnet 5"],
+    // GPT with no suffix at all.
+    ["gpt-5", "GPT-5"],
+    // Unrecognized ids -> returned unchanged, never blank, never mangled.
+    ["mistral/mixtral-8x7b", "mistral/mixtral-8x7b"],
+    ["experimental", "experimental"],
+  ];
+  for (const [id, expected] of cases) {
+    assert.equal(modelDisplayName(id), expected, `modelDisplayName(${JSON.stringify(id)})`);
+  }
+
+  // Non-string input: returned unchanged (total function, caller's own
+  // shape guard is not relied on).
+  for (const notAString of [null, undefined, 5, {}, []]) {
+    assert.equal(
+      modelDisplayName(notAString),
+      notAString,
+      `modelDisplayName(${JSON.stringify(notAString)}) is a no-op`,
+    );
+  }
+});
+
+test("renderProvenance: a hostile model id is escaped in both the chip text and the title", async () => {
+  const { renderProvenance } = await import("../src/render-index.js");
+  const { STRINGS } = await import("../src/strings.js");
+  const strings = STRINGS.en;
+
+  const hostile = renderProvenance(
+    JSON.stringify({
+      summarize: { model: "<img src=x>", effort: "high", fallback: false },
+    }),
+    strings,
+  );
+  assert.ok(!hostile.includes("<img"), "raw markup never reaches the page");
+  // modelDisplayName doesn't recognize this id, so it passes through
+  // unchanged and esc() is what neutralizes it — in both the visible chip
+  // text and the title attribute.
+  assert.match(
+    hostile,
+    /title="&lt;img src=x&gt;">&lt;img src=x&gt; · high/,
+    "hostile id escaped in both the title attribute and the visible chip text",
+  );
+
+  // The risk a title="" attribute actually introduces is not a tag, it is a
+  // QUOTE: an id carrying `"` could close the attribute and open an event
+  // handler. esc() escapes both quote kinds, so the id must stay inside a
+  // single, intact title value.
+  const breakout = renderProvenance(
+    JSON.stringify({
+      summarize: { model: 'x" onmouseover="alert(1)', effort: "high", fallback: false },
+    }),
+    strings,
+  );
+  assert.ok(!/title="[^"]*" onmouseover/.test(breakout), "no attribute breakout via a quote");
+  assert.match(
+    breakout,
+    /title="x&quot; onmouseover=&quot;alert\(1\)"/,
+    "the quote is escaped and the whole id stays one attribute value",
+  );
 });
 
 test("colophon: absent from both fields renders no wrapper div at all", async () => {

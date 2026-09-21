@@ -931,13 +931,13 @@ def test_translate_hu_enabled_true_is_parsed(monkeypatch):
     assert config.translate_hu_enabled is True
 
 
-def test_translate_model_defaults_to_sonnet(monkeypatch):
+def test_translate_model_defaults_to_pinned_sonnet_5(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.delenv("TRANSLATE_MODEL", raising=False)
 
     config = Config.from_env()
 
-    assert config.translate_model == "sonnet"
+    assert config.translate_model == "claude-sonnet-5"
 
 
 def test_translate_model_override_is_used(monkeypatch):
