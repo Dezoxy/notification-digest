@@ -304,6 +304,7 @@ test("modelDisplayName: every mapping rule, production ids, and the fail-safe fa
   const cases = [
     // Production ids recorded so far (see the digest-display-names task spec).
     ["claude-opus-5", "Opus 5"],
+    ["claude-opus-5-5", "Opus 5.5"],
     ["sonnet", "Sonnet 5"], // historical CLI alias, not a Claude-family regex match
     ["claude-sonnet-4-6", "Sonnet 4.6"],
     ["openai/gpt-5.6-sol", "GPT-5.6 Sol"],

@@ -64,7 +64,7 @@ class Config:
     x_enabled: bool = False
     x_cookies_path: str | None = None
     x_cookies: str | None = field(default=None, repr=False)
-    anthropic_model: str = "claude-opus-5"
+    anthropic_model: str = "claude-opus-5-5"
     archive_dir: str = "./archive"
     claude_timeout_seconds: int = 300
     claude_effort: str = "high"
@@ -86,7 +86,7 @@ class Config:
     # alias there names a model family, not the model that actually ran, and
     # the label would go stale the day the alias moved. Pinned, the label is
     # true by construction and upgrading is a deliberate one-line change --
-    # the same posture anthropic_model is deployed with (claude-opus-5).
+    # the same posture anthropic_model is deployed with (claude-opus-5-5).
     translate_model: str = "claude-sonnet-5"
     # Used only when the primary TRANSLATE_MODEL is refused by the API
     # safety classifier (digest/summarize.py's SafeguardsRefusalError; see
@@ -182,7 +182,7 @@ class Config:
     # primary daily/window summarization tier -- e.g. if a cheaper or more
     # search-capable model turns out to suit tool-heavy verification better
     # than the primary editorial model does.
-    verify_daily_model: str = "claude-opus-5"
+    verify_daily_model: str = "claude-opus-5-5"
     verify_daily_effort: str = "high"
     # The news collector has no separate NEWS_ENABLED flag -- it is enabled
     # iff this tuple is non-empty (see digest/main.py's _run_news_collector).
@@ -585,7 +585,7 @@ class Config:
         x_cookies: str | None = None
         if x_enabled:
             x_cookies_path, x_cookies = _require_exactly_one_x_cookie_source()
-        anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+        anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
         archive_dir = os.environ.get("ARCHIVE_DIR", "./archive")
         claude_timeout_seconds = _optional_positive_int("CLAUDE_TIMEOUT_SECONDS", default=300)
         claude_effort = _optional_choice(
