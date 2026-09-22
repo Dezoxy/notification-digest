@@ -152,7 +152,7 @@ that needs live web tools, which no fallback can provide.
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_MODEL` | Model for headless summarization (`claude-opus-5`). |
+| `ANTHROPIC_MODEL` | Model for headless summarization (`claude-opus-5-5`). |
 | `CLAUDE_TIMEOUT_SECONDS` | Per summarize call (`300`; the deployment sets 600). |
 | `CLAUDE_EFFORT` | `low`/`medium`/`high`/`xhigh`/`max` (`high`). |
 | `TRANSLATE_HU_ENABLED` | Hungarian translation pass (`false`). |

@@ -940,6 +940,17 @@ def test_translate_model_defaults_to_pinned_sonnet_5(monkeypatch):
     assert config.translate_model == "claude-sonnet-5"
 
 
+def test_anthropic_model_defaults_to_pinned_opus_5_5(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    monkeypatch.delenv("VERIFY_DAILY_MODEL", raising=False)
+
+    config = Config.from_env()
+
+    assert config.anthropic_model == "claude-opus-5-5"
+    assert config.verify_daily_model == "claude-opus-5-5"
+
+
 def test_translate_model_override_is_used(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("TRANSLATE_MODEL", "claude-haiku-5")
