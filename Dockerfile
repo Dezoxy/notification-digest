@@ -23,7 +23,7 @@ RUN apt-get update \
 # Pinned to the same version the owner's homelab repo pins as
 # `claude_cli_version` for other Claude Code-based homelab services — bump
 # both together, deliberately, not independently.
-RUN npm install -g @anthropic-ai/claude-code@2.1.282
+RUN npm install -g @anthropic-ai/claude-code@2.1.284
 
 WORKDIR /app
 
