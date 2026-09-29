@@ -313,9 +313,15 @@ export function renderDigestPage(digest, older, newer, token, host, lang, view, 
   // something to say — an old digest with neither source_counts nor
   // provenance must render no colophon div at all, exactly as it rendered
   // nothing before this feature (see the .colophon CSS comment).
+  // Collapsed by default (owner request): the whole colophon sits behind one
+  // native <details> disclosure — same "no JS needed" contract as
+  // renderArcContext's primer — so the record-keeping rows are one tap away
+  // instead of always on screen. Both rows share ONE summary on purpose: they
+  // answer the same "how was this page made" question, so splitting them
+  // would cost a second tap for one kind of curiosity.
   const colophonHtml =
     sourceKeyHtml || provenanceHtml
-      ? `<div class="colophon">${sourceKeyHtml}${provenanceHtml}</div>`
+      ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}</summary><div class="colophonbody">${sourceKeyHtml}${provenanceHtml}</div></details>`
       : "";
 
   // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics

@@ -77,6 +77,9 @@ export const STRINGS = {
     // label itself now says which line this is.
     provenanceLabel: "Written by",
     provenanceTranslateLabel: "Translated with",
+    // Summary of the collapsed colophon disclosure wrapping the two rows
+    // above (source key + provenance) — see colophonHtml in renderDigestPage.
+    colophonLabel: "How this was made",
     // Search (roadmap 4 step 7). searchResults is a placeholder template
     // ({n} = result count), same convention as weekLabel above.
     searchLabel: "Search the archive",
@@ -319,6 +322,7 @@ export const STRINGS = {
     provenanceLabel: "Írta",
     // Owner: please review
     provenanceTranslateLabel: "Fordította",
+    colophonLabel: "Hogyan készült",
     // Search (roadmap 4 step 7) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     searchLabel: "Keresés az archívumban",

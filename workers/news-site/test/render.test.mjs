@@ -192,10 +192,10 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
     "closing line's inline style attribute is stripped",
   );
   // Colophon wrapper (this feature): both record-keeping rows sit inside
-  // ONE div.colophon, in source-key-then-provenance order.
+  // ONE collapsed details.colophon, in source-key-then-provenance order.
   assert.match(
     html,
-    /<div class="colophon"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div>/,
+    /<details class="colophon"><summary>How this was made<\/summary><div class="colophonbody"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
     "colophon wraps both the source key and the provenance row",
   );
   // Model provenance (ingest v5): "Written by"/"Translated with" rows
@@ -395,7 +395,7 @@ test("colophon: absent from both fields renders no wrapper div at all", async ()
     provenance: null,
   };
   const html = renderDigestPage(digest, null, null, "tok", "example.com", "en", "all", [], null);
-  assert.ok(!html.includes('class="colophon"'), "no colophon div when neither row has data");
+  assert.ok(!html.includes('class="colophon"'), "no colophon wrapper when neither row has data");
   assert.ok(!html.includes('class="sourcekey"'), "no source key either");
   assert.ok(!html.includes('class="provenance"'), "no provenance row either");
 });

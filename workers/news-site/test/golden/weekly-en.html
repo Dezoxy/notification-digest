@@ -1120,10 +1120,22 @@
      when at least one of them is non-empty, so an old digest with neither
      renders no colophon at all, exactly as before this feature. */
   .colophon { border-top: 1px solid var(--hairline); padding-top: 1em; margin-top: 2.2em; }
+  /* Collapsed by default: the colophon is a native <details> whose summary
+     ("How this was made") is the only thing on screen until tapped. Summary
+     styling is .arccontext summary's — the same mono metadata register for
+     the same kind of control (an interface toggle revealing record-keeping,
+     not a heading). */
+  .colophon summary {
+    cursor: pointer; font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .colophon summary:hover, .colophon summary:focus-visible { color: var(--accent); }
+  .colophon summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .colophonbody { margin-top: 0.9em; }
   /* .sourcekey carries its own top margin for when it renders standalone
      (kept as-is below); inside the colophon that margin would stack on top
-     of the wrapper's own padding-top, doubling the gap under the article. */
-  .colophon > .sourcekey { margin-top: 0; }
+     of the body's own margin-top, doubling the gap under the summary. */
+  .colophonbody > .sourcekey { margin-top: 0; }
 
   /* Source key (roadmap 2 step 8 follow-up): the digest page's colophon —
      source_counts/failed_sources spelled out as concrete per-source numbers
@@ -1911,6 +1923,12 @@
        print; the swatches print gray (acceptable) but the text itself
        forces to ink like every other digest-page text block above. */
     .sourcekey, .provenance { color: #000; }
+    /* ...and "stay visible" survives the collapse: a closed <details> hides
+       its content via ::details-content, so print forces it visible and
+       drops the now-pointless toggle. A browser without ::details-content
+       prints the colophon collapsed, the same as the screen shows it. */
+    .colophon::details-content { content-visibility: visible; }
+    .colophon summary { display: none; }
     /* TL;DR/attention are tinted boxes on screen — print swaps the fills
        for thin bordered outlines: a colored background wastes ink and
        won't reproduce reliably across printers anyway. */

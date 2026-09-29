@@ -750,9 +750,11 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   failed-source pills. Model ids are shown by short name (`claude-opus-5` as
   "Opus 5", `openai/gpt-5.6-terra` as "GPT-5.6 Terra" — see
   `modelDisplayName`), with the exact id kept as a hover tooltip; an id the
-  map does not recognise renders unchanged. The colophon sits between two
-  hairline rules, and the article's closing coverage line (`p.foot`) gets a
-  third above it.
+  map does not recognise renders unchanged. The colophon (source key and
+  provenance together) is collapsed by default behind one native `<details>`
+  disclosure, "How this was made" / "Hogyan készült", and print forces it
+  open. It sits between two hairline rules, and the article's closing
+  coverage line (`p.foot`) gets a third above it.
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
