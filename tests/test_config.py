@@ -937,7 +937,7 @@ def test_translate_model_defaults_to_pinned_sonnet_5(monkeypatch):
 
     config = Config.from_env()
 
-    assert config.translate_model == "claude-sonnet-5"
+    assert config.translate_model == "claude-sonnet-5-5"
 
 
 def test_anthropic_model_defaults_to_pinned_opus_5_5(monkeypatch):

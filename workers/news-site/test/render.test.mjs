@@ -313,6 +313,7 @@ test("modelDisplayName: every mapping rule, production ids, and the fail-safe fa
     // Claude-family ids not yet seen in production but covered by the regex.
     ["claude-haiku-4-5", "Haiku 4.5"],
     ["claude-sonnet-5", "Sonnet 5"],
+    ["claude-sonnet-5-5", "Sonnet 5.5"],
     // GPT with no suffix at all.
     ["gpt-5", "GPT-5"],
     // Unrecognized ids -> returned unchanged, never blank, never mangled.

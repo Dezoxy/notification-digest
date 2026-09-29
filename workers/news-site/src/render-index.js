@@ -222,7 +222,7 @@ export function modelDisplayName(id) {
   // than an explicit dated id — every row carrying this bare alias falls in
   // the Sonnet 5 era (translate_model_fallback's own comment in
   // digest/config.py contrasts this alias's Sonnet 5 against the older
-  // 4.6-era pin). The app now records "claude-sonnet-5" directly instead of
+  // 4.6-era pin). The app now records a pinned id (e.g. "claude-sonnet-5-5") instead of
   // the alias, so this mapping only ever serves existing historical rows and
   // will never need to grow a new one. Deliberately NOT extended to "opus"
   // or "haiku" bare aliases — no such rows exist, and guessing a mapping for
