@@ -1088,42 +1088,47 @@
     }
   }
   /* .closing is the About page's own italic caveat paragraph (renderAboutPage,
-     src/render-search.js). .foot is the DIFFERENT class the app emits for a
-     digest's closing coverage line ("From N items; …"), baked into body_html
-     with its own inline style attribute for the email half — see the
-     stripInlineStyles comment in render-digest.js. Stripping that attribute
-     hands presentation to the site's CSS, but until this rule the site had
-     never styled .foot at all: it only ever defined .closing, so every
-     digest's closing line rendered as plain unstyled body text once the
-     inline styles were stripped, a regression this joined selector fixes by
-     giving .foot the same italic/muted/hairline treatment .closing already
-     had.
-     Why .digest p.foot and not bare .foot: the digest's paragraph rule
-     .digest p (0,1,1) sets both color and margin, so a bare .foot (0,1,0)
-     lost both -- the line kept prose color and a 0.7em margin instead of
-     muted and 2.2em. And the closing line is entirely <em>, which
-     .digest p em deliberately brightens to --text for emphasis in prose,
-     so it rendered as the brightest text on the page. The em rule below
-     hands the muted color back to it. Measured, not assumed: before this,
-     the line painted rgb(236,237,240) against body text at (195,201,212). */
-  .closing, .digest p.foot {
+     src/render-search.js). */
+  .closing {
     font-style: italic; color: var(--muted); border-top: 1px solid var(--hairline);
     padding-top: 1em; margin-top: 2.2em; font-size: 0.92em;
   }
-  .digest p.foot em { color: inherit; }
+  /* .foot is the DIFFERENT class the app emits for a digest's closing
+     coverage line ("From N items; 5 informed this briefing…", or the daily/
+     weekly "Synthesized from N briefings covering M items"), baked into
+     body_html by emailer._style_footer_line for the email half. Hidden on
+     the site by owner decision: the colophon's source key already says what
+     went in, with per-source numbers, so the prose line only repeated it.
+     Hidden here rather than dropped from the prompts, so one rule covers
+     every archived digest too, and the model's output contract (and the
+     verify pass that preserves the line) stays untouched. .digest p.foot,
+     not bare .foot: .digest p (0,1,1) would otherwise win on specificity. */
+  .digest p.foot { display: none; }
 
   /* Colophon wrapper (this feature): a divider between the article and the
      digest page's two record-keeping rows below it (the source key and the
      model-provenance byline) — same hairline-rule vocabulary as every other
-     structural divider on this page (.digestnav-bottom, .closing/.foot).
+     structural divider on this page (.digestnav-bottom, .closing).
      renderDigestPage only wraps sourceKeyHtml/provenanceHtml in this div
      when at least one of them is non-empty, so an old digest with neither
      renders no colophon at all, exactly as before this feature. */
   .colophon { border-top: 1px solid var(--hairline); padding-top: 1em; margin-top: 2.2em; }
+  /* Collapsed by default: the colophon is a native <details> whose summary
+     ("How this was made") is the only thing on screen until tapped. Summary
+     styling is .arccontext summary's — the same mono metadata register for
+     the same kind of control (an interface toggle revealing record-keeping,
+     not a heading). */
+  .colophon summary {
+    cursor: pointer; font-family: var(--font-data); font-size: 0.75em; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .colophon summary:hover, .colophon summary:focus-visible { color: var(--accent); }
+  .colophon summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .colophonbody { margin-top: 0.9em; }
   /* .sourcekey carries its own top margin for when it renders standalone
      (kept as-is below); inside the colophon that margin would stack on top
-     of the wrapper's own padding-top, doubling the gap under the article. */
-  .colophon > .sourcekey { margin-top: 0; }
+     of the body's own margin-top, doubling the gap under the summary. */
+  .colophonbody > .sourcekey { margin-top: 0; }
 
   /* Source key (roadmap 2 step 8 follow-up): the digest page's colophon —
      source_counts/failed_sources spelled out as concrete per-source numbers
@@ -1911,6 +1916,12 @@
        print; the swatches print gray (acceptable) but the text itself
        forces to ink like every other digest-page text block above. */
     .sourcekey, .provenance { color: #000; }
+    /* ...and "stay visible" survives the collapse: a closed <details> hides
+       its content via ::details-content, so print forces it visible and
+       drops the now-pointless toggle. A browser without ::details-content
+       prints the colophon collapsed, the same as the screen shows it. */
+    .colophon::details-content { content-visibility: visible; }
+    .colophon summary { display: none; }
     /* TL;DR/attention are tinted boxes on screen — print swaps the fills
        for thin bordered outlines: a colored background wastes ink and
        won't reproduce reliably across printers anyway. */
@@ -1994,7 +2005,7 @@
 <p>New licensing requirements take effect next quarter.</p>
 <p class="foot"><em>From 12 items; 5 informed this briefing, while 4 were chatter.</em></p>
 </article>
-<div class="colophon"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/">← All digests</a>
+<details class="colophon"><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div></details><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/">← All digests</a>
 <span class="spacer"></span>
 <a class="nav-older" href="/t/goldentesttoken/d/234">← 10:00</a></nav>
 <a class="backfab" href="/t/goldentesttoken/" aria-label="Back to all digests">←</a>

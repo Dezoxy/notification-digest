@@ -185,17 +185,19 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
   assert.match(html, /example\.com\/markets-report/, "citation link survives");
   // Closing coverage line (this feature): the app's .foot paragraph, style
   // attribute stripped like every other inline style in the body, class
-  // surviving so the .closing, .foot CSS rule applies.
+  // surviving so the .digest p.foot rule can hide it (owner decision: the
+  // source key already carries those numbers).
   assert.match(html, /class="foot"/, "closing line keeps its class");
+  assert.match(html, /\.digest p\.foot \{ display: none; \}/, "closing line is hidden on the site");
   assert.ok(
     !/<article[\s\S]*?class="foot" style=[\s\S]*?<\/article>/.test(html),
     "closing line's inline style attribute is stripped",
   );
   // Colophon wrapper (this feature): both record-keeping rows sit inside
-  // ONE div.colophon, in source-key-then-provenance order.
+  // ONE collapsed details.colophon, in source-key-then-provenance order.
   assert.match(
     html,
-    /<div class="colophon"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div>/,
+    /<details class="colophon"><summary>How this was made<\/summary><div class="colophonbody"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
     "colophon wraps both the source key and the provenance row",
   );
   // Model provenance (ingest v5): "Written by"/"Translated with" rows
@@ -395,7 +397,7 @@ test("colophon: absent from both fields renders no wrapper div at all", async ()
     provenance: null,
   };
   const html = renderDigestPage(digest, null, null, "tok", "example.com", "en", "all", [], null);
-  assert.ok(!html.includes('class="colophon"'), "no colophon div when neither row has data");
+  assert.ok(!html.includes('class="colophon"'), "no colophon wrapper when neither row has data");
   assert.ok(!html.includes('class="sourcekey"'), "no source key either");
   assert.ok(!html.includes('class="provenance"'), "no provenance row either");
 });
