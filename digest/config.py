@@ -87,7 +87,7 @@ class Config:
     # the label would go stale the day the alias moved. Pinned, the label is
     # true by construction and upgrading is a deliberate one-line change --
     # the same posture anthropic_model is deployed with (claude-opus-5-5).
-    translate_model: str = "claude-sonnet-5"
+    translate_model: str = "claude-sonnet-5-5"
     # Used only when the primary TRANSLATE_MODEL is refused by the API
     # safety classifier (digest/summarize.py's SafeguardsRefusalError; see
     # digest/translate.py's translate_digest for the fallback call itself).
@@ -599,7 +599,7 @@ class Config:
         relay_tg_channels = _optional_tg_channel_tuple("RELAY_TG_CHANNELS")
 
         translate_hu_enabled = _parse_bool(os.environ.get("TRANSLATE_HU_ENABLED", "false"))
-        translate_model = os.environ.get("TRANSLATE_MODEL", "claude-sonnet-5")
+        translate_model = os.environ.get("TRANSLATE_MODEL", "claude-sonnet-5-5")
         translate_model_fallback = os.environ.get("TRANSLATE_MODEL_FALLBACK", "claude-sonnet-4-6")
         translate_effort = _optional_choice(
             "TRANSLATE_EFFORT", default="high", choices=_CLAUDE_EFFORT_CHOICES
