@@ -1088,34 +1088,27 @@
     }
   }
   /* .closing is the About page's own italic caveat paragraph (renderAboutPage,
-     src/render-search.js). .foot is the DIFFERENT class the app emits for a
-     digest's closing coverage line ("From N items; …"), baked into body_html
-     with its own inline style attribute for the email half — see the
-     stripInlineStyles comment in render-digest.js. Stripping that attribute
-     hands presentation to the site's CSS, but until this rule the site had
-     never styled .foot at all: it only ever defined .closing, so every
-     digest's closing line rendered as plain unstyled body text once the
-     inline styles were stripped, a regression this joined selector fixes by
-     giving .foot the same italic/muted/hairline treatment .closing already
-     had.
-     Why .digest p.foot and not bare .foot: the digest's paragraph rule
-     .digest p (0,1,1) sets both color and margin, so a bare .foot (0,1,0)
-     lost both -- the line kept prose color and a 0.7em margin instead of
-     muted and 2.2em. And the closing line is entirely <em>, which
-     .digest p em deliberately brightens to --text for emphasis in prose,
-     so it rendered as the brightest text on the page. The em rule below
-     hands the muted color back to it. Measured, not assumed: before this,
-     the line painted rgb(236,237,240) against body text at (195,201,212). */
-  .closing, .digest p.foot {
+     src/render-search.js). */
+  .closing {
     font-style: italic; color: var(--muted); border-top: 1px solid var(--hairline);
     padding-top: 1em; margin-top: 2.2em; font-size: 0.92em;
   }
-  .digest p.foot em { color: inherit; }
+  /* .foot is the DIFFERENT class the app emits for a digest's closing
+     coverage line ("From N items; 5 informed this briefing…", or the daily/
+     weekly "Synthesized from N briefings covering M items"), baked into
+     body_html by emailer._style_footer_line for the email half. Hidden on
+     the site by owner decision: the colophon's source key already says what
+     went in, with per-source numbers, so the prose line only repeated it.
+     Hidden here rather than dropped from the prompts, so one rule covers
+     every archived digest too, and the model's output contract (and the
+     verify pass that preserves the line) stays untouched. .digest p.foot,
+     not bare .foot: .digest p (0,1,1) would otherwise win on specificity. */
+  .digest p.foot { display: none; }
 
   /* Colophon wrapper (this feature): a divider between the article and the
      digest page's two record-keeping rows below it (the source key and the
      model-provenance byline) — same hairline-rule vocabulary as every other
-     structural divider on this page (.digestnav-bottom, .closing/.foot).
+     structural divider on this page (.digestnav-bottom, .closing).
      renderDigestPage only wraps sourceKeyHtml/provenanceHtml in this div
      when at least one of them is non-empty, so an old digest with neither
      renders no colophon at all, exactly as before this feature. */

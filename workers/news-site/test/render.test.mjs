@@ -185,8 +185,10 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
   assert.match(html, /example\.com\/markets-report/, "citation link survives");
   // Closing coverage line (this feature): the app's .foot paragraph, style
   // attribute stripped like every other inline style in the body, class
-  // surviving so the .closing, .foot CSS rule applies.
+  // surviving so the .digest p.foot rule can hide it (owner decision: the
+  // source key already carries those numbers).
   assert.match(html, /class="foot"/, "closing line keeps its class");
+  assert.match(html, /\.digest p\.foot \{ display: none; \}/, "closing line is hidden on the site");
   assert.ok(
     !/<article[\s\S]*?class="foot" style=[\s\S]*?<\/article>/.test(html),
     "closing line's inline style attribute is stripped",

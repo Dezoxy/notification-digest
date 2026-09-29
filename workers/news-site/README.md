@@ -753,8 +753,9 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   map does not recognise renders unchanged. The colophon (source key and
   provenance together) is collapsed by default behind one native `<details>`
   disclosure, "How this was made" / "Hogyan készült", and print forces it
-  open. It sits between two hairline rules, and the article's closing
-  coverage line (`p.foot`) gets a third above it.
+  open. It sits between two hairline rules. The article's closing coverage
+  line (`p.foot`, "From N items; …" / "Synthesized from …") is hidden on the
+  site: the source key already carries those numbers per source.
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
