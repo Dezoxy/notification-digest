@@ -10,7 +10,7 @@ Every check whose subject is missing is skipped, not failed, so a repository
 adopts them as it grows: no docs index, no view register, no speaker notes and
 no requirement documents still passes. What exists must be consistent.
 
-The canonical copy lives in architecture-base (scripts/); repositories copy it
+The canonical copy lives in development-base (scripts/); repositories copy it
 unchanged.
 
 Run from anywhere: python3 scripts/check_docs_consistency.py
@@ -332,7 +332,7 @@ def check_self_links(f: Failures) -> None:
 
 PROSE_WIDTH = 80
 # Copied skills stay byte-identical to their canonical source in
-# architecture-base, so this repository does not get to rewrap them.
+# development-base, so this repository does not get to rewrap them.
 SKILL_DIRS = (REPO / ".claude" / "skills", REPO / ".agents" / "skills")
 
 

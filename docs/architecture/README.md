@@ -132,5 +132,5 @@ Mermaid into `generated/`, which is gitignored.
 
 Model fragments live in `model/` and are included in order from
 [`workspace.dsl`](workspace.dsl). `model/styles-shared.dsl` is copied unchanged
-from architecture-base and must stay that way; this repository's layer mapping
+from development-base and must stay that way; this repository's layer mapping
 lives in `model/styles.dsl`.

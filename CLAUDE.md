@@ -41,7 +41,7 @@ true at the multi-channel cutover.
   the knowledge base around them. Use the `architecture-views` skill
   (.claude/skills/architecture-views/SKILL.md) for model and view work, and
   `architecture-docs` (.claude/skills/architecture-docs/SKILL.md) for the prose.
-  Both are copied from architecture-base, which stays their canonical home;
+  Both are copied from development-base, which stays their canonical home;
   `model/styles-shared.dsl` is canonical there and is never edited here.
   A view is split at its budget, never enlarged without rendered evidence
   recorded in the view register.
@@ -137,20 +137,29 @@ true at the multi-channel cutover.
 
 ## Agent harness
 
-- ECC (`~/Documents/development-base/agent-base`) is used as a **globally
-  installed plugin**: its agents, skills and commands are already reachable as
-  `ecc:<name>`. Do NOT run ECC's `/project-init` against this repo. It was
-  evaluated on 2026-09-20 and rejected — `install-apply.js --target
-  claude-project` plans **825 operations**, copying all 22 languages' rule
-  files, ~130 skill directories, 68 agents and 160 script libs into
-  `.claude/`. That is a second, divergent copy of what the plugin already
-  serves, committed to a repo that tracks 281 files in total, and ECC updates
-  would never reach it.
-- Its Python rules also contradict the Conventions above outright: `black` +
-  `isort` against the ruff-only rule, `os.environ`/`dotenv` at call sites
-  against the `config.py`-only rule, and `pytest --cov=src` against a package
-  that is `digest/`. Adopting them would import guidance this repo has
-  deliberately rejected.
+- The `ecc@ecc` plugin was disabled globally (user scope) on 2026-09-30, so
+  `ecc:<name>` agents, skills and commands are no longer reachable in sessions
+  here. The harness is now curated in the owner's development base,
+  `~/Developer/development-base` (GitHub `Dezoxy/development-base`, the renamed
+  architecture-base). It is copied from the ECC fork at
+  `~/Developer/agent-base` (`Dezoxy/ECC`), which only tracks upstream
+  `affaan-m/ECC` and is never edited by hand;
+  `development-base/.claude/ecc/SOURCE.md` records provenance and every hand
+  edit.
+- A repository adopts the harness by copying it from the base, following the
+  base README's "Agent harness" section. This repo has NOT adopted it yet.
+- Do NOT run ECC's `/project-init` against this repo. It was evaluated on
+  2026-09-20 and rejected — `install-apply.js --target claude-project` plans
+  **825 operations**, copying all 22 languages' rule files, ~130 skill
+  directories, 68 agents and 160 script libs into `.claude/`, committed to a
+  repo that tracks 281 files in total. The installer copies everything,
+  unselected; the curated development base is the selective route.
+- ECC's upstream Python rules also contradict the Conventions above outright:
+  `black` + `isort` against the ruff-only rule, `os.environ`/`dotenv` at call
+  sites against the `config.py`-only rule, and `pytest --cov=src` against a
+  package that is `digest/`. The development base's copy already uses ruff but
+  still carries the other two, so this repo's Conventions win if it adopts
+  them.
 - `.claude/settings.json` is the one piece of that surface worth keeping: a
   narrow permission allowlist for the real toolchain (uv, ruff, pytest, the
   worker's npm scripts, read-only git/gh), plus denies for pushes to main,
@@ -159,7 +168,8 @@ true at the multi-channel cutover.
   which stays untracked.
 - ECC's installer also sets `includeCoAuthoredBy: false`. That is deliberately
   NOT adopted here — it is an attribution choice for the owner to make, not a
-  side effect of a tooling install.
+  side effect of a tooling install. The development base keeps attribution on
+  too.
 
 ## Verification
 
