@@ -1,6 +1,6 @@
 // This repository's styles. The shared meanings (people, systems, external,
 // shapes, security markings, arrows) and the approved palette come from
-// styles-shared.dsl, copied unchanged from architecture-base. This file only
+// styles-shared.dsl, copied unchanged from development-base. This file only
 // maps this system's layers and groups onto palette families, plus local
 // extras. Tag order matters on an element: layer tag first, security marking
 // last.
