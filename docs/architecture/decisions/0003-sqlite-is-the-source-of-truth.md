@@ -6,6 +6,9 @@ Date: 2026-09-20
 
 Accepted
 
+Hosting amended by [7. Run digest as Azure jobs](0007-run-digest-as-azure-jobs.md).
+The historical VM decision below remains recorded; Azure production cutover is pending.
+
 ## Context
 
 This service runs on a single homelab VM ([C-05](../requirements/constraints.md))

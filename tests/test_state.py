@@ -1159,11 +1159,11 @@ def test_fresh_db_has_no_source_check_and_is_stamped_at_latest_version(conn):
     # history -- the actual constraint syntax is "CHECK (source ...)".
     assert "CHECK (source" not in items_ddl
     assert "CHECK (source" not in cursors_ddl
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
 
     # Fast path: a second call is a no-op and leaves the version unchanged.
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_items_table_accepts_unknown_source_at_the_sql_level_post_migration(conn):
@@ -1241,7 +1241,7 @@ def test_init_db_migrates_legacy_v0_two_value_check_db_dropping_check_entirely(t
     preserved = old_conn.execute("SELECT id, source FROM items WHERE id = ?", (row_id,)).fetchone()
     assert preserved == (row_id, "telegram")  # same id, row survives the rebuild chain
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 8
 
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
@@ -1287,7 +1287,7 @@ def test_init_db_migrates_v1_db_predating_deltas_table_by_adding_it(tmp_path: Pa
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 8
     deltas_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'deltas'"
     ).fetchone()
@@ -1321,7 +1321,7 @@ def test_init_db_migrates_v2_db_predating_arc_keys_table_by_adding_it(tmp_path: 
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 8
     arc_keys_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_keys'"
     ).fetchone()
@@ -1355,7 +1355,7 @@ def test_init_db_migrates_v3_db_predating_arc_context_table_by_adding_it(tmp_pat
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 8
     arc_context_ddl = old_conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arc_context'"
     ).fetchone()
@@ -2773,7 +2773,7 @@ def test_init_db_migrates_v5_db_predating_synced_at_column_by_adding_it(tmp_path
 
     cols = {row[1] for row in conn.execute("PRAGMA table_info(arc_context)")}
     assert "synced_at" in cols
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
     conn.close()
 
 
@@ -2823,7 +2823,7 @@ def test_init_db_migrates_v6_db_predating_provenance_column_by_adding_it(tmp_pat
 
     columns = {row[1] for row in old_conn.execute("PRAGMA table_info(digests)").fetchall()}
     assert "provenance" in columns
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 8
 
     # The column is fully usable post-migration.
     digest_id = create_digest(
@@ -2886,7 +2886,7 @@ def test_init_db_migrates_v4_db_predating_embed_url_column_by_adding_it(tmp_path
 
     init_db(old_conn)
 
-    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert old_conn.execute("PRAGMA user_version").fetchone()[0] == 8
     columns = {r[1] for r in old_conn.execute("PRAGMA table_info(items)").fetchall()}
     assert "embed_url" in columns
 

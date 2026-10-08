@@ -1,0 +1,54 @@
+name: azure-application
+
+on:
+  pull_request:
+    paths: ['digest/**', 'tests/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
+  push:
+    branches: [main]
+    paths: ['digest/**', 'tests/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.14'
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - name: Start pinned Blob emulator
+        run: |
+          docker run --detach --name digest-azurite \
+            --publish 127.0.0.1:10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.35.0 \
+            azurite-blob --blobHost 0.0.0.0
+          for attempt in $(seq 1 20); do
+            if curl --silent --output /dev/null http://127.0.0.1:10000/devstoreaccount1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Exercise SDK leases, checkpoints and cloud restore
+        run: uv run pytest tests/test_cloud_state_azurite.py --azurite
+      - name: Stop Blob emulator
+        if: always()
+        run: docker rm --force digest-azurite || true
+      - name: Build migration container without runtime credentials
+        run: docker build --tag notification-digest-ci .
+      - name: Verify fencing when the runner is container PID 1
+        run: |
+          fence_status=0
+          docker run --rm --entrypoint python notification-digest-ci \
+            -c 'from digest.cloud_run import _fence_process_group; _fence_process_group()' \
+            || fence_status=$?
+          case "$fence_status" in
+            70|137) ;;
+            *) echo "Container fencing failed: exit $fence_status"; exit 1 ;;
+          esac

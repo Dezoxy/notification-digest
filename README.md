@@ -271,10 +271,16 @@ directory's `README.md`, which is the authoritative document for the site.
 
 ## Deployment
 
-Not deployed from this repo. A git tag triggers `.github/workflows/release.yml`,
-which builds and publishes the image to GHCR; Renovate in the separate
-`~/developer/homelab` repo bumps the pinned tag, and deploy (systemd timer,
-Ansible role `myapps`, secrets wiring via Azure Key Vault) happens from there.
+Production currently runs on the homelab `01-myapps-vm`. A git tag triggers
+`.github/workflows/release.yml`, which builds and publishes the image to GHCR;
+the separate `~/Developer/toom-platform-homelab` repository pins the tag and
+deploys its systemd timers, Ansible `myapps` role and Key Vault secrets.
+
+The approved Azure target is prepared here in `infra/azure/`: nine Container Apps
+Jobs, leased Blob-backed SQLite bundles and explicit reviewed OIDC plan/apply.
+Schedules default to disabled; merging these changes does not move production.
+See [the Azure migration runbook](docs/azure-migration.md) for subscription
+authentication, state handoff, activation, cloud recovery and homelab retirement.
 
 The Worker deploys on its own track and is not part of that chain: a tag
 here ships the Python service only. Deploying the site is `wrangler deploy`

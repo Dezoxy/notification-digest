@@ -1,8 +1,8 @@
 # Runtime image for the digest one-shot container (see PLAN.md §3, §6).
 # Not built on the VM: this image is only ever built by
-# .github/workflows/release.yml and pulled by the homelab repo's Ansible
-# `myapps` role. `docker build .` / `docker compose build` here are for local
-# dev only.
+# .github/workflows/release.yml and pulled by the configured runtime.
+# The existing VM uses Ansible; Azure Jobs use the app-owned infrastructure.
+# `docker build .` / `docker compose build` here are for local dev only.
 
 FROM python:3.14-slim-bookworm
 
@@ -20,14 +20,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the same version the owner's homelab repo pins as
-# `claude_cli_version` for other Claude Code-based homelab services — bump
-# both together, deliberately, not independently.
-RUN npm install -g @anthropic-ai/claude-code@2.1.293
+# Preserve the measured VM CLI for the first hosting migration release.
+# Main independently adopted 2.1.293; adoption here is deferred until the pilot
+# validates quality and subscription behavior. The global homelab pin is separate.
+RUN npm install -g @anthropic-ai/claude-code@2.1.284
 
 WORKDIR /app
 
-# uv Docker guidance: use the system interpreter (already 3.12 here) instead
+# uv Docker guidance: use the system interpreter (already 3.14 here) instead
 # of letting uv download its own, and copy instead of hardlink since the
 # layer cache and the final image are on different filesystems.
 ENV UV_PYTHON_DOWNLOADS=never \

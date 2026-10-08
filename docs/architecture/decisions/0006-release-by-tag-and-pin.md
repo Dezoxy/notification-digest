@@ -6,6 +6,9 @@ Date: 2026-09-20
 
 Accepted
 
+Deployment ownership superseded by [7. Run digest as Azure jobs](0007-run-digest-as-azure-jobs.md).
+The historical VM decision below remains recorded; Azure production cutover is pending.
+
 ## Context
 
 This repository is application source only — deployment (the Ansible

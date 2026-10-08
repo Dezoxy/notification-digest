@@ -44,6 +44,8 @@ from telethon import utils as telethon_utils
 from telethon.errors import ChatForwardsRestrictedError, FloodWaitError
 from telethon.tl import functions
 
+from digest import cloud_context
+
 logger = logging.getLogger(__name__)
 
 # Runaway guard only -- mirrors digest/collectors/telegram.py's own
@@ -246,6 +248,7 @@ async def _forward_one_chunk(
         top_msg_id=top_msg_id,
     )
     try:
+        cloud_context.guard()
         await client(req)
         return True
     except FloodWaitError as exc:

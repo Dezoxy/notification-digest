@@ -19,7 +19,7 @@ from telethon import TelegramClient
 from telethon import utils as telethon_utils
 from telethon.sessions import StringSession
 
-from digest import relay
+from digest import cloud_context, relay
 from digest.collectors import hackernews as hackernews_collector
 from digest.collectors import patreon as patreon_collector
 from digest.collectors import polymarket as polymarket_collector
@@ -706,6 +706,7 @@ async def _run_x_collector(conn: sqlite3.Connection, cfg: Config) -> CollectResu
     # and the next healthy run does it instead.
     if not result.failed:
         x_collector.persist_cookies(client, cfg.x_cookies_path)
+        cloud_context.checkpoint(conn)
     return result
 
 
@@ -2113,6 +2114,7 @@ def _ping_relay_batch(cfg: Config, channel: str, count: int, thread_id: int) -> 
     """
     if not (cfg.telegram_notify_bot_token and cfg.telegram_notify_chat_id):
         return
+    cloud_context.guard()
     try:
         send_relay_ping(
             channel,

@@ -24,6 +24,9 @@ dependencies = [
     # stdlib XML parsing would mean hand-rolling namespace/date/encoding
     # tolerance ourselves.
     "feedparser>=6.0",
+    # Azure SDKs own Blob leases/snapshots and managed identity; no workflow framework.
+    "azure-storage-blob>=12.31.0",
+    "azure-identity>=1.26.0",
 ]
 
 [dependency-groups]
