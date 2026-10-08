@@ -16,7 +16,7 @@
   },
   "customManagers": [
     {
-      "description": "Claude Code CLI pinned in the Dockerfile's npm install. config:recommended's dockerfile manager only reads FROM lines, so an `npm install -g pkg@version` inside a RUN is invisible to it -- this pin sat at 2.1.220 while the rest of the fleet moved to 2.1.251, and nothing would ever have opened a PR for it. The Dockerfile comment already said 'bump both together', which no bot can read. Mirrors the identical manager in Dezoxy/my-health-datas. Must be bumped together with claude_cli_version in the homelab repo.",
+      "description": "Claude Code CLI pinned in the Dockerfile's npm install. config:recommended's dockerfile manager only reads FROM lines, so an `npm install -g pkg@version` inside a RUN is invisible to it -- this pin sat at 2.1.220 while the rest of the fleet moved to 2.1.251, and nothing would ever have opened a PR for it. The Dockerfile comment already said 'bump both together', which no bot can read. Mirrors the identical manager in Dezoxy/my-health-datas. The application image pin is separate from the global homelab CLI; verify subscription and editorial behavior on a new migration CLI during the cloud pilot.",
       "customType": "regex",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["npm install -g (?<depName>@[a-z0-9-]+/[a-z0-9-]+)@(?<currentValue>[0-9][^\\s\"'\\\\]*)"],

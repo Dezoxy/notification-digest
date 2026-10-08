@@ -4,6 +4,8 @@
 # The existing VM uses Ansible; Azure Jobs use the app-owned infrastructure.
 # `docker build .` / `docker compose build` here are for local dev only.
 
+FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS node-runtime
+
 FROM python:3.14-slim-bookworm
 
 # --- uv ---
@@ -13,17 +15,20 @@ FROM python:3.14-slim-bookworm
 COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 
 # --- Node.js + Claude Code CLI ---
-# Debian bookworm's apt nodejs package is 18.x, which meets Claude Code's
-# minimum supported Node version — plain apt avoids adding the NodeSource
-# repo/key for what is otherwise a non-perf-critical CLI dependency.
+# Claude Code 2.1.294 requires Node >=22; bookworm's apt Node 18 is too old.
+# Copy only Node and its npm modules from the official digest-pinned image.
+# The tag remains discoverable by Renovate; no headers/yarn/build tools ship.
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends libstdc++6 libatomic1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
-# Preserve the measured VM CLI for the first hosting migration release.
-# Main independently adopted 2.1.293; adoption here is deferred until the pilot
-# validates quality and subscription behavior. The global homelab pin is separate.
-RUN npm install -g @anthropic-ai/claude-code@2.1.284
+# Owner-approved current CLI; subscription OAuth and editorial settings stay.
+# The measured VM baseline was 2.1.284; the homelab global pin is separate.
+RUN npm install -g @anthropic-ai/claude-code@2.1.294
 
 WORKDIR /app
 

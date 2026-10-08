@@ -100,7 +100,7 @@ true at the multi-channel cutover.
   weekday mornings. The /docs-sync and /pr-summary rules below are written
   for PRs a session drives and do not apply to them -- a bot cannot run
   either. Review the diff, let CI verify it, merge.
-- `twifork` is the ONE exception: it is tracked, but gated behind the
+- `twifork` is the standing exception: it is tracked, but gated behind the
   Dependency Dashboard (`dependencyDashboardApproval`) instead of opening a
   PR on its own, and its PR carries a `supply-chain-audit` label. It is a
   single-maintainer fork handling a live X session cookie, so each bump
@@ -217,16 +217,34 @@ Production currently runs on `01-myapps-vm`, deployed from
 wiring). Changes here do not move or stop the VM runtime by themselves.
 
 The approved Azure target is app-owned in `infra/azure/`, with the migration
-and cloud recovery procedure in `docs/azure-migration.md`. Its nine Container
-Apps Jobs start in Manual mode. `.github/workflows/azure-validate.yml` validates
+and cloud recovery procedure in `docs/azure-migration.md`. Provision the
+foundation with `jobs_enabled=false`, copy/verify digest secrets, then enable
+its nine jobs in Manual mode with schedules disabled.
+`.github/workflows/azure-validate.yml` validates
 IaC without credentials; `azure-application.yml` runs lint/tests/container build;
 `azure-deploy.yml` produces an OIDC-authenticated saved plan and explicitly
-approved apply. HCP Terraform holds remote state; never create local state.
+approved apply. Azure Blob Storage holds Terraform state in a separate
+bootstrapped backend resource group; never create local state. This stack owns a
+dedicated digest Key Vault; secret values are copied by the reviewed migration
+tool, never managed through Terraform. The existing Azure subscription remains
+the recommended default; select its ID explicitly.
 
 Releases remain explicit git tags: `.github/workflows/release.yml` publishes
 `ghcr.io/dezoxy/notification-digest:<version>`. Azure configuration pins the
 verified migration release. Until cutover, the homelab repository still pins
 and deploys its own image. A tag/merge alone never activates Azure schedules.
-Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth and the pinned image CLI;
+Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth. The owner requested current
+CLI 2.1.294 (Node >=22); keep it pinned and verify subscription/editorial behavior
+in the Azure pilot. The VM baseline was 2.1.284 and has not been redeployed;
 this migration does not introduce Anthropic API billing. Recovery stays within
 Azure; returning execution to the VM is outside the approved migration.
+Cloud X-cookie rotation uses `python -m digest.cloud_cookies PRIVATE_JSON_FILE`
+with explicit `--operator-login` for workstation Azure CLI access; canonical
+cookies live in runtime Blob state, not a duplicate dedicated-vault seed. Daily
+backup copies use a separate account/writer identity attached only to the backup
+job; pilot recovery must prove a restore from that account.
+
+Operator cloud commands use temporary private working directories and clean them
+up after closing SQLite connections, stopping watchdogs and releasing leases.
+Explicit export destinations remain durable private outputs for operator
+verification/cleanup.

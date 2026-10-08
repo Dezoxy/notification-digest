@@ -2,10 +2,10 @@ name: azure-application
 
 on:
   pull_request:
-    paths: ['digest/**', 'tests/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
+    paths: ['digest/**', 'tests/**', 'scripts/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
   push:
     branches: [main]
-    paths: ['digest/**', 'tests/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
+    paths: ['digest/**', 'tests/**', 'scripts/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
             --publish 127.0.0.1:10000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.35.0 \
             azurite-blob --blobHost 0.0.0.0
-          for attempt in $(seq 1 20); do
+          for _attempt in $(seq 1 20); do
             if curl --silent --output /dev/null http://127.0.0.1:10000/devstoreaccount1; then
               exit 0
             fi
@@ -42,6 +42,19 @@ jobs:
         run: docker rm --force digest-azurite || true
       - name: Build migration container without runtime credentials
         run: docker build --tag notification-digest-ci .
+      - name: Verify Node and Claude CLI without runtime credentials
+        run: |
+          expected_cli=$(sed -n 's/^RUN npm install -g @anthropic-ai\/claude-code@\([^[:space:]]*\)$/\1/p' Dockerfile)
+          test -n "$expected_cli"
+          docker run --rm --network none --entrypoint sh \
+            --env EXPECTED_CLAUDE_CLI="$expected_cli" notification-digest-ci -c '
+              set -eu
+              node --version
+              npm --version
+              node -e "if (parseInt(process.versions.node, 10) < 22) process.exit(1)"
+              test "$(claude --version)" = "$EXPECTED_CLAUDE_CLI (Claude Code)"
+              claude --help >/dev/null
+            '
       - name: Verify fencing when the runner is container PID 1
         run: |
           fence_status=0

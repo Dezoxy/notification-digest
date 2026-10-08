@@ -34,6 +34,10 @@ class CloudStateError(RuntimeError):
     """State cannot safely be used or published; callers must stop execution."""
 
 
+class LeaseBusyError(CloudStateError):
+    """Another healthy writer held the lease throughout the wait budget."""
+
+
 class CloudState:
     """One execution's lease, manifest and ephemeral local state directory.
 
@@ -71,6 +75,7 @@ class CloudState:
         self._manifest: dict[str, Any] | None = None
         self.lease_deadline = 0.0
         self._fenced = False
+        self._content_digest: str | None = None
 
     @classmethod
     def from_account_url(
@@ -112,6 +117,7 @@ class CloudState:
         if self._lease is not None:
             raise CloudStateError("Cloud state lease is already held")
         stop_at = self._clock() + self.lease_wait_seconds
+        transient_attempt = 0
         while True:
             started = self._clock()
             try:
@@ -119,6 +125,12 @@ class CloudState:
             except Exception as exc:
                 if getattr(exc, "status_code", None) == 404:
                     raise CloudStateError("Cloud state is missing; bootstrap is required") from None
+                if _transient_storage_error(exc) and transient_attempt < 2:
+                    delay = 0.5 * (2**transient_attempt)
+                    if self._clock() + delay < stop_at:
+                        self._sleep(delay)
+                        transient_attempt += 1
+                        continue
                 if (
                     getattr(exc, "status_code", None) != 409
                     or getattr(exc, "error_code", None) != "LeaseAlreadyPresent"
@@ -126,7 +138,7 @@ class CloudState:
                     raise CloudStateError("Cloud state lease acquisition failed") from None
                 remaining = stop_at - self._clock()
                 if remaining <= 0:
-                    raise CloudStateError("Cloud state lease wait exceeded its budget") from None
+                    raise LeaseBusyError("Cloud state lease wait exceeded its budget") from None
                 self._sleep(min(5, remaining))
                 continue
             self._lease = lease
@@ -143,17 +155,39 @@ class CloudState:
             self._fenced = True
             raise CloudStateError("Cloud state lease cannot be proven valid")
 
+    def _retry_read_or_renew(self, operation: Callable[[], Any], *, renewing: bool = False) -> Any:
+        """Retry only idempotent effects inside the existing proven lease."""
+        attempt = 0
+        while True:
+            self.check_lease()
+            if self._clock() >= self.lease_deadline - 10:
+                raise CloudStateError("Cloud state lease retry has no safe time remaining")
+            try:
+                result = operation()
+                self.check_lease()
+                return result
+            except Exception as exc:
+                delay = 0.5 * (2 ** min(attempt, 2))
+                if (
+                    (not renewing and attempt == 2)
+                    or not _transient_storage_error(exc)
+                    or self._clock() + delay >= self.lease_deadline - 10
+                ):
+                    raise
+                self._sleep(delay)
+                attempt += 1
+
     def renew(self) -> None:
-        """Renew before expiry; a failed or late response permanently fences us."""
+        """Retry transient renewal failures without extending the old proven deadline."""
         self.check_lease()
         started = self._clock()
         previous_deadline = self.lease_deadline
         try:
-            self._lease.renew()
+            self._retry_read_or_renew(self._lease.renew, renewing=True)
         except Exception:
             self._fenced = True
             raise CloudStateError("Cloud state lease renewal failed") from None
-        if self._clock() >= previous_deadline - 5 or self._fenced:
+        if self._clock() >= previous_deadline - 10 or self._fenced:
             self._fenced = True
             raise CloudStateError("Cloud state lease renewal completed too late")
         self.lease_deadline = started + LEASE_SECONDS
@@ -171,15 +205,18 @@ class CloudState:
     def _read_manifest(self) -> dict[str, Any]:
         self.check_lease()
         try:
-            download = self._manifest_blob.download_blob(
-                lease=self._lease, offset=0, length=MAX_MANIFEST_BYTES + 1
-            )
-            raw = download.readall()
+
+            def read() -> tuple[bytes, str]:
+                download = self._manifest_blob.download_blob(
+                    lease=self._lease, offset=0, length=MAX_MANIFEST_BYTES + 1
+                )
+                return download.readall(), download.properties.etag
+
+            raw, etag = self._retry_read_or_renew(read)
             if len(raw) > MAX_MANIFEST_BYTES:
                 raise ValueError("Oversized manifest")
             manifest = json.loads(raw)
             self._validate_manifest(manifest)
-            etag = download.properties.etag
         except Exception:
             raise CloudStateError("Cloud state manifest is missing or invalid") from None
         self.check_lease()
@@ -224,8 +261,13 @@ class CloudState:
         self.check_lease()
         try:
             blob = self.container.get_blob_client(reference["name"])
-            with destination.open("wb") as output:
-                blob.download_blob(offset=0, length=reference["size"] + 1).readinto(output)
+
+            def download() -> None:
+                # Reopen/truncate on retry: a partial response must never append.
+                with destination.open("wb") as output:
+                    blob.download_blob(offset=0, length=reference["size"] + 1).readinto(output)
+
+            self._retry_read_or_renew(download)
             destination.chmod(0o600)
             if destination.stat().st_size != reference["size"]:
                 raise ValueError("Bundle length differs")
@@ -238,6 +280,7 @@ class CloudState:
     def restore(self) -> dict[str, Any]:
         """Validate the whole bundle before installing local SQLite/cookies/archive."""
         manifest = self._read_manifest()
+        self._content_digest = None
         self.data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.data_dir.chmod(0o700)
         with tempfile.TemporaryDirectory(prefix=".state-", dir=self.data_dir) as temp:
@@ -249,6 +292,14 @@ class CloudState:
             try:
                 _extract_bundle(bundle, extracted)
                 _validate_database(extracted / "state.db")
+                content_digest = _bundle_content_digest(bundle)
+                # Legacy imports may contain only a live jar. The collector's
+                # resolver requires the seed to exist even when the live wins.
+                seed = extracted / "x-cookies.json"
+                live = extracted / "x-cookies.json.live"
+                if live.exists() and not seed.exists():
+                    shutil.copy2(live, seed)
+                    seed.chmod(0o600)
             except Exception:
                 raise CloudStateError("Cloud state bundle contents are invalid") from None
             self.check_lease()
@@ -268,6 +319,7 @@ class CloudState:
                 source = extracted / name
                 if source.exists():
                     source.replace(self.data_dir / name)
+        self._content_digest = content_digest
         return manifest
 
     def checkpoint(
@@ -282,6 +334,12 @@ class CloudState:
         now = self._utc_now().astimezone(UTC)
         with tempfile.TemporaryDirectory(prefix=".checkpoint-", dir=self.data_dir) as temp:
             bundle = self._build_bundle(connection, Path(temp), now)
+            content_digest = _bundle_content_digest(bundle)
+            if not daily_backup and content_digest == self._content_digest:
+                # Guards still run before returning. Any SQLite/cookie/archive
+                # change changes this digest, including pending delivery intents.
+                self.check_lease()
+                return self._manifest
             reference = self._upload_bundle(bundle)
         backups = [
             backup
@@ -302,6 +360,7 @@ class CloudState:
         }
         previous_manifest = self._manifest
         self._publish_manifest(manifest)
+        self._content_digest = content_digest
         self._discard_unreferenced(previous_manifest, manifest)
         return manifest
 
@@ -339,7 +398,7 @@ class CloudState:
             else self.data_dir / "x-cookies.json.live"
         )
         cutoff = now.timestamp() - timedelta(days=365).total_seconds()
-        with tarfile.open(bundle, "w:gz") as tar:
+        with tarfile.open(bundle, "w:gz", compresslevel=1) as tar:
             tar.add(snapshot, arcname="state.db", recursive=False)
             seed_path = live_cookies_path.with_name(live_cookies_path.name.removesuffix(".live"))
             for cookie_path, name in (
@@ -371,15 +430,20 @@ class CloudState:
 
     def _upload_bundle(self, bundle: Path) -> dict[str, Any]:
         self.check_lease()
-        name = f"{self.namespace}/bundles/{uuid4().hex}.tar.gz"
-        reference = {"name": name, "sha256": _sha256(bundle), "size": bundle.stat().st_size}
-        try:
+        digest, size = _sha256(bundle), bundle.stat().st_size
+
+        def upload() -> dict[str, Any]:
+            # Each retry gets a fresh immutable name. An upload whose response
+            # was lost may have succeeded; never overwrite or trust that object.
+            name = f"{self.namespace}/bundles/{uuid4().hex}.tar.gz"
             with bundle.open("rb") as source:
                 self.container.get_blob_client(name).upload_blob(source, overwrite=False)
+            return {"name": name, "sha256": digest, "size": size}
+
+        try:
+            return self._retry_read_or_renew(upload)
         except Exception:
             raise CloudStateError("Cloud state bundle upload failed") from None
-        self.check_lease()
-        return reference
 
     def _publish_manifest(self, manifest: dict[str, Any]) -> None:
         from azure.core import MatchConditions
@@ -541,6 +605,36 @@ class CloudState:
         return deleted
 
 
+def _transient_storage_error(exc: Exception) -> bool:
+    from azure.core.exceptions import ServiceRequestError, ServiceResponseError
+
+    # Authorization, missing/corrupt state and 409/412 lease loss never retry.
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return status in (408, 429, 500, 502, 503, 504)
+    return isinstance(exc, (ServiceRequestError, ServiceResponseError))
+
+
+def _bundle_content_digest(bundle: Path) -> str:
+    """Compare logical files, excluding incidental gzip and SQLite snapshot times."""
+    digest = hashlib.sha256()
+    with tarfile.open(bundle, "r:gz") as tar:
+        for member in tar:
+            if not member.isfile():
+                continue
+            digest.update(json.dumps([member.name, member.size]).encode())
+            if member.name != "state.db":
+                # Cookie precedence and archive retention depend on file age.
+                digest.update(repr(member.mtime).encode())
+            content = tar.extractfile(member)
+            if content is None:
+                raise CloudStateError("Cloud bundle member is unreadable")
+            with content:
+                for chunk in iter(lambda stream=content: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -639,39 +733,48 @@ def main() -> int:
     export.add_argument("--backup-date")
     args = parser.parse_args()
     cfg = CloudConfig.from_env()
-    state = CloudState.from_account_url(
-        cfg.account_url,
-        cfg.container,
-        namespace=cfg.namespace,
-        data_dir=cfg.data_dir,
-        managed_identity_client_id=cfg.identity_client_id,
-        operator_login=args.operator_login,
-    )
+    # Only the explicit export destination is durable. Source imports and the
+    # configured operator data directory remain untouched by working files.
+    with tempfile.TemporaryDirectory(prefix="digest-state-operator-") as temp:
+        state = CloudState.from_account_url(
+            cfg.account_url,
+            cfg.container,
+            namespace=cfg.namespace,
+            data_dir=temp,
+            managed_identity_client_id=cfg.identity_client_id,
+            operator_login=args.operator_login,
+        )
+        watchdog = None
+        try:
+            if args.command == "bootstrap":
+                source = args.source_dir
+                if (source / "bundle.tar.gz").exists():
+                    state.bootstrap_export(source)
+                else:
+                    state.bootstrap(
+                        source / "state.db",
+                        archive_dir=source / "archive",
+                        live_cookies_path=source / "x-cookies.json.live",
+                    )
+            else:
+                # Own the process group before starting the same fence as jobs.
+                if os.getpgrp() != os.getpid():
+                    os.setsid()
+                signal.signal(signal.SIGTERM, lambda *_: _fence_process_group())
+                state.acquire()
+                watchdog = LeaseWatchdog(state, _fence_process_group)
+                watchdog.start()
+                state.export(args.destination, backup_date=args.backup_date)
+        finally:
+            try:
+                if watchdog is not None:
+                    watchdog.stop()
+            finally:
+                state.release()
     if args.command == "bootstrap":
-        source = args.source_dir
-        if (source / "bundle.tar.gz").exists():
-            state.bootstrap_export(source)
-        else:
-            state.bootstrap(
-                source / "state.db",
-                archive_dir=source / "archive",
-                live_cookies_path=source / "x-cookies.json.live",
-            )
         print("Cloud state bootstrap completed; verify an export before enabling schedules")
-        return 0
-    # Own the whole process group before starting the same failure fence as jobs.
-    if os.getpgrp() != os.getpid():
-        os.setsid()
-    signal.signal(signal.SIGTERM, lambda *_: _fence_process_group())
-    state.acquire()
-    watchdog = LeaseWatchdog(state, _fence_process_group)
-    watchdog.start()
-    try:
-        state.export(args.destination, backup_date=args.backup_date)
-    finally:
-        watchdog.stop()
-        state.release()
-    print("Cloud state export completed; keep the export private")
+    else:
+        print("Cloud state export completed; keep the export private")
     return 0
 
 

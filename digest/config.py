@@ -30,6 +30,9 @@ class CloudConfig:
     namespace: str = "production"
     data_dir: str = "/data"
     identity_client_id: str | None = None
+    backup_account_url: str | None = None
+    backup_container: str | None = None
+    backup_identity_client_id: str | None = None
 
     @classmethod
     def from_env(cls) -> CloudConfig:
@@ -39,9 +42,7 @@ class CloudConfig:
             raise ConfigError("DIGEST_CLOUD_ACCOUNT_URL must be an Azure HTTPS account URL")
         account_url = account_url.rstrip("/")
         container = _require_str("DIGEST_CLOUD_CONTAINER")
-        if "--" in container or not re.fullmatch(
-            r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])", container
-        ):
+        if "--" in container or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])", container):
             raise ConfigError("DIGEST_CLOUD_CONTAINER must be a valid private container name")
         namespace = _optional_str("DIGEST_CLOUD_NAMESPACE", default="production")
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", namespace):
@@ -49,9 +50,36 @@ class CloudConfig:
         data_dir = _optional_str("DIGEST_CLOUD_DATA_DIR", default="/data")
         if not data_dir.startswith("/"):
             raise ConfigError("DIGEST_CLOUD_DATA_DIR must be absolute")
+        backup_url = _optional_str_or_none("DIGEST_CLOUD_BACKUP_ACCOUNT_URL")
+        backup_container = _optional_str_or_none("DIGEST_CLOUD_BACKUP_CONTAINER")
+        backup_identity = _optional_str_or_none("DIGEST_CLOUD_BACKUP_IDENTITY_CLIENT_ID")
+        if any((backup_url, backup_container, backup_identity)):
+            if not all((backup_url, backup_container, backup_identity)):
+                raise ConfigError("DIGEST_CLOUD_BACKUP_* settings must be configured together")
+            if not re.fullmatch(r"https://[a-z0-9]{3,24}\.blob\.core\.windows\.net/?", backup_url):
+                raise ConfigError(
+                    "DIGEST_CLOUD_BACKUP_ACCOUNT_URL must be an Azure HTTPS account URL"
+                )
+            backup_url = backup_url.rstrip("/")
+            if backup_url == account_url:
+                raise ConfigError("DIGEST_CLOUD_BACKUP_ACCOUNT_URL must use a separate account")
+            if "--" in backup_container or not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])", backup_container
+            ):
+                raise ConfigError("DIGEST_CLOUD_BACKUP_CONTAINER must be a valid container name")
+            if not re.fullmatch(
+                r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", backup_identity
+            ):
+                raise ConfigError("DIGEST_CLOUD_BACKUP_IDENTITY_CLIENT_ID must be a UUID")
         return cls(
-            account_url, container, namespace, data_dir,
+            account_url,
+            container,
+            namespace,
+            data_dir,
             _optional_str_or_none("DIGEST_CLOUD_IDENTITY_CLIENT_ID"),
+            backup_url,
+            backup_container,
+            backup_identity,
         )
 
 

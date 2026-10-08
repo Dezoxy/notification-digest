@@ -255,7 +255,10 @@ def test_job_resume_skips_completed_slot_and_backup_prunes(tmp_path, monkeypatch
     assert run_job("relay", cloud, _config(), "2026-07-05T19:40:00+00:00", state)
     dispatch.assert_called_once()
     assert state.release.call_count == 2
+    copy = Mock()
+    monkeypatch.setattr("digest.cloud_backup.copy_daily_backup", copy)
     assert run_job("backup", cloud, _config(), "2026-07-05T04:15:00+00:00", state)
+    copy.assert_called_once_with(state, cloud)
     state.prune.assert_called_once()
     assert any(call.kwargs.get("daily_backup") for call in state.checkpoint.call_args_list)
 
@@ -373,3 +376,71 @@ def test_fence_exits_even_when_namespace_process_group_is_missing(monkeypatch):
         _fence_process_group()
     assert result.value.code == 70
     exit_process.assert_called_once_with(70)
+
+
+@pytest.mark.parametrize(
+    "job", ["daytime", "overnight", "evening", "positions", "patreon", "relay"]
+)
+def test_cursor_lane_lease_contention_is_clean_skip_without_dispatch(job, tmp_path, monkeypatch):
+    from digest.cloud_state import LeaseBusyError
+
+    state = Mock()
+    state.acquire.side_effect = LeaseBusyError("busy")
+    dispatch = Mock()
+    monkeypatch.setattr("digest.cloud_run._dispatch", dispatch)
+    cloud = CloudConfig(
+        "https://digeststore.blob.core.windows.net", "digest", data_dir=str(tmp_path)
+    )
+    assert run_job(job, cloud, _config(), "slot", state)
+    dispatch.assert_not_called()
+    state.restore.assert_not_called()
+    state.release.assert_not_called()
+
+
+@pytest.mark.parametrize("job", ["daily", "weekly", "backup"])
+def test_aggregate_and_backup_lease_contention_requires_catchup(job, tmp_path):
+    from digest.cloud_state import LeaseBusyError
+
+    state = Mock()
+    state.acquire.side_effect = LeaseBusyError("busy")
+    cloud = CloudConfig(
+        "https://digeststore.blob.core.windows.net", "digest", data_dir=str(tmp_path)
+    )
+    with pytest.raises(LeaseBusyError):
+        run_job(job, cloud, _config(), "slot", state)
+
+
+@pytest.mark.parametrize(
+    "job", ["daytime", "overnight", "evening", "positions", "patreon", "relay"]
+)
+def test_late_cursor_lanes_skip_and_explicit_catchup_still_valid(job):
+    hour, minute = {
+        "daytime": (6, 0),
+        "overnight": (0, 0),
+        "evening": (18, 0),
+        "positions": (1, 25),
+        "patreon": (0, 50),
+        "relay": (0, 40),
+    }[job]
+    due = datetime(2026, 7, 5, hour, minute, tzinfo=UTC)
+    assert scheduled_slot(job, due + timedelta(minutes=11)) is None
+    assert scheduled_slot(job, due + timedelta(minutes=11), catch_up_slot=due) == due.isoformat()
+
+
+def test_backup_copy_failure_does_not_complete_slot(tmp_path, monkeypatch):
+    db = connect(str(tmp_path / "state.db"))
+    init_db(db)
+    db.close()
+    cloud = CloudConfig(
+        "https://digeststore.blob.core.windows.net", "digest", data_dir=str(tmp_path)
+    )
+    state = Mock(lease_deadline=time.monotonic() + 60)
+    monkeypatch.setattr(
+        "digest.cloud_backup.copy_daily_backup", Mock(side_effect=RuntimeError("copy"))
+    )
+    with pytest.raises(RuntimeError):
+        run_job("backup", cloud, _config(), "slot", state)
+    db = connect(str(tmp_path / "state.db"))
+    assert not cloud_slot_completed(db, "backup", "slot")
+    db.close()
+    state.release.assert_called_once()

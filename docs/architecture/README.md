@@ -98,7 +98,8 @@ exceeding it.
 | 4 | [Deliver through independent channels, and keep email implemented](decisions/0004-multi-channel-delivery.md) | Accepted |
 | 5 | [Forward relay-lane posts verbatim, with no summarization](decisions/0005-relay-forwards-verbatim.md) | Accepted |
 | 6 | [Release by git tag, deploy by pin bump from a separate repository](decisions/0006-release-by-tag-and-pin.md) | Accepted; deployment ownership superseded by ADR 7 for Azure target |
-| 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; production cutover pending |
+| 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; state/vault ownership amended by ADR 8; cutover pending |
+| 8 | [Isolate digest Azure state and secrets](decisions/0008-isolate-digest-azure-state-and-secrets.md) | Accepted for state/vault; existing subscription recommended; deployment pending |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

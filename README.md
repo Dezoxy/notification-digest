@@ -278,9 +278,17 @@ deploys its systemd timers, Ansible `myapps` role and Key Vault secrets.
 
 The approved Azure target is prepared here in `infra/azure/`: nine Container Apps
 Jobs, leased Blob-backed SQLite bundles and explicit reviewed OIDC plan/apply.
-Schedules default to disabled; merging these changes does not move production.
+Terraform state uses a separate Azure Blob backend; digest credentials use an
+app-owned Key Vault. The existing subscription is sufficient for this workload;
+select its ID explicitly. Source secrets remain intact during the reviewed copy.
+Provision the foundation first, copy/verify secrets, then create the nine Manual
+jobs. Jobs and schedules default to disabled; merging does not move production.
 See [the Azure migration runbook](docs/azure-migration.md) for subscription
 authentication, state handoff, activation, cloud recovery and homelab retirement.
+The owner requested current CLI 2.1.294 for the migration image, with official
+Node 22 (tag/digest pinned) to meet its >=22 engine requirement. Subscription
+OAuth, prompts, models and fallbacks stay configured as before; live quality and
+authentication still require the cloud pilot. The VM baseline remains 2.1.284.
 
 The Worker deploys on its own track and is not part of that chain: a tag
 here ships the Python service only. Deploying the site is `wrangler deploy`
@@ -319,7 +327,7 @@ Use the Application panel, which reads the cookie store below that boundary:
 3. Copy the **Value** of `auth_token` and `ct0`, in one sitting — `ct0` is the
    CSRF token paired to that session.
 
-### 3. Store the jar
+### 3. Store the jar (shared preparation)
 
 Exactly two keys, which is what `load_cookies` expects:
 
@@ -327,6 +335,8 @@ Exactly two keys, which is what `load_cookies` expects:
 {"auth_token":"...","ct0":"..."}
 ```
 
+Create a private directory first (mode 0700), set `DEST` below to its path, and
+use an existing-file permission check so a prior file cannot stay world-readable.
 Capture the two values without either the shell or your history seeing
 them — the prompts are hidden, and the readout at the end is how you
 confirm the paste landed. (Pasting raw JSON at a zsh prompt is a trap:
@@ -337,7 +347,7 @@ that embeds the credential in your history.)
 python3 - <<'PY'
 import getpass, json, os, sys
 
-DEST = "/tmp/x-cookies.json"
+DEST = "/PRIVATE/DIGEST_ROTATION/x-cookies.json"
 at  = getpass.getpass("paste auth_token, then Enter: ").strip()
 ct0 = getpass.getpass("paste ct0,        then Enter: ").strip()
 
@@ -354,14 +364,26 @@ if errs:
     for e in errs: print("  -", e, file=sys.stderr)
     sys.exit(1)
 
-fd = os.open(DEST, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+fd = os.open(DEST, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+os.fchmod(fd, 0o600)
 with os.fdopen(fd, "w") as f:
     json.dump({"auth_token": at, "ct0": ct0}, f)
 print(f"\nwrote {DEST} (0600)")
-print(f"  auth_token: {len(at)} chars, ends ...{at[-4:]}")
-print(f"  ct0:        {len(ct0)} chars, ends ...{ct0[-4:]}")
+print("validated two non-empty, distinct cookie values")
 PY
 ```
+
+### 4. Select the active runtime
+
+**After Azure cutover:** use the guarded [cloud X-cookie rotation
+procedure](docs/azure-migration.md#rotate-the-cloud-x-cookie-jar). Pass the private
+JSON to `uv run python -m digest.cloud_cookies /PRIVATE/cookies.json
+--operator-login` with the configured Azure runtime namespace and scoped Blob
+access. This updates canonical seed/live state under the lease; no X-cookie
+secret exists in the dedicated vault. Verify a Manual X-enabled run before
+resuming schedules. A homelab vault update does not reach cloud jobs.
+
+**Current VM only, before cutover:** follow the upload and deploy steps below.
 
 **`--tags` is mandatory, not decoration.** `az keyvault secret set` creates a
 new secret VERSION, and versions do not inherit tags. The deploy discovers
@@ -377,11 +399,11 @@ deploy still goes green. That is exactly what happened on 2026-09-06 —
 az keyvault secret set \
   --vault-name kv-homelab-prod-th \
   --name digest-x-cookies \
-  --file /tmp/x-cookies.json \
+  --file /PRIVATE/DIGEST_ROTATION/x-cookies.json \
   --tags envvar=DIGEST_X_COOKIES folder=digest file-encoding=utf-8 \
   --output none && echo uploaded
 
-rm -f /tmp/x-cookies.json
+rm -f /PRIVATE/DIGEST_ROTATION/x-cookies.json
 ```
 
 `--output none` because the default prints the secret value back at you.
@@ -407,7 +429,7 @@ az keyvault secret set-attributes --vault-name kv-homelab-prod-th \
   --tags envvar=DIGEST_X_COOKIES folder=digest file-encoding=utf-8
 ```
 
-### 4. Deploy
+### 5. Deploy (current VM only)
 
 Deploy `01-myapps-vm` (Configuration only) from the homelab repo. Ansible
 rewrites the seed file, whose mtime then jumps ahead of the stale
@@ -426,8 +448,12 @@ Then confirm with the next digest's `source_counts`, which should carry an
 ### The other session credentials
 
 `REDDIT_SESSION_COOKIE`, `PATREON_SESSION_COOKIE` and `TG_SESSION` are also
-long-lived session credentials refreshed the same way (update the Key Vault
-secret, deploy), but they have none of the mechanics above: they are env vars
+long-lived session credentials. Before cutover, update the homelab vault and
+deploy the VM. After cutover, use the [dedicated-vault credential rotation
+procedure](docs/azure-migration.md#credential-rotation-after-cutover): update the
+active digest vault, verify a Manual Azure run, then resume jobs. Homelab deploy
+is no longer the rotation path. These credentials have none of the X mechanics
+above: they are env vars
 rather than files, sent as hand-built headers over stateless `urllib` (or, for
 Telegram, an MTProto auth key), so nothing rotates and there is no live jar.
 Each already reports its own auth death explicitly — see `reddit.py`'s 401/403

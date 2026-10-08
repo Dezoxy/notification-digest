@@ -16,7 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from digest import cloud_context
-from digest.cloud_state import CloudState
+from digest.cloud_state import CloudState, LeaseBusyError
 from digest.config import CloudConfig, Config
 from digest.state import cloud_slot_completed, complete_cloud_slot, connect, init_db
 
@@ -32,6 +32,7 @@ JOBS = (
     "relay",
     "backup",
 )
+CURSOR_JOBS = frozenset({"daytime", "overnight", "evening", "positions", "patreon", "relay"})
 _GRACE = timedelta(minutes=10)
 
 
@@ -83,6 +84,9 @@ def scheduled_slot(job: str, now: datetime, *, catch_up_slot: datetime | None = 
     elif not valid:
         return None
     elif candidate - slot > _GRACE:
+        if job in CURSOR_JOBS:
+            logger.info("cloud_job event=skipped job=%s reason=late_start", job)
+            return None
         raise ValueError(
             "scheduled job started after its ten-minute grace; explicit catch-up required"
         )
@@ -190,7 +194,13 @@ def run_job(job: str, cloud: CloudConfig, cfg: Config, slot: str, state: CloudSt
     if job not in JOBS:
         raise ValueError("unsupported cloud job")
     started = time.monotonic()
-    state.acquire()
+    try:
+        state.acquire()
+    except LeaseBusyError:
+        if job not in CURSOR_JOBS:
+            raise
+        logger.info("cloud_job event=skipped job=%s slot=%s reason=lease_busy", job, slot)
+        return True
     watchdog = LeaseWatchdog(state, _fence_process_group, job=job)
     watchdog.start()
     conn = None
@@ -216,6 +226,9 @@ def run_job(job: str, cloud: CloudConfig, cfg: Config, slot: str, state: CloudSt
             if job == "backup":
                 state.checkpoint(conn, daily_backup=True)
                 state.prune()
+                from digest.cloud_backup import copy_daily_backup
+
+                copy_daily_backup(state, cloud)
                 ok = True
             else:
                 ok = _dispatch(job, cfg)

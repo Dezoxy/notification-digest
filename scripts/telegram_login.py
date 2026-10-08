@@ -54,7 +54,7 @@ def main() -> None:
 
         print("\n" + "=" * 70)
         print("SECRET — Telethon StringSession (store as digest-tg-session in")
-        print("Azure Key Vault kv-homelab-prod-th; do NOT commit or paste this")
+        print("the active runtime Key Vault (see docs/azure-migration.md); do NOT paste this")
         print("anywhere else):")
         print("=" * 70)
         print(session_string)

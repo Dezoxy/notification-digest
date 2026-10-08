@@ -9,6 +9,10 @@ Accepted
 Amends the hosting portion of [3. SQLite is the source of truth](0003-sqlite-is-the-source-of-truth.md).
 Supersedes the deployment ownership portion of [6. Release by tag and pin](0006-release-by-tag-and-pin.md).
 
+The Terraform backend and shared-vault choice are superseded by
+[8. Isolate digest Azure state and secrets](0008-isolate-digest-azure-state-and-secrets.md).
+The remaining hosting/runtime decision stays accepted.
+
 Implementation is being prepared; production remains on the VM until the
 verified state handoff and explicit schedule activation.
 

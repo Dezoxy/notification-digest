@@ -9,7 +9,7 @@
 - No official API path exists for X notifications at acceptable cost; twikit (unofficial, cookie-based) is accepted with explicit ToS/ban risk and mitigations (§8).
 - Idempotent by design: a crashed run must never lose or duplicate items. Empty window → nothing delivered on any channel, no noise.
 - Partial-failure-tolerant: one collector failing must not suppress the other collector's digest — send what was collected with a failure banner.
-- Secrets never committed; injected as env vars at deploy time from Azure Key Vault (`kv-homelab-prod-th`).
+- Secrets never committed; the VM uses `kv-homelab-prod-th`; the Azure target uses a dedicated digest Key Vault.
 
 ## 2. Architecture
 
@@ -120,6 +120,8 @@ notification-digest/
 │   ├── cloud_context.py          # checkpoint/delivery effect boundaries, local mode unchanged
 │   ├── cloud_state.py            # consistent Blob state bundles, lease/ETag fencing, admin export/import
 │   ├── cloud_reconcile.py        # explicit uncertain-delivery reconciliation under the shared lease
+│   ├── cloud_cookies.py          # guarded cloud X cookie rotation, private JSON input
+│   ├── cloud_backup.py           # daily independent-account copy with backup-only identity
 │   ├── state.py                  # SQLite: schema + migrations, item/cursor/digest persistence, prunes
 │   ├── deliver.py                # per-channel senders, pending-digest retry, Telegram 429 breaker
 │   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation + the fallback chain
@@ -154,6 +156,7 @@ notification-digest/
 │   ├── arc-context.md            # story-arc background-primer prompt template (§4.19)
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
+│   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
 │   ├── list_telegram_topics.py   # one-off: print a forum group's topics + thread ids for TELEGRAM_*_THREAD_ID
 │   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
@@ -168,6 +171,9 @@ notification-digest/
 │   ├── test_cloud_runtime.py      # scheduling, failure fencing and publication recovery
 │   ├── test_cloud_state.py        # snapshots, integrity, conditional manifests and retention
 │   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite
+│   ├── test_cloud_cookies.py      # private input and leased X rotation without network calls
+│   ├── test_cloud_backup.py       # independent copy, completion marker and config validation
+│   ├── test_cloud_operators.py    # temporary operator workspaces and cleanup
 │   ├── test_collectors.py         # Telegram collector: output shape, allowlist filtering (mocked client)
 │   ├── test_config.py             # Config.from_env: every var, every error path
 │   ├── test_context.py            # arc-context primers: prompt build, sentinel, soft-fail (mocked CLI)
@@ -212,7 +218,15 @@ notification-digest/
 │       ├── test/                  # node --test invariants + byte-golden pages
 │       ├── schema.sql, migrations/ # D1 schema (separate from digest/state.py's SQLite)
 │       └── wrangler.jsonc         # deploy config; `wrangler deploy` from this dir
-├── infra/azure/                   # app-owned Azure jobs/storage/RBAC/alerts, remote Terraform state
+├── infra/azure/                   # app-owned resources; separate bootstrapped Azure Blob backend
+│   ├── main.tf                    # runtime jobs/storage, dedicated vault and runner RBAC
+│   ├── backup.tf                  # separate account/RG, private copies and backup-only writer
+│   ├── monitoring.tf              # aggregate log alerts and app-RG budget
+│   ├── variables.tf               # reviewed nonsecret inputs and validation
+│   ├── outputs.tf                 # deployment and operator resource identifiers
+│   ├── versions.tf                # Terraform/provider pin and remote Azure backend
+│   ├── production.auto.tfvars.example # source baseline and disabled first-stage defaults
+│   └── secret-migration.json       # 17 runtime/registry names, no duplicate X cookie seed
 ├── Makefile                       # architecture model targets: check, docs, view, export, pdf
 ├── Dockerfile                     # slim Python 3.14 image, local default `python -m digest`
 ├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
@@ -1451,17 +1465,29 @@ keeping Claude subscription authentication, current editorial behavior and the
 SQLite source of truth. Implementation is prepared in the app; the VM remains
 production until explicit state handoff and schedule activation. Historical
 completed phases above describe the VM deployment at their original dates.
+The owner subsequently requested current Claude CLI 2.1.294 for the migration
+image, using official Node 22 to meet its >=22 engine requirement. The temporary
+Renovate hold is removed; subscription/editorial behavior still needs pilot
+evidence. The measured production VM baseline remains 2.1.284.
 
 - [ ] Validate the guarded cloud runner, checkpoints, lease loss and uncertain
   delivery; pass application/container/Terraform checks and PR review.
-- [ ] Configure dedicated HCP Terraform workspace, app OIDC identity and GitHub
-  environments; review and apply the disabled-schedule cloud stack.
+- [ ] Bootstrap separate Azure Blob Terraform backend; configure app OIDC
+  identity and GitHub environments in the explicitly selected existing subscription.
+- [ ] Review/apply the foundation with jobs disabled and a dedicated digest vault;
+  preview, copy and verify the 17-entry secret manifest immediately before Manual
+  jobs apply; resolve authorized source rotations explicitly, then revoke operator roles.
+- [ ] Review/apply `jobs_enabled=true` with schedules disabled to create Manual jobs.
 - [ ] Separate shared homelab alerts, pause/drain all digest writers, import the
   final consistent database/live cookies/archives and verify cloud lineage.
+- [ ] Require authenticated Azure egress for every enabled path, subscription
+  authentication, cloud cookie rotation and independent backup restore before activation.
 - [ ] Activate schedules after pilot checks; observe seven days including the
   weekly digest, test cloud-only recovery and measure actual checkpoint cost.
 - [ ] Retire digest-specific homelab configuration after verification. Keep the
   shared VM and its remaining applications, credentials and backup services.
 
 There is no return-to-VM procedure. See [the migration runbook](docs/azure-migration.md)
-and [ADR 7](docs/architecture/decisions/0007-run-digest-as-azure-jobs.md).
+and [ADR 7](docs/architecture/decisions/0007-run-digest-as-azure-jobs.md), amended
+by [ADR 8](docs/architecture/decisions/0008-isolate-digest-azure-state-and-secrets.md)
+for Azure Terraform state and dedicated-vault ownership.
