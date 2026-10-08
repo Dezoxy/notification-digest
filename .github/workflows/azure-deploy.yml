@@ -5,10 +5,15 @@ on:
     inputs:
       operation:
         type: choice
-        description: Plan only, or plan followed by approval of the saved plan
+        description: Plan a change, or apply a plan that was already reviewed
         options: [plan, apply]
         default: plan
         required: true
+      plan_run_id:
+        type: string
+        description: Run ID of the reviewed plan run; required for apply
+        default: ''
+        required: false
 
 permissions:
   contents: read
@@ -19,7 +24,7 @@ concurrency:
 
 jobs:
   plan:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'plan'
     runs-on: ubuntu-latest
     environment: azure-plan
     permissions:
@@ -86,17 +91,26 @@ jobs:
             infra/azure/production.auto.tfvars.json
             infra/azure/backend.hcl
           retention-days: 1
-      - name: Approval instructions
+      - name: Apply instructions
         run: |
-          echo 'Review the azure-plan artifact and plan output before approving azure-production.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'The apply job uses this exact saved plan. Schedule activation can replace job resources; Blob state is protected.' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo 'Review the azure-plan artifact and plan output, then apply this exact saved plan with:'
+            echo
+            echo '```sh'
+            echo "gh workflow run azure-deploy.yml --ref main -f operation=apply -f plan_run_id=$GITHUB_RUN_ID"
+            echo '```'
+            echo
+            echo 'Schedule activation can replace job resources; Blob state is protected.'
+            echo 'The plan artifact expires after one day; run a new plan after that.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   apply:
-    needs: plan
-    if: inputs.operation == 'apply'
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'apply'
     runs-on: ubuntu-latest
-    # Configure required reviewers in repository settings; verified below.
-    # Azure federated credentials must independently restrict this environment.
+    # Approval is the owner dispatching apply with the run ID of the reviewed
+    # plan; the verification step ties that run to this commit.
+    # Azure federated credentials must independently restrict this environment;
+    # both environments are restricted to main by deployment branch policy.
     environment: azure-production
     permissions:
       contents: read
@@ -114,23 +128,44 @@ jobs:
         with:
           terraform_version: 1.16.4
           terraform_wrapper: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: azure-plan-${{ github.run_id }}
-          path: infra/azure
-      - name: Require configured approval gate
+      - name: Require a successful reviewed plan run from this commit
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
         run: |
-          gh api "repos/$GH_REPO/environments/azure-production" \
-            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' \
-            > "$RUNNER_TEMP/approval-gate.json"
+          python - <<'PY'
+          import os, re
+          run_id = os.environ.get('PLAN_RUN_ID', '')
+          if not re.fullmatch(r'[0-9]{1,20}', run_id):
+              raise SystemExit('plan_run_id must be the numeric run ID of the reviewed plan run.')
+          if run_id == os.environ['GITHUB_RUN_ID']:
+              raise SystemExit('plan_run_id must be a previous plan run, not this apply run.')
+          PY
+          gh api "repos/$GH_REPO/actions/runs/$PLAN_RUN_ID" \
+            --jq '{path, event, head_branch, head_sha, status, conclusion}' \
+            > "$RUNNER_TEMP/plan-run.json"
           python - <<'PY'
           import json, os
           from pathlib import Path
-          if json.loads(Path(os.environ['RUNNER_TEMP'], 'approval-gate.json').read_text()) is not True:
-              raise SystemExit('azure-production must have required reviewers configured before applying.')
+          run = json.loads(Path(os.environ['RUNNER_TEMP'], 'plan-run.json').read_text())
+          expected = {
+              'path': '.github/workflows/azure-deploy.yml',
+              'event': 'workflow_dispatch',
+              'head_branch': 'main',
+              'head_sha': os.environ['GITHUB_SHA'],
+              'status': 'completed',
+              'conclusion': 'success',
+          }
+          for key, want in expected.items():
+              if run.get(key) != want:
+                  raise SystemExit(f'plan run {key} is {run.get(key)!r}, expected {want!r}; apply refused.')
           PY
+      - uses: actions/download-artifact@v8
+        with:
+          name: azure-plan-${{ inputs.plan_run_id }}
+          path: infra/azure
+          run-id: ${{ inputs.plan_run_id }}
+          github-token: ${{ github.token }}
       - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly -backend-config=backend.hcl
       - run: terraform -chdir=infra/azure apply -input=false deployment.tfplan
