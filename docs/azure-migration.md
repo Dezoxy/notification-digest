@@ -148,7 +148,10 @@ itself.
 The deployment identity needs Contributor on the app resource group and
 permission to grant the runner's container Blob and dedicated-vault Secrets
 User roles. Use a constrained Role Based Access Control Administrator assignment
-for those grants; review principal/role/scope conditions with the administrator.
+for those grants. The condition should restrict the assignable roles to Storage
+Blob Data Contributor and Key Vault Secrets User, and must not add a
+principal-type condition: the stack's role assignments do not send
+`principalType`, so such a condition rejects them with `AuthorizationFailed`.
 Do not give the deployment identity secret-value access to the homelab vault.
 The separate secret-copy operator receives only the temporary source-read and
 target-write roles needed for the reviewed migration. Bootstrap resource-group
