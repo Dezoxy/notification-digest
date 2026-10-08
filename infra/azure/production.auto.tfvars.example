@@ -4,6 +4,7 @@
 # Personal identifiers below are placeholders. Secret values are copied separately.
 # All secret names resolve in the dedicated digest vault, never the homelab vault.
 storage_account_name = "REPLACE_WITH_GLOBALLY_UNIQUE_NAME"
+backup_storage_account_name = "REPLACE_WITH_DIFFERENT_UNIQUE_NAME"
 ghcr_username = "Dezoxy"
 key_vault_name = "REPLACE_WITH_UNIQUE_VAULT_NAME"
 alert_email = "REPLACE@example.com"

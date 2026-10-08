@@ -100,7 +100,7 @@ true at the multi-channel cutover.
   weekday mornings. The /docs-sync and /pr-summary rules below are written
   for PRs a session drives and do not apply to them -- a bot cannot run
   either. Review the diff, let CI verify it, merge.
-- `twifork` is the ONE exception: it is tracked, but gated behind the
+- `twifork` is the standing exception: it is tracked, but gated behind the
   Dependency Dashboard (`dependencyDashboardApproval`) instead of opening a
   PR on its own, and its PR carries a `supply-chain-audit` label. It is a
   single-maintainer fork handling a live X session cookie, so each bump
@@ -109,6 +109,10 @@ true at the multi-channel cutover.
   trusted. Ticking the dashboard box IS the decision to do that audit, so
   the bump can never arrive looking routine. See the pin's comment in
   `pyproject.toml` and the rule's own `description` in `renovate.json`.
+- During the Azure migration pilot, the Dockerfile Claude CLI has a temporary
+  Renovate `allowedVersions: "=2.1.284"` hold. Review newer release/security notes
+  manually; remove the exact-version rule only in a reviewed candidate update
+  after subscription/model/translation/verification/fallback pilot checks.
 - Repo: github.com/Dezoxy/notification-digest (private). Container image:
   `ghcr.io/dezoxy/notification-digest`.
 - Before opening or updating any PR, run /docs-sync
@@ -236,3 +240,8 @@ and deploys its own image. A tag/merge alone never activates Azure schedules.
 Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth and the pinned image CLI;
 this migration does not introduce Anthropic API billing. Recovery stays within
 Azure; returning execution to the VM is outside the approved migration.
+Cloud X-cookie rotation uses `python -m digest.cloud_cookies PRIVATE_JSON_FILE`
+with explicit `--operator-login` for workstation Azure CLI access; canonical
+cookies live in runtime Blob state, not a duplicate dedicated-vault seed. Daily
+backup copies use a separate account/writer identity attached only to the backup
+job; pilot recovery must prove a restore from that account.

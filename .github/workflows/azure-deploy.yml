@@ -66,8 +66,10 @@ jobs:
           }
           if not all(re.fullmatch(patterns[k], v) for k, v in backend.items()) or '--' in backend['container_name']:
               raise SystemExit('Backend location is invalid; use the separately bootstrapped container and notification-digest.tfstate key.')
-          if backend['storage_account_name'] == values.get('storage_account_name') or backend['resource_group_name'] == values.get('resource_group_name', 'notification-digest-westeurope'):
-              raise SystemExit('Terraform backend must use a separate resource group and storage account from runtime state.')
+          app_accounts = {values.get('storage_account_name'), values.get('backup_storage_account_name')}
+          app_groups = {values.get('resource_group_name', 'notification-digest-westeurope'), values.get('backup_resource_group_name', 'notification-digest-backups-westeurope')}
+          if backend['storage_account_name'] in app_accounts or backend['resource_group_name'].lower() in {str(group).lower() for group in app_groups}:
+              raise SystemExit('Terraform backend must use a separate resource group and storage account from runtime state and backups.')
           Path('infra/azure/backend.hcl').write_text(''.join(f'{k} = {json.dumps(v)}\n' for k, v in sorted(backend.items())))
           Path('infra/azure/production.auto.tfvars.json').write_text(json.dumps(values))
           PY

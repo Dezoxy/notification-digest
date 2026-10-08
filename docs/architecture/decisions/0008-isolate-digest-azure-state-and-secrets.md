@@ -41,7 +41,13 @@ is needed. The source homelab vault also serves applications staying on the VM.
 
 Keep the existing subscription as the recommended default, selecting its ID
 explicitly. Dedicated resource groups, identities and scoped roles provide the
-needed separation. A separate subscription earns its extra setup when ownership,
+needed separation. A separate backup resource group/account isolates daily
+runtime copies from routine state pruning. Only the backup job receives its
+additional container-scoped writer identity; other jobs cannot access backup
+state. Versioning/14-day soft deletion and 30-day copy retention are prepared,
+but there is no immutable retention or independent subscription/admin boundary.
+A restore from that account is a pilot gate. A separate subscription earns its
+extra setup when ownership,
 billing policy or quotas require that boundary; those requirements are absent.
 
 Store Terraform state in a separate West Europe Azure Blob backend, bootstrapped
@@ -54,12 +60,17 @@ migration rather than starting a parallel empty state. Homelab HCP state is
 unaffected.
 
 Create an app-owned Standard Key Vault in West Europe with RBAC, purge protection
-and 90-day soft deletion. The runner receives Secrets User on this dedicated
+and seven-day soft deletion. Retention is fixed at creation and purge protection
+cannot be disabled after enabling it; decide before the foundation apply.
+The runner receives Secrets User on this dedicated
 vault and Blob Data Contributor on its runtime container. Terraform contains
 secret names/references and metadata only; no secret values or managed secret
 resources. Use a separate operator tool for metadata preview, explicit in-memory
 copy and verification of the reviewed digest-only manifest. Preserve source
-secrets, values and metadata; refuse conflicting target values/metadata. Keep
+secrets, values and metadata; refuse conflicting target values/metadata by
+default. An explicitly reviewed `--apply --replace-target NAME` selects exactly
+one manifest target for a new version after source rotation. The 17-entry
+manifest excludes the unused historical X cookie seed. Keep
 shared homelab failure-alert credentials where remaining applications need them.
 
 Provision in two reviewed stages: first the foundation with no jobs; then, after
@@ -74,8 +85,9 @@ pilot validation and explicit schedule activation remain separate gates.
   West Europe, with separate access and recovery responsibilities.
 - The homelab vault stays intact for remaining applications; cloud jobs no longer
   need its secrets or its RBAC grants.
-- Backend storage adds a small cost and bootstrap/recovery responsibility; vault
+- Backend/backup storage add cost and bootstrap/recovery responsibility; vault
   operations and state versions must be included in measured cloud spending.
+  The app-resource-group budget excludes both separate groups and is not a cap.
 - One subscription shares billing and subscription-level administrative authority;
   resource-group isolation does not create a new billing/security account.
 - Azure backend locks and vault references add Azure coupling. SQLite and release
@@ -89,8 +101,10 @@ restore need cloud pilot evidence. Secret copying is not rotation: compromised
 source values require a separately authorized rotation. Keep credential edits
 paused during copy because Key Vault lacks reliable create-only secret writes.
 Protect Terraform state and private plan artifacts because provider-computed
-credentials can appear there. A standalone guarded cloud-cookie rotation command
-remains a follow-up; the transferred live-cookie bundle stays authoritative.
+credentials can appear there. The guarded `digest.cloud_cookies` command rotates
+the canonical seed/live cookie pair under the state lease; the transferred
+live-cookie bundle stays authoritative. Egress/authentication for every enabled
+source and publication lane is an explicit go/no-go pilot gate.
 
 ## Related
 

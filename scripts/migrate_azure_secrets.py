@@ -3,6 +3,8 @@
 
 Default mode lists metadata only. --apply and --verify read values into memory;
 neither mode writes values to files, command arguments, logs or Terraform state.
+After reviewing a rotated source, --apply --replace-target NAME creates a new
+version of exactly that manifest target; the default never overwrites conflicts.
 Pause operator secret edits during migration: Key Vault PUT has no create-only
 condition, so the conflict preflight cannot fence concurrent human writes.
 """
@@ -32,7 +34,7 @@ class MigrationError(Exception):
 def validate_name(name: str, *, vault: bool = False) -> str:
     """Reject names that could escape the fixed Azure public-cloud endpoint."""
     pattern = r"[A-Za-z][A-Za-z0-9-]{1,22}[A-Za-z0-9]" if vault else r"[A-Za-z0-9-]{1,127}"
-    if not isinstance(name, str) or not re.fullmatch(pattern, name) or "--" in name:
+    if not isinstance(name, str) or not re.fullmatch(pattern, name) or (vault and "--" in name):
         raise MigrationError("Invalid vault or secret name in configuration.")
     return name.lower() if vault else name
 
@@ -180,20 +182,37 @@ def preflight(source: dict[str, Any], name: str, now: float) -> None:
         raise MigrationError(f"Source secret {name} is not yet valid.")
 
 
+def selected_entries(
+    entries: list[dict[str, str]], mode: str, replace_target: str | None
+) -> list[dict[str, str]]:
+    """Limit an explicit rotation to one configured target before authentication."""
+    if replace_target is None:
+        return entries
+    validate_name(replace_target)
+    if mode != "apply":
+        raise MigrationError("--replace-target requires --apply.")
+    matches = [entry for entry in entries if entry["target"].lower() == replace_target.lower()]
+    if len(matches) != 1:
+        raise MigrationError("Replacement target must name exactly one manifest target.")
+    return matches
+
+
 def migrate(
     client: VaultClient,
     source_vault: str,
     target_vault: str,
     entries: list[dict[str, str]],
     mode: str = "preview",
+    replace_target: str | None = None,
 ) -> list[str]:
-    """Preflight the entire manifest before any writes; never overwrite conflicts."""
+    """Preflight before writes; replace only one explicitly selected target."""
     if source_vault.lower() == target_vault.lower():
         raise MigrationError("Source and target vault must be different.")
     if mode not in {"preview", "apply", "verify"}:
         raise MigrationError("Invalid migration mode.")
+    entries = selected_entries(entries, mode, replace_target)
     sources, targets = client.metadata(source_vault), client.metadata(target_vault)
-    pending: list[tuple[str, dict[str, Any]]] = []
+    pending: list[tuple[str, dict[str, Any], dict[str, Any] | None]] = []
     messages = []
     now = time.time()
     for entry in entries:
@@ -202,7 +221,13 @@ def migrate(
         if source is None:
             raise MigrationError(f"Required source secret {source_name} is missing.")
         preflight(source, source_name, now)
-        if target is not None and preserved_metadata(source) != preserved_metadata(target):
+        if replace_target is not None and target is None:
+            raise MigrationError(f"Replacement target secret {target_name} is missing.")
+        if (
+            replace_target is None
+            and target is not None
+            and preserved_metadata(source) != preserved_metadata(target)
+        ):
             raise MigrationError(f"Target secret {target_name} has conflicting metadata.")
         if mode == "preview":
             status = "exists; value equality not checked" if target is not None else "would copy"
@@ -220,20 +245,35 @@ def migrate(
             if existing.get("value") != value["value"] or preserved_metadata(existing) != (
                 preserved_metadata(value)
             ):
-                raise MigrationError(f"Target secret {target_name} differs; refusing overwrite.")
-            messages.append(f"{target_name}: verified unchanged")
+                if replace_target is None:
+                    raise MigrationError(
+                        f"Target secret {target_name} differs; refusing overwrite."
+                    )
+                pending.append((target_name, body, existing))
+            else:
+                messages.append(f"{target_name}: verified unchanged")
         elif mode == "verify":
             raise MigrationError(f"Required target secret {target_name} is missing.")
         else:
-            pending.append((target_name, body))
+            pending.append((target_name, body, None))
     if pending:
         # Check again after the potentially slow value preflight. Operators must
         # still stop other writers: Key Vault does not fence the final PUT race.
         latest_targets = client.metadata(target_vault)
-        for name, _ in pending:
-            if name.lower() in latest_targets:
+        for name, _, existing in pending:
+            if existing is None and name.lower() in latest_targets:
                 raise MigrationError(f"Target secret {name} appeared during preflight; retry.")
-    for name, body in pending:
+            if existing is not None:
+                if name.lower() not in latest_targets:
+                    raise MigrationError(
+                        f"Target secret {name} disappeared during preflight; retry."
+                    )
+                latest = client.get(target_vault, name)
+                if latest.get("value") != existing.get("value") or preserved_metadata(latest) != (
+                    preserved_metadata(existing)
+                ):
+                    raise MigrationError(f"Target secret {name} changed during preflight; retry.")
+    for name, body, existing in pending:
         result = client.put(target_vault, name, body)
         if result.get("value") != body["value"] or preserved_metadata(result) != (
             preserved_metadata(body)
@@ -248,7 +288,8 @@ def migrate(
             raise MigrationError(
                 f"Target secret {name} failed read-back verification; stop and inspect."
             )
-        messages.append(f"{name}: copied and verified")
+        action = "new version copied" if existing is not None else "copied"
+        messages.append(f"{name}: {action} and verified")
     return messages
 
 
@@ -262,15 +303,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--subscription", help="Azure CLI authentication subscription ID or name")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--apply", action="store_true", help="Read and copy values; no overwrites")
+    modes.add_argument(
+        "--apply",
+        action="store_true",
+        help="Read and copy values; conflicts require --replace-target",
+    )
     modes.add_argument("--verify", action="store_true", help="Read values and check equality only")
+    parser.add_argument(
+        "--replace-target",
+        help="With --apply, copy one reviewed rotation as a new version of this manifest target",
+    )
     args = parser.parse_args(argv)
     try:
         source, entries = load_manifest(args.manifest)
         source = validate_name(args.source_vault or source, vault=True)
         target = validate_name(args.target_vault, vault=True)
         mode = "apply" if args.apply else "verify" if args.verify else "preview"
-        messages = migrate(VaultClient(args.subscription), source, target, entries, mode)
+        entries = selected_entries(entries, mode, args.replace_target)
+        messages = migrate(
+            VaultClient(args.subscription), source, target, entries, mode, args.replace_target
+        )
         print(f"{mode}: {source} -> {target}; {len(entries)} secrets")
         for message in messages:
             print(message)

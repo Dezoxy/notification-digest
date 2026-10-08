@@ -25,6 +25,19 @@
   ],
   "packageRules": [
     {
+      "description": "Temporary Azure migration hold: preserve the VM-tested Claude subscription CLI 2.1.284 through the cloud pilot. Remove this rule in a reviewed update only after subscription authentication and all model/translation/verification/fallback paths pass on the proposed CLI. This exact version filter intentionally suppresses newer automatic PRs during the hold; inspect npm release/security notes manually. Match only the Dockerfile custom regex manager so other npm dependencies remain unaffected.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchFileNames": [
+        "Dockerfile"
+      ],
+      "matchPackageNames": [
+        "@anthropic-ai/claude-code"
+      ],
+      "allowedVersions": "=2.1.284"
+    },
+    {
       "description": "twifork IS tracked, but gated behind the Dependency Dashboard rather than opening a PR on its own. It is a single-maintainer fork of the dead upstream twikit, it still imports as `twikit`, and it handles a live X session cookie -- see the pin's own comment in pyproject.toml. Every bump needs a supply-chain re-audit of the diff against the previous pin (no new network hosts, no new eval/exec/base64/subprocess/pickle), which no bot can assert. Excluding it entirely made those updates INVISIBLE, which is not the same as safe -- a fork going unmaintained, or shipping a fix this collector needs, would simply never surface. dependencyDashboardApproval makes Renovate report the update and wait: ticking the box is the deliberate act that starts the audit, so the bump can never arrive looking like a routine one. Remove this rule entirely to make it fully automatic.",
       "matchPackageNames": [
         "twifork"

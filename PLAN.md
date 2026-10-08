@@ -120,6 +120,8 @@ notification-digest/
 │   ├── cloud_context.py          # checkpoint/delivery effect boundaries, local mode unchanged
 │   ├── cloud_state.py            # consistent Blob state bundles, lease/ETag fencing, admin export/import
 │   ├── cloud_reconcile.py        # explicit uncertain-delivery reconciliation under the shared lease
+│   ├── cloud_cookies.py          # guarded cloud X cookie rotation, private JSON input
+│   ├── cloud_backup.py           # daily independent-account copy with backup-only identity
 │   ├── state.py                  # SQLite: schema + migrations, item/cursor/digest persistence, prunes
 │   ├── deliver.py                # per-channel senders, pending-digest retry, Telegram 429 breaker
 │   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation + the fallback chain
@@ -169,6 +171,8 @@ notification-digest/
 │   ├── test_cloud_runtime.py      # scheduling, failure fencing and publication recovery
 │   ├── test_cloud_state.py        # snapshots, integrity, conditional manifests and retention
 │   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite
+│   ├── test_cloud_cookies.py      # private input and leased X rotation without network calls
+│   ├── test_cloud_backup.py       # independent copy, completion marker and config validation
 │   ├── test_collectors.py         # Telegram collector: output shape, allowlist filtering (mocked client)
 │   ├── test_config.py             # Config.from_env: every var, every error path
 │   ├── test_context.py            # arc-context primers: prompt build, sentinel, soft-fail (mocked CLI)
@@ -213,7 +217,15 @@ notification-digest/
 │       ├── test/                  # node --test invariants + byte-golden pages
 │       ├── schema.sql, migrations/ # D1 schema (separate from digest/state.py's SQLite)
 │       └── wrangler.jsonc         # deploy config; `wrangler deploy` from this dir
-├── infra/azure/                   # app-owned Azure jobs/storage/vault/RBAC/alerts; separate Azure Blob backend
+├── infra/azure/                   # app-owned resources; separate bootstrapped Azure Blob backend
+│   ├── main.tf                    # runtime jobs/storage, dedicated vault and runner RBAC
+│   ├── backup.tf                  # separate account/RG, private copies and backup-only writer
+│   ├── monitoring.tf              # aggregate log alerts and app-RG budget
+│   ├── variables.tf               # reviewed nonsecret inputs and validation
+│   ├── outputs.tf                 # deployment and operator resource identifiers
+│   ├── versions.tf                # Terraform/provider pin and remote Azure backend
+│   ├── production.auto.tfvars.example # source baseline and disabled first-stage defaults
+│   └── secret-migration.json       # 17 runtime/registry names, no duplicate X cookie seed
 ├── Makefile                       # architecture model targets: check, docs, view, export, pdf
 ├── Dockerfile                     # slim Python 3.14 image, local default `python -m digest`
 ├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
@@ -1458,10 +1470,13 @@ completed phases above describe the VM deployment at their original dates.
 - [ ] Bootstrap separate Azure Blob Terraform backend; configure app OIDC
   identity and GitHub environments in the explicitly selected existing subscription.
 - [ ] Review/apply the foundation with jobs disabled and a dedicated digest vault;
-  preview, copy and verify only the approved secret manifest without source deletion.
+  preview, copy and verify the 17-entry secret manifest immediately before Manual
+  jobs apply; resolve authorized source rotations explicitly, then revoke operator roles.
 - [ ] Review/apply `jobs_enabled=true` with schedules disabled to create Manual jobs.
 - [ ] Separate shared homelab alerts, pause/drain all digest writers, import the
   final consistent database/live cookies/archives and verify cloud lineage.
+- [ ] Require authenticated Azure egress for every enabled path, subscription
+  authentication, cloud cookie rotation and independent backup restore before activation.
 - [ ] Activate schedules after pilot checks; observe seven days including the
   weekly digest, test cloud-only recovery and measure actual checkpoint cost.
 - [ ] Retire digest-specific homelab configuration after verification. Keep the

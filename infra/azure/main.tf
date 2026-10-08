@@ -25,6 +25,11 @@ locals {
     ARCHIVE_DIR                     = "/data/archive"
     X_COOKIES_PATH                  = "/data/x-cookies.json"
   }
+  backup_env = {
+    DIGEST_CLOUD_BACKUP_ACCOUNT_URL        = azurerm_storage_account.backup.primary_blob_endpoint
+    DIGEST_CLOUD_BACKUP_CONTAINER          = azurerm_storage_container.backup.name
+    DIGEST_CLOUD_BACKUP_IDENTITY_CLIENT_ID = azurerm_user_assigned_identity.backup_writer.client_id
+  }
 }
 
 resource "azurerm_resource_group" "digest" {
@@ -110,7 +115,7 @@ resource "azurerm_key_vault" "digest" {
   sku_name                   = "standard"
   rbac_authorization_enabled = true
   purge_protection_enabled   = true
-  soft_delete_retention_days = 90
+  soft_delete_retention_days = 7
   tags                       = local.tags
   lifecycle { prevent_destroy = true }
 }
@@ -131,8 +136,11 @@ resource "azurerm_container_app_job" "digest" {
   replica_timeout_in_seconds   = 3000
   replica_retry_limit          = 0
   identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.runner.id]
+    type = "UserAssigned"
+    identity_ids = concat(
+      [azurerm_user_assigned_identity.runner.id],
+      each.key == "backup" ? [azurerm_user_assigned_identity.backup_writer.id] : []
+    )
   }
   dynamic "manual_trigger_config" {
     for_each = var.schedules_enabled ? [] : [1]
@@ -171,7 +179,7 @@ resource "azurerm_container_app_job" "digest" {
       command = ["python", "-m", "digest.cloud_run"]
       args    = [each.key]
       dynamic "env" {
-        for_each = merge(var.app_env, local.cloud_env)
+        for_each = merge(var.app_env, local.cloud_env, each.key == "backup" ? local.backup_env : {})
         content {
           name  = env.key
           value = env.value
@@ -197,5 +205,5 @@ resource "azurerm_container_app_job" "digest" {
     }
   }
   tags       = local.tags
-  depends_on = [azurerm_role_assignment.state, azurerm_role_assignment.secrets]
+  depends_on = [azurerm_role_assignment.state, azurerm_role_assignment.secrets, azurerm_role_assignment.backup_writer]
 }

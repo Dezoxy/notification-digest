@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import pytest
 
-from digest.cloud_state import CloudState, CloudStateError
+from digest.cloud_state import CloudState, CloudStateError, LeaseBusyError
 from digest.state import connect, init_db
 
 
@@ -49,6 +49,9 @@ class FakeDownload:
 
     def readinto(self, stream: io.BytesIO) -> int:
         return stream.write(self.payload)
+
+    def chunks(self):
+        yield self.payload
 
 
 class FakeBlob:
@@ -292,6 +295,8 @@ def test_failed_checkpoint_keeps_old_authoritative_manifest(tmp_path, source, fa
     state.restore()
     container.failures.add(failure)
     with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
         with pytest.raises(CloudStateError):
             state.checkpoint(connection)
     assert json.loads(container.data["production/manifest.json"][0]) == original
@@ -305,6 +310,8 @@ def test_manifest_ack_loss_fences_even_when_server_committed(tmp_path, source):
     state.restore()
     container.failures.add("after_manifest")
     with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
         with pytest.raises(CloudStateError, match="commit failed"):
             state.checkpoint(connection)
     assert json.loads(container.data["production/manifest.json"][0])["bundle"] != original["bundle"]
@@ -321,6 +328,8 @@ def test_etag_change_rejects_stale_manifest_commit(tmp_path, source):
     payload, _ = container.data["production/manifest.json"]
     container.data["production/manifest.json"] = payload, "unexpected-etag"
     with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
         with pytest.raises(CloudStateError, match="commit failed"):
             state.checkpoint(connection)
 
@@ -384,7 +393,9 @@ def test_checkpoint_bounds_history_without_daily_sweep(tmp_path, source):
     state.acquire()
     state.restore()
     with sqlite3.connect(state.data_dir / "state.db") as connection:
-        for _ in range(12):
+        for index in range(12):
+            connection.execute("UPDATE cursors SET last_seen_id=?", (str(index),))
+            connection.commit()
             state.checkpoint(connection)
     # Current, previous, and the bootstrap's daily backup; normal checkpoints
     # do not accumulate full databases even if the daily maintenance job fails.
@@ -399,7 +410,14 @@ def test_cleanup_failure_does_not_discard_successful_commit(tmp_path, source, ca
     state.restore()
     with sqlite3.connect(state.data_dir / "state.db") as connection:
         state.checkpoint(connection)
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
         state.checkpoint(connection)
+        connection.execute("UPDATE cursors SET last_seen_id='93'")
+        connection.commit()
+        state.checkpoint(connection)
+        connection.execute("UPDATE cursors SET last_seen_id='94'")
+        connection.commit()
         container.failures.add("delete")
         current = state.checkpoint(connection)
     assert json.loads(container.data["production/manifest.json"][0]) == current
@@ -540,6 +558,8 @@ def run_azurite_smoke() -> None:
             payload = manifest_blob.download_blob(lease=state._lease).readall()
             manifest_blob.upload_blob(payload, overwrite=True, lease=state._lease)
             with sqlite3.connect(state.data_dir / "state.db") as connection:
+                connection.execute("UPDATE cursors SET last_seen_id = '101'")
+                connection.commit()
                 with pytest.raises(CloudStateError, match="commit failed"):
                     state.checkpoint(connection)
             state.release()
@@ -551,3 +571,221 @@ def run_azurite_smoke() -> None:
         client.delete_container()
         client.close()
     print("Azurite SDK protocol smoke passed: lease exclusion, renew, ETag, snapshot, restore, GC")
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+def test_transient_lease_renewal_recovers_without_optimistic_extension(tmp_path, source, status):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    calls = []
+    original = state._lease.renew
+
+    def renew():
+        calls.append(state.lease_deadline)
+        if len(calls) == 1:
+            raise StorageError(status)
+        original()
+
+    state._lease.renew = renew
+    container.seconds = 15
+    state.renew()
+    assert calls == [60, 60]
+    # Request start is conservative even though retry succeeds at 15.5.
+    assert state.lease_deadline == 75
+    assert container.seconds == 15.5
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 409, 412])
+def test_known_lost_or_unauthorized_lease_never_retries(tmp_path, source, status):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    from unittest.mock import Mock
+
+    state._lease.renew = Mock(side_effect=StorageError(status))
+    with pytest.raises(CloudStateError, match="renewal failed"):
+        state.renew()
+    state._lease.renew.assert_called_once()
+    assert state.lease_deadline == 60
+    with pytest.raises(CloudStateError):
+        state.check_lease()
+
+
+def test_transient_renewal_at_safety_deadline_is_not_retried(tmp_path, source):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    from unittest.mock import Mock
+
+    state._lease.renew = Mock(side_effect=StorageError(503))
+    container.seconds = 49.75
+    with pytest.raises(CloudStateError, match="renewal failed"):
+        state.renew()
+    state._lease.renew.assert_called_once()
+    assert container.seconds == 49.75
+    assert state.lease_deadline == 60
+
+
+def test_manifest_and_bundle_reads_retry_transient_transport_failures(tmp_path, source):
+    from azure.core.exceptions import ServiceResponseError
+
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    original = container.fail
+    attempts = []
+
+    def fail_once(point):
+        if point == "download":
+            attempts.append(point)
+            if len(attempts) in (1, 3):
+                raise ServiceResponseError("mock response truncated")
+        original(point)
+
+    container.fail = fail_once
+    state.restore()
+    assert len(attempts) == 4
+    assert container.seconds == 1
+    assert (state.data_dir / "state.db").exists()
+
+
+def test_unchanged_checkpoint_skips_upload_but_every_material_change_persists(tmp_path, source):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        original = state.checkpoint(connection)
+        writes = container.counter
+        assert state.checkpoint(connection) is original
+        assert container.counter == writes
+        for change in ("cursor", "cookie", "cookie_age", "archive", "archive_age"):
+            if change == "cursor":
+                connection.execute("UPDATE cursors SET last_seen_id='92'")
+                connection.commit()
+            elif change == "cookie":
+                (state.data_dir / "x-cookies.json.live").write_text('{"auth_token":"new"}')
+            elif change == "cookie_age":
+                os.utime(state.data_dir / "x-cookies.json.live", (300, 300))
+            elif change == "archive":
+                (state.data_dir / "archive" / "new.md").write_text("new")
+            else:
+                os.utime(state.data_dir / "archive" / "new.md", (400, 400))
+            updated = state.checkpoint(connection)
+            assert updated["bundle"] != original["bundle"]
+            original = updated
+        writes = container.counter
+        state.checkpoint(connection, daily_backup=True)
+        assert container.counter > writes
+
+
+def test_lease_busy_error_is_distinct_from_missing_state(tmp_path, source):
+    container = FakeContainer()
+    owner = make_state(container, tmp_path / "first")
+    bootstrap(owner, source)
+    owner.acquire()
+    contender = make_state(container, tmp_path / "second", lease_wait_seconds=0)
+    with pytest.raises(LeaseBusyError):
+        contender.acquire()
+    missing = make_state(container, tmp_path / "missing", namespace="absent")
+    with pytest.raises(CloudStateError) as error:
+        missing.acquire()
+    assert not isinstance(error.value, LeaseBusyError)
+
+
+def test_renewal_recovers_after_more_than_three_transient_failures(tmp_path, source):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    count = 0
+    original = state._lease.renew
+
+    def renew():
+        nonlocal count
+        count += 1
+        assert state.lease_deadline == 60
+        if count <= 4:
+            raise StorageError(503)
+        original()
+
+    state._lease.renew = renew
+    container.seconds = 15
+    state.renew()
+    assert count == 5
+    assert state.lease_deadline == 75
+    assert container.seconds == 20.5
+
+
+def test_restored_unchanged_state_reuses_authoritative_bundle_without_upload(tmp_path, source):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    original = bootstrap(state, source)
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        writes = container.counter
+        state.checkpoint(connection)
+        assert container.counter == writes
+    state.release()
+    other = make_state(container, tmp_path / "other")
+    other.acquire()
+    other.restore()
+    with sqlite3.connect(other.data_dir / "state.db") as connection:
+        assert other.checkpoint(connection) == original
+        assert container.counter == writes
+    other.release()
+
+
+@pytest.mark.parametrize("operation", ["acquire", "bundle", "after_bundle"])
+def test_transient_acquire_and_immutable_upload_ack_loss_recover(tmp_path, source, operation):
+    container = FakeContainer()
+    state = make_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    original = container.fail
+    count = 0
+
+    def fail_once(point):
+        nonlocal count
+        if point == operation:
+            count += 1
+            if count == 1:
+                raise StorageError(503)
+        original(point)
+
+    container.fail = fail_once
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
+        current = state.checkpoint(connection)
+    assert count == 2
+    assert json.loads(container.data["production/manifest.json"][0]) == current
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "92"
+    if operation == "after_bundle":
+        assert state.prune() == 1
+    state.release()
+
+
+def test_restore_live_only_cookie_state_normalizes_seed_for_collector(tmp_path, source):
+    from digest.collectors.x import resolve_cookie_path
+
+    (source / "x-cookies.json").unlink()
+    state = make_state(FakeContainer(), tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    state.restore()
+    seed = state.data_dir / "x-cookies.json"
+    live = state.data_dir / "x-cookies.json.live"
+    assert seed.read_bytes() == live.read_bytes()
+    assert resolve_cookie_path(str(seed)) == str(live)
+    state.release()

@@ -82,11 +82,17 @@ to day: the Telegram `StringSession` or the X cookie jar stops working
 - **Recovery — Telegram:** the owner runs `scripts/telegram_login.py`
   interactively (one-time, from a local machine, never on the VM or in the
   container per that script's own docstring), generates a fresh `StringSession`,
-  and updates the `digest-tg-session` secret in Azure Key Vault; the homelab
-  repo then redeploys with the new secret.
+  and updates `digest-tg-session` in the **active runtime vault**. Before cutover,
+  the homelab repo redeploys the VM from the shared vault. After cutover, use the
+  [dedicated-vault rotation procedure](../../azure-migration.md#credential-rotation-after-cutover),
+  verify a Manual Azure run and resume schedules; homelab deploy no longer updates
+  the digest.
 - **Recovery — X:** the owner extracts a fresh cookie from an authenticated
-  browser session and updates `X_COOKIES` / `X_COOKIES_PATH` in Key Vault the
-  same way. This is manual and has no scripted equivalent in this repository.
+  browser session. Before cutover, refresh the shared-vault seed and deploy the
+  VM. After cutover, use the leased
+  [cloud cookie command](../../azure-migration.md#rotate-the-cloud-x-cookie-jar)
+  to update canonical Blob state and verify a Manual run; no dedicated-vault
+  cookie copy is used. Browser re-authentication remains manual.
 - **RPO:** near-zero for Telegram once auth is restored (messages remain in the
   group and are re-collected on the next cursor advance); not well-defined for
   X, since the notifications timeline's own history depth is outside this

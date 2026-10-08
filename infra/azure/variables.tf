@@ -21,6 +21,29 @@ variable "storage_account_name" {
   }
 }
 
+variable "backup_resource_group_name" {
+  description = "Separate resource group for recovery copies outside the runtime account."
+  type        = string
+  default     = "notification-digest-backups-westeurope"
+  validation {
+    condition     = lower(var.backup_resource_group_name) != lower(var.resource_group_name)
+    error_message = "Recovery copies require a separate resource group from the runtime."
+  }
+}
+
+variable "backup_storage_account_name" {
+  description = "Globally unique recovery storage name, different from the runtime account."
+  type        = string
+  validation {
+    condition     = can(regex("^[a-z0-9]{3,24}$", var.backup_storage_account_name))
+    error_message = "Backup storage names require 3-24 lowercase letters/digits."
+  }
+  validation {
+    condition     = var.backup_storage_account_name != var.storage_account_name
+    error_message = "Recovery copies must use a different account from runtime state."
+  }
+}
+
 variable "image" {
   description = "Exact GHCR release tag or digest. Replace the VM baseline with the tested migration release before executing any job."
   type        = string

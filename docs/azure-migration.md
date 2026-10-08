@@ -1,7 +1,7 @@
 # Azure digest migration and operations
 
 Status on 2026-10-08: the first preparation PR is merged; the Azure state and
-dedicated-vault follow-up is being prepared. Production still runs
+dedicated-vault follow-up and review fixes are prepared for verification. Production still runs
 on `01-myapps-vm`. This runbook describes the authorized hosting target and the
 remaining deployment gates. Returning execution to the VM is outside the plan.
 
@@ -13,6 +13,11 @@ It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, the VM's
 measured Claude CLI 2.1.284, models, effort, prompts, translations, verification
 and OpenRouter fallbacks. Main independently adopted CLI 2.1.293 during
 preparation; adopting that update is deferred until the pilot verifies it.
+The temporary `renovate.json` rule limits the Dockerfile custom manager to
+`=2.1.284`. It intentionally suppresses newer automatic PRs during this hold:
+review release/security notes manually. Remove the rule only in a reviewed CLI
+update after the candidate passes subscription authentication, summarization,
+translation, verification and fallback pilot checks.
 A hosting change does not remove subscription contention with other
 applications using the same account.
 
@@ -31,6 +36,7 @@ Both kinds of state live in Azure:
 |---|---|---|
 | Runtime Blob Storage in the app resource group | Canonical SQLite/cookie/archive bundles and retained backups | Terraform manages resources; runner has Blob Data Contributor on `digest-state` only |
 | Separate Blob Storage in a backend resource group | Terraform state and Blob-lease locking | Bootstrapped outside the app stack; deployment identity has access to `terraform-state`; runner has none |
+| Separate backup account/resource group | Daily independent runtime bundle/manifest copies | App Terraform creates the resources; only the backup job has the backup-writer identity; ordinary runner/pruner cannot access it |
 | Dedicated digest Key Vault in the app resource group | Subscription OAuth, sessions, publication/collector credentials and GHCR pull token | Terraform manages the vault and roles, never secret values; runner has Secrets User on this vault only |
 
 The runtime manifest is authoritative between jobs; `/data` is the temporary
@@ -132,7 +138,11 @@ Do not give the deployment identity secret-value access to the homelab vault.
 The separate secret-copy operator receives only the temporary source-read and
 target-write roles needed for the reviewed migration. Bootstrap resource-group
 creation and resource-provider registration separately if the deployment
-identity is scoped to an existing group. Register `Microsoft.App`,
+identity is scoped to an existing group. The separate
+`notification-digest-backups-westeurope` group also needs Contributor and a
+constrained role-assignment grant for its backup-writer identity/container.
+Import a precreated backup group as `azurerm_resource_group.backup` into the same
+Azure backend before planning. Register `Microsoft.App`,
 `Microsoft.Storage`, `Microsoft.KeyVault`, `Microsoft.OperationalInsights`,
 `Microsoft.ManagedIdentity`, `Microsoft.Insights` and `Microsoft.Consumption`
 through the account's established administrative process. The provider does not
@@ -163,16 +173,23 @@ fallback omission semantics. Leaving `FALLBACK_MODELS` unset retains the app's
 defaults; an empty value disables them. Azure env values are literal: keep
 `$FET,$ASI` as single dollars, unlike homelab Compose env-file escaping.
 
-Choose globally unique names for the runtime storage account and digest vault,
+Choose globally unique names for the runtime storage account, **different**
+backup storage account (`backup_storage_account_name`) and digest vault,
 plus the alert email; update the budget start to the first day of the deployment
 month. Select a tested migration release image before manually executing any
 job. The default `0.28.0` records the source baseline and does **not** contain the
 cloud runner. Activation also requires `migration_release_verified=true`. The
 stack rejects floating tags.
 
-The new Standard Key Vault uses RBAC, purge protection and 90-day soft deletion.
+The new Standard Key Vault uses RBAC, purge protection and **seven-day soft
+deletion**. Decide this before the foundation apply: retention is fixed at vault
+creation and enabled purge protection cannot be disabled. A deleted secret/vault
+name stays reserved during retention; recover it rather than attempting a purge.
+The shorter retention suits these re-issuable credentials while preventing
+immediate purge.
 The runner has Secrets User access to the dedicated vault and Blob access to its
-runtime container; it cannot read backend state or the source vault. Private
+runtime container; it cannot read backend state, the source vault or the backup
+account. Only the backup job receives the additional backup-writer identity. Private
 GHCR pulls use a read-packages PAT via a Key Vault-backed registry password
 reference; Azure managed identity cannot directly authenticate to GHCR. OAuth,
 session strings, cookies and publication credentials never enter Terraform
@@ -183,7 +200,9 @@ plans. Shared Key storage authentication is disabled.
 ## Copy digest secrets to the dedicated vault
 
 The reviewed [secret manifest](../infra/azure/secret-migration.json) names the
-17 runtime/registry secrets plus `digest-x-cookies`, the historical cookie seed.
+**17 runtime/registry secrets**. The unused `digest-x-cookies` seed is excluded:
+cloud cookie state comes from the transferred live bundle and the guarded
+rotation command below, rather than a second vault copy.
 Keep names stable; the migration validates and copies the latest values/metadata
 to the new vault. It does not delete, modify or rotate source secrets. Shared
 homelab failure-notification credentials remain in the source vault because
@@ -206,7 +225,74 @@ match; any difference fails preflight before writes. Review conflicts and source
 metadata before proceeding. Pause credential edits during copy, because Key Vault
 does not offer a reliable create-only secret write. Both vaults must use the same
 Entra tenant; the operator needs source list/get and target list/get/set access.
-Run preview again after any source rotation.
+Run preview again after any source rotation. Perform the full copy and verify
+**immediately before** the Manual-jobs apply, freezing credential edits throughout
+that copy and apply. Verify again immediately before the first production start;
+if credentials changed, resolve and verify each conflict before proceeding.
+
+### Temporary operator access
+
+Use an administrator authorized to assign these roles. The copy operator is
+separate from the GitHub deployment service principal. The following creates
+only missing direct, vault-scoped assignments for the signed-in human operator,
+and records IDs **only for assignments this procedure created**. Existing direct
+assignments are retained; inspect inherited/group access separately. Run in bash,
+selecting the intended subscription explicitly:
+
+```bash
+set -euo pipefail
+export DIGEST_SOURCE_VAULT=kv-homelab-prod-th
+export DIGEST_TARGET_VAULT=YOUR_DIGEST_VAULT
+export DIGEST_COPY_OPERATOR_ID=YOUR_OPERATOR_ENTRA_OBJECT_ID
+az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+umask 077
+DIGEST_OPERATOR_DIR=$(mktemp -d "${TMPDIR:-/tmp}/digest-operator.XXXXXXXX")
+chmod 700 "$DIGEST_OPERATOR_DIR"
+DIGEST_SOURCE_SCOPE=$(az keyvault show --name "$DIGEST_SOURCE_VAULT" --query id -o tsv)
+DIGEST_TARGET_SCOPE=$(az keyvault show --name "$DIGEST_TARGET_VAULT" --query id -o tsv)
+grant_copy_role() {
+  local scope="$1" role="$2" marker="$3" existing
+  existing=$(az role assignment list --scope "$scope" \
+    --query "[?principalId=='$DIGEST_COPY_OPERATOR_ID' && roleDefinitionName=='$role' && scope=='$scope'].id" \
+    --output tsv)
+  if [ -z "$existing" ]; then
+    az role assignment create --assignee-object-id "$DIGEST_COPY_OPERATOR_ID" \
+      --assignee-principal-type User --role "$role" --scope "$scope" \
+      --query id --output tsv > "$DIGEST_OPERATOR_DIR/$marker"
+  fi
+}
+grant_copy_role "$DIGEST_SOURCE_SCOPE" 'Key Vault Secrets User' source-role.id
+grant_copy_role "$DIGEST_TARGET_SCOPE" 'Key Vault Secrets Officer' target-role.id
+```
+
+Have the copy operator authenticate as that exact user, then wait for data-plane
+RBAC propagation. Do not increase permissions to bypass a propagation failure.
+The two roles allow source list/get and target list/get/set, respectively; the
+Secrets Officer role also permits deletion, so keep it temporary and use only
+the reviewed copy command. These commands do not grant access to the GitHub
+runner. After the final full-manifest verification and any authorized conflict
+resolution, switch back to the role-assignment administrator and revoke only
+the assignments recorded above:
+
+```bash
+for marker in source-role.id target-role.id; do
+  if [ -s "$DIGEST_OPERATOR_DIR/$marker" ]; then
+    IFS= read -r DIGEST_CREATED_ROLE_ID < "$DIGEST_OPERATOR_DIR/$marker"
+    az role assignment delete --ids "$DIGEST_CREATED_ROLE_ID"
+  fi
+done
+```
+
+Confirm those assignment IDs are absent, then switch back to the copy operator's
+login. Allow
+RBAC/token caches to expire and repeat a metadata-filtered read of
+`digest-tg-session` in both vaults (`az keyvault secret show --vault-name VAULT
+--name digest-tg-session --query id --output tsv`). Expect authorization failure
+if the operator has no other secret-read grant; never print `value`. If access
+still succeeds, identify inherited, group or pre-existing grants and record the
+residual access instead of claiming revocation proved isolation. Do not remove
+unrelated grants. Remove the private marker directory after documenting the
+assignment IDs and verification outcome.
 
 ```sh
 # Preview only: the destination vault must already exist.
@@ -221,15 +307,34 @@ uv run python scripts/migrate_azure_secrets.py \
 
 The default source is `kv-homelab-prod-th`; the default manifest is
 `infra/azure/secret-migration.json`. `--source-vault` and `--manifest` override
-those explicit names. After the 18 copies pass verification, review a second
+those explicit names. After the 17 copies pass verification, review a second
 plan/apply with `jobs_enabled=true` and `schedules_enabled=false` to create the
 nine Manual jobs. No source secret removal is part of this procedure.
 
-The `digest-x-cookies` vault copy preserves the seed only. Production cookie
-state comes from the final transferred `x-cookies.json.live` bundle; never
-replace it with an older vault seed. A standalone cloud-cookie rotation command
-is not yet implemented, so rotation/recovery must follow the guarded state
-handoff procedure until that operator workflow is added and tested.
+### Resolve a source rotation before cutover
+
+A differing target is a stop condition by default. Determine which source
+version is intended, freeze source/target edits and explicitly authorize replacing
+that one target. Do not delete the secret: purge protection would reserve its
+name. The tool creates a new version of the exact manifest target in memory,
+preserves metadata and verifies it; it cannot replace an unrelated target.
+For an authorized Telegram source rotation, for example:
+
+```sh
+uv run python scripts/migrate_azure_secrets.py \
+  --target-vault YOUR_DIGEST_VAULT --subscription "$AZURE_SUBSCRIPTION_ID" \
+  --apply --replace-target digest-tg-session
+uv run python scripts/migrate_azure_secrets.py \
+  --target-vault YOUR_DIGEST_VAULT --subscription "$AZURE_SUBSCRIPTION_ID" --verify
+```
+
+The command is a credential write, not a preview. `--replace-target` requires
+`--apply`, selects exactly one configured target, and refuses a missing target.
+Record the source/target version IDs and verification result without values.
+Other conflicts remain blocked until reviewed individually. Copying an older
+source over a deliberately rotated target is not a valid conflict resolution.
+After cutover, update the dedicated vault directly using the credential procedure
+below; the homelab vault is no longer the source of truth for digest credentials.
 
 ## Validate, release and provision disabled jobs
 
@@ -278,6 +383,13 @@ session remains. Never run the same Telegram StringSession in the VM and cloud
 at once, including a supposedly isolated pilot. Hiding delivery channels marks
 them resolved and is not a dry-run switch.
 
+Before any migration image or ordinary release initializes the VM database,
+create and retain a consistent SQLite online-backup snapshot of the source
+schema and record its `PRAGMA user_version`. The migration adds schema v8:
+`0.28.0` must never open a database after that upgrade. This is a preservation
+and diagnosis artifact, not a return-to-VM procedure. Keep the VM on its current
+image until it is drained.
+
 After draining, create a consistent SQLite online-backup snapshot and transfer
 the database, live X cookie file and archives through the explicit state
 bootstrap procedure. Protect the staging directory (mode 0700, files 0600).
@@ -297,7 +409,8 @@ through `CloudConfig`:
 export DIGEST_CLOUD_ACCOUNT_URL=https://YOUR_ACCOUNT.blob.core.windows.net
 export DIGEST_CLOUD_CONTAINER=digest-state
 export DIGEST_CLOUD_NAMESPACE=production
-export DIGEST_CLOUD_DATA_DIR=/tmp/digest-cloud-operator
+export DIGEST_CLOUD_DATA_DIR=/PRIVATE/DIGEST_OPERATOR/data
+# Create this directory privately (0700) before executing operator commands.
 uv run python -m digest.cloud_state --operator-login bootstrap /PRIVATE/FINAL_STATE_DIR
 uv run python -m digest.cloud_state --operator-login export /PRIVATE/VERIFY_EXPORT_DIR
 ```
@@ -322,6 +435,36 @@ The runtime command is `python -m digest.cloud_run JOB`, where `JOB` is one of
 lease, validates the current bundle, checkpoints progress and fails closed on
 absent/corrupt state or lost ownership. Test subscription authentication,
 collectors, publication and cloud-only export/restore into a separate namespace.
+
+### Egress go/no-go gate
+
+Record cloud execution IDs, image/configuration pins and status-only evidence
+for **every enabled collector and publication lane**: Telegram/relay, X, RSS,
+Reddit, Hacker News, Polymarket, Patreon and positions as configured. Verify
+subscription Claude calls, HU translation, daily web verification, configured
+OpenRouter fallback authentication, Telegram notifications, site ingest and
+email only if enabled. A TCP connection or one successful digest is insufficient:
+validate authenticated requests and actual parsing/publication, including paid
+Patreon access. An empty healthy feed can pass with authenticated/status evidence;
+an auth or blocked-egress failure cannot pass merely because other sources work.
+Do not print session headers, cookie values or collected bodies in the evidence.
+
+**Go:** representative manual cloud runs exercise every enabled path without
+persistent 401/403, challenge pages, IP/region denial or rate-limit failure, output
+quality matches the baseline, and alerts plus cloud restore are demonstrated.
+Run session-bearing checks only after VM writers are drained, or use separate
+test sessions and a separate pilot namespace. Never reuse the production
+Telegram session concurrently. Production credentials need their own final
+post-drain verification before schedule activation.
+
+**No-go:** any enabled source loses access from Azure, subscription authentication
+fails, publication is uncertain, or the representative tests are incomplete.
+Keep schedules disabled and preserve state; do not resume execution on the VM.
+Investigate and repeat controlled tests. NAT Gateway/static egress or a proxy is
+a separate reviewed cost/security decision and cannot be assumed to fix a
+provider's data-center block. Disabling a collector requires the owner's explicit
+approval of the quality loss. Record actual outbound transfer, Blob operations,
+retained bytes and execution minutes before accepting the monthly estimate.
 
 After state handoff succeeds, set `schedules_enabled=true` through a reviewed
 plan/apply. **Manual-to-Scheduled changes replace job resources in AzureRM**;
@@ -350,12 +493,76 @@ retire digest-specific homelab definitions. Physical deletion of source state
 and credentials is a separate reviewed cleanup. The shared VM remains for its
 other applications. Recovery takes place within Azure.
 
+## Credential rotation after cutover
+
+After cutover the dedicated digest vault is authoritative for env credentials;
+updating `kv-homelab-prod-th` or running homelab Ansible does not update Azure jobs.
+Temporarily grant the operator Secrets Officer on the digest vault through the
+scoped grant/revoke procedure above. Pause and drain affected jobs, review the
+existing secret's metadata without its value, then capture the newly authorized
+credential in a private 0600 file under a 0700 directory. Avoid `--value`, shell
+history, command substitution and raw secret output.
+
+For Telegram, run `uv run python scripts/telegram_login.py` interactively on the
+operator's machine. The helper intentionally displays the new session for the
+owner; do not capture its terminal output in logs. Paste the session with a hidden
+prompt into the private file, then use `az keyvault secret set --vault-name
+YOUR_DIGEST_VAULT --name digest-tg-session --file /PRIVATE/telegram-session.txt
+--tags envvar=DIGEST_TG_SESSION folder=digest file-encoding=utf-8 --output none`.
+Preserve any additional tags, non-null content type, expiry and not-before from
+the metadata preflight through the corresponding CLI flags; those attributes
+are per version and must not be silently reset. Verify latest version metadata,
+wait for job secret-reference refresh, and prove the next Manual run authenticates
+with the new version before reactivating schedules. If refresh fails, use the
+reviewed Azure job replacement path while jobs are drained. Preserve delivery
+and cursor state. Remove the temporary role, verify lost access and erase the
+private input after successful validation. Reddit/Patreon/OAuth rotations follow
+the same dedicated-vault procedure using their exact manifest names/tags.
+
+### Rotate the cloud X cookie jar
+
+X has no secret in the dedicated vault: its current jar is in leased runtime
+state. Extract `auth_token` and `ct0` from a fresh dedicated browser session using
+the README procedure. Save the JSON privately (0700 directory, 0600 regular file;
+no symlink), pause/drain cloud jobs, configure the production Blob namespace and
+a writable private directory for the verification export, then run:
+
+```sh
+uv run python -m digest.cloud_cookies /PRIVATE/cookies.json --operator-login
+uv run python -m digest.cloud_state --operator-login export /PRIVATE/COOKIE_VERIFY
+```
+
+The command uses a temporary private working copy, Azure CLI authentication
+and scoped runtime-container Blob access, acquires the same renewable lease and
+watchdog, validates current state and
+the JSON, updates both seed/live cookie files, and commits a guarded canonical
+checkpoint without contacting X or changing database records. Inspect exported
+file hashes/mtime and database parity without printing cookies; then test one
+Manual X-enabled run and require successful collection before resuming schedules.
+Delete the private JSON/export after verification. Lost ownership or an ambiguous
+Blob commit fails closed: inspect/export the canonical generation before deciding
+whether to repeat the operation. Never seed an empty cloud database or replace a
+newer live jar with the historical homelab vault seed.
+
 ## Interrupted runs and recovery
 
 Platform retries are disabled. A job waits at most ten minutes for the shared
-lease; lease contention/failure must appear in logs and be investigated.
-Subsequent cursor-based runs can collect missed input, but a missed daily or
-weekly synthesis requires an explicit catch-up slot. For example, after
+lease. Cursor jobs (`daytime`, `overnight`, `evening`, `positions`, `patreon`,
+`relay`) skip with a structured log and successful exit when startup is more
+than ten minutes late or contention exhausts the wait; the next cursor run can
+collect missed input. Investigate repeated skips and verify freshness alerts
+still detect missing successful work. Daily, weekly and backup remain hard
+failures for these conditions and require an explicit catch-up slot.
+
+Lease acquisition, idempotent Blob reads and immutable bundle uploads allow
+three total attempts with 0.5/1-second backoff. Upload retries use fresh names:
+a lost acknowledgement can leave an orphan for guarded garbage collection.
+Transient lease renewals retry with 0.5/1/2-second capped backoff while the original
+proven lease has more than the safety margin remaining. They never extend the
+known deadline without a successful renewal response. The independent
+watchdog still fences the process before ownership expires. Manifest commits and
+external delivery are never blindly retried; ambiguous writes fail closed.
+A missed daily or weekly synthesis requires an explicit catch-up slot. For example, after
 reviewing the missed summer daily slot:
 
 ```sh
@@ -410,6 +617,56 @@ and 365 days of archives are distinct from 90-day item pruning. Checkpoint
 garbage collection must protect the current manifest and retained backups;
 ordinary age-only Blob lifecycle deletion is unsafe for referenced objects.
 
+### Independent daily backup account
+
+The backup job must copy a validated `bundle.tar.gz` and `manifest.json` to the
+separate private `digest-backups` container/account before its slot can complete.
+It uploads the bundle first, verifies its stored size and SHA-256 by streaming
+readback, then uploads and verifies the manifest as the completion marker.
+Missing backup configuration or a failed copy fails
+the backup job. Retained references in the runtime account are useful local
+history but are not an independent account backup.
+
+`DIGEST_CLOUD_BACKUP_ACCOUNT_URL`, `DIGEST_CLOUD_BACKUP_CONTAINER` and
+`DIGEST_CLOUD_BACKUP_IDENTITY_CLIENT_ID` are configured on the backup job only.
+The distinct backup-writer identity can write that container; ordinary runner
+and runtime pruning cannot access it. Blob versioning and 14-day soft deletion
+protect logical deletion; lifecycle retains independent copies/old versions for
+30 days under the backup prefix, with deleted versions retained for up to
+14 additional days by soft deletion and billed accordingly. The runtime account
+retains seven daily
+referenced generations separately. This is not immutable storage: the backup
+writer can delete copies, and both accounts share subscription/region and
+administrative authority. Cross-subscription/provider or immutable retention is
+a future requirement decision, not claimed protection.
+
+For restore, grant a recovery operator temporary **Storage Blob Data Reader**
+on the backup container, select an explicitly completed prefix from the backup
+record (manifest must exist), and download only its bundle/manifest into an empty
+0700 directory with 0600 files. Verify the manifest hash, SQLite integrity and
+lineage, then use the existing `digest.cloud_state --operator-login bootstrap
+/PRIVATE/RESTORE_SOURCE` into a fresh runtime namespace. Reconcile delivery
+history after older restores. For the selected complete prefix, the downloads are:
+
+```sh
+umask 077
+mkdir -m 700 /PRIVATE/RESTORE_SOURCE
+export DIGEST_BACKUP_ACCOUNT=YOUR_BACKUP_ACCOUNT
+export DIGEST_BACKUP_PREFIX=backups/production/YYYY-MM-DD/COMPLETE_COPY_UUID
+az storage blob download --auth-mode login --account-name "$DIGEST_BACKUP_ACCOUNT" \
+  --container-name digest-backups --name "$DIGEST_BACKUP_PREFIX/bundle.tar.gz" \
+  --file /PRIVATE/RESTORE_SOURCE/bundle.tar.gz --output none
+az storage blob download --auth-mode login --account-name "$DIGEST_BACKUP_ACCOUNT" \
+  --container-name digest-backups --name "$DIGEST_BACKUP_PREFIX/manifest.json" \
+  --file /PRIVATE/RESTORE_SOURCE/manifest.json --output none
+chmod 600 /PRIVATE/RESTORE_SOURCE/bundle.tar.gz /PRIVATE/RESTORE_SOURCE/manifest.json
+```
+
+Keep the two files from one prefix together; do not mix dates or generations.
+Revoke only the recovery assignment this procedure created and verify access
+after propagation. Pilot acceptance requires a restore
+from this **separate account**, not merely a second namespace in runtime storage.
+
 ## Alerts, cost and residency
 
 Two aggregate log rules evaluate every 15 minutes: failures/uncertain delivery
@@ -424,16 +681,24 @@ and tune before accepting the alerting evidence.
 
 The pre-migration estimate was approximately $1–2/month including alerts with
 available Container Apps grants; reserve $5 for a pilot. Durability checkpoints
-upload the approximately 50 MB database repeatedly, and **their real storage
-and execution cost has not been measured**. Blob soft deletion retains removed
+skip uploads when the database/cookie/archive content is
+unchanged and use fast gzip compression. Unchanged checkpoints still snapshot,
+compress and hash locally; fast compression trades CPU for larger stored bytes.
+A changed checkpoint still uploads the
+full approximately 50 MB database bundle; **real storage and execution cost has
+not been measured**. Blob soft deletion retains removed
 objects for 14 extra days; reference-aware pruning and seven daily backups bound
 ordinary live history. Recalculate transfers, writes, retained bytes, boot time
 and logs after the pilot. The monthly budget defaults to 5 **billing-currency
-units**, sends alerts at 80/100%, and does not cap spending. Subscription fees
-remain separate. Dedicated-vault and backend-storage costs belong in actual
+units** for the **app resource group only**, sends alerts at 80/100%, and does
+not cap spending. The separate backup and backend groups are outside that budget.
+Reconcile all three groups, including vault operations and backup versions, when
+measuring total monthly hosting cost. Subscription fees
+remain separate. Dedicated-vault, backup-account and backend-storage costs belong in actual
 spending reconciliation.
 
-Runtime blobs, Terraform backend blobs, the dedicated vault and 30-day logs
+Runtime blobs, independent backup blobs, Terraform backend blobs, the dedicated
+vault and 30-day logs
 stay in West Europe. The source homelab vault remains in Germany West Central;
 copying digest credentials moves their Azure storage within the EU. This does
 not establish GDPR compliance or change external providers' processing terms.
