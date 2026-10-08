@@ -11,7 +11,8 @@ for the lease and 35 minutes of active work, then fences the process group.
 It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, the VM's
 measured Claude CLI 2.1.284, models, effort, prompts, translations, verification
 and OpenRouter fallbacks. Main independently adopted CLI 2.1.293 during
-preparation; adopting that update is deferred until the pilot verifies it. A hosting change does not remove subscription contention with other
+preparation; adopting that update is deferred until the pilot verifies it.
+A hosting change does not remove subscription contention with other
 applications using the same account.
 
 ## Prepare configuration and deployment identity
