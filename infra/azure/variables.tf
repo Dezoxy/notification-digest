@@ -45,7 +45,7 @@ variable "backup_storage_account_name" {
 }
 
 variable "image" {
-  description = "Exact GHCR release tag or digest. Replace the VM baseline with the tested migration release before executing any job."
+  description = "Exact GHCR release tag or digest, pinned in the tracked image.auto.tfvars.json. The default is the VM baseline, which has no cloud runner."
   type        = string
   default     = "ghcr.io/dezoxy/notification-digest:0.28.0"
   validation {

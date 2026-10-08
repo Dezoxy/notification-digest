@@ -98,12 +98,13 @@ One run = one process, one exit code, in every mode. In **window mode**, `main.p
 notification-digest/
 ├── .github/
 │   └── workflows/
-│       ├── release.yml           # build + push digest image to GHCR on git tag
+│       ├── release.yml           # build + push digest image to GHCR on git tag (or called by auto-release)
+│       ├── auto-release.yml      # gate + next patch tag + release for merges touching shipped files
 │       ├── pr-summary.yml        # post-merge PR summary -> docs/pr-summaries/pr-<n>.md
 │       ├── architecture-pdf.yml  # operator-run: architecture PDF -> a GitHub release
 │       ├── azure-validate.yml    # credential-free Terraform validation
 │       ├── azure-application.yml # lint, offline/failure tests and container build
-│       └── azure-deploy.yml      # reviewed OIDC plan/apply; schedules initially disabled
+│       └── azure-deploy.yml      # reviewed OIDC plan/apply, schedules initially disabled; guarded image-pin auto-apply
 ├── .githooks/
 │   └── pre-push                  # blocks direct pushes to main (ALLOW_MAIN_PUSH=1 for bootstrap)
 ├── .claude/
@@ -157,6 +158,8 @@ notification-digest/
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
 │   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
+│   ├── azure_release_guard.py     # image-bump plan check and idle wait for the auto-apply job
+│   ├── next_release_version.py    # next patch tag from `git tag --list`, for auto-release
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
 │   ├── list_telegram_topics.py   # one-off: print a forum group's topics + thread ids for TELEGRAM_*_THREAD_ID
 │   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
@@ -168,6 +171,8 @@ notification-digest/
 │   └── build_architecture_pdf_source.py # assembles the PDF source from pdf-sections.txt
 ├── tests/
 │   ├── conftest.py                # opt-in local Blob protocol test option
+│   ├── test_azure_release_guard.py # image-only plan check, cron evaluator and idle wait (no network)
+│   ├── test_next_release_version.py # patch-bump ordering and invalid-tag handling
 │   ├── test_cloud_runtime.py      # scheduling, failure fencing and publication recovery
 │   ├── test_cloud_state.py        # snapshots, integrity, conditional manifests and retention
 │   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite
@@ -225,6 +230,7 @@ notification-digest/
 │   ├── variables.tf               # reviewed nonsecret inputs and validation
 │   ├── outputs.tf                 # deployment and operator resource identifiers
 │   ├── versions.tf                # Terraform/provider pin and remote Azure backend
+│   ├── image.auto.tfvars.json     # tracked image pin; a merged bump deploys via azure-deploy
 │   ├── production.auto.tfvars.example # source baseline and disabled first-stage defaults
 │   └── secret-migration.json       # 17 runtime/registry names, no duplicate X cookie seed
 ├── Makefile                       # architecture model targets: check, docs, view, export, pdf
@@ -612,7 +618,7 @@ Cost: reasoning tokens are billed as output and are the main unknown, so `run_op
 
 Not part of this repo — tracked here for continuity into `~/developer/homelab`.
 
-**Release pipeline:** this repo is a versioned, released artifact, same as the owner's other self-made apps. `.github/workflows/release.yml` builds the Docker image on git tag push and publishes it to GHCR as `ghcr.io/dezoxy/notification-digest:<tag>`, published from the private repo `Dezoxy/notification-digest`. No image is ever built on the VM. Renovate, already running in the `~/developer/homelab` repo, opens a PR bumping the pinned `digest` tag whenever a new release lands in GHCR; deploy after that is a separate, manual step — either the homelab repo's Makefile/Ansible invocation by hand, or its own GitHub Actions. Changing code in this repo ships nothing until a tag is cut **and** the homelab repo bumps and deploys.
+**Release pipeline:** this repo is a versioned, released artifact, same as the owner's other self-made apps. `.github/workflows/release.yml` builds the Docker image on git tag push and publishes it to GHCR as `ghcr.io/dezoxy/notification-digest:<tag>`, published from the private repo `Dezoxy/notification-digest`. No image is ever built on the VM. Renovate, already running in the `~/developer/homelab` repo, opens a PR bumping the pinned `digest` tag whenever a new release lands in GHCR; deploy after that is a separate, manual step — either the homelab repo's Makefile/Ansible invocation by hand, or its own GitHub Actions. Historically, changing code in this repo shipped nothing until a tag was cut **and** the homelab repo bumped and deployed. Since the Azure migration, `.github/workflows/auto-release.yml` cuts the next patch tag for merges touching shipped files and the Azure pin follows through Renovate and the guarded `azure-deploy`; the homelab bump/deploy remains its own step until cutover.
 
 **Ansible `myapps` role additions:**
 - New compose service block for `digest` (pulls the pinned `ghcr.io/dezoxy/notification-digest` image tag — never built on the VM, same pattern as `netcheck` pinned to `ghcr.io/dezoxy/netcheck:2.9.0` in the role defaults — env from Key Vault-sourced vars, volumes for `/srv/appdata/digest`).
@@ -764,8 +770,8 @@ approved until its entry's status line says so; boxes are ticked only after
 the entry is approved; a rejected entry is removed, leaving a line in §9's
 decision log saying why. Entries appear in recommended execution order.
 Cross-repo steps are labeled (digest), (toom-edge = the news-site repo),
-(homelab = deploy repo); per §6/deploy note, digest code ships nothing until
-a tag is cut and homelab bumps it. The (toom-edge) label is historical:
+(homelab = deploy repo); per §6/deploy note, digest code ships only when
+a tag is cut (automatic for shipped files, see auto-release.yml) and homelab bumps it. The (toom-edge) label is historical:
 §11.1–11.6 predate the news-site source moving into this repo at
 `workers/news-site/`, so entries written after that move label site steps
 (site) and are not cross-repo at all.

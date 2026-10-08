@@ -12,7 +12,7 @@ budget_start_date = "2026-10-01T00:00:00Z"
 jobs_enabled = false
 schedules_enabled = false
 migration_release_verified = false
-image = "ghcr.io/dezoxy/notification-digest:0.28.0"
+# The image is NOT set here: it is pinned in the tracked image.auto.tfvars.json.
 
 app_env = {
   TG_CHAT_ALLOWLIST = "REPLACE_WITH_CHAT_IDS"

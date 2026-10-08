@@ -1,6 +1,11 @@
 name: azure-deploy
 
 on:
+  # A merged image-pin bump (Renovate or a revert) deploys through release-apply
+  # below, which refuses anything that is not a pure image bump of every job.
+  push:
+    branches: [main]
+    paths: ['infra/azure/image.auto.tfvars.json']
   workflow_dispatch:
     inputs:
       operation:
@@ -24,7 +29,7 @@ concurrency:
 
 jobs:
   plan:
-    if: github.ref == 'refs/heads/main' && inputs.operation == 'plan'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.operation == 'plan')
     runs-on: ubuntu-latest
     environment: azure-plan
     permissions:
@@ -60,6 +65,17 @@ jobs:
               raise SystemExit('Configure valid AZURE_TERRAFORM_VARS_JSON and AZURE_TERRAFORM_BACKEND_JSON objects.')
           if not isinstance(values, dict) or not isinstance(backend, dict):
               raise SystemExit('Terraform application and backend configuration must be JSON objects.')
+          # production.auto.tfvars.json loads after image.auto.tfvars.json and would
+          # silently override the tracked pin, so the variable must not carry an image.
+          try:
+              pin = json.loads(Path('infra/azure/image.auto.tfvars.json').read_text())['image']
+          except (OSError, ValueError, KeyError, TypeError):
+              raise SystemExit('The tracked image pin infra/azure/image.auto.tfvars.json is missing or malformed.')
+          if 'image' in values:
+              if values['image'] != pin:
+                  raise SystemExit('AZURE_TERRAFORM_VARS_JSON sets an image that differs from the tracked pin in infra/azure/image.auto.tfvars.json; remove image from AZURE_TERRAFORM_VARS_JSON.')
+              print('::warning::AZURE_TERRAFORM_VARS_JSON still sets image (equal to the tracked pin). It is ignored; remove it from the variable.')
+              del values['image']
           required = {'resource_group_name', 'storage_account_name', 'container_name', 'key'}
           if set(backend) != required or not all(isinstance(v, str) for v in backend.values()):
               raise SystemExit('Backend configuration must contain only resource_group_name, storage_account_name, container_name and key.')
@@ -91,7 +107,11 @@ jobs:
             infra/azure/production.auto.tfvars.json
             infra/azure/backend.hcl
           retention-days: 1
+      - name: Release deploy note
+        if: github.event_name == 'push'
+        run: echo 'The guarded release-apply job handles this plan; if it refuses, use the manual plan and apply.' >> "$GITHUB_STEP_SUMMARY"
       - name: Apply instructions
+        if: github.event_name == 'workflow_dispatch'
         run: |
           {
             echo 'Review the azure-plan artifact and plan output, then apply this exact saved plan with:'
@@ -169,3 +189,69 @@ jobs:
           github-token: ${{ github.token }}
       - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly -backend-config=backend.hcl
       - run: terraform -chdir=infra/azure apply -input=false deployment.tfplan
+
+  release-apply:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Applies the plan this run just produced, but only if scripts/azure_release_guard.py
+    # finds it to be a pure image bump of every job. Anything else fails the job
+    # and the owner uses the manual plan/apply path. Each step fails closed.
+    environment: azure-production
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      packages: read
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: azure-plan-${{ github.run_id }}
+          path: infra/azure
+      - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly -backend-config=backend.hcl
+      - name: Accept only an image-only bump of every job
+        id: guard
+        run: |
+          terraform -chdir=infra/azure show -json deployment.tfplan > "$RUNNER_TEMP/plan.json"
+          python3 scripts/azure_release_guard.py plan-check "$RUNNER_TEMP/plan.json" infra/azure/image.auto.tfvars.json
+      - name: Wait for the pinned image to exist in GHCR
+        if: steps.guard.outputs.decision == 'apply'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("infra/azure/image.auto.tfvars.json"))["image"])')
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for _attempt in $(seq 1 40); do
+            if docker manifest inspect "$image" > /dev/null 2>&1; then
+              echo "Found $image"
+              exit 0
+            fi
+            echo "Waiting for $image"
+            sleep 30
+          done
+          echo "::error::$image did not appear in GHCR within 20 minutes; use the manual path once release.yml has published it."
+          exit 1
+      - uses: azure/login@v3
+        if: steps.guard.outputs.decision == 'apply'
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Wait until no job is running or about to fire
+        if: steps.guard.outputs.decision == 'apply'
+        run: python3 scripts/azure_release_guard.py wait-idle "$RUNNER_TEMP/plan.json"
+      - name: Apply the guarded plan
+        if: steps.guard.outputs.decision == 'apply'
+        run: terraform -chdir=infra/azure apply -input=false deployment.tfplan

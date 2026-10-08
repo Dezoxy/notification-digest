@@ -21,6 +21,14 @@
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["npm install -g (?<depName>@[a-z0-9-]+/[a-z0-9-]+)@(?<currentValue>[0-9][^\\s\"'\\\\]*)"],
       "datasourceTemplate": "npm"
+    },
+    {
+      "description": "The Azure image pin, infra/azure/image.auto.tfvars.json. No built-in manager reads a Terraform tfvars JSON file, so this extracts the exact X.Y.Z tag of the application image. The homelab repo tracks this same private GHCR image with the docker datasource.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^infra\\/azure\\/image\\.auto\\.tfvars\\.json$/"],
+      "matchStrings": ["\"image\":\\s*\"(?<depName>ghcr\\.io/dezoxy/notification-digest):(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
     }
   ],
   "packageRules": [
@@ -32,6 +40,19 @@
       "dependencyDashboardApproval": true,
       "addLabels": [
         "supply-chain-audit"
+      ]
+    },
+    {
+      "description": "The Azure image pin automerges at any time, because merging it IS the deploy: the push to main triggers azure-deploy, which plans and then applies through the release-apply job only when scripts/azure_release_guard.py accepts the plan. The guard accepts nothing but an in-place update of all nine jobs whose sole difference is the container image, identical across jobs, equal to this pin and an exact release tag or digest, with nothing unknown until apply, and then waits until no job is running or about to fire. A plan with any other change, or a partial bump, is refused and the run fails: use the manual plan/apply path. CI must pass before Renovate merges. Schedule activation is not part of this; it stays an explicit variable change. Remove this rule to go back to merging pin PRs by hand (a merged pin still deploys).",
+      "matchFileNames": [
+        "infra/azure/image.auto.tfvars.json"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/dezoxy/notification-digest"
+      ],
+      "automerge": true,
+      "schedule": [
+        "at any time"
       ]
     },
     {

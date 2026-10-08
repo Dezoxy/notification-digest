@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  # auto-release.yml calls this directly: a tag created with the built-in token
+  # does not trigger the tag push above.
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build, e.g. v0.29.1
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -13,8 +21,18 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
+      - name: Require a release tag
+        if: inputs.tag != ''
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # A tag push builds the pushed tag; a call builds the tag it was given.
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -28,8 +46,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/dezoxy/notification-digest
+          # value= makes a workflow_call build the called tag; on a tag push the
+          # ref name is that tag, which is what the action would have used anyway.
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
           # No floating `latest` tag: the homelab repo pins an exact version
           # per PLAN.md §6/§7, so there's nothing that would ever consume it.
           flavor: |

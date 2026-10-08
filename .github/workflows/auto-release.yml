@@ -1,0 +1,81 @@
+name: auto-release
+
+# Every merge to main that changes what the image ships is released as the next
+# patch version. Renovate then bumps infra/azure/image.auto.tfvars.json and
+# azure-deploy applies it through its guard, so there is no human gate between
+# merging shipped code and the Azure jobs. Stop it by not merging, closing the
+# Renovate pin PR, or reverting the pin.
+#
+# Loop safety: the path filter is exactly what the Dockerfile copies. The pin file
+# Renovate bumps after each release (infra/azure/image.auto.tfvars.json) and the
+# docs commits CI pushes (docs/pr-summaries/) are NOT in it, so neither can cut a
+# release. Workflow-only, docs-only and infra-only merges release nothing.
+#
+# Minor and major bumps stay manual: push vX.Y.0 by hand (release.yml builds it)
+# and later automatic releases continue from the highest tag.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'digest/**'
+      - 'prompts/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notification-digest-auto-release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    # The same checks CI runs, so a red main is never released.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.14'
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest
+
+  tag:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Create the next patch release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force --tags
+          if git tag --points-at "$GITHUB_SHA" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "This commit already carries a release tag; nothing to do."
+            exit 0
+          fi
+          tag=$(git tag --list 'v*' | python3 scripts/next_release_version.py)
+          printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}

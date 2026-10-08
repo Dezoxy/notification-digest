@@ -26,6 +26,14 @@ consequences.
 
 ### Tag → image → pin → deploy
 
+> **Superseded on 2026-10-08.** Production moved to Azure Container Apps Jobs
+> ([ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md)). The steps below
+> describe the retired VM path and are kept as the record of it. Today a merge
+> to `main` that touches shipped files is tagged and built automatically, the
+> image pin lives in this repository's `infra/azure/image.auto.tfvars.json`, and
+> a merged pin bump deploys through a guarded apply. The
+> [migration runbook](../../azure-migration.md#image-upgrades) owns that chain.
+
 This repository cannot deploy itself ([C-07](../requirements/constraints.md),
 [ADR 0006](../decisions/0006-release-by-tag-and-pin.md)). A merge to `main` here
 ships nothing on its own:
