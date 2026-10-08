@@ -1,8 +1,8 @@
 # Runtime image for the digest one-shot container (see PLAN.md §3, §6).
 # Not built on the VM: this image is only ever built by
 # .github/workflows/release.yml and pulled by the configured runtime.
-# The existing VM uses Ansible; Azure Jobs use the app-owned infrastructure. `docker build .` / `docker compose build` here are for local
-# dev only.
+# The existing VM uses Ansible; Azure Jobs use the app-owned infrastructure.
+# `docker build .` / `docker compose build` here are for local dev only.
 
 FROM python:3.14-slim-bookworm
 
@@ -10,7 +10,7 @@ FROM python:3.14-slim-bookworm
 # Pinned uv release tag (not :latest) for reproducible builds. Renovate
 # tracks COPY --from=<image>:<tag> references, so it can open a bump PR here
 # same as it does for FROM lines.
-COPY --from=ghcr.io/astral-sh/uv:0.12.20 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 
 # --- Node.js + Claude Code CLI ---
 # Debian bookworm's apt nodejs package is 18.x, which meets Claude Code's
@@ -20,8 +20,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Preserve this tested CLI pin during the hosting migration. The homelab
-# global CLI pin is separate; upgrading either is a deliberate change.
+# Preserve the measured VM CLI for the first hosting migration release.
+# Main independently adopted 2.1.293; adoption here is deferred until the pilot
+# validates quality and subscription behavior. The global homelab pin is separate.
 RUN npm install -g @anthropic-ai/claude-code@2.1.284
 
 WORKDIR /app

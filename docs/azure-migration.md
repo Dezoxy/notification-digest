@@ -8,9 +8,10 @@ The target runs the existing release image as nine finite Container Apps Jobs
 in West Europe, with 0.5 vCPU, 1 GiB, no platform retries and a 50-minute
 platform timeout. The runner allows at most ten minutes waiting
 for the lease and 35 minutes of active work, then fences the process group.
-It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, Claude CLI
-version, models, effort, prompts, translations, verification and OpenRouter
-fallbacks. A hosting change does not remove subscription contention with other
+It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, the VM's
+measured Claude CLI 2.1.284, models, effort, prompts, translations, verification
+and OpenRouter fallbacks. Main independently adopted CLI 2.1.293 during
+preparation; adopting that update is deferred until the pilot verifies it. A hosting change does not remove subscription contention with other
 applications using the same account.
 
 ## Prepare configuration and deployment identity
