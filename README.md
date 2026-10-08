@@ -278,7 +278,11 @@ deploys its systemd timers, Ansible `myapps` role and Key Vault secrets.
 
 The approved Azure target is prepared here in `infra/azure/`: nine Container Apps
 Jobs, leased Blob-backed SQLite bundles and explicit reviewed OIDC plan/apply.
-Schedules default to disabled; merging these changes does not move production.
+Terraform state uses a separate Azure Blob backend; digest credentials use an
+app-owned Key Vault. The existing subscription is sufficient for this workload;
+select its ID explicitly. Source secrets remain intact during the reviewed copy.
+Provision the foundation first, copy/verify secrets, then create the nine Manual
+jobs. Jobs and schedules default to disabled; merging does not move production.
 See [the Azure migration runbook](docs/azure-migration.md) for subscription
 authentication, state handoff, activation, cloud recovery and homelab retirement.
 

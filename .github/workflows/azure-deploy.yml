@@ -33,22 +33,45 @@ jobs:
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       TF_IN_AUTOMATION: 'true'
       TFVARS_JSON: ${{ vars.AZURE_TERRAFORM_VARS_JSON }}
+      BACKEND_JSON: ${{ vars.AZURE_TERRAFORM_BACKEND_JSON }}
     steps:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.16.4
           terraform_wrapper: false
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
-      - name: Write reviewed references and nonsecret configuration
+      - name: Validate and write reviewed backend and nonsecret configuration
         run: |
           python - <<'PY'
-          import json, os
+          import json, os, re
           from pathlib import Path
-          values = json.loads(os.environ['TFVARS_JSON'])
+          for name in ('ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID'):
+              if not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', os.environ.get(name, '')):
+                  raise SystemExit(f'{name} must be configured with an Azure UUID.')
+          try:
+              values = json.loads(os.environ['TFVARS_JSON'])
+              backend = json.loads(os.environ['BACKEND_JSON'])
+          except (KeyError, ValueError):
+              raise SystemExit('Configure valid AZURE_TERRAFORM_VARS_JSON and AZURE_TERRAFORM_BACKEND_JSON objects.')
+          if not isinstance(values, dict) or not isinstance(backend, dict):
+              raise SystemExit('Terraform application and backend configuration must be JSON objects.')
+          required = {'resource_group_name', 'storage_account_name', 'container_name', 'key'}
+          if set(backend) != required or not all(isinstance(v, str) for v in backend.values()):
+              raise SystemExit('Backend configuration must contain only resource_group_name, storage_account_name, container_name and key.')
+          patterns = {
+              'resource_group_name': r'[A-Za-z0-9_-]{1,90}',
+              'storage_account_name': r'[a-z0-9]{3,24}',
+              'container_name': r'[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])',
+              'key': r'notification-digest\.tfstate',
+          }
+          if not all(re.fullmatch(patterns[k], v) for k, v in backend.items()) or '--' in backend['container_name']:
+              raise SystemExit('Backend location is invalid; use the separately bootstrapped container and notification-digest.tfstate key.')
+          if backend['storage_account_name'] == values.get('storage_account_name') or backend['resource_group_name'] == values.get('resource_group_name', 'notification-digest-westeurope'):
+              raise SystemExit('Terraform backend must use a separate resource group and storage account from runtime state.')
+          Path('infra/azure/backend.hcl').write_text(''.join(f'{k} = {json.dumps(v)}\n' for k, v in sorted(backend.items())))
           Path('infra/azure/production.auto.tfvars.json').write_text(json.dumps(values))
           PY
-      - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly -backend-config=backend.hcl
       - run: terraform -chdir=infra/azure plan -input=false -no-color -out=deployment.tfplan
       - name: Write reviewable plan
         run: terraform -chdir=infra/azure show -no-color deployment.tfplan > infra/azure/deployment-plan.txt
@@ -59,6 +82,7 @@ jobs:
             infra/azure/deployment.tfplan
             infra/azure/deployment-plan.txt
             infra/azure/production.auto.tfvars.json
+            infra/azure/backend.hcl
           retention-days: 1
       - name: Approval instructions
         run: |
@@ -88,7 +112,6 @@ jobs:
         with:
           terraform_version: 1.16.4
           terraform_wrapper: false
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
       - uses: actions/download-artifact@v8
         with:
           name: azure-plan-${{ github.run_id }}
@@ -107,5 +130,5 @@ jobs:
           if json.loads(Path(os.environ['RUNNER_TEMP'], 'approval-gate.json').read_text()) is not True:
               raise SystemExit('azure-production must have required reviewers configured before applying.')
           PY
-      - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly -backend-config=backend.hcl
       - run: terraform -chdir=infra/azure apply -input=false deployment.tfplan

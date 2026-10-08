@@ -217,11 +217,17 @@ Production currently runs on `01-myapps-vm`, deployed from
 wiring). Changes here do not move or stop the VM runtime by themselves.
 
 The approved Azure target is app-owned in `infra/azure/`, with the migration
-and cloud recovery procedure in `docs/azure-migration.md`. Its nine Container
-Apps Jobs start in Manual mode. `.github/workflows/azure-validate.yml` validates
+and cloud recovery procedure in `docs/azure-migration.md`. Provision the
+foundation with `jobs_enabled=false`, copy/verify digest secrets, then enable
+its nine jobs in Manual mode with schedules disabled.
+`.github/workflows/azure-validate.yml` validates
 IaC without credentials; `azure-application.yml` runs lint/tests/container build;
 `azure-deploy.yml` produces an OIDC-authenticated saved plan and explicitly
-approved apply. HCP Terraform holds remote state; never create local state.
+approved apply. Azure Blob Storage holds Terraform state in a separate
+bootstrapped backend resource group; never create local state. This stack owns a
+dedicated digest Key Vault; secret values are copied by the reviewed migration
+tool, never managed through Terraform. The existing Azure subscription remains
+the recommended default; select its ID explicitly.
 
 Releases remain explicit git tags: `.github/workflows/release.yml` publishes
 `ghcr.io/dezoxy/notification-digest:<version>`. Azure configuration pins the

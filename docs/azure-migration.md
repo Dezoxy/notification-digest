@@ -1,6 +1,7 @@
 # Azure digest migration and operations
 
-Status on 2026-10-08: implementation prepared for review; production still runs
+Status on 2026-10-08: the first preparation PR is merged; the Azure state and
+dedicated-vault follow-up is being prepared. Production still runs
 on `01-myapps-vm`. This runbook describes the authorized hosting target and the
 remaining deployment gates. Returning execution to the VM is outside the plan.
 
@@ -15,16 +16,106 @@ preparation; adopting that update is deferred until the pilot verifies it.
 A hosting change does not remove subscription contention with other
 applications using the same account.
 
+## Subscription, state and secret ownership
+
+Use the existing Azure subscription for this single-owner workload. Choose its
+subscription ID explicitly: several subscriptions can have the same display
+name. A new subscription would add billing/access setup without solving a
+current requirement. Reconsider it for a different owner, separate billing,
+organization policy or subscription quotas. Isolation here uses dedicated
+resource groups, managed identities and narrowly scoped roles.
+
+Both kinds of state live in Azure:
+
+| Store | Purpose | Ownership and access |
+|---|---|---|
+| Runtime Blob Storage in the app resource group | Canonical SQLite/cookie/archive bundles and retained backups | Terraform manages resources; runner has Blob Data Contributor on `digest-state` only |
+| Separate Blob Storage in a backend resource group | Terraform state and Blob-lease locking | Bootstrapped outside the app stack; deployment identity has access to `terraform-state`; runner has none |
+| Dedicated digest Key Vault in the app resource group | Subscription OAuth, sessions, publication/collector credentials and GHCR pull token | Terraform manages the vault and roles, never secret values; runner has Secrets User on this vault only |
+
+The runtime manifest is authoritative between jobs; `/data` is the temporary
+working copy during an execution. Terraform state is separate from application
+state. This stack uses the Azure `azurerm` backend, replacing the original HCP
+Terraform choice. The homelab repository's HCP workspaces stay unchanged.
+
+## Bootstrap the Azure Terraform backend
+
+Prepare a dedicated West Europe backend resource group and globally unique
+storage account through the established Azure administrative process. Its
+lifecycle is independent of the app Terraform stack: retain it during app
+changes and recovery. Protect the backend resource group with a `CanNotDelete`
+management lock. Record its ownership, permissions and recovery settings
+in the deployment record. These commands create resources and grant access;
+review the selected subscription, names and principals before executing them.
+They are preparation instructions, not actions already performed.
+
+```sh
+export AZURE_SUBSCRIPTION_ID=YOUR_CHOSEN_SUBSCRIPTION_ID
+export DIGEST_BACKEND_RESOURCE_GROUP=notification-digest-terraform-westeurope
+export DIGEST_BACKEND_STORAGE_ACCOUNT=YOUR_UNIQUE_BACKEND_ACCOUNT
+export DIGEST_DEPLOY_PRINCIPAL_ID=YOUR_GITHUB_OIDC_SERVICE_PRINCIPAL_OBJECT_ID
+export DIGEST_BOOTSTRAP_PRINCIPAL_ID=YOUR_OPERATOR_OBJECT_ID
+az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+az group create --name "$DIGEST_BACKEND_RESOURCE_GROUP" --location westeurope
+az lock create --name protect-digest-tfstate --lock-type CanNotDelete \
+  --resource-group "$DIGEST_BACKEND_RESOURCE_GROUP"
+az storage account create --name "$DIGEST_BACKEND_STORAGE_ACCOUNT" \
+  --resource-group "$DIGEST_BACKEND_RESOURCE_GROUP" --location westeurope \
+  --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
+  --allow-blob-public-access false --allow-shared-key-access false
+az storage account blob-service-properties update \
+  --account-name "$DIGEST_BACKEND_STORAGE_ACCOUNT" \
+  --resource-group "$DIGEST_BACKEND_RESOURCE_GROUP" \
+  --enable-versioning true --enable-delete-retention true --delete-retention-days 14 \
+  --enable-container-delete-retention true --container-delete-retention-days 14
+DIGEST_BACKEND_ACCOUNT_ID=$(az storage account show \
+  --name "$DIGEST_BACKEND_STORAGE_ACCOUNT" \
+  --resource-group "$DIGEST_BACKEND_RESOURCE_GROUP" --query id --output tsv)
+az role assignment create --assignee-object-id "$DIGEST_BOOTSTRAP_PRINCIPAL_ID" \
+  --role 'Storage Blob Data Contributor' --scope "$DIGEST_BACKEND_ACCOUNT_ID"
+# Wait for this role to propagate before the data-plane operation below.
+az storage container create --name terraform-state \
+  --account-name "$DIGEST_BACKEND_STORAGE_ACCOUNT" --auth-mode login --public-access off
+az role assignment create --assignee-object-id "$DIGEST_DEPLOY_PRINCIPAL_ID" \
+  --assignee-principal-type ServicePrincipal --role 'Storage Blob Data Contributor' \
+  --scope "$DIGEST_BACKEND_ACCOUNT_ID/blobServices/default/containers/terraform-state"
+```
+
+Azure-managed encryption is enabled by Storage by default. Verify private
+container access, disabled Shared Key, versioning, soft deletion and successful
+Entra data-plane access after role propagation. Retain only the operator access
+needed by the recovery process. Never fall back to account keys or local state
+when Entra access fails. GitHub OIDC authenticates backend access with
+`use_azuread_auth=true` and `use_oidc=true`; no HCP token is needed.
+
+GitHub environment variable `AZURE_TERRAFORM_BACKEND_JSON` contains exactly:
+
+```json
+{
+  "resource_group_name": "notification-digest-terraform-westeurope",
+  "storage_account_name": "YOUR_UNIQUE_BACKEND_ACCOUNT",
+  "container_name": "terraform-state",
+  "key": "notification-digest.tfstate"
+}
+```
+
+Check the original HCP workspace before initialization. The expected state has
+zero managed resources because no production apply occurred during preparation.
+If a workspace contains resources, stop and plan an explicit remote-backend
+migration; do not initialize a parallel empty state or dump credentials to a
+local state file.
+
+These four fields are nonsecret locations, supplied to `terraform init` through
+an ignored backend configuration file. Configure them identically for plan and
+apply. Do not add tokens, access keys or SAS URLs. Blob state can contain
+provider-computed credentials: restrict backend access and treat state versions
+and saved plans as sensitive. Test backend recovery separately from runtime
+bundle restore; an app backup does not back up Terraform state.
+
 ## Prepare configuration and deployment identity
 
-The stack lives in [infra/azure](../infra/azure/). Its dedicated HCP Terraform
-workspace is `toomhorvath/notification-digest-azure`; configure **Local execution**
-with remote state before initialization. GitHub runners perform Azure operations
-using OIDC; HCP Terraform stores and locks state. Never remove the `cloud` block
-or fall back to a local state file.
-
-Create separate GitHub deployment identity/federated credentials for this app.
-The workflow uses subjects
+The stack lives in [infra/azure](../infra/azure/). Create separate GitHub deployment
+identity/federated credentials for this app. The workflow uses subjects
 `repo:Dezoxy/notification-digest:environment:azure-plan` and
 `repo:Dezoxy/notification-digest:environment:azure-production`, audience
 `api://AzureADTokenExchange`. Restrict both environments to `main`. Configure
@@ -33,50 +124,112 @@ if no required reviewers are configured. Review the saved plan before
 approving its apply job. These repository/Entra settings are prerequisites,
 not settings that the workflow YAML can enforce by itself.
 
-The deployment identity needs resource creation/update permissions for the
-dedicated resource group, and permission to grant the runner's container-scoped
-Blob role and per-secret Key Vault roles. Bootstrap resource-group creation and
-resource-provider registration separately if the identity is scoped to an
-existing group. Register `Microsoft.App`, `Microsoft.Storage`,
-`Microsoft.OperationalInsights`, `Microsoft.ManagedIdentity`, `Microsoft.Insights`
-and `Microsoft.Consumption` through the account's established administrative
-process. The provider does not automatically register providers. Import a
-precreated resource group into the remote workspace before a first plan.
+The deployment identity needs Contributor on the app resource group and
+permission to grant the runner's container Blob and dedicated-vault Secrets
+User roles. Use a constrained Role Based Access Control Administrator assignment
+for those grants; review principal/role/scope conditions with the administrator.
+Do not give the deployment identity secret-value access to the homelab vault.
+The separate secret-copy operator receives only the temporary source-read and
+target-write roles needed for the reviewed migration. Bootstrap resource-group
+creation and resource-provider registration separately if the deployment
+identity is scoped to an existing group. Register `Microsoft.App`,
+`Microsoft.Storage`, `Microsoft.KeyVault`, `Microsoft.OperationalInsights`,
+`Microsoft.ManagedIdentity`, `Microsoft.Insights` and `Microsoft.Consumption`
+through the account's established administrative process. The provider does not
+automatically register providers. Import a precreated app resource group into
+the Azure backend before a first plan; do not create a local state file. For a
+workstation operator using Azure CLI login, initialize the same remote backend
+with `-backend-config=use_oidc=false` to override the CI OIDC setting. Keep
+`use_azuread_auth=true`, explicit subscription selection and the exact backend
+locations. Then import `azurerm_resource_group.digest` using its ARM ID before
+the first workflow plan. The import needs the reviewed Terraform variables;
+do not improvise defaults or bypass backend access failures.
 
-Supply environment variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and
-`AZURE_SUBSCRIPTION_ID` as GitHub environment **variables**, and `TF_API_TOKEN`
-as an environment **secret** limited to the dedicated workspace. Both plan and
-apply environments need those credentials. `AZURE_TERRAFORM_VARS_JSON` on
-`azure-plan` contains the reviewed Terraform inputs as JSON. Its contents must
-only be nonsecret values and versionless Key Vault URLs.
+Supply `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
+`AZURE_TERRAFORM_BACKEND_JSON` and `AZURE_TERRAFORM_VARS_JSON` as GitHub environment
+**variables**. Both plan and apply environments need the same identity,
+subscription and backend locations. `AZURE_TERRAFORM_VARS_JSON` contains reviewed
+nonsecret Terraform inputs, including `key_vault_name` and the environment-name
+to secret-name map `secret_names`. Terraform constructs versionless references
+to the new vault. Secret values never enter Terraform inputs or managed secret
+resources. Do not configure `TF_API_TOKEN` for this Azure stack.
 
 Start from [production.auto.tfvars.example](../infra/azure/production.auto.tfvars.example).
 The app configuration was rendered offline from the declared homelab defaults
-and host overrides on 2026-10-08. All 17 referenced secret names/enabled flags
-were verified using vault metadata; no values were read. The existing vault
-`kv-homelab-prod-th` remains externally managed, in Germany West Central.
-Recheck the baseline against the final live configuration before cutover:
-collector flags, feeds/allowlists, topics, model/effort/budgets, translation,
-verification, context, delivery channels and fallback omission semantics.
-Leaving `FALLBACK_MODELS` unset retains the app's defaults; an empty value would
-disable them. Azure env values are literal: keep `$FET,$ASI` as single dollars,
-unlike the homelab Compose env-file escaping.
+and host overrides on 2026-10-08. Recheck the baseline against final live
+configuration before cutover: collector flags, feeds/allowlists, topics,
+model/effort/budgets, translation, verification, context, delivery channels and
+fallback omission semantics. Leaving `FALLBACK_MODELS` unset retains the app's
+defaults; an empty value disables them. Azure env values are literal: keep
+`$FET,$ASI` as single dollars, unlike homelab Compose env-file escaping.
 
-Choose the globally unique storage account name and alert email; update the
-budget start to the first day of the deployment month. Select a tested migration
-release image before manually executing any job. The default `0.28.0` records
-the source baseline and does **not** contain the cloud runner. Activation also
-requires `migration_release_verified=true`. The stack rejects floating tags.
+Choose globally unique names for the runtime storage account and digest vault,
+plus the alert email; update the budget start to the first day of the deployment
+month. Select a tested migration release image before manually executing any
+job. The default `0.28.0` records the source baseline and does **not** contain the
+cloud runner. Activation also requires `migration_release_verified=true`. The
+stack rejects floating tags.
 
-The shared vault uses per-secret RBAC, and the runner identity has access only
-to its state container and declared secrets. Private GHCR pulls use the existing
-read-packages PAT via a Key Vault-backed registry password reference; Azure
-managed identity cannot directly authenticate to GHCR. OAuth, session strings,
-cookies and publication credentials never enter Terraform inputs. AzureRM may
-store provider-computed Storage/Log Analytics keys in state: restrict and encrypt
-the remote workspace and the private one-day plan artifacts; do not share or
-publish binary plans. Shared Key storage authentication is
-disabled; runtime storage access uses managed identity.
+The new Standard Key Vault uses RBAC, purge protection and 90-day soft deletion.
+The runner has Secrets User access to the dedicated vault and Blob access to its
+runtime container; it cannot read backend state or the source vault. Private
+GHCR pulls use a read-packages PAT via a Key Vault-backed registry password
+reference; Azure managed identity cannot directly authenticate to GHCR. OAuth,
+session strings, cookies and publication credentials never enter Terraform
+inputs. AzureRM may store provider-computed Storage/Log Analytics keys in state:
+protect backend state and private one-day plan artifacts; do not share binary
+plans. Shared Key storage authentication is disabled.
+
+## Copy digest secrets to the dedicated vault
+
+The reviewed [secret manifest](../infra/azure/secret-migration.json) names the
+17 runtime/registry secrets plus `digest-x-cookies`, the historical cookie seed.
+Keep names stable; the migration validates and copies the latest values/metadata
+to the new vault. It does not delete, modify or rotate source secrets. Shared
+homelab failure-notification credentials remain in the source vault because
+other services still need them; Azure Monitor uses the configured email action
+group. No unrelated homelab secrets belong in the digest vault.
+
+Provision the foundation with `jobs_enabled=false` and `schedules_enabled=false`
+first. This creates the vault/storage/identities and monitoring support without
+job resources. Container Apps can resolve secret references while creating a
+Manual job, so delaying execution alone is insufficient. Then review the
+metadata-only preview from
+[scripts/migrate_azure_secrets.py](../scripts/migrate_azure_secrets.py). Use the
+operator's Azure CLI login; never redirect secret JSON into a file or shell
+variable. The tool's default preview prints vault/secret names and presence
+status, not values. An explicit `--apply` copies missing secrets in memory;
+`--verify` checks
+values and metadata without writing or printing values. An existing target is
+skipped only when value and enabled/expiry/not-before/tags/content-type metadata
+match; any difference fails preflight before writes. Review conflicts and source
+metadata before proceeding. Pause credential edits during copy, because Key Vault
+does not offer a reliable create-only secret write. Both vaults must use the same
+Entra tenant; the operator needs source list/get and target list/get/set access.
+Run preview again after any source rotation.
+
+```sh
+# Preview only: the destination vault must already exist.
+uv run python scripts/migrate_azure_secrets.py \
+  --target-vault YOUR_DIGEST_VAULT --subscription "$AZURE_SUBSCRIPTION_ID"
+# After review: copy missing values, then verify without writing.
+uv run python scripts/migrate_azure_secrets.py \
+  --target-vault YOUR_DIGEST_VAULT --subscription "$AZURE_SUBSCRIPTION_ID" --apply
+uv run python scripts/migrate_azure_secrets.py \
+  --target-vault YOUR_DIGEST_VAULT --subscription "$AZURE_SUBSCRIPTION_ID" --verify
+```
+
+The default source is `kv-homelab-prod-th`; the default manifest is
+`infra/azure/secret-migration.json`. `--source-vault` and `--manifest` override
+those explicit names. After the 18 copies pass verification, review a second
+plan/apply with `jobs_enabled=true` and `schedules_enabled=false` to create the
+nine Manual jobs. No source secret removal is part of this procedure.
+
+The `digest-x-cookies` vault copy preserves the seed only. Production cookie
+state comes from the final transferred `x-cookies.json.live` bundle; never
+replace it with an older vault seed. A standalone cloud-cookie rotation command
+is not yet implemented, so rotation/recovery must follow the guarded state
+handoff procedure until that operator workflow is added and tested.
 
 ## Validate, release and provision disabled jobs
 
@@ -95,10 +248,16 @@ state and performs no plan/apply. Review and merge application changes, then
 publish the explicit `vX.Y.Z` release through the existing release workflow.
 Set the reviewed image pin to its `X.Y.Z` GHCR tag or digest. Run
 `azure-deploy` with `operation=plan`. Inspect resource ownership, RBAC, cost,
-image/configuration, state retention and the nine **Manual** jobs.
+image/configuration, state retention and the dedicated vault. The foundation
+plan must contain
+**zero jobs** with `jobs_enabled=false`. After secret copy/verification, the
+second plan with `jobs_enabled=true` must contain nine **Manual** jobs and only
+dedicated-vault references. Jobs must not execute until state bootstrap is
+completed and verified.
 
-For provisioning, dispatch `operation=apply`, review the newly generated plan
-artifact, then approve `azure-production`. Apply uses that exact saved plan.
+For each provisioning stage, dispatch `operation=apply`, review the newly
+generated plan artifact, then approve `azure-production`. Apply uses that exact
+saved plan.
 Artifacts expire after one day. Azure tables/KQL, image pull, CLI authentication,
 cloud egress and measured resource use remain live pilot checks; validation
 does not prove them. Check a subsequent no-op plan for provider drift around
@@ -267,16 +426,19 @@ The pre-migration estimate was approximately $1–2/month including alerts with
 available Container Apps grants; reserve $5 for a pilot. Durability checkpoints
 upload the approximately 50 MB database repeatedly, and **their real storage
 and execution cost has not been measured**. Blob soft deletion retains removed
-objects for one extra day; reference-aware pruning and seven daily backups bound
+objects for 14 extra days; reference-aware pruning and seven daily backups bound
 ordinary live history. Recalculate transfers, writes, retained bytes, boot time
 and logs after the pilot. The monthly budget defaults to 5 **billing-currency
 units**, sends alerts at 80/100%, and does not cap spending. Subscription fees
-remain separate. Shared-vault costs and any provider-managed resource-group
-charges should be included when reconciling actual spending.
+remain separate. Dedicated-vault and backend-storage costs belong in actual
+spending reconciliation.
 
-Private blobs and 30-day logs stay in West Europe; the existing shared vault is
-in Germany West Central. Azure managed identity, Container Apps definitions
-and Blob SDK/leases create Azure coupling; SQLite and release containers remain
+Runtime blobs, Terraform backend blobs, the dedicated vault and 30-day logs
+stay in West Europe. The source homelab vault remains in Germany West Central;
+copying digest credentials moves their Azure storage within the EU. This does
+not establish GDPR compliance or change external providers' processing terms.
+Azure managed identity, Container Apps definitions and Blob SDK/leases create
+Azure coupling; SQLite and release containers remain
 portable. Telegram, X, Claude and the existing Cloudflare site retain their
 external processing/residency characteristics. Avoid publishing message bodies,
 session/cookie contents, credential-bearing URLs or model inputs in logs.
@@ -285,4 +447,6 @@ Reference contracts: [Container Apps Jobs](https://learn.microsoft.com/en-us/azu
 [AzureRM job resource](https://registry.terraform.io/providers/hashicorp/azurerm/5.4.0/docs/resources/container_app_job),
 [Blob leases](https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blob-lease),
 [Key Vault job secrets](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets),
-[Azure budgets](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets).
+[Azure budgets](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets),
+[Azure Terraform backend](https://developer.hashicorp.com/terraform/language/backend/azurerm),
+[Blob versioning](https://learn.microsoft.com/en-us/azure/storage/blobs/versioning-overview).

@@ -2,10 +2,10 @@ name: azure-application
 
 on:
   pull_request:
-    paths: ['digest/**', 'tests/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
+    paths: ['digest/**', 'tests/**', 'scripts/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
   push:
     branches: [main]
-    paths: ['digest/**', 'tests/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
+    paths: ['digest/**', 'tests/**', 'scripts/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
 
 permissions:
   contents: read

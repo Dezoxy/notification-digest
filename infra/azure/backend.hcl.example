@@ -1,0 +1,7 @@
+# Bootstrap this backend separately from the application stack in West Europe.
+# The deployment identity needs Storage Blob Data Contributor on this container.
+# Never grant the digest runner access. ARM_* supplies Azure OIDC authentication.
+resource_group_name  = "notification-digest-terraform-westeurope"
+storage_account_name = "REPLACE_WITH_GLOBALLY_UNIQUE_NAME"
+container_name       = "terraform-state"
+key                  = "notification-digest.tfstate"

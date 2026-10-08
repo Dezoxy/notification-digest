@@ -9,7 +9,7 @@
 - No official API path exists for X notifications at acceptable cost; twikit (unofficial, cookie-based) is accepted with explicit ToS/ban risk and mitigations (§8).
 - Idempotent by design: a crashed run must never lose or duplicate items. Empty window → nothing delivered on any channel, no noise.
 - Partial-failure-tolerant: one collector failing must not suppress the other collector's digest — send what was collected with a failure banner.
-- Secrets never committed; injected as env vars at deploy time from Azure Key Vault (`kv-homelab-prod-th`).
+- Secrets never committed; the VM uses `kv-homelab-prod-th`; the Azure target uses a dedicated digest Key Vault.
 
 ## 2. Architecture
 
@@ -154,6 +154,7 @@ notification-digest/
 │   ├── arc-context.md            # story-arc background-primer prompt template (§4.19)
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
+│   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
 │   ├── list_telegram_topics.py   # one-off: print a forum group's topics + thread ids for TELEGRAM_*_THREAD_ID
 │   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
@@ -212,7 +213,7 @@ notification-digest/
 │       ├── test/                  # node --test invariants + byte-golden pages
 │       ├── schema.sql, migrations/ # D1 schema (separate from digest/state.py's SQLite)
 │       └── wrangler.jsonc         # deploy config; `wrangler deploy` from this dir
-├── infra/azure/                   # app-owned Azure jobs/storage/RBAC/alerts, remote Terraform state
+├── infra/azure/                   # app-owned Azure jobs/storage/vault/RBAC/alerts; separate Azure Blob backend
 ├── Makefile                       # architecture model targets: check, docs, view, export, pdf
 ├── Dockerfile                     # slim Python 3.14 image, local default `python -m digest`
 ├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
@@ -1454,8 +1455,11 @@ completed phases above describe the VM deployment at their original dates.
 
 - [ ] Validate the guarded cloud runner, checkpoints, lease loss and uncertain
   delivery; pass application/container/Terraform checks and PR review.
-- [ ] Configure dedicated HCP Terraform workspace, app OIDC identity and GitHub
-  environments; review and apply the disabled-schedule cloud stack.
+- [ ] Bootstrap separate Azure Blob Terraform backend; configure app OIDC
+  identity and GitHub environments in the explicitly selected existing subscription.
+- [ ] Review/apply the foundation with jobs disabled and a dedicated digest vault;
+  preview, copy and verify only the approved secret manifest without source deletion.
+- [ ] Review/apply `jobs_enabled=true` with schedules disabled to create Manual jobs.
 - [ ] Separate shared homelab alerts, pause/drain all digest writers, import the
   final consistent database/live cookies/archives and verify cloud lineage.
 - [ ] Activate schedules after pilot checks; observe seven days including the
@@ -1464,4 +1468,6 @@ completed phases above describe the VM deployment at their original dates.
   shared VM and its remaining applications, credentials and backup services.
 
 There is no return-to-VM procedure. See [the migration runbook](docs/azure-migration.md)
-and [ADR 7](docs/architecture/decisions/0007-run-digest-as-azure-jobs.md).
+and [ADR 7](docs/architecture/decisions/0007-run-digest-as-azure-jobs.md), amended
+by [ADR 8](docs/architecture/decisions/0008-isolate-digest-azure-state-and-secrets.md)
+for Azure Terraform state and dedicated-vault ownership.

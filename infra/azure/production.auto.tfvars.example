@@ -1,23 +1,25 @@
 # Declared configuration from homelab defaults + host_vars on 2026-10-08.
 # Review parity against the final live configuration before cutover.
-# Secret names and enabled flags verified from Key Vault metadata on 2026-10-08.
-# No secret values were read. Recheck metadata before apply.
+# Copy reviewed configuration to an ignored local file or repository variable.
+# Personal identifiers below are placeholders. Secret values are copied separately.
+# All secret names resolve in the dedicated digest vault, never the homelab vault.
 storage_account_name = "REPLACE_WITH_GLOBALLY_UNIQUE_NAME"
 ghcr_username = "Dezoxy"
-key_vault_resource_id = "/subscriptions/522caf52-0fb9-4b3b-acb9-006c120306dd/resourceGroups/rg-homelab-secrets/providers/Microsoft.KeyVault/vaults/kv-homelab-prod-th"
+key_vault_name = "REPLACE_WITH_UNIQUE_VAULT_NAME"
 alert_email = "REPLACE@example.com"
 budget_start_date = "2026-10-01T00:00:00Z"
+jobs_enabled = false
 schedules_enabled = false
 migration_release_verified = false
 image = "ghcr.io/dezoxy/notification-digest:0.28.0"
 
 app_env = {
-  TG_CHAT_ALLOWLIST = "-1001358788312,-1001277327948,-1001994655615,-1001534592031,-1001993180528,-1001770853167,-1001683536966,-1001301968221,-1001220282322,-1001933319598,-1001700689119,-1002006131201,-1001556054753,-1002520657240,-1001963527562"
+  TG_CHAT_ALLOWLIST = "REPLACE_WITH_CHAT_IDS"
   SMTP_HOST = "smtp.mail.me.com"
   SMTP_PORT = "587"
-  DIGEST_FROM = "digest@tomhorvath.me"
-  DIGEST_FROM_NAME = "Toom's Digest"
-  DIGEST_TO = "tom@tomhorvath.me, oroszy.f@hotmail.com"
+  DIGEST_FROM = "digest@example.com"
+  DIGEST_FROM_NAME = "My Digest"
+  DIGEST_TO = "owner@example.com"
   ANTHROPIC_MODEL = "claude-opus-5-5"
   CLAUDE_TIMEOUT_SECONDS = "600"
   CLAUDE_EFFORT = "high"
@@ -37,11 +39,11 @@ app_env = {
   POLYMARKET_API_BASE = "https://polymarket-proxy.toomhorvath.workers.dev"
   EMAIL_ENABLED = "false"
   SITE_PUBLISH_URL = "https://news-site.toomhorvath.workers.dev"
-  TELEGRAM_WEEKLY_THREAD_ID = "141"
-  TELEGRAM_PATREON_THREAD_ID = "317"
-  TELEGRAM_POSITIONS_THREAD_ID = "354"
-  TELEGRAM_RELAY_THREAD_ID = "555"
-  PATREON_CAMPAIGN_ID = "7095842"
+  TELEGRAM_WEEKLY_THREAD_ID = "REPLACE_WITH_THREAD_ID"
+  TELEGRAM_PATREON_THREAD_ID = "REPLACE_WITH_THREAD_ID"
+  TELEGRAM_POSITIONS_THREAD_ID = "REPLACE_WITH_THREAD_ID"
+  TELEGRAM_RELAY_THREAD_ID = "REPLACE_WITH_THREAD_ID"
+  PATREON_CAMPAIGN_ID = "REPLACE_WITH_CAMPAIGN_ID"
   TRANSLATE_HU_ENABLED = "true"
   TRANSLATE_MODEL = "claude-sonnet-5-5"
   TRANSLATE_EFFORT = "high"
@@ -53,22 +55,22 @@ app_env = {
   CONTEXT_MAX_PER_RUN = "1"
 }
 
-secret_refs = {
-  TG_API_ID = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-tg-api-id"
-  TG_API_HASH = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-tg-api-hash"
-  TG_SESSION = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-tg-session"
-  SMTP_USER = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-smtp-user"
-  SMTP_PASSWORD = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-smtp-password"
-  CLAUDE_CODE_OAUTH_TOKEN = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-claude-oauth-token"
-  REDDIT_SESSION_COOKIE = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-reddit-session"
-  POLYMARKET_PROXY_KEY = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-polymarket-proxy-key"
-  SITE_INGEST_KEY = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-site-ingest-key"
-  SITE_PUBLIC_BASE = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-site-public-base"
-  TELEGRAM_NOTIFY_BOT_TOKEN = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-telegram-notify-bot-token"
-  TELEGRAM_NOTIFY_CHAT_ID = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-telegram-notify-chat-id"
-  TELEGRAM_NOTIFY_THREAD_ID = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-telegram-notify-thread-id"
-  TELEGRAM_DAILY_THREAD_ID = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-telegram-daily-thread-id"
-  PATREON_SESSION_COOKIE = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-patreon-session-cookie"
-  OPENROUTER_API_KEY = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-openrouter-api-key"
-  GHCR_PULL_TOKEN = "https://kv-homelab-prod-th.vault.azure.net/secrets/digest-ghcr-pull-token"
+secret_names = {
+  TG_API_ID = "digest-tg-api-id"
+  TG_API_HASH = "digest-tg-api-hash"
+  TG_SESSION = "digest-tg-session"
+  SMTP_USER = "digest-smtp-user"
+  SMTP_PASSWORD = "digest-smtp-password"
+  CLAUDE_CODE_OAUTH_TOKEN = "digest-claude-oauth-token"
+  REDDIT_SESSION_COOKIE = "digest-reddit-session"
+  POLYMARKET_PROXY_KEY = "digest-polymarket-proxy-key"
+  SITE_INGEST_KEY = "digest-site-ingest-key"
+  SITE_PUBLIC_BASE = "digest-site-public-base"
+  TELEGRAM_NOTIFY_BOT_TOKEN = "digest-telegram-notify-bot-token"
+  TELEGRAM_NOTIFY_CHAT_ID = "digest-telegram-notify-chat-id"
+  TELEGRAM_NOTIFY_THREAD_ID = "digest-telegram-notify-thread-id"
+  TELEGRAM_DAILY_THREAD_ID = "digest-telegram-daily-thread-id"
+  PATREON_SESSION_COOKIE = "digest-patreon-session-cookie"
+  OPENROUTER_API_KEY = "digest-openrouter-api-key"
+  GHCR_PULL_TOKEN = "digest-ghcr-pull-token"
 }

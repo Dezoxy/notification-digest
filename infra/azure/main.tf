@@ -11,10 +11,9 @@ locals {
     relay     = "40 * * * *"
     backup    = "15 4 * * *"
   }
-  secrets = { for name, url in var.secret_refs : name => {
+  secrets = { for name, secret_name in var.secret_names : name => {
     name = lower(replace(name, "_", "-"))
-    url  = url
-    key  = basename(url)
+    url  = "${azurerm_key_vault.digest.vault_uri}secrets/${secret_name}"
   } }
   cloud_env = {
     DIGEST_CLOUD_ACCOUNT_URL        = azurerm_storage_account.state.primary_blob_endpoint
@@ -46,7 +45,7 @@ resource "azurerm_storage_account" "state" {
   allow_nested_items_to_be_public = false
   tags                            = local.tags
   blob_properties {
-    delete_retention_policy { days = 1 }
+    delete_retention_policy { days = 14 }
     container_delete_retention_policy { days = 7 }
   }
   # The runner prunes immutable checkpoints by reference under the shared
@@ -98,14 +97,32 @@ resource "azurerm_role_assignment" "state" {
 }
 
 resource "azurerm_role_assignment" "secrets" {
-  for_each             = toset([for secret in values(local.secrets) : secret.key])
-  scope                = "${var.key_vault_resource_id}/secrets/${each.key}"
+  scope                = azurerm_key_vault.digest.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.runner.principal_id
 }
 
+resource "azurerm_key_vault" "digest" {
+  name                       = var.key_vault_name
+  location                   = var.location
+  resource_group_name        = azurerm_resource_group.digest.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  rbac_authorization_enabled = true
+  purge_protection_enabled   = true
+  soft_delete_retention_days = 90
+  tags                       = local.tags
+  lifecycle { prevent_destroy = true }
+}
+
+# Identity metadata only. Secret values are copied by the separate migration
+# tool and must never enter Terraform configuration, plans or state.
+data "azurerm_client_config" "current" {}
+
 resource "azurerm_container_app_job" "digest" {
-  for_each                     = local.jobs
+  # Create jobs only after all referenced vault secrets have been copied and
+  # verified. Even Manual jobs resolve Key Vault references during creation.
+  for_each                     = var.jobs_enabled ? local.jobs : {}
   name                         = "digest-${each.key}"
   resource_group_name          = azurerm_resource_group.digest.name
   location                     = var.location
@@ -175,15 +192,8 @@ resource "azurerm_container_app_job" "digest" {
       error_message = "Scheduled activation requires a verified migration image; baseline 0.28.0 has no cloud runner."
     }
     precondition {
-      condition     = length(setintersection(toset(keys(var.app_env)), toset(keys(var.secret_refs)))) == 0
+      condition     = length(setintersection(toset(keys(var.app_env)), toset(keys(var.secret_names)))) == 0
       error_message = "An environment variable must have exactly one nonsecret value or secret reference."
-    }
-    precondition {
-      condition = alltrue([
-        for secret in values(local.secrets) :
-        split(".", split("/", secret.url)[2])[0] == basename(var.key_vault_resource_id)
-      ])
-      error_message = "All secret URLs must belong to the specified shared vault."
     }
   }
   tags       = local.tags
