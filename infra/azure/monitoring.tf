@@ -1,6 +1,9 @@
 locals {
+  # A fuzzy union still needs one operand that resolves. Both log tables are
+  # absent until the first job execution, so the empty datatable keeps the
+  # rule creatable and the foundation apply from failing with SEM0529.
   failure_query = <<-KQL
-    union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL
+    union isfuzzy=true (datatable(TimeGenerated:datetime, Log_s:string)[]), ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL
     | where TimeGenerated > ago(30m)
     | where tostring(column_ifexists("ContainerJobName_s", "")) startswith "digest-"
         or tostring(column_ifexists("ContainerAppName_s", "")) startswith "digest-"
