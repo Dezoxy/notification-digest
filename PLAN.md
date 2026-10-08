@@ -173,6 +173,7 @@ notification-digest/
 │   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite
 │   ├── test_cloud_cookies.py      # private input and leased X rotation without network calls
 │   ├── test_cloud_backup.py       # independent copy, completion marker and config validation
+│   ├── test_cloud_operators.py    # temporary operator workspaces and cleanup
 │   ├── test_collectors.py         # Telegram collector: output shape, allowlist filtering (mocked client)
 │   ├── test_config.py             # Config.from_env: every var, every error path
 │   ├── test_context.py            # arc-context primers: prompt build, sentinel, soft-fail (mocked CLI)
@@ -1464,6 +1465,10 @@ keeping Claude subscription authentication, current editorial behavior and the
 SQLite source of truth. Implementation is prepared in the app; the VM remains
 production until explicit state handoff and schedule activation. Historical
 completed phases above describe the VM deployment at their original dates.
+The owner subsequently requested current Claude CLI 2.1.294 for the migration
+image, using official Node 22 to meet its >=22 engine requirement. The temporary
+Renovate hold is removed; subscription/editorial behavior still needs pilot
+evidence. The measured production VM baseline remains 2.1.284.
 
 - [ ] Validate the guarded cloud runner, checkpoints, lease loss and uncertain
   delivery; pass application/container/Terraform checks and PR review.

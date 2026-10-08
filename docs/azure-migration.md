@@ -9,15 +9,24 @@ The target runs the existing release image as nine finite Container Apps Jobs
 in West Europe, with 0.5 vCPU, 1 GiB, no platform retries and a 50-minute
 platform timeout. The runner allows at most ten minutes waiting
 for the lease and 35 minutes of active work, then fences the process group.
-It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, the VM's
-measured Claude CLI 2.1.284, models, effort, prompts, translations, verification
-and OpenRouter fallbacks. Main independently adopted CLI 2.1.293 during
-preparation; adopting that update is deferred until the pilot verifies it.
-The temporary `renovate.json` rule limits the Dockerfile custom manager to
-`=2.1.284`. It intentionally suppresses newer automatic PRs during this hold:
-review release/security notes manually. Remove the rule only in a reviewed CLI
-update after the candidate passes subscription authentication, summarization,
-translation, verification and fallback pilot checks.
+It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, models,
+effort, prompts, translations, verification and OpenRouter fallbacks. The owner
+requested the current Claude CLI, so the migration image now pins **2.1.294**
+(the official npm latest and Anthropic release verified on 2026-10-08). That
+release requires Node >=22: the Dockerfile copies Node/npm from the official
+Node 22 Bookworm image pinned by tag and digest, with only its runtime libraries.
+The measured VM baseline remains **2.1.284**; its production image and the
+separate homelab global CLI pin have not been updated by this preparation.
+The temporary Renovate hold is removed; its existing custom manager can again
+propose ordinary CLI updates. A build/version/help smoke without credentials
+checks installation, not authentication or editorial equivalence. Azure pilot
+checks must still prove subscription access, summarization, HU translation,
+verification, fallbacks and output quality on 2.1.294 before activation.
+Local ARM64 image build passed with Node 22.23.3 and npm 10.9.9. A fresh CI
+build for the deployment platform remains required; no live model calls have
+been run for this update. Remeasure runtime/memory, state transfers and total
+cost on the new CLI during the Azure pilot: old VM sizing is a baseline, not
+proof that the new image has identical resource use.
 A hosting change does not remove subscription contention with other
 applications using the same account.
 
@@ -399,8 +408,13 @@ Preserve the latest `x-cookies.json.live`: an original Key Vault cookie seed
 must not overwrite a rotated cookie from the transferred bundle. Do not set
 `X_COOKIES` alongside `X_COOKIES_PATH` in the Azure runtime.
 
-For an operator workstation, use a writable temporary data directory and explicit
-Azure CLI authentication; grant the operator Blob Data Contributor on this
+Operator bootstrap/export/reconciliation/cookie commands create private temporary
+working directories and remove them after SQLite connections close, watchdogs
+stop and leases are released.
+They do not touch the configured persistent `DIGEST_CLOUD_DATA_DIR`. Explicit
+export destinations remain private durable output and must be removed by the
+operator after verification. Use explicit Azure CLI authentication; grant the
+operator Blob Data Contributor on this
 container through the established administrative process. Do not grant broader
 vault access to run an export. The application reads all cloud configuration
 through `CloudConfig`:
@@ -409,8 +423,6 @@ through `CloudConfig`:
 export DIGEST_CLOUD_ACCOUNT_URL=https://YOUR_ACCOUNT.blob.core.windows.net
 export DIGEST_CLOUD_CONTAINER=digest-state
 export DIGEST_CLOUD_NAMESPACE=production
-export DIGEST_CLOUD_DATA_DIR=/PRIVATE/DIGEST_OPERATOR/data
-# Create this directory privately (0700) before executing operator commands.
 uv run python -m digest.cloud_state --operator-login bootstrap /PRIVATE/FINAL_STATE_DIR
 uv run python -m digest.cloud_state --operator-login export /PRIVATE/VERIFY_EXPORT_DIR
 ```
@@ -623,8 +635,14 @@ The backup job must copy a validated `bundle.tar.gz` and `manifest.json` to the
 separate private `digest-backups` container/account before its slot can complete.
 It uploads the bundle first, verifies its stored size and SHA-256 by streaming
 readback, then uploads and verifies the manifest as the completion marker.
-Missing backup configuration or a failed copy fails
-the backup job. Retained references in the runtime account are useful local
+Transient storage failures allow up to three attempts with 0.5/1-second
+backoff inside the existing lease safety margin. Each copy retry uses a fresh
+prefix; an ambiguous partial copy is not recorded as a successful backup and
+may leave an orphan for retention cleanup. SDK automatic retries stay disabled
+because the guarded
+outer loop owns these budgets. Authentication, missing state, integrity errors
+and lease loss fail immediately. A final failed copy fails the backup job.
+Retained references in the runtime account are useful local
 history but are not an independent account backup.
 
 `DIGEST_CLOUD_BACKUP_ACCOUNT_URL`, `DIGEST_CLOUD_BACKUP_CONTAINER` and

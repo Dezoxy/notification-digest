@@ -42,6 +42,19 @@ jobs:
         run: docker rm --force digest-azurite || true
       - name: Build migration container without runtime credentials
         run: docker build --tag notification-digest-ci .
+      - name: Verify Node and Claude CLI without runtime credentials
+        run: |
+          expected_cli=$(sed -n 's/^RUN npm install -g @anthropic-ai\/claude-code@\([^[:space:]]*\)$/\1/p' Dockerfile)
+          test -n "$expected_cli"
+          docker run --rm --network none --entrypoint sh \
+            --env EXPECTED_CLAUDE_CLI="$expected_cli" notification-digest-ci -c '
+              set -eu
+              node --version
+              npm --version
+              node -e "if (parseInt(process.versions.node, 10) < 22) process.exit(1)"
+              test "$(claude --version)" = "$EXPECTED_CLAUDE_CLI (Claude Code)"
+              claude --help >/dev/null
+            '
       - name: Verify fencing when the runner is container PID 1
         run: |
           fence_status=0

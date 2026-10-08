@@ -285,6 +285,10 @@ Provision the foundation first, copy/verify secrets, then create the nine Manual
 jobs. Jobs and schedules default to disabled; merging does not move production.
 See [the Azure migration runbook](docs/azure-migration.md) for subscription
 authentication, state handoff, activation, cloud recovery and homelab retirement.
+The owner requested current CLI 2.1.294 for the migration image, with official
+Node 22 (tag/digest pinned) to meet its >=22 engine requirement. Subscription
+OAuth, prompts, models and fallbacks stay configured as before; live quality and
+authentication still require the cloud pilot. The VM baseline remains 2.1.284.
 
 The Worker deploys on its own track and is not part of that chain: a tag
 here ships the Python service only. Deploying the site is `wrangler deploy`

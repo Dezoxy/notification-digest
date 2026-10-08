@@ -733,39 +733,48 @@ def main() -> int:
     export.add_argument("--backup-date")
     args = parser.parse_args()
     cfg = CloudConfig.from_env()
-    state = CloudState.from_account_url(
-        cfg.account_url,
-        cfg.container,
-        namespace=cfg.namespace,
-        data_dir=cfg.data_dir,
-        managed_identity_client_id=cfg.identity_client_id,
-        operator_login=args.operator_login,
-    )
+    # Only the explicit export destination is durable. Source imports and the
+    # configured operator data directory remain untouched by working files.
+    with tempfile.TemporaryDirectory(prefix="digest-state-operator-") as temp:
+        state = CloudState.from_account_url(
+            cfg.account_url,
+            cfg.container,
+            namespace=cfg.namespace,
+            data_dir=temp,
+            managed_identity_client_id=cfg.identity_client_id,
+            operator_login=args.operator_login,
+        )
+        watchdog = None
+        try:
+            if args.command == "bootstrap":
+                source = args.source_dir
+                if (source / "bundle.tar.gz").exists():
+                    state.bootstrap_export(source)
+                else:
+                    state.bootstrap(
+                        source / "state.db",
+                        archive_dir=source / "archive",
+                        live_cookies_path=source / "x-cookies.json.live",
+                    )
+            else:
+                # Own the process group before starting the same fence as jobs.
+                if os.getpgrp() != os.getpid():
+                    os.setsid()
+                signal.signal(signal.SIGTERM, lambda *_: _fence_process_group())
+                state.acquire()
+                watchdog = LeaseWatchdog(state, _fence_process_group)
+                watchdog.start()
+                state.export(args.destination, backup_date=args.backup_date)
+        finally:
+            try:
+                if watchdog is not None:
+                    watchdog.stop()
+            finally:
+                state.release()
     if args.command == "bootstrap":
-        source = args.source_dir
-        if (source / "bundle.tar.gz").exists():
-            state.bootstrap_export(source)
-        else:
-            state.bootstrap(
-                source / "state.db",
-                archive_dir=source / "archive",
-                live_cookies_path=source / "x-cookies.json.live",
-            )
         print("Cloud state bootstrap completed; verify an export before enabling schedules")
-        return 0
-    # Own the whole process group before starting the same failure fence as jobs.
-    if os.getpgrp() != os.getpid():
-        os.setsid()
-    signal.signal(signal.SIGTERM, lambda *_: _fence_process_group())
-    state.acquire()
-    watchdog = LeaseWatchdog(state, _fence_process_group)
-    watchdog.start()
-    try:
-        state.export(args.destination, backup_date=args.backup_date)
-    finally:
-        watchdog.stop()
-        state.release()
-    print("Cloud state export completed; keep the export private")
+    else:
+        print("Cloud state export completed; keep the export private")
     return 0
 
 

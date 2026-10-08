@@ -105,6 +105,11 @@ credentials can appear there. The guarded `digest.cloud_cookies` command rotates
 the canonical seed/live cookie pair under the state lease; the transferred
 live-cookie bundle stays authoritative. Egress/authentication for every enabled
 source and publication lane is an explicit go/no-go pilot gate.
+The owner requested current CLI 2.1.294 with official Node 22 for the migration
+image. Its credential-free installation smoke does not establish live
+subscription access or equivalent editorial output; both remain pilot gates.
+Operator commands use temporary private workspaces; explicit export files remain
+operator-owned verification/recovery material.
 
 ## Related
 
