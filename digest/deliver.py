@@ -26,6 +26,7 @@ from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from digest import cloud_context
 from digest.config import Config
 from digest.emailer import localize_tldr_label_hu, render_body_html, send_digest
 from digest.publish import (
@@ -41,6 +42,7 @@ from digest.publish import (
 from digest.state import (
     get_arc_keys,
     get_daily_allowed_urls,
+    get_delivery_intent,
     get_deltas,
     get_digest_item_urls,
     get_digest_post_link,
@@ -53,6 +55,7 @@ from digest.state import (
     mark_digest_sent,
     mark_digest_site_published,
     mark_digest_telegram_sent,
+    set_delivery_intent,
 )
 
 # A Telegram TL;DR notification is a REAL-TIME ping, not an archive record --
@@ -85,6 +88,29 @@ _MARK_CHANNEL_DONE = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _begin_cloud_send(conn: sqlite3.Connection, digest_id: int, channel: str) -> bool:
+    if not cloud_context.active():
+        return True
+    cloud_context.guard()
+    status = get_delivery_intent(conn, digest_id, channel)
+    if status in {"inflight", "uncertain"}:
+        set_delivery_intent(conn, digest_id, channel, "uncertain")
+        logger.error(
+            "cloud delivery uncertain: digest=%d channel=%s; manual reconciliation required",
+            digest_id, channel,
+        )
+        return False
+    set_delivery_intent(conn, digest_id, channel, "inflight")
+    return True
+
+
+def _cloud_send_outcome(
+    conn: sqlite3.Connection, digest_id: int, channel: str, status: str
+) -> None:
+    if cloud_context.active():
+        set_delivery_intent(conn, digest_id, channel, status)
 
 
 def digest_meta(conn: sqlite3.Connection, digest_id: int) -> tuple[int, str, str | None, str]:
@@ -155,6 +181,8 @@ def _deliver_email(
     # container this actually deploys to (glibc), so it's safe here despite
     # not being portable in general.
     generated_at_label = f"{now_local:%a, %b %-d · %H:%M}"
+    if not _begin_cloud_send(conn, digest_id, "email"):
+        return False
     try:
         send_digest(
             cfg.smtp_host,
@@ -170,10 +198,12 @@ def _deliver_email(
             generated_at_label,
         )
     except Exception as exc:
+        _cloud_send_outcome(conn, digest_id, "email", "uncertain")
         logger.error("email delivery failed for digest %d: %s", digest_id, type(exc).__name__)
         return False
 
     mark_digest_sent(conn, digest_id)
+    _cloud_send_outcome(conn, digest_id, "email", "confirmed")
     return True
 
 
@@ -383,6 +413,8 @@ def _deliver_site(
         byte-identical between the two attempts, and two hand-maintained
         copies of that call is how they would stop being.
         """
+        cloud_context.guard()
+        cloud_context.checkpoint(conn)
         publish_to_site(
             digest_id,
             body_md,
@@ -635,6 +667,8 @@ def _deliver_telegram(
     if telegram_state.rate_limited:
         return False
 
+    if not _begin_cloud_send(conn, digest_id, "telegram"):
+        return False
     try:
         if kind == "patreon":
             # A different message shape entirely, not a parameterization --
@@ -675,6 +709,11 @@ def _deliver_telegram(
                 cfg.site_public_base,
             )
     except TelegramPartialSend as exc:
+        if cloud_context.active():
+            _cloud_send_outcome(conn, digest_id, "telegram", "uncertain")
+            telegram_state.rate_limited = exc.status == 429
+            logger.error("cloud delivery uncertain: digest=%d channel=telegram partial", digest_id)
+            return False
         # Part 1 (at least) is already in the topic. Retrying would re-send
         # it, so mark the digest done -- then still return False, so the run
         # exits non-zero and OnFailure alerts a human to the gap.
@@ -698,6 +737,7 @@ def _deliver_telegram(
         mark_digest_telegram_sent(conn, digest_id)
         return False
     except LookupError:
+        _cloud_send_outcome(conn, digest_id, "telegram", "pending")
         # A patreon digest with no linked item cannot produce a button, and
         # a post message whose button points nowhere is worse than a retry.
         # Left telegram_sent = 0 so a later run picks it up, exactly like
@@ -705,6 +745,10 @@ def _deliver_telegram(
         logger.error("patreon digest %d has no item to link to; not sending", digest_id)
         return False
     except TelegramSendError as exc:
+        _cloud_send_outcome(
+            conn, digest_id, "telegram",
+            "pending" if exc.status is not None and 400 <= exc.status < 500 else "uncertain",
+        )
         if exc.status == 429:
             telegram_state.rate_limited = True
             logger.warning(
@@ -713,10 +757,12 @@ def _deliver_telegram(
         logger.error("telegram notify failed for digest %d: %s", digest_id, type(exc).__name__)
         return False
     except Exception as exc:
+        _cloud_send_outcome(conn, digest_id, "telegram", "uncertain")
         logger.error("telegram notify failed for digest %d: %s", digest_id, type(exc).__name__)
         return False
 
     mark_digest_telegram_sent(conn, digest_id)
+    _cloud_send_outcome(conn, digest_id, "telegram", "confirmed")
     return True
 
 

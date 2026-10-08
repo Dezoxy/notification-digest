@@ -3,6 +3,7 @@
 | Area | What it holds |
 |---|---|
 | [Architecture](architecture/README.md) | The model, the view register, the decisions and the architecture knowledge base. Start at [the overview](architecture/overview/01-notification-digest.md) |
+| [Azure migration](azure-migration.md) | App-owned target hosting, state handoff, schedule activation and cloud recovery; production cutover pending |
 | [Incidents](#incidents) | What actually went wrong, and what changed because of it |
 | [Design guidance](redesign-design-guidance.md) | Design principles distilled for the news-site work |
 | PR summaries | `pr-summaries/pr-<n>.md`, written automatically when a pull request merges. Generated output, not hand-maintained |

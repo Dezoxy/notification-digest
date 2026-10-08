@@ -100,7 +100,10 @@ notification-digest/
 │   └── workflows/
 │       ├── release.yml           # build + push digest image to GHCR on git tag
 │       ├── pr-summary.yml        # post-merge PR summary -> docs/pr-summaries/pr-<n>.md
-│       └── architecture-pdf.yml  # operator-run: architecture PDF -> a GitHub release
+│       ├── architecture-pdf.yml  # operator-run: architecture PDF -> a GitHub release
+│       ├── azure-validate.yml    # credential-free Terraform validation
+│       ├── azure-application.yml # lint, offline/failure tests and container build
+│       └── azure-deploy.yml      # reviewed OIDC plan/apply; schedules initially disabled
 ├── .githooks/
 │   └── pre-push                  # blocks direct pushes to main (ALLOW_MAIN_PUSH=1 for bootstrap)
 ├── .claude/
@@ -112,7 +115,11 @@ notification-digest/
 │   ├── __init__.py
 │   ├── __main__.py               # `python -m digest [daily [--force]|weekly|patreon|positions|relay|hide:<ch>]`
 │   ├── main.py                   # orchestrates one run (any mode), sets exit code
-│   ├── config.py                 # loads/validates every env var into a typed Config object
+│   ├── config.py                 # loads/validates every env var into typed app/cloud config
+│   ├── cloud_run.py              # guarded Azure job dispatch, slots/DST and lease watchdog
+│   ├── cloud_context.py          # checkpoint/delivery effect boundaries, local mode unchanged
+│   ├── cloud_state.py            # consistent Blob state bundles, lease/ETag fencing, admin export/import
+│   ├── cloud_reconcile.py        # explicit uncertain-delivery reconciliation under the shared lease
 │   ├── state.py                  # SQLite: schema + migrations, item/cursor/digest persistence, prunes
 │   ├── deliver.py                # per-channel senders, pending-digest retry, Telegram 429 breaker
 │   ├── summarize.py              # window-digest prompt build + `claude -p` invocation + validation + the fallback chain
@@ -157,6 +164,10 @@ notification-digest/
 │   ├── architecture-pdf.sh        # operator-run architecture PDF build; `make pdf`
 │   └── build_architecture_pdf_source.py # assembles the PDF source from pdf-sections.txt
 ├── tests/
+│   ├── conftest.py                # opt-in local Blob protocol test option
+│   ├── test_cloud_runtime.py      # scheduling, failure fencing and publication recovery
+│   ├── test_cloud_state.py        # snapshots, integrity, conditional manifests and retention
+│   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite
 │   ├── test_collectors.py         # Telegram collector: output shape, allowlist filtering (mocked client)
 │   ├── test_config.py             # Config.from_env: every var, every error path
 │   ├── test_context.py            # arc-context primers: prompt build, sentinel, soft-fail (mocked CLI)
@@ -182,6 +193,7 @@ notification-digest/
 │   ├── test_weekly.py             # weekly.py: prompt build + summarize_weekly (mocked claude CLI)
 │   └── test_x_collector.py        # notifications parsing, per-account post cursors (mocked twikit client)
 ├── docs/
+│   ├── azure-migration.md        # target cloud deployment, cutover and Azure recovery
 │   ├── incidents/
 │   │   └── 2026-08-06-telegram-flood.md  # the Telegram 429/freshness-guard incident write-up
 │   ├── redesign-design-guidance.md # design principles distilled for the §11 site work (toom-edge)
@@ -200,10 +212,11 @@ notification-digest/
 │       ├── test/                  # node --test invariants + byte-golden pages
 │       ├── schema.sql, migrations/ # D1 schema (separate from digest/state.py's SQLite)
 │       └── wrangler.jsonc         # deploy config; `wrangler deploy` from this dir
+├── infra/azure/                   # app-owned Azure jobs/storage/RBAC/alerts, remote Terraform state
 ├── Makefile                       # architecture model targets: check, docs, view, export, pdf
-├── Dockerfile                     # slim Python 3.12 image, runs `python -m digest`
+├── Dockerfile                     # slim Python 3.14 image, local default `python -m digest`
 ├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
-├── pyproject.toml                 # uv-managed, Python 3.12 deps: telethon, twifork, markdown, nh3, feedparser, python-dotenv
+├── pyproject.toml                 # uv-managed, Python >=3.12, collectors/rendering and Azure Blob/identity SDKs
 ├── renovate.json                  # dependency automation; twifork is dashboard-gated (hand audit per bump)
 └── .env.example                   # documents every env var from §4.7, no real values
 ```
@@ -1429,3 +1442,26 @@ than built: §11.5 (rejected, §9 decision 6) and the OPEN GAP inside §11.3
 "flip the in-repo default" decision and its optional site status chips.
 No entry is left with unticked boxes that are meant to be ticked: every box
 still open in §11 is either unapproved or explicitly optional.
+
+
+## Azure hosting migration (accepted 2026-10-08; cutover pending)
+
+The owner approved moving notification-digest to Azure Container Apps Jobs while
+keeping Claude subscription authentication, current editorial behavior and the
+SQLite source of truth. Implementation is prepared in the app; the VM remains
+production until explicit state handoff and schedule activation. Historical
+completed phases above describe the VM deployment at their original dates.
+
+- [ ] Validate the guarded cloud runner, checkpoints, lease loss and uncertain
+  delivery; pass application/container/Terraform checks and PR review.
+- [ ] Configure dedicated HCP Terraform workspace, app OIDC identity and GitHub
+  environments; review and apply the disabled-schedule cloud stack.
+- [ ] Separate shared homelab alerts, pause/drain all digest writers, import the
+  final consistent database/live cookies/archives and verify cloud lineage.
+- [ ] Activate schedules after pilot checks; observe seven days including the
+  weekly digest, test cloud-only recovery and measure actual checkpoint cost.
+- [ ] Retire digest-specific homelab configuration after verification. Keep the
+  shared VM and its remaining applications, credentials and backup services.
+
+There is no return-to-VM procedure. See [the migration runbook](docs/azure-migration.md)
+and [ADR 7](docs/architecture/decisions/0007-run-digest-as-azure-jobs.md).

@@ -1,0 +1,24 @@
+name: azure-validate
+
+on:
+  pull_request:
+    paths: ['infra/azure/**', '.github/workflows/azure*.yml']
+  push:
+    branches: [main]
+    paths: ['infra/azure/**', '.github/workflows/azure*.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra/azure
+      - run: terraform -chdir=infra/azure init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/azure validate

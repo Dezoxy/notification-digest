@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from digest import cloud_context
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,6 +326,15 @@ class Item:
     embed_url: str | None = None
 
 
+class _DurableConnection(sqlite3.Connection):
+    """Each committed transaction is a recovery boundary in cloud execution."""
+
+    def commit(self) -> None:
+        cloud_context.guard()
+        super().commit()
+        cloud_context.checkpoint(self)
+
+
 def connect(db_path: str) -> sqlite3.Connection:
     """Open (creating parent dirs as needed) a SQLite connection with FK enforcement.
 
@@ -343,7 +354,7 @@ def connect(db_path: str) -> sqlite3.Connection:
     path = Path(db_path)
     if path.parent and str(path.parent) not in ("", "."):
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), factory=_DurableConnection)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -373,7 +384,7 @@ def connect(db_path: str) -> sqlite3.Connection:
 #
 # Version 7 (model provenance): adds `digests.provenance` -- see
 # `_migrate_add_provenance_column` and init_db's `if version < 7:` step.
-_LATEST_SCHEMA_VERSION = 7
+_LATEST_SCHEMA_VERSION = 8
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -508,6 +519,24 @@ def init_db(conn: sqlite3.Connection) -> None:
         # still missing the column, and every `create_digest` INSERT would
         # fail without it.
         _migrate_add_provenance_column(conn)
+
+    if version < 8:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS cloud_delivery_intents (
+                digest_id INTEGER NOT NULL REFERENCES digests(id),
+                channel TEXT NOT NULL CHECK(channel IN ('telegram', 'email')),
+                status TEXT NOT NULL
+                    CHECK(status IN ('pending','inflight','confirmed','uncertain')),
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(digest_id, channel)
+            );
+            CREATE TABLE IF NOT EXISTS cloud_completed_slots (
+                job TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                PRIMARY KEY(job, slot)
+            );
+        """)
 
     conn.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
     conn.commit()
@@ -2811,6 +2840,59 @@ def get_digest_post_link(conn: sqlite3.Connection, digest_id: int) -> tuple[str,
     if row is None:
         raise LookupError(f"digest {digest_id} has no items to link to")
     return row[0], row[1]
+
+
+def set_delivery_intent(
+    conn: sqlite3.Connection, digest_id: int, channel: str, status: str
+) -> None:
+    """Persist the cloud channel outcome before/after a non-idempotent send."""
+    conn.execute(
+        "INSERT INTO cloud_delivery_intents VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(digest_id, channel) DO UPDATE SET "
+        "status=excluded.status, updated_at=excluded.updated_at",
+        (digest_id, channel, status, datetime.now(UTC).isoformat()),
+    )
+    conn.commit()
+
+
+def get_delivery_intent(conn: sqlite3.Connection, digest_id: int, channel: str) -> str | None:
+    """Read a prior send outcome for manual reconciliation or safe resume."""
+    row = conn.execute(
+        "SELECT status FROM cloud_delivery_intents WHERE digest_id=? AND channel=?",
+        (digest_id, channel),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def reconcile_delivery(
+    conn: sqlite3.Connection, digest_id: int, channel: str, outcome: str
+) -> None:
+    """Record a human-confirmed outcome atomically with the channel flag."""
+    if channel not in {"email", "telegram"} or outcome not in {"confirmed", "pending"}:
+        raise ValueError("invalid reconciliation channel or outcome")
+    if get_delivery_intent(conn, digest_id, channel) not in {"inflight", "uncertain"}:
+        raise ValueError("delivery does not require reconciliation")
+    column = {"email": "email_sent", "telegram": "telegram_sent"}[channel]
+    conn.execute(
+        f"UPDATE digests SET {column}=? WHERE id=?", (outcome == "confirmed", digest_id)
+    )
+    set_delivery_intent(conn, digest_id, channel, outcome)
+
+
+def cloud_slot_completed(conn: sqlite3.Connection, job: str, slot: str) -> bool:
+    """Read whether this scheduled execution already completed."""
+    return conn.execute(
+        "SELECT 1 FROM cloud_completed_slots WHERE job=? AND slot=?", (job, slot)
+    ).fetchone() is not None
+
+
+def complete_cloud_slot(conn: sqlite3.Connection, job: str, slot: str) -> None:
+    """Persist a successful schedule slot using UTC timestamps."""
+    conn.execute(
+        "INSERT OR IGNORE INTO cloud_completed_slots VALUES (?, ?, ?)",
+        (job, slot, datetime.now(UTC).isoformat()),
+    )
+    conn.commit()
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:

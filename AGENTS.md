@@ -212,12 +212,21 @@ verified without looking at the rendered view.
 
 ## Deploy note
 
-Deployment (Ansible role `myapps`, the systemd timer, and secrets wiring)
-lives in the separate `~/developer/homelab` repo. Changes here never touch
-the VM by themselves — a deploy from the homelab repo is a separate step.
+Production currently runs on `01-myapps-vm`, deployed from
+`~/Developer/toom-platform-homelab` (Ansible `myapps`, systemd timers and Key Vault
+wiring). Changes here do not move or stop the VM runtime by themselves.
 
-Releases are cut by git tag: GitHub Actions in this repo publishes a
-versioned image to GHCR (`ghcr.io/dezoxy/notification-digest:<tag>`), the homelab repo
-pins that tag (Renovate opens the bump PR), and deploy happens from there.
-Changing code here ships nothing until a tag is cut **and** the homelab repo
-bumps and deploys — never build the image on the VM.
+The approved Azure target is app-owned in `infra/azure/`, with the migration
+and cloud recovery procedure in `docs/azure-migration.md`. Its nine Container
+Apps Jobs start in Manual mode. `.github/workflows/azure-validate.yml` validates
+IaC without credentials; `azure-application.yml` runs lint/tests/container build;
+`azure-deploy.yml` produces an OIDC-authenticated saved plan and explicitly
+approved apply. HCP Terraform holds remote state; never create local state.
+
+Releases remain explicit git tags: `.github/workflows/release.yml` publishes
+`ghcr.io/dezoxy/notification-digest:<version>`. Azure configuration pins the
+verified migration release. Until cutover, the homelab repository still pins
+and deploys its own image. A tag/merge alone never activates Azure schedules.
+Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth and the pinned image CLI;
+this migration does not introduce Anthropic API billing. Recovery stays within
+Azure; returning execution to the VM is outside the approved migration.

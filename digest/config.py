@@ -21,6 +21,40 @@ class ConfigError(Exception):
     """
 
 
+@dataclass(frozen=True)
+class CloudConfig:
+    """Hosting settings, separate from the unchanged editorial configuration."""
+
+    account_url: str
+    container: str
+    namespace: str = "production"
+    data_dir: str = "/data"
+    identity_client_id: str | None = None
+
+    @classmethod
+    def from_env(cls) -> CloudConfig:
+        """Load strict Azure state settings without reading credentials into logs."""
+        account_url = _require_str("DIGEST_CLOUD_ACCOUNT_URL")
+        if not re.fullmatch(r"https://[a-z0-9]{3,24}\.blob\.core\.windows\.net/?", account_url):
+            raise ConfigError("DIGEST_CLOUD_ACCOUNT_URL must be an Azure HTTPS account URL")
+        account_url = account_url.rstrip("/")
+        container = _require_str("DIGEST_CLOUD_CONTAINER")
+        if "--" in container or not re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])", container
+        ):
+            raise ConfigError("DIGEST_CLOUD_CONTAINER must be a valid private container name")
+        namespace = _optional_str("DIGEST_CLOUD_NAMESPACE", default="production")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", namespace):
+            raise ConfigError("DIGEST_CLOUD_NAMESPACE must be a single safe path segment")
+        data_dir = _optional_str("DIGEST_CLOUD_DATA_DIR", default="/data")
+        if not data_dir.startswith("/"):
+            raise ConfigError("DIGEST_CLOUD_DATA_DIR must be absolute")
+        return cls(
+            account_url, container, namespace, data_dir,
+            _optional_str_or_none("DIGEST_CLOUD_IDENTITY_CLIENT_ID"),
+        )
+
+
 # Valid values for CLAUDE_EFFORT, mirroring the `claude` CLI's own
 # `--effort <low|medium|high|xhigh|max>` flag (see run_claude in
 # digest/summarize.py). Kept here, next to the validator, rather than
