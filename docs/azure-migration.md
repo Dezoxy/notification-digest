@@ -130,10 +130,14 @@ bundle restore; an app backup does not back up Terraform state.
 ## Prepare configuration and deployment identity
 
 The stack lives in [infra/azure](../infra/azure/). Create separate GitHub deployment
-identity/federated credentials for this app. The workflow uses subjects
-`repo:Dezoxy/notification-digest:environment:azure-plan` and
-`repo:Dezoxy/notification-digest:environment:azure-production`, audience
-`api://AzureADTokenExchange`. Restrict both environments to `main`. GitHub does
+identity/federated credentials for this app. GitHub issues immutable,
+ID-based subjects for this repository:
+`repo:Dezoxy@OWNER_ID/notification-digest@REPO_ID:environment:azure-plan` and
+the same prefix with `:environment:azure-production`, audience
+`api://AzureADTokenExchange`. Read the exact prefix from `sub_claim_prefix` in
+`gh api repos/Dezoxy/notification-digest/actions/oidc/customization/sub`; the
+name-only form `repo:Dezoxy/notification-digest:...` does not match and fails
+`terraform init` with `AADSTS700213`. Restrict both environments to `main`. GitHub does
 not offer required reviewers on this private personal repository, so approval
 is a two-step dispatch: review the saved plan, then dispatch the apply with
 that plan run's ID. The apply job fails closed unless that run is a successful
