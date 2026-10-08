@@ -133,11 +133,13 @@ The stack lives in [infra/azure](../infra/azure/). Create separate GitHub deploy
 identity/federated credentials for this app. The workflow uses subjects
 `repo:Dezoxy/notification-digest:environment:azure-plan` and
 `repo:Dezoxy/notification-digest:environment:azure-production`, audience
-`api://AzureADTokenExchange`. Restrict both environments to `main`. Configure
-required reviewer approval on `azure-production`; the apply job fails closed
-if no required reviewers are configured. Review the saved plan before
-approving its apply job. These repository/Entra settings are prerequisites,
-not settings that the workflow YAML can enforce by itself.
+`api://AzureADTokenExchange`. Restrict both environments to `main`. GitHub does
+not offer required reviewers on this private personal repository, so approval
+is a two-step dispatch: review the saved plan, then dispatch the apply with
+that plan run's ID. The apply job fails closed unless that run is a successful
+`azure-deploy` plan from `main` at the same commit. These repository/Entra
+settings are prerequisites, not settings that the workflow YAML can enforce by
+itself.
 
 The deployment identity needs Contributor on the app resource group and
 permission to grant the runner's container Blob and dedicated-vault Secrets
@@ -369,10 +371,18 @@ second plan with `jobs_enabled=true` must contain nine **Manual** jobs and only
 dedicated-vault references. Jobs must not execute until state bootstrap is
 completed and verified.
 
-For each provisioning stage, dispatch `operation=apply`, review the newly
-generated plan artifact, then approve `azure-production`. Apply uses that exact
-saved plan.
-Artifacts expire after one day. Azure tables/KQL, image pull, CLI authentication,
+For each provisioning stage, dispatch `operation=plan`, review the plan
+artifact and output, then dispatch `operation=apply` with `plan_run_id` set to
+that plan run:
+
+```sh
+gh workflow run azure-deploy.yml --ref main -f operation=plan
+gh workflow run azure-deploy.yml --ref main -f operation=apply -f plan_run_id=<plan run id>
+```
+
+Apply refuses a run that is not a successful `azure-deploy` plan from `main` at
+the same commit, and uses that exact saved plan. Artifacts expire after one day,
+so an old plan cannot be applied. Azure tables/KQL, image pull, CLI authentication,
 cloud egress and measured resource use remain live pilot checks; validation
 does not prove them. Check a subsequent no-op plan for provider drift around
 Key Vault-backed job secrets before activating schedules.
