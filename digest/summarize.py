@@ -15,12 +15,13 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from digest.anthropic_api import EFFORT as FALLBACK_EFFORT
+from digest.anthropic_api import FederationConfig, run_anthropic
 from digest.config import claude_subprocess_env
-from digest.openrouter import REASONING_EFFORT, run_openrouter
 from digest.state import Item
 
 logger = logging.getLogger(__name__)
@@ -691,26 +692,24 @@ def run_claude(prompt: str, model: str, timeout_seconds: int, effort: str) -> st
 # subprocess/socket spins up) and returns nothing, which is strictly worse
 # than spending that same handful of seconds moving straight to the NEXT
 # leg, which might actually have enough runway to succeed. 15s is a rough
-# floor under any real OpenRouter completion -- see digest/openrouter.py's
-# run_openrouter and _REASONING_EFFORT's own comment for why every fallback
-# leg reasons at "high" and is not a fast call to begin with.
+# floor under any real Claude API completion -- see digest/anthropic_api.py's
+# run_anthropic and EFFORT's own comment for why every fallback leg reasons
+# at "high" and is not a fast call to begin with.
 _MIN_FALLBACK_SECONDS = 15
 
 
 @dataclass(frozen=True)
 class FallbackLeg:
-    """One OpenRouter model in a fallback chain: which model, and the key to call it with.
+    """One Claude API model in a fallback chain: which model, and how to authenticate.
 
-    `api_key` is `repr=False`: this dataclass's default `__repr__` would
-    otherwise print the raw OpenRouter API key verbatim, and a dataclass
-    repr is exactly the kind of thing that ends up in a traceback or a debug
-    log line without anyone deliberately choosing to print it (CLAUDE.md's
-    secrets-never-logged hard rule doesn't stop at code that explicitly
-    calls `logger.info` -- an accidental repr is just as real a leak).
+    `federation` carries identifiers only (rule, organization, service account,
+    Entra audience), never a credential: the job's managed identity is the
+    credential and is exchanged per call (digest/anthropic_api.py). A repr of
+    this dataclass in a traceback therefore leaks nothing.
     """
 
     model: str
-    api_key: str = field(repr=False)
+    federation: FederationConfig
 
 
 @dataclass(frozen=True)
@@ -722,7 +721,7 @@ class ModelRun:
     the one ASKED first, not necessarily the one that ANSWERED -- an owner
     (or a Loki dashboard) looking at a finished digest has no way to tell
     "the primary served this" from "the primary hit a Max-subscription
-    limit and OpenRouter's third fallback model quietly wrote it instead"
+    limit and the Claude API's second fallback model quietly wrote it instead"
     without this. `run_with_fallbacks` returns one of these alongside its
     output on every successful call (see that function's own docstring,
     point 6) so a caller can persist it (digest/state.py's `create_digest`'s
@@ -732,9 +731,9 @@ class ModelRun:
     on the primary path, or `FallbackLeg.model` verbatim on a fallback path.
     `effort` is the reasoning/thinking effort that leg actually ran at --
     `primary_effort` verbatim on the primary path, or
-    `digest.openrouter.REASONING_EFFORT` on a fallback path (every
-    OpenRouter leg, at every tier, always reasons at "high" -- see that
-    constant's own comment). `fallback` is `True` iff an OpenRouter leg
+    `digest.anthropic_api.EFFORT` on a fallback path (every
+    Claude API leg, at every tier, always reasons at "high" -- see that
+    constant's own comment). `fallback` is `True` iff a Claude API leg
     served this call, `False` iff the Claude primary did -- the single bit
     a reader actually scans for ("did the chain have to reach past the
     primary this time?") without parsing `model` against whatever the
@@ -765,7 +764,7 @@ def run_with_fallbacks(
     Six load-bearing design points, each explained below because getting
     any one of them backwards silently breaks either the ~145 existing
     tests that monkeypatch `run_claude`, or the byte-for-byte-unchanged
-    behavior an unconfigured (no OPENROUTER_API_KEY) deployment must keep.
+    behavior an unconfigured (no ANTHROPIC_FEDERATION_RULE_ID) deployment must keep.
 
     1. WHY `primary` IS A CALLABLE, NOT `(model, effort)` ARGS THIS FUNCTION
        RESOLVES ITSELF. Every one of this codebase's seven summarization
@@ -794,10 +793,11 @@ def run_with_fallbacks(
        `run_claude` signals a refusal STRUCTURALLY: a non-zero exit plus the
        `API Error:`/`safeguards flagged` marker raises
        `SafeguardsRefusalError` before any text ever reaches a caller (see
-       that function's own docstring). An OpenRouter model declining the
-       same content has no equivalent structural signal -- it returns
-       ordinary prose ("I can't help with that") with HTTP 200, which
-       `run_openrouter` sees as a perfectly successful call. If validation
+       that function's own docstring). The Claude API signals a decline with
+       `stop_reason: "refusal"`, which `run_anthropic` turns into a failed
+       leg, but a model can also decline in ordinary prose ("I can't help
+       with that") with HTTP 200 -- a perfectly successful call as far as
+       `run_anthropic` can tell. If validation
        ran only after THIS function returned, that leg's unusable prose
        would be accepted as the chain's result, and the failure would
        surface later, downstream, on `validate_output` (or the
@@ -830,13 +830,13 @@ def run_with_fallbacks(
        exact same exception OBJECT (a bare `raise` inside the `except`
        block that first caught it, not a new instance of the same type,
        and not any kind of wrapper). This is the whole mechanism behind
-       "unset OPENROUTER_API_KEY = today's behavior, byte for byte":
+       "unset federation config = today's behavior, byte for byte":
        digest/translate.py's `translate_digest` catches
        `SafeguardsRefusalError` SPECIFICALLY (to decide whether to attempt
        its own existing `fallback_model` retry), and every existing test
        across this suite asserts on the primary's own exception TYPE. A
        caller passed `fallbacks=()` (digest/main.py's `_fallback_legs`
-       returns exactly that when `cfg.openrouter_api_key is None`) must see
+       returns exactly that when `cfg.anthropic_federation is None`) must see
        precisely the exception `run_claude` itself would have raised, not
        some new `RuntimeError` or `SummarizeError` this function
        synthesized -- otherwise every one of those existing catches and
@@ -845,13 +845,13 @@ def run_with_fallbacks(
     5. ALL LEGS FAILED -> `SummarizeError` LISTING EACH LEG AS
        `<model>: <ExceptionTypeName>` -- TYPE NAMES ONLY, NEVER `str(exc)`.
        A model's own exception message can quote the prompt it was given
-       (`SummarizeError`'s docstring, `OpenRouterError`'s docstring in
-       digest/openrouter.py -- both make the identical promise for the
+       (`SummarizeError`'s docstring, `AnthropicApiError`'s docstring in
+       digest/anthropic_api.py -- both make the identical promise for the
        identical reason): the prompt is built from scraped Telegram/X
        message text, and this codebase's hard rule is that such content
        must never reach a log line or an exception message that gets
        shipped to Loki. Only the exception CLASS name (`TimeoutError`,
-       `OpenRouterError`, `SummarizeError`, ...) is safe to include, and
+       `AnthropicApiError`, `SummarizeError`, ...) is safe to include, and
        that is exactly what this final message carries, one entry per
        attempted (or budget-skipped) leg. Chained `from` the LAST leg's own
        exception (`raise SummarizeError(...) from last_exc`) -- not the
@@ -865,8 +865,8 @@ def run_with_fallbacks(
        fallback chain configured, an owner looking at a finished digest
        cannot otherwise tell whether the PRIMARY served it or the chain had
        to reach past a failed/refused/rate-limited primary to a DIFFERENT
-       model on OpenRouter -- `model`/`effort` on a fallback leg are already
-       known locally (`leg.model`, `digest.openrouter.REASONING_EFFORT`),
+       model on the Claude API -- `model`/`effort` on a fallback leg are already
+       known locally (`leg.model`, `digest.anthropic_api.EFFORT`),
        but the primary's own identity is NOT: point 1 above is exactly why
        this function only ever holds an opaque, zero-argument `primary`
        closure, never a `(model, effort)` pair it could call itself. That
@@ -886,7 +886,7 @@ def run_with_fallbacks(
        is still what makes the returned `ModelRun` trustworthy for the one
        thing it exists to answer: "which model actually produced this
        digest?" On a fallback path, `ModelRun` is instead built from that
-       leg's own `FallbackLeg.model` and `digest.openrouter.REASONING_EFFORT`
+       leg's own `FallbackLeg.model` and `digest.anthropic_api.EFFORT`
        (see `ModelRun`'s own docstring for why the fallback effort is
        always that constant, never `primary_effort`), with `fallback=True`.
     """
@@ -933,7 +933,7 @@ def run_with_fallbacks(
                 failures.append(f"{leg.model}: skipped (budget exhausted)")
                 continue
             try:
-                output = run_openrouter(prompt, leg.model, int(remaining), leg.api_key)
+                output = run_anthropic(prompt, leg.model, int(remaining), leg.federation)
                 if validate is not None:
                     validate(output)
             except Exception as leg_exc:
@@ -946,7 +946,7 @@ def run_with_fallbacks(
                 leg.model,
                 type(primary_exc).__name__,
             )
-            return output, ModelRun(model=leg.model, effort=REASONING_EFFORT, fallback=True)
+            return output, ModelRun(model=leg.model, effort=FALLBACK_EFFORT, fallback=True)
 
         raise SummarizeError(
             "every model in the fallback chain failed: " + "; ".join(failures)
@@ -2289,14 +2289,14 @@ def summarize(
     contract, and deterministically prepend the collector-failure banner.
 
     `fallbacks` (default `()`, matching every existing direct call and test)
-    is this window digest's own OpenRouter fallback chain -- see
+    is this window digest's own Claude API fallback chain -- see
     `run_with_fallbacks`'s own docstring for the full mechanics.
     `fallback_budget_seconds` (default 180) is the SHARED wall-clock budget
     for every leg of that chain together, not per leg -- see point 3 of that
     same docstring. digest/main.py's `_deliver` passes
     `cfg.fallback_timeout_seconds` and a chain built from
-    `Config.fallback_models`/`Config.openrouter_api_key` (see main.py's
-    `_fallback_legs`); an unconfigured deployment (`openrouter_api_key is
+    `Config.fallback_models`/`Config.anthropic_federation` (see main.py's
+    `_fallback_legs`); an unconfigured deployment (`anthropic_federation is
     None`) passes `fallbacks=()`, which is exactly this default -- so this
     call behaves byte-for-byte as it did before the chain existed.
 

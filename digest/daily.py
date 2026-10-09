@@ -180,7 +180,7 @@ def summarize_daily(
     (`create_digest`'s `provenance` column).
 
     `fallbacks` (default `()`, matching every existing direct call and
-    test) is this daily brief's own OpenRouter fallback chain -- see
+    test) is this daily brief's own Claude API fallback chain -- see
     digest/summarize.py's `run_with_fallbacks` for the full mechanics, and
     `fallback_budget_seconds` (default 180) the SHARED wall-clock budget
     every leg of that chain draws from together. digest/main.py's

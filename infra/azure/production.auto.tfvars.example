@@ -54,6 +54,12 @@ app_env = {
   VERIFY_DAILY_MAX_WEB_OPS = "20"
   CONTEXT_ENABLED = "true"
   CONTEXT_MAX_PER_RUN = "1"
+  # Claude API fallback over workload identity federation (identifiers, not
+  # secrets; all four or none). See docs/azure-migration.md.
+  ANTHROPIC_FEDERATION_RULE_ID = "fdrl_REPLACE_WITH_RULE_ID"
+  ANTHROPIC_ORGANIZATION_ID = "REPLACE_WITH_CONSOLE_ORGANIZATION_UUID"
+  ANTHROPIC_SERVICE_ACCOUNT_ID = "svac_REPLACE_WITH_SERVICE_ACCOUNT_ID"
+  ANTHROPIC_FEDERATION_AUDIENCE = "api://REPLACE_WITH_AUDIENCE_APP_ID"
 }
 
 secret_names = {
@@ -72,6 +78,8 @@ secret_names = {
   TELEGRAM_NOTIFY_THREAD_ID = "digest-telegram-notify-thread-id"
   TELEGRAM_DAILY_THREAD_ID = "digest-telegram-daily-thread-id"
   PATREON_SESSION_COOKIE = "digest-patreon-session-cookie"
-  OPENROUTER_API_KEY = "digest-openrouter-api-key"
   GHCR_PULL_TOKEN = "digest-ghcr-pull-token"
 }
+# No fallback API key is mapped on purpose: the fallback authenticates with the
+# managed identity through workload identity federation, so there is nothing
+# to store here.

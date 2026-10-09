@@ -6,6 +6,12 @@ Date: 2026-09-20
 
 Accepted
 
+The OpenRouter provider choice (option 3 and the provider, model lists and
+`OPENROUTER_API_KEY` switch in the Decision) is superseded by
+[9. Fall back to the Claude API over workload identity federation](0009-fall-back-to-the-claude-api-over-workload-identity-federation.md).
+The chain design below stays accepted; the text is kept as written because it
+records what was decided on 2026-09-20.
+
 ## Context
 
 Every summarization call site (`summarize()` and its six siblings — daily,

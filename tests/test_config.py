@@ -1248,35 +1248,131 @@ def test_telegram_patreon_thread_id_is_parsed(monkeypatch):
     assert Config.from_env().telegram_patreon_thread_id == 317
 
 
-# --- OpenRouter fallback chain (OPENROUTER_API_KEY / FALLBACK_MODELS / FALLBACK_LIGHT_MODELS) ---
+# --- Claude API fallback chain (ANTHROPIC_* federation, FALLBACK_*MODELS) ---
+
+_FEDERATION_UUID = "11111111-2222-3333-4444-555555555555"
+_FEDERATION_ENV = {
+    "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_0123abcDEF",
+    "ANTHROPIC_ORGANIZATION_ID": _FEDERATION_UUID,
+    "ANTHROPIC_SERVICE_ACCOUNT_ID": "svac_0123abcDEF",
+    "ANTHROPIC_FEDERATION_AUDIENCE": f"api://{_FEDERATION_UUID}",
+}
 
 
-def test_openrouter_api_key_unset_defaults_to_none(monkeypatch):
+def _clear_federation_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        *_FEDERATION_ENV,
+        "ANTHROPIC_WORKSPACE_ID",
+        "DIGEST_CLOUD_IDENTITY_CLIENT_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def _set_federation_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_federation_env(monkeypatch)
+    for key, value in _FEDERATION_ENV.items():
+        monkeypatch.setenv(key, value)
+
+
+def test_anthropic_federation_unset_defaults_to_none(monkeypatch):
     _set_base_env(monkeypatch)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    _clear_federation_env(monkeypatch)
 
-    assert Config.from_env().openrouter_api_key is None
+    assert Config.from_env().anthropic_federation is None
 
 
-def test_openrouter_api_key_custom_value_is_used(monkeypatch):
+def test_anthropic_federation_all_four_set_builds_the_config(monkeypatch):
     _set_base_env(monkeypatch)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-key")
+    _set_federation_env(monkeypatch)
 
-    assert Config.from_env().openrouter_api_key == "sk-or-secret-key"
+    federation = Config.from_env().anthropic_federation
+
+    assert federation is not None
+    assert federation.rule_id == "fdrl_0123abcDEF"
+    assert federation.organization_id == _FEDERATION_UUID
+    assert federation.service_account_id == "svac_0123abcDEF"
+    assert federation.audience == f"api://{_FEDERATION_UUID}"
+    assert federation.workspace_id is None
+    assert federation.identity_client_id is None
 
 
-def test_openrouter_api_key_excluded_from_repr(monkeypatch):
+def test_anthropic_federation_workspace_id_is_optional_and_read(monkeypatch):
     _set_base_env(monkeypatch)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-key")
+    _set_federation_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_abc123")
 
-    assert "sk-or-secret-key" not in repr(Config.from_env())
+    assert Config.from_env().anthropic_federation.workspace_id == "wrkspc_abc123"
+
+
+def test_anthropic_federation_identity_client_id_comes_from_the_cloud_identity(monkeypatch):
+    _set_base_env(monkeypatch)
+    _set_federation_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_CLOUD_IDENTITY_CLIENT_ID", "client-id-from-blob-state")
+
+    assert Config.from_env().anthropic_federation.identity_client_id == "client-id-from-blob-state"
+
+
+@pytest.mark.parametrize("missing", list(_FEDERATION_ENV))
+def test_anthropic_federation_partially_set_names_the_missing_variable(monkeypatch, missing):
+    _set_base_env(monkeypatch)
+    _set_federation_env(monkeypatch)
+    monkeypatch.delenv(missing)
+
+    with pytest.raises(ConfigError) as exc_info:
+        Config.from_env()
+
+    message = str(exc_info.value)
+    assert missing in message
+    for value in _FEDERATION_ENV.values():
+        assert value not in message
+
+
+def test_anthropic_federation_only_one_set_names_the_other_three(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_federation_env(monkeypatch)
+    monkeypatch.setenv(
+        "ANTHROPIC_FEDERATION_RULE_ID", _FEDERATION_ENV["ANTHROPIC_FEDERATION_RULE_ID"]
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        Config.from_env()
+
+    message = str(exc_info.value)
+    for name in list(_FEDERATION_ENV)[1:]:
+        assert name in message
+    assert _FEDERATION_ENV["ANTHROPIC_FEDERATION_RULE_ID"] not in message
+
+
+@pytest.mark.parametrize(
+    "name, bad_value",
+    [
+        ("ANTHROPIC_FEDERATION_RULE_ID", "rule-wrong-prefix-1"),
+        ("ANTHROPIC_ORGANIZATION_ID", "not-a-uuid-zzzz"),
+        ("ANTHROPIC_SERVICE_ACCOUNT_ID", "svac_has spaces"),
+        ("ANTHROPIC_FEDERATION_AUDIENCE", "https://wrong-scheme-1234"),
+        ("ANTHROPIC_WORKSPACE_ID", "ws-wrong-prefix-1"),
+    ],
+)
+def test_anthropic_federation_malformed_value_names_the_variable_not_the_value(
+    monkeypatch, name, bad_value
+):
+    _set_base_env(monkeypatch)
+    _set_federation_env(monkeypatch)
+    monkeypatch.setenv(name, bad_value)
+
+    with pytest.raises(ConfigError) as exc_info:
+        Config.from_env()
+
+    message = str(exc_info.value)
+    assert name in message
+    assert bad_value not in message
 
 
 def test_fallback_models_unset_falls_back_to_the_owner_default(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.delenv("FALLBACK_MODELS", raising=False)
 
-    assert Config.from_env().fallback_models == ("openai/gpt-5.6-sol", "z-ai/glm-5.3")
+    assert Config.from_env().fallback_models == ("claude-opus-5-5", "claude-sonnet-5-5")
 
 
 def test_fallback_models_explicitly_empty_means_no_legs(monkeypatch):
@@ -1288,12 +1384,17 @@ def test_fallback_models_explicitly_empty_means_no_legs(monkeypatch):
 
 def test_fallback_models_custom_list_is_parsed_and_stripped(monkeypatch):
     _set_base_env(monkeypatch)
-    monkeypatch.setenv("FALLBACK_MODELS", " openai/gpt-5.6-sol , mistralai/mistral-large ")
+    monkeypatch.setenv("FALLBACK_MODELS", " claude-opus-5-5 , claude-sonnet-5-5 ")
 
-    assert Config.from_env().fallback_models == (
-        "openai/gpt-5.6-sol",
-        "mistralai/mistral-large",
-    )
+    assert Config.from_env().fallback_models == ("claude-opus-5-5", "claude-sonnet-5-5")
+
+
+def test_fallback_models_old_provider_slash_model_id_is_rejected(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_MODELS", "openai/gpt-5.6-sol")
+
+    with pytest.raises(ConfigError, match="FALLBACK_MODELS"):
+        Config.from_env()
 
 
 def test_fallback_models_bad_model_id_raises_config_error_naming_the_variable(monkeypatch):
@@ -1308,10 +1409,7 @@ def test_fallback_light_models_unset_falls_back_to_the_owner_default(monkeypatch
     _set_base_env(monkeypatch)
     monkeypatch.delenv("FALLBACK_LIGHT_MODELS", raising=False)
 
-    assert Config.from_env().fallback_light_models == (
-        "openai/gpt-5.6-terra",
-        "deepseek/deepseek-v4-flash",
-    )
+    assert Config.from_env().fallback_light_models == ("claude-sonnet-5-5", "claude-haiku-5-5")
 
 
 def test_fallback_light_models_explicitly_empty_means_no_legs(monkeypatch):
@@ -1319,6 +1417,14 @@ def test_fallback_light_models_explicitly_empty_means_no_legs(monkeypatch):
     monkeypatch.setenv("FALLBACK_LIGHT_MODELS", "")
 
     assert Config.from_env().fallback_light_models == ()
+
+
+def test_fallback_light_models_old_provider_slash_model_id_is_rejected(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("FALLBACK_LIGHT_MODELS", "openai/gpt-5.6-sol")
+
+    with pytest.raises(ConfigError, match="FALLBACK_LIGHT_MODELS"):
+        Config.from_env()
 
 
 def test_fallback_light_models_bad_model_id_raises_config_error_naming_the_variable(monkeypatch):
@@ -1343,11 +1449,31 @@ def test_fallback_timeout_seconds_custom_value_is_used(monkeypatch):
     assert Config.from_env().fallback_timeout_seconds == 90
 
 
-def test_openrouter_api_key_not_in_claude_subprocess_env_allowlist(monkeypatch):
-    # The `claude -p` subprocess must never see a different provider's own
-    # credential -- see claude_subprocess_env's own docstring.
+def test_fallback_credentials_not_in_claude_subprocess_env_allowlist(monkeypatch):
+    # The `claude -p` subprocess must see neither the Claude API fallback's
+    # access (federation ids, managed-identity token service) nor any ANTHROPIC_*
+    # credential that would override the subscription token -- see
+    # claude_subprocess_env's own docstring.
     from digest.config import claude_subprocess_env
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-key")
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "IDENTITY_ENDPOINT",
+        "IDENTITY_HEADER",
+    ):
+        monkeypatch.setenv(name, "not-for-the-subprocess")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "subscription-token")
 
-    assert "OPENROUTER_API_KEY" not in claude_subprocess_env()
+    env = claude_subprocess_env()
+
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "subscription-token"
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "IDENTITY_ENDPOINT",
+        "IDENTITY_HEADER",
+    ):
+        assert name not in env

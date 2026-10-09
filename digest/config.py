@@ -10,7 +10,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from digest.openrouter import validate_model_id
+from digest.anthropic_api import FederationConfig, validate_model_id
 
 
 class ConfigError(Exception):
@@ -560,31 +560,29 @@ class Config:
     # verify_daily_timeout_seconds' 600s (an agentic, tool-calling loop) --
     # neither of those call shapes applies here.
     context_timeout_seconds: int = 120
-    # THE master switch for the OpenRouter fallback chain (digest/summarize.py's
-    # `run_with_fallbacks`, digest/openrouter.py's `run_openrouter`): unset
+    # THE master switch for the Claude API fallback chain (digest/summarize.py's
+    # `run_with_fallbacks`, digest/anthropic_api.py's `run_anthropic`): unset
     # (None) means digest/main.py's `_fallback_legs` builds an EMPTY leg
     # tuple for every one of this run's seven summarization call sites, and
     # an empty `fallbacks` sequence makes `run_with_fallbacks` re-raise the
     # primary's own exception unchanged (see that function's own docstring,
     # point 4) -- so an unconfigured deployment behaves byte-for-byte as it
-    # did before this feature existed. `field(repr=False)`, like every other
-    # secret this dataclass carries (tg_api_hash, smtp_password, x_cookies,
-    # ...): it is a bearer-style API key sent as a request header
-    # (digest/openrouter.py's `run_openrouter`), and a dataclass repr is
-    # exactly the kind of thing that can end up in a traceback without
-    # anyone deliberately choosing to print it.
-    openrouter_api_key: str | None = field(default=None, repr=False)
+    # did before this feature existed. Holds identifiers only (rule,
+    # organization, service account, Entra audience): authentication is the
+    # job's managed identity federated into the Claude API (Workload Identity
+    # Federation), so no API key exists to carry here, log or leak.
+    anthropic_federation: FederationConfig | None = None
     # The EDITORIAL-tier fallback chain: every call site whose primary uses
     # `anthropic_model` (window/daily/weekly/positions/patreon summarization
     # -- digest/main.py's `_fallback_legs(cfg, light=False)`) falls back
     # through these, in order, when the primary and any earlier fallback
-    # both fail. "openai/gpt-5.6-sol" and "z-ai/glm-5.3" are the owner's
-    # chosen defaults -- two different frontier-tier providers, so a
-    # provider-wide OpenRouter outage or rate limit affecting one still
-    # leaves the other reachable, which a two-model chain drawn from the
-    # SAME upstream provider would not guarantee. Only consulted at all when
-    # `openrouter_api_key` is set; see that field's own comment.
-    fallback_models: tuple[str, ...] = ("openai/gpt-5.6-sol", "z-ai/glm-5.3")
+    # both fail. Claude API model ids: the first repeats the primary's own
+    # model, which is exactly right when the subscription's usage limit ran
+    # out (the API bills prepaid credits instead); the second is a different
+    # model so a safety-classifier refusal that is specific to the first
+    # still has somewhere to go. Only consulted at all when
+    # `anthropic_federation` is set; see that field's own comment.
+    fallback_models: tuple[str, ...] = ("claude-opus-5-5", "claude-sonnet-5-5")
     # The LIGHT-tier fallback chain: every call site whose primary uses
     # `translate_model`/`context_model` (digest/main.py's
     # `_fallback_legs(cfg, light=True)`) falls back through these instead --
@@ -592,14 +590,14 @@ class Config:
     # capability (see digest/translate.py's `_TRANSLATE_EFFORT` and
     # digest/context.py's `_CONTEXT_EFFORT`, both fixed at a cheaper tier
     # than the editorial models for the identical reason), so this tier's
-    # defaults are smaller/cheaper models rather than a copy of
+    # defaults are smaller/cheaper Claude models rather than a copy of
     # `fallback_models`. Kept as a SEPARATE knob, not a derived subset of
     # `fallback_models`, so either tier can be retuned independently of the
     # other -- mirroring `context_model` defaulting to the SAME literal
     # `translate_model` resolves to today without being wired to it
     # dynamically (see `context_model`'s own comment for that exact
     # precedent).
-    fallback_light_models: tuple[str, ...] = ("openai/gpt-5.6-terra", "deepseek/deepseek-v4-flash")
+    fallback_light_models: tuple[str, ...] = ("claude-sonnet-5-5", "claude-haiku-5-5")
     # The SHARED wall-clock budget for one call's entire fallback chain --
     # every leg together, never per leg (digest/summarize.py's
     # `run_with_fallbacks`, point 3 of its own docstring). 180s is sized
@@ -719,12 +717,12 @@ class Config:
         context_model = os.environ.get("CONTEXT_MODEL", "sonnet")
         context_timeout_seconds = _optional_positive_int("CONTEXT_TIMEOUT_SECONDS", default=120)
 
-        openrouter_api_key = _optional_secret("OPENROUTER_API_KEY")
+        anthropic_federation = _optional_federation()
         fallback_models = _optional_model_id_tuple(
-            "FALLBACK_MODELS", default=("openai/gpt-5.6-sol", "z-ai/glm-5.3")
+            "FALLBACK_MODELS", default=("claude-opus-5-5", "claude-sonnet-5-5")
         )
         fallback_light_models = _optional_model_id_tuple(
-            "FALLBACK_LIGHT_MODELS", default=("openai/gpt-5.6-terra", "deepseek/deepseek-v4-flash")
+            "FALLBACK_LIGHT_MODELS", default=("claude-sonnet-5-5", "claude-haiku-5-5")
         )
         fallback_timeout_seconds = _optional_positive_int("FALLBACK_TIMEOUT_SECONDS", default=180)
 
@@ -848,7 +846,7 @@ class Config:
             context_max_per_run=context_max_per_run,
             context_model=context_model,
             context_timeout_seconds=context_timeout_seconds,
-            openrouter_api_key=openrouter_api_key,
+            anthropic_federation=anthropic_federation,
             fallback_models=fallback_models,
             fallback_light_models=fallback_light_models,
             fallback_timeout_seconds=fallback_timeout_seconds,
@@ -1120,11 +1118,11 @@ def _optional_tg_channel_tuple(name: str) -> tuple[str, ...]:
 
 
 def _optional_model_id_tuple(name: str, *, default: tuple[str, ...]) -> tuple[str, ...]:
-    """Read an optional comma-separated list of OpenRouter model ids.
+    """Read an optional comma-separated list of Claude API model ids.
 
     Backs FALLBACK_MODELS and FALLBACK_LIGHT_MODELS (Config.fallback_models
-    / Config.fallback_light_models) -- both are OpenRouter "<provider>/
-    <model>" id lists with the identical validation need, so this parser
+    / Config.fallback_light_models) -- both are Claude API "claude-..."
+    id lists with the identical validation need, so this parser
     takes the env var NAME and its own `default` tuple rather than being
     hardcoded to either one, mirroring `_optional_tg_channel_tuple`'s own
     shape exactly.
@@ -1140,15 +1138,15 @@ def _optional_model_id_tuple(name: str, *, default: tuple[str, ...]) -> tuple[st
     unset AND blank cases both mean the same thing, "lane not configured",
     because it has no non-empty default to fall back to.
 
-    Each surviving entry is validated against `digest.openrouter`'s
-    `validate_model_id` (single home for the "<provider>/<model>" shape --
-    see that function's own comment for why it lives there, not a second
-    copy here) and a ConfigError NAMING the variable (never echoing the
-    malformed value -- a model id isn't a secret, but the house style here
-    is "name the var, not the value" regardless) is raised on the first bad
+    Each surviving entry is validated against `digest.anthropic_api`'s
+    `validate_model_id` (single home for the "claude-..." shape -- see that
+    module for why it lives there, not a second copy here) and a ConfigError
+    NAMING the variable (never echoing the malformed value -- a model id
+    isn't a secret, but the house style here is "name the var, not the
+    value" regardless) is raised on the first bad
     entry. Validated at startup rather than left to fail lazily: an
     unvalidated typo'd model id would otherwise present as a fallback leg
-    that ALWAYS fails with the same OpenRouterError, discovered only the
+    that ALWAYS fails with the same AnthropicApiError, discovered only the
     first time the primary itself fails and the chain actually needs that
     leg -- which, for a rarely-exercised fallback path, could be weeks
     into a live outage rather than at the next deploy.
@@ -1161,8 +1159,56 @@ def _optional_model_id_tuple(name: str, *, default: tuple[str, ...]) -> tuple[st
     models = tuple(p.strip() for p in raw.split(",") if p.strip())
     for model in models:
         if not validate_model_id(model):
-            raise ConfigError(f"{name} entries must be valid OpenRouter model ids (provider/model)")
+            raise ConfigError(f"{name} entries must be valid Claude model ids (claude-...)")
     return models
+
+
+_UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+_FEDERATION_ID_PATTERNS = {
+    "ANTHROPIC_FEDERATION_RULE_ID": re.compile(r"^fdrl_[A-Za-z0-9_-]+$"),
+    "ANTHROPIC_ORGANIZATION_ID": re.compile(rf"^{_UUID}$"),
+    "ANTHROPIC_SERVICE_ACCOUNT_ID": re.compile(r"^svac_[A-Za-z0-9_-]+$"),
+    "ANTHROPIC_FEDERATION_AUDIENCE": re.compile(rf"^api://{_UUID}$"),
+}
+_WORKSPACE_ID_RE = re.compile(r"^wrkspc_[A-Za-z0-9_-]+$")
+
+
+def _optional_federation() -> FederationConfig | None:
+    """Read the Claude API federation settings, all-or-nothing.
+
+    None of the four required variables set means the fallback chain is off
+    (Config.anthropic_federation's own comment). Some but not all set is a
+    ConfigError NAMING the missing variables: a half-configured chain would
+    otherwise look enabled and fail only when the primary does, which for a
+    rarely-exercised path could be weeks later. Every value is an identifier
+    from the Claude Console or Entra, not a credential, but the house style
+    still applies: errors name the variable, never echo its value.
+
+    ANTHROPIC_WORKSPACE_ID is optional (the rule's workspace is implied when
+    it covers exactly one). The managed identity's client id is read from
+    DIGEST_CLOUD_IDENTITY_CLIENT_ID, the value the Blob state client already
+    uses, so the two cannot drift apart.
+    """
+    values = {name: _optional_str_or_none(name) for name in _FEDERATION_ID_PATTERNS}
+    if not any(values.values()):
+        return None
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise ConfigError(f"Claude API federation needs all of: {', '.join(missing)}")
+    for name, pattern in _FEDERATION_ID_PATTERNS.items():
+        if not pattern.match(values[name]):
+            raise ConfigError(f"{name} is not a valid identifier")
+    workspace_id = _optional_str_or_none("ANTHROPIC_WORKSPACE_ID")
+    if workspace_id is not None and not _WORKSPACE_ID_RE.match(workspace_id):
+        raise ConfigError("ANTHROPIC_WORKSPACE_ID is not a valid identifier")
+    return FederationConfig(
+        rule_id=values["ANTHROPIC_FEDERATION_RULE_ID"],
+        organization_id=values["ANTHROPIC_ORGANIZATION_ID"],
+        service_account_id=values["ANTHROPIC_SERVICE_ACCOUNT_ID"],
+        audience=values["ANTHROPIC_FEDERATION_AUDIENCE"],
+        workspace_id=workspace_id,
+        identity_client_id=_optional_str_or_none("DIGEST_CLOUD_IDENTITY_CLIENT_ID"),
+    )
 
 
 def _optional_x_handle_tuple(name: str) -> tuple[str, ...]:
@@ -1444,19 +1490,16 @@ def claude_subprocess_env() -> dict[str, str]:
     long-lived `claude setup-token` token. With the token withheld here and
     the login gone, every summarize call failed "Not logged in".
 
-    OPENROUTER_API_KEY is deliberately NOT in this allowlist, even though
-    `claude -p` never reads it and forwarding it would look harmless. The
-    `claude` CLI subprocess is exactly the untrusted-content-facing process
-    this allowlist exists to protect every OTHER secret from (see this
-    docstring's opening paragraph) -- widening it to also hand over a
-    DIFFERENT provider's own credential would make the fallback chain's own
-    OpenRouter key exfiltratable by the exact same injection path this
-    function was written to close for TG_SESSION/SMTP_PASSWORD/etc.
-    digest/openrouter.py's `run_openrouter` never runs inside this
-    subprocess anyway -- it is a plain `urllib` HTTP call made directly by
-    this codebase's own process, never by the `claude` CLI -- so there is
-    no legitimate reason this key would ever need to reach that
-    environment in the first place.
+    The Claude API fallback's access is deliberately NOT in this allowlist
+    either: neither IDENTITY_ENDPOINT/IDENTITY_HEADER (the managed identity's
+    local token service, through which anything in the subprocess could mint
+    tokens for the runner identity -- Blob state and API credit) nor any
+    ANTHROPIC_* variable. `claude -p` never needs them, and the second
+    reason is a billing one, not only a secrecy one: an ANTHROPIC_API_KEY or
+    ANTHROPIC_AUTH_TOKEN reaching the CLI would take precedence over
+    CLAUDE_CODE_OAUTH_TOKEN and silently move every digest from the flat
+    subscription onto metered API billing. digest/anthropic_api.py's
+    `run_anthropic` runs in this codebase's own process, never in the CLI.
     """
     allowed = ("PATH", "HOME", "USER", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN")
     return {k: os.environ[k] for k in allowed if k in os.environ}

@@ -206,7 +206,7 @@ def translate_digest(
     from the fencing defense.
 
     `fallbacks` (default `()`, matching every existing direct call and
-    test) is this translation's own OpenRouter chain, on the LIGHT tier
+    test) is this translation's own Claude API chain, on the LIGHT tier
     (`Config.fallback_light_models`, the same tier `generate_arc_context`
     uses -- see digest/main.py's `_fallback_legs`): translation is a
     mechanical rewrite, not editorial judgment (`_TRANSLATE_EFFORT_DEFAULT`'s
@@ -217,12 +217,12 @@ def translate_digest(
     for the full mechanics. The primary closure passed to it is the
     EXISTING two-step call above (`model`, then -- on a
     `SafeguardsRefusalError` specifically -- `fallback_model`) UNCHANGED: that
-    is a same-provider, same-mechanism retry this function has always done
-    on its own, orthogonal to reaching for an entirely different provider
-    via OpenRouter, so it stays exactly where it was, just wrapped in one
-    more layer of retry rather than replaced by it. Because this whole
+    is a CLI-to-CLI retry this function has always done on its own,
+    orthogonal to retrying the prompt over the Claude API, so it stays exactly
+    where it was, just wrapped in one more layer of retry rather than
+    replaced by it. Because this whole
     function's own `except Exception` below still catches anything
-    `run_with_fallbacks` itself ultimately raises (every leg, OpenRouter
+    `run_with_fallbacks` itself ultimately raises (every leg, Claude API
     included, exhausted) and soft-fails to English-only, `fallbacks` can
     only ever IMPROVE this function's odds of producing a Hungarian digest
     -- it can never turn a translation that would have succeeded before

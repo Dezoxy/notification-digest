@@ -213,8 +213,9 @@ def test_real_manifest_exact_runtime_scope_excludes_unused_cookie_seed():
     source, entries = migration.load_manifest(migration.MANIFEST)
     assert source == "kv-homelab-prod-th"
     names = {entry["source"] for entry in entries}
-    assert len(names) == 17
+    assert len(names) == 16
     assert "digest-x-cookies" not in names
+    assert "digest-openrouter-api-key" not in names
     assert "digest-notify-telegram-bot-token" not in names
     assert "digest-notify-telegram-chat-id" not in names
     example = (SCRIPT.parents[1] / "infra/azure/production.auto.tfvars.example").read_text()

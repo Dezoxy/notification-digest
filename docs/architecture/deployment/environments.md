@@ -16,7 +16,7 @@ mandatory there; there is no `MODE=staging`.
 | Telegram / X sessions | The owner's real, long-lived personal sessions | Whatever session the developer supplies — typically the same owner's credentials, since there is no synthetic Telegram/X sandbox |
 | State | `/srv/appdata/digest/state.db` on local ext4 — the system of record | A throwaway file inside the named Docker volume `digest-data` (`compose.yml`); reset per README's inspection/reset instructions, never touching production data |
 | Delivery channels | Telegram TL;DR ping + news site live; email implemented but disabled (`myapps_digest_email_enabled: false` in homelab host_vars) | Whatever the developer's `.env` enables — typically a subset, or `hide:` flags, to avoid posting test digests to the real Telegram topic |
-| External calls | Real Telegram, X, Claude CLI, OpenRouter, news site | Also real, unless the developer disables a collector — this is not a mocked sandbox. Automated tests are the only place a hard rule applies: CLAUDE.md requires tests to never call the real Telegram or X APIs, or send real email; that mocking happens at the collector/emailer boundary in `tests/`, not in a local `docker compose run` |
+| External calls | Real Telegram, X, Claude CLI, the Claude API (only if the federation variables are set; otherwise no fallback), news site | Also real, unless the developer disables a collector — this is not a mocked sandbox. Automated tests are the only place a hard rule applies: CLAUDE.md requires tests to never call the real Telegram or X APIs, or send real email; that mocking happens at the collector/emailer boundary in `tests/`, not in a local `docker compose run` |
 
 ### Rules
 

@@ -15,8 +15,8 @@ owner's home LAN that is never reachable from the internet
 ([A-04](../requirements/assumptions.md)). The Digest Runner never listens on a
 port; it is a one-shot process that starts on a systemd timer, makes only
 outbound connections (to Telegram, X, Reddit, Patreon, Polymarket, Hacker
-News, RSS feeds, the Claude CLI, OpenRouter, the News Site, and optionally an
-SMTP relay), and exits. See [trust-boundaries.md](trust-boundaries.md) for the
+News, RSS feeds, the Claude CLI, the Claude API (fallback), the News Site, and
+optionally an SMTP relay), and exits. See [trust-boundaries.md](trust-boundaries.md) for the
 boundary-by-boundary detail and the model in
 [`../model/containers.dsl`](../model/containers.dsl).
 
@@ -34,7 +34,8 @@ to what" below.
 | Digest Runner | X | `X_COOKIES_PATH` / `X_COOKIES` (owner's session cookie), via `twifork` (twikit fork) | Read access to the owner's own notifications timeline. Unofficial API; no sanctioned alternative exists at this tier ([C-03](../requirements/constraints.md)) |
 | Digest Runner | Reddit | `REDDIT_SESSION_COOKIE` (owner's own logged-in session) | Read access to top-of-day posts in configured subreddits. Reddit formally declined the owner's official API application; the cookie session is the only remaining path |
 | Digest Runner | Patreon | `PATREON_SESSION_COOKIE` (owner's own paid-tier session) | Read access to one campaign's paid-tier posts |
-| Digest Runner | Claude CLI | `CLAUDE_CODE_OAUTH_TOKEN`, forwarded to the `claude -p` subprocess | Summarizes each window; falls back to OpenRouter (`OPENROUTER_API_KEY`) on failure ([C-08](../requirements/constraints.md)) |
+| Digest Runner | Claude CLI | `CLAUDE_CODE_OAUTH_TOKEN`, forwarded to the `claude -p` subprocess | Summarizes each window on the owner's flat-fee subscription ([C-08](../requirements/constraints.md)) |
+| Digest Runner | Claude API (fallback only) | No stored credential: the job's managed identity requests an Entra token for a dedicated audience app registration and exchanges it at Anthropic (Workload Identity Federation) for a short-lived access token, once per fallback call ([ADR 9](../decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md)) | Re-runs a failed summarization against prepaid API credits. The federation rule matches the runner identity's object ID; the service account sits in a dedicated workspace with a monthly spend limit |
 | Digest Runner | News Site | `SITE_INGEST_KEY` sent as the `x-ingest-key` header on `PUT /ingest/:id` | Write-only: upsert one digest by id. Compared with hash-then-`timingSafeEqual`; the Worker fails closed (401) if the key is unset |
 | Digest Runner | SMTP relay | `SMTP_USER` / `SMTP_PASSWORD` | Sends the digest as e-mail. Implemented and still the deployment role's default, but disabled on the real VM |
 | Reader (owner) | News Site | Possession of the full URL, `https://…/t/<SITE_TOKEN>/…` | Read access to the whole digest archive. No account, no password — the token in the path **is** the authorization |
@@ -67,9 +68,18 @@ Secrets in play, by where they end up:
   deliberately absent" below.
 - **The News Site's own secrets** (`SITE_TOKEN`, `INGEST_KEY`): set with
   `wrangler secret put`, never in `wrangler.jsonc` or source.
-- **The `claude -p` OAuth token, the OpenRouter API key, the SMTP password,
-  the GHCR pull token**: standard service-style credentials, all Key
-  Vault-sourced.
+- **The `claude -p` OAuth token, the SMTP password, the GHCR pull token**:
+  standard service-style credentials, all Key Vault-sourced.
+- **No Anthropic API credential exists.** The Claude API fallback uses
+  workload identity federation: the rule, organization, service-account and
+  audience identifiers are configuration, not secrets, and the access token it
+  yields lives only in memory for one call. The `claude -p` subprocess
+  environment allowlist withholds `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` (the
+  managed identity's token service, which could mint tokens for the runner
+  identity) and every `ANTHROPIC_*` variable. That is also a billing control:
+  an `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` reaching the CLI would
+  override `CLAUDE_CODE_OAUTH_TOKEN` and move every digest onto metered API
+  billing. `AnthropicApiError` never carries a response body, token or URL.
 
 At rest on the VM, one secret persists as a plain file rather than only living
 in process memory: the X cookie jar. `X_COOKIES_PATH` seeds a "live" copy at

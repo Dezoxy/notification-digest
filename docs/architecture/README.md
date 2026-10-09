@@ -93,13 +93,14 @@ exceeding it.
 | ADR | Decision | Status |
 |---|---|---|
 | 1 | [Pin the unofficial X client to an exact version and audit every bump](decisions/0001-pin-unofficial-x-client.md) | Accepted |
-| 2 | [Summarize through a fallback chain rather than a single model](decisions/0002-summarizer-fallback-chain.md) | Accepted |
+| 2 | [Summarize through a fallback chain rather than a single model](decisions/0002-summarizer-fallback-chain.md) | Accepted; OpenRouter provider superseded by ADR 9 |
 | 3 | [Keep SQLite as the system of record and D1 as a disposable copy](decisions/0003-sqlite-is-the-source-of-truth.md) | Accepted |
 | 4 | [Deliver through independent channels, and keep email implemented](decisions/0004-multi-channel-delivery.md) | Accepted |
 | 5 | [Forward relay-lane posts verbatim, with no summarization](decisions/0005-relay-forwards-verbatim.md) | Accepted |
 | 6 | [Release by git tag, deploy by pin bump from a separate repository](decisions/0006-release-by-tag-and-pin.md) | Accepted; deployment ownership superseded by ADR 7 for Azure target |
 | 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; state/vault ownership amended by ADR 8; cutover pending |
 | 8 | [Isolate digest Azure state and secrets](decisions/0008-isolate-digest-azure-state-and-secrets.md) | Accepted for state/vault; existing subscription recommended; deployment pending |
+| 9 | [Fall back to the Claude API over workload identity federation](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Accepted; implemented, federation not yet configured |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

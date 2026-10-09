@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS digests (
     -- classified as a window digest, with no separate backfill needed.
     kind            TEXT NOT NULL DEFAULT 'window',
     -- Model provenance (which model/effort actually produced this digest's
-    -- summarize/translate legs, and whether an OpenRouter fallback fired
+    -- summarize/translate legs, and whether a Claude API fallback fired
     -- for either one): a single JSON object with up to two keys, "summarize"
     -- (always present) and "translate" (present only when this digest has a
     -- Hungarian translation), each a nested model/effort/fallback object.
