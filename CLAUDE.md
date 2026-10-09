@@ -77,6 +77,9 @@ true at the multi-channel cutover.
 - Never commit or log secrets, cookies, or session strings (Telegram session,
   X cookies, SMTP password, Claude credentials, etc.). Secrets come from Azure
   Key Vault as env vars at deploy time.
+- This repository is public (since 2026-10-09): PR bodies, issue text, CI logs,
+  fixtures and docs are world-readable. Keep tokens, cookies, session strings
+  and personal data out of all of them.
 - Tests must never call the real Telegram or X APIs, or send real email. Mock
   at the collector boundary (`collectors/telegram.py`, `collectors/x.py`) and
   the emailer boundary (`emailer.py`).
@@ -109,8 +112,8 @@ true at the multi-channel cutover.
   trusted. Ticking the dashboard box IS the decision to do that audit, so
   the bump can never arrive looking routine. See the pin's comment in
   `pyproject.toml` and the rule's own `description` in `renovate.json`.
-- Repo: github.com/Dezoxy/notification-digest (private). Container image:
-  `ghcr.io/dezoxy/notification-digest`.
+- Repo: github.com/Dezoxy/notification-digest (public since 2026-10-09).
+  Container image: `ghcr.io/dezoxy/notification-digest` (private).
 - Before opening or updating any PR, run /docs-sync
   (`.claude/skills/docs-sync/SKILL.md`): audit the branch diff for
   documentation it falsifies — README, PLAN.md's layout tree, this file and

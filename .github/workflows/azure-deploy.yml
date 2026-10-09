@@ -98,6 +98,9 @@ jobs:
       - run: terraform -chdir=infra/azure plan -input=false -no-color -out=deployment.tfplan
       - name: Write reviewable plan
         run: terraform -chdir=infra/azure show -no-color deployment.tfplan > infra/azure/deployment-plan.txt
+      # Not deleted here: a manual operation=plan must keep its artifact until the
+      # operator applies it. The consumer deletes it: `apply` for a manual plan,
+      # `release-apply` for an image-pin run (retention-days below is the backstop).
       - uses: actions/upload-artifact@v7
         with:
           name: azure-plan-${{ github.run_id }}
@@ -121,7 +124,7 @@ jobs:
             echo '```'
             echo
             echo 'Schedule activation can replace job resources; Blob state is protected.'
-            echo 'The plan artifact expires after one day; run a new plan after that.'
+            echo 'The plan artifact is deleted by the apply that consumes it and expires after one day; run a new plan after that.'
           } >> "$GITHUB_STEP_SUMMARY"
 
   apply:
@@ -135,7 +138,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      actions: read
+      actions: write
     env:
       ARM_USE_OIDC: 'true'
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -189,6 +192,44 @@ jobs:
           github-token: ${{ github.token }}
       - run: terraform -chdir=infra/azure init -input=false -lockfile=readonly -backend-config=backend.hcl
       - run: terraform -chdir=infra/azure apply -input=false deployment.tfplan
+      # Public repository: do not leave the saved plan (it embeds prior state)
+      # downloadable for a day. `always()` runs this after a failed, refused,
+      # noop or cancelled run too. Best effort: failing to delete warns, never
+      # fails the job (the artifact still expires after retention-days).
+      - name: Delete the consumed plan artifact
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! [[ "$PLAN_RUN_ID" =~ ^[0-9]{1,20}$ ]]; then
+            echo "No valid plan run ID; nothing to delete."
+            exit 0
+          fi
+          export ARTIFACT_NAME="azure-plan-$PLAN_RUN_ID"
+          warn() {
+            echo "::warning::Could not delete the plan artifact $ARTIFACT_NAME; it expires in one day."
+          }
+          if ! ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == env.ARTIFACT_NAME) | .id'); then
+            warn
+            exit 0
+          fi
+          if [ -z "$ids" ]; then
+            echo "No artifact named $ARTIFACT_NAME on run $PLAN_RUN_ID (already deleted or never uploaded)."
+            exit 0
+          fi
+          for id in $ids; do
+            if [[ "$id" =~ ^[0-9]+$ ]] \
+              && gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > /dev/null; then
+              echo "Deleted $ARTIFACT_NAME (artifact $id)."
+            else
+              warn
+            fi
+          done
 
   release-apply:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -202,7 +243,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      actions: read
+      actions: write
       packages: read
     env:
       ARM_USE_OIDC: 'true'
@@ -255,3 +296,41 @@ jobs:
       - name: Apply the guarded plan
         if: steps.guard.outputs.decision == 'apply'
         run: terraform -chdir=infra/azure apply -input=false deployment.tfplan
+      # Public repository: do not leave the saved plan (it embeds prior state)
+      # downloadable for a day. `always()` runs this after a failed, refused,
+      # noop or cancelled run too. Best effort: failing to delete warns, never
+      # fails the job (the artifact still expires after retention-days).
+      - name: Delete this run's plan artifact
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! [[ "$PLAN_RUN_ID" =~ ^[0-9]{1,20}$ ]]; then
+            echo "No valid plan run ID; nothing to delete."
+            exit 0
+          fi
+          export ARTIFACT_NAME="azure-plan-$PLAN_RUN_ID"
+          warn() {
+            echo "::warning::Could not delete the plan artifact $ARTIFACT_NAME; it expires in one day."
+          }
+          if ! ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == env.ARTIFACT_NAME) | .id'); then
+            warn
+            exit 0
+          fi
+          if [ -z "$ids" ]; then
+            echo "No artifact named $ARTIFACT_NAME on run $PLAN_RUN_ID (already deleted or never uploaded)."
+            exit 0
+          fi
+          for id in $ids; do
+            if [[ "$id" =~ ^[0-9]+$ ]] \
+              && gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > /dev/null; then
+              echo "Deleted $ARTIFACT_NAME (artifact $id)."
+            else
+              warn
+            fi
+          done

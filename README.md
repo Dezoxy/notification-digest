@@ -11,6 +11,15 @@ uses `twifork` (a maintained fork of the dead `twikit`, still imported as
 `twikit`), an unofficial scraper driven by a cookie session — this carries
 ToS and account-ban risk, which the owner has explicitly accepted.
 
+## About this project
+
+A personal project published as-is, not a supported product. Issues and pull
+requests are welcome but handled best-effort, with no response-time promise.
+The X collector uses an unofficial cookie-session client and only runs when
+`X_ENABLED` is set; it may violate X's terms. The owner accepted that risk for
+their own accounts, and anyone who runs it accepts their own. Report security
+issues privately, as described in [SECURITY.md](SECURITY.md).
+
 ## Architecture
 
 ```
