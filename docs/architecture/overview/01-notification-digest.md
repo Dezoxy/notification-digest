@@ -21,7 +21,7 @@ reliability, risks — stay in the repository as the detail behind each claim.
 ## Context
 
 The system sits between accounts the owner already holds and the two places the
-owner actually reads. Collection is always outbound: nothing on the home network
+owner actually reads. Collection is always outbound: nothing the system runs
 accepts an inbound connection from a source.
 
 ![Context view: who reads the digest, what writes it, and where it comes out](embed:Context)
@@ -35,14 +35,14 @@ the question it answers. They have their own view:
 
 | Container | Responsibility | Technology |
 |---|---|---|
-| Digest Runner | Collects new items per source, summarizes the window, delivers the result. One short-lived process per scheduled run | Python 3.12, one-shot Docker container |
-| State Database | System of record: items, per-source cursors, digests, delivery state | SQLite on local ext4 |
+| Digest Runner | Collects new items per source, summarizes the window, delivers the result. One short-lived process per scheduled run | Python 3.14, one-shot container started by an Azure Container Apps job |
+| State Database | System of record: items, per-source cursors, digests, delivery state | SQLite file, kept as a bundle in private Azure Blob Storage |
 | News Site | Serves the public digest archive; accepts authenticated ingest from the runner | Cloudflare Worker, JavaScript |
 | Site Database | Rendering copy of published digests. Disposable | Cloudflare D1 |
 
 ![Containers view: the building blocks and the trust boundary between them](embed:Containers)
 
-The runner is not a service. It starts on a timer, does one job and exits, so
+The runner is not a service. It starts on a schedule, does one job and exits, so
 every arrow leaving it lives inside a run that has a beginning and an end. That
 is why there is no queue, no scheduler process and no health endpoint to
 monitor: the unit of work is the process itself.
@@ -58,19 +58,21 @@ delivers nothing twice — the system's one absolute guarantee
 
 ## The shape that follows from one owner
 
-- **No high availability.** One Proxmox node holds the runner, its state and the
-  primary backup ([C-05](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)). A missed run is
+- **No high availability.** One Azure region holds the runner and its state; the
+  recovery copy sits in a separate storage account in the same region
+  ([C-05](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)). A missed run is
   tolerable; a duplicate delivery is not.
 - **Personal credentials, not service credentials.** The owner's own Telegram
   and X sessions are what make the owner's own groups readable
   ([C-02](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)). This is the system's sharpest
   security property.
-- **Two databases that are not peers.** The VM's SQLite file is the system of
+- **Two databases that are not peers.** The SQLite state is the system of
   record; Cloudflare D1 is a rendering copy that may be thrown away
   ([ADR 3](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0003-sqlite-is-the-source-of-truth.md)). They share
   table names, which is exactly why the distinction is written down.
-- **Releases are deliberate.** A merge ships nothing. A release is a tag, an
-  image, a pinned version in a separate repository and a deploy
+- **Releases are traceable.** A merge to shipped code becomes a tag and an
+  image, the image is pinned by a reviewed change in this repository, and only
+  that pin may be applied without a manual plan
   ([ADR 6](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0006-release-by-tag-and-pin.md)).
 
 ## Reading paths
@@ -85,7 +87,7 @@ full, so nothing here depends on opening a link.
 | **For stakeholders** | What it is, what it produces, what it costs, what could go wrong. No protocols |
 | **For the CTO** | Exposure, data, recovery, the risks accepted rather than mitigated, and cost |
 | **For engineers** | The design, the runtime, the decisions, and what a change must satisfy |
-| **For operators** | How a change reaches the host, what fails together, backups and recovery |
+| **For operators** | How a change reaches the jobs, what fails together, backups and recovery |
 | **Glossary** | Terms used with a specific meaning here |
 
 Then the reference sections, in order: the requirements and principles the

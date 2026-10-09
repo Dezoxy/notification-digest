@@ -1,11 +1,14 @@
 # Azure digest migration and operations
 
-Status on 2026-10-08: the first preparation PR is merged; the Azure state and
-dedicated-vault follow-up and review fixes are prepared for verification. Production still runs
-on `01-myapps-vm`. This runbook describes the authorized hosting target and the
-remaining deployment gates. Returning execution to the VM is outside the plan.
+Status on 2026-10-09: the cutover happened on 2026-10-08. The digest's VM
+timers were drained and stopped, the state was handed to Azure and the Azure
+schedules were enabled, so production runs here and no longer on `01-myapps-vm`.
+This runbook keeps the cutover procedure as the historical record and the
+template for any rebuild, and it owns the operating and recovery procedures.
+Still open: the seven-day observation, an exercised restore from the backup
+account, and measured cost. Returning execution to the VM is outside the plan.
 
-The target runs the existing release image as nine finite Container Apps Jobs
+Production runs the existing release image as nine finite Container Apps Jobs
 in West Europe, with 0.5 vCPU, 1 GiB, no platform retries and a 50-minute
 platform timeout. The runner allows at most ten minutes waiting
 for the lease and 35 minutes of active work, then fences the process group.
@@ -29,6 +32,15 @@ build for the deployment platform remains required; no live model calls have
 been run for this update. Remeasure runtime/memory, state transfers and total
 cost on the new CLI during the Azure pilot: old VM sizing is a baseline, not
 proof that the new image has identical resource use.
+
+Status on 2026-10-09: the schedules were activated on 2026-10-08, so the
+paragraph above is the record of what was planned, not a pending gate. The CLI
+and Node pins have since moved on through Renovate; the `Dockerfile` is the
+source. Recorded since activation: scheduled digests summarized through the
+subscription CLI on the Azure jobs, and the Claude API fallback smoke test
+passing on the released image. Not recorded here: Hungarian translation, the
+daily verification pass, an output-quality comparison with the VM, and measured
+runtime, memory or cost.
 A hosting change does not remove subscription contention with other
 applications using the same account.
 
@@ -736,6 +748,10 @@ the smoke test in step 5 is part of the setup, not an optional extra.
   this leg.
 
 ## State handoff and activation
+
+This procedure was carried out for the 2026-10-08 cutover. It stays as the
+record of what was done and as the template for any later handoff or rebuild;
+read its future tense accordingly.
 
 Complete shared homelab alert separation first: jobs-refresh currently uses
 `DIGEST_NOTIFY_*` credentials independently of the digest application. Retain

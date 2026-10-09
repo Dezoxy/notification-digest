@@ -7,7 +7,8 @@ Date: 2026-09-20
 Accepted
 
 Deployment ownership superseded by [7. Run digest as Azure jobs](0007-run-digest-as-azure-jobs.md).
-The historical VM decision below remains recorded; Azure production cutover is pending.
+The historical VM decision below remains recorded; the Azure production cutover
+happened on 2026-10-08.
 
 ## Context
 

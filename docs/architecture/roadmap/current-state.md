@@ -1,26 +1,48 @@
 ## Current State
 
-What follows is what is actually deployed on the owner's VM today, not what the
-code is capable of if every flag were turned on.
+What follows is what is actually deployed today, not what the code is capable
+of if every flag were turned on.
+
+### Where it runs
+
+Production runs as nine scheduled Azure Container Apps jobs in West Europe,
+declared in `infra/azure/` ([ADR
+0007](../decisions/0007-run-digest-as-azure-jobs.md)). It has done so since
+2026-10-08, when the homelab VM's digest timers were drained and stopped, the
+state was handed to Azure and the Azure schedules were enabled. The VM no longer
+runs the digest and there is no plan to return execution to it; its old state
+directory and backups were left in place, frozen, and removing the digest role
+from the homelab repository is an open pull request there. The summarizer's
+fallback moved the same way: OpenRouter is gone, and a failed `claude -p` call
+is retried against the Claude API with no stored key, through a federated
+managed identity ([ADR
+0009](../decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md)).
+
+The state is the same SQLite file, now stored as an immutable bundle in private
+Blob Storage and restored, used and checkpointed by every run under a Blob
+lease. Recovery copies go daily to a separate storage account and resource group
+in the same region. One region is the whole failure domain
+([C-05](../requirements/constraints.md)).
 
 ### Run modes and their schedule
 
-Nine systemd timers exist on `01-myapps-vm`, each serialized through the same
-host-level `flock` wrapper because every mode shares one Telegram user session
+Nine Container Apps jobs exist, all serialized by the same Blob lease because
+every mode shares one Telegram user session
 ([deployment-architecture.md](../deployment/deployment-architecture.md)):
 
 | Mode | Cadence | Delivers into |
 |---|---|---|
-| window (`digest`, `digest-overnight`, `digest-evening`) | ~6-hourly, split across three timer/flag combinations (plain, `hide:telegram`, `hide:telegram,site`) | Telegram TL;DR + news site |
-| daily (`digest-daily`) | Once/day, 20:30 Budapest | Telegram daily topic + news site |
-| weekly (`digest-weekly`) | Sunday, 21:45 Budapest | Telegram weekly topic + news site |
-| patreon (`digest-patreon`) | Hourly | Its own Telegram topic only — never the site |
-| positions (`digest-positions`) | Every 4 hours | Its own Telegram topic only, silent when nothing material happened (NO-SIGNAL contract) |
-| relay (`digest-relay`) | Hourly | Its own Telegram topic, a verbatim forward, no model call |
+| window (`daytime`, `overnight`, `evening`) | ~6-hourly, split across three jobs (06 and 12 UTC plain; 00 UTC `hide:telegram`; 18 UTC `hide:telegram,site`) | Telegram TL;DR + news site |
+| daily (`daily`) | Once/day, 20:30 Budapest | Telegram daily topic + news site |
+| weekly (`weekly`) | Sunday, 21:45 Budapest | Telegram weekly topic + news site |
+| patreon (`patreon`) | Hourly | Its own Telegram topic only — never the site |
+| positions (`positions`) | Every 4 hours | Its own Telegram topic only, silent when nothing material happened (NO-SIGNAL contract) |
+| relay (`relay`) | Hourly | Its own Telegram topic, a verbatim forward, no model call |
+| backup (`backup`) | Daily, 04:15 UTC | Not a digest: copies a recovery bundle to the backup account |
 
-The exact timer-unit-to-flag mapping for the three window-mode variants is
-homelab-repo configuration and **not verifiable from this repository**; the
-existence of all nine units, including `digest-relay`, is confirmed in
+`daily` and `weekly` are scheduled twice in UTC (one of the two fires per DST
+state) and proceed only when the Budapest local time matches. The cron
+expressions are in `infra/azure/main.tf` and are summarized in
 [deployment-architecture.md](../deployment/deployment-architecture.md).
 
 ### What's collecting
@@ -48,13 +70,15 @@ prompt-design validation.
 - **Telegram TL;DR ping** — live.
 - **News site** (`workers/news-site/`) — live; installable as a PWA with push
   notifications since 2026-08-27 (PLAN.md §11.7).
-- **Email** — implemented, and still the Ansible role's default, but disabled on
-  the real deployment (`myapps_digest_email_enabled: false`).
+- **Email** — implemented, and still the in-repo default, but disabled on the
+  real deployment (`EMAIL_ENABLED=false` in the job settings). The app refuses
+  to start with every channel disabled.
 
 ### What's enabled beyond the shipped defaults
 
 Three features ship default-off in this repository but are turned on for the
-real deployment, per the separate homelab repository's host variables: Hungarian
+real deployment, per the reviewed non-secret job settings in `infra/azure/`
+(`production.auto.tfvars.example` shows their shape): Hungarian
 translation (`TRANSLATE_HU_ENABLED`), the daily web-verification pass
 (`VERIFY_DAILY_ENABLED`), and story-arc context primers (`CONTEXT_ENABLED`). The
 gap between the shipped default and the running configuration is tracked as
@@ -87,10 +111,13 @@ once the owner observed the community doesn't react or reply on Telegram at all
 | Gap | Reference |
 |---|---|
 | End-to-end run latency has never been measured | [TD-003](../risks/technical-debt.md) |
-| The D1 rebuild-from-VM path has never been exercised end to end | [TD-002](../risks/technical-debt.md) |
+| A restore from the backup storage account has never been exercised | [backup-strategy.md](../reliability/backup-strategy.md) |
+| The Claude API fallback has not yet served a real digest; the chain was proven by a one-off smoke test in the job environment on 2026-10-09 | [ADR 9](../decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md), [availability.md](../reliability/availability.md) |
+| Real lease contention between two overlapping executions has not been tested; the lease is the only overlap guard | [deployment-architecture.md](../deployment/deployment-architecture.md) |
+| The D1 rebuild-from-state path has never been exercised end to end | [TD-002](../risks/technical-debt.md) |
 | `arc_context` has no prune | [TD-001](../risks/technical-debt.md) |
 | Hungarian readers never see the "What changed" delta block | [TD-004](../risks/technical-debt.md) |
-| Summarization spend has no hard cap | [RISK-004](../risks/architecture-risks.md) |
+| Summarization spend has no hard cap, and Azure spend is bounded only by a budget notification, not a cap | [RISK-004](../risks/architecture-risks.md), [observability-architecture.md](../observability/observability-architecture.md) |
 
 ### Numbers
 
@@ -100,4 +127,5 @@ once the owner observed the community doesn't react or reply on Telegram at all
 | X collection frequency | 4 pulls/day (window mode is the only mode that ever touches X) | PLAN.md §8 |
 | Run success rate | **Not measured** — no dashboard computes it | [availability.md](../reliability/availability.md) |
 | End-to-end freshness (window close → delivery) | **Not measured** | [QA-02](../requirements/quality-attributes.md), [TD-003](../risks/technical-debt.md) |
-| Backup restore | Exercised once | [QA-05](../requirements/quality-attributes.md) |
+| Backup restore | Exercised once on the VM before the move; **not exercised on Azure** | [QA-05](../requirements/quality-attributes.md), [backup-strategy.md](../reliability/backup-strategy.md) |
+| Recovery objectives (RPO ~24h, RTO manual) | **Targets, not measurements** — no timed rehearsal exists | [disaster-recovery.md](../reliability/disaster-recovery.md) |

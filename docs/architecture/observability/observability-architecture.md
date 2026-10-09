@@ -4,42 +4,76 @@ This document is deliberately modest. notification-digest has no metrics
 pipeline, no tracing, and no dashboard defined in this repository —
 `pyproject.toml` pulls in no OpenTelemetry, Prometheus, or APM client of any
 kind. What exists is process exit codes, structured log lines written to stdout,
-and whatever the host's systemd/journald setup does with them. The honest
-summary, stated plainly rather than implied: **a missed or broken run is noticed
-because the digest does not arrive, or arrives with a visible failure banner** —
-not because an alert fired.
+a Log Analytics workspace that collects them, and two log-based alerts and a
+budget notification that e-mail the owner. The honest summary, stated plainly
+rather than implied: **a missed or broken run is noticed because an alert
+e-mails the owner, or because the digest does not arrive or arrives with a
+visible failure banner** — and neither alert has yet been recorded catching a
+real failure.
+
+Until 2026-10-08 the digest ran on a homelab VM and its logs went to journald
+and, if the host shipped them, Loki and Grafana. That path no longer receives
+digest logs. Observability is Azure's now, declared in `infra/azure/` (the
+alerts and budget in `infra/azure/monitoring.tf`); this document explains the
+design and does not copy the queries or thresholds.
 
 ### What exists
 
 | Signal | Mechanism | Where it goes |
 |---|---|---|
-| Exit code | `sys.exit(0)` success, `sys.exit(1)` a collector or delivery leg failed, `sys.exit(2)` a configuration error before any work started (`digest/main.py`) | Whatever invokes the container — the systemd unit wrapping `docker compose run --rm digest` — records it as the unit's result |
-| Human-readable logs | Python `logging`, `basicConfig(level=INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stdout)` (`digest/main.py`) | Container stdout. Since the systemd unit runs `docker compose run` attached (not detached), that output is inherited by the unit's own stdout and captured by journald on the VM |
-| `run_summary` (one JSON line per run) | `logger.info("run_summary %s", json.dumps({...}))`, emitted from every run mode (window, daily, weekly, patreon, positions) | Same stdout/journald path. Fields include mode, per-collector or per-source-digest status, item counts, and whether delivery succeeded |
+| Exit code | `sys.exit(0)` success, `sys.exit(1)` a collector or delivery leg failed, `sys.exit(2)` a configuration error before any work started (`digest/main.py`) | The Container Apps job execution that ran the container records it as that execution's result. The wrapper `digest/cloud_run.py` adds its own line per execution: `cloud_job event=success`, `failure`, `skipped`, `already_completed` or `not_due` |
+| Human-readable logs | Python `logging`, `basicConfig(level=INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stdout)` (`digest/main.py`) | Container stdout and stderr, collected by the Container Apps environment into one Log Analytics workspace (console and system logs) |
+| `run_summary` (one JSON line per run) | `logger.info("run_summary %s", json.dumps({...}))`, emitted from every run mode (window, daily, weekly, patreon, positions) | Same path. Fields include mode, per-collector or per-source-digest status, item counts, and whether delivery succeeded |
 | `digest_delivery` (one JSON line per digest handled) | `digest/deliver.py`, logged once per digest with a per-channel (`email`/`site`/`telegram`) outcome | Same path |
+| Platform events | Container Apps system logs: image-pull failures, crashing containers, failed executions | Same workspace |
 
-Both structured lines are explicitly designed, by this codebase's own convention
-(dozens of comments across `digest/main.py`, `digest/deliver.py`,
+The workspace keeps logs for 30 days, in West Europe, with a daily ingestion
+quota: if the quota is exceeded, logs are dropped. The volume against that quota
+has not been measured over a long enough period to say it is sufficient.
+
+Both structured lines are explicitly designed, by this codebase's own
+convention (dozens of comments across `digest/main.py`, `digest/deliver.py`,
 `digest/summarize.py`, `digest/collectors/rss.py`, `digest/collectors/x.py` name
-it directly), to be queryable in Loki *if* the host ships journald into Loki.
-Whether that ingestion pipeline actually exists and is currently working is
-homelab-repo infrastructure and **is not verified from this repository**.
+it directly), to be queryable. Those comments still say "Loki" because they were
+written for the VM; the lines are queried in Log Analytics now. The comments
+have not been reworded, and nothing in the code depends on the log backend.
 
-### What the exit code alone is trusted to do
+### What the exit code and the log lines are trusted to do
 
 The application's own code is explicit that the exit code is meant to be the
 *only* signal an alert acts on: `digest/main.py`'s docstrings state outright
-that "ANY collector failure must surface as a non-zero exit (the sole signal for
-the Loki alert on digest.service) even on a run that delivers nothing at all,"
-and every `run_summary`/`digest_delivery` line is described in the same comments
-as being "for Loki, not the alert signal itself." That is the application's
-design assumption, built in from the start. Whether a Grafana/Loki alert on
-`digest.service` failures is actually configured today is a separate,
-homelab-repo question this repository cannot answer; PLAN.md §6 describes the
-*intended* rule ("add a Grafana alert rule on `{unit=\"digest.service\"}`
-matched against journal output for `digest.service`, firing on any failed run")
-in terms that read as a plan, not a confirmed deployment. Treat "an alert exists
-and pages the owner on a failed run" as **not confirmed**, not as fact.
+that "ANY collector failure must surface as a non-zero exit" even on a run that
+delivers nothing at all, and every `run_summary`/`digest_delivery` line is
+described in the same comments as being for the log backend, "not the alert
+signal itself." That design assumption survived the move: the Azure `failures`
+alert keys off the wrapper's `cloud_job event=failure` line and a "cloud
+delivery uncertain" line, which a failed run produces, plus platform errors.
+
+### Alerts and budget
+
+All three e-mail the owner through one Azure Monitor action group
+([`infra/azure/monitoring.tf`](../../../infra/azure/monitoring.tf)). The alert
+rules are evaluated every 15 minutes at severity 2 and are enabled together with
+the job schedules.
+
+| Alert | Fires when | Why it exists |
+|---|---|---|
+| `failures` | In the last 30 minutes, any `cloud_job event=failure`, any "cloud delivery uncertain" line, or a platform error such as an image-pull failure or a crashing container | A run that failed, or a delivery whose outcome is unknown and must be reconciled by hand before it is resent |
+| `freshness` | A job has no success inside its expected window: `daytime` 20 hours; `overnight`, `evening`, `daily`, `weekly` and `backup` 26 hours; `positions` 6 hours; `patreon` and `relay` 2 hours | A job that did not run, or kept skipping or failing, produces no failure line at all. This is the alert that notices silence, including a skipped cursor slot, which exits 0 |
+| Monthly budget | Actual spend on the application resource group reaches 80% and 100% of the monthly amount | Early notice of unexpected cost. It does **not** cap spending, and it covers the application resource group only, not the backup or Terraform-backend groups |
+
+Two limits to keep in view. Both alert rules are aggregate: they do not say
+which job failed, so the owner reads the log lines for that. And the alert
+queries were declared before the log tables existed, with query validation
+skipped; the runbook makes confirming the real table columns, error reasons and
+notification routing a pilot task. Treat "an alert reaches the owner on a real
+failed run" as **designed and deployed, not yet observed**.
+
+One data point exists. On 2026-10-09, shortly after activation, the `freshness`
+alert e-mailed the owner because jobs that had not yet had their first
+scheduled run counted as stale. That shows the rule evaluates and its
+notification is delivered; it was not a failed run, and the `failures` alert
+has not been seen to fire.
 
 ### How a failure actually becomes visible
 
@@ -51,16 +85,14 @@ In order of what is actually known to happen, most to least reliable:
 2. **The digest arrives with a failure banner** for a specific source —
    window-mode partial failures are deliberately visible in the delivered
    content itself (README, `digest/main.py`), not just in logs.
-3. **`systemctl status <unit>`** or `journalctl` on the VM, checked by hand,
-   shows a failed run and its log lines (including
+3. **The Container Apps job execution history** and its Log Analytics lines,
+   checked by hand, show a failed or skipped run and its log lines (including
    `run_summary`/`digest_delivery`) if the owner goes looking.
-4. **An automated alert**, if the homelab Loki/Grafana pipeline that this app's
-   log lines are designed for is actually wired up and firing — status not
-   confirmed here.
+4. **An alert e-mail** from `failures` or `freshness`, as above — deployed, but
+   not yet recorded as having fired on a real incident.
 
-There is no mechanism in this repository that pushes a failure notification to
-the owner beyond the digest content itself and whatever the host-level pipeline
-in (4) does.
+Beyond the digest content, the alerts above are the only mechanism that pushes a
+failure notification to the owner.
 
 ### Gaps — explicitly not covered
 
@@ -69,14 +101,15 @@ in (4) does.
   [availability.md](../reliability/availability.md)).
 - **No tracing.** A single sequential process per run has little need for
   distributed tracing, but there is also no correlation ID threading a run's log
-  lines together beyond timestamp proximity in the same journal stream.
-- **No dashboard.** No Grafana panel, Loki dashboard, or equivalent is known to
-  exist for this specific service in either repository.
-- **No confirmed alert.** See above — the code assumes one exists; its current
-  existence and correctness cannot be verified from this repository.
-- **No log retention policy owned by this system.** Retention of the
-  journald/Loki data (if any) is entirely a function of the host's own
-  configuration, not this application.
+  lines together beyond timestamp proximity within one execution's logs.
+- **No dashboard.** No Azure workbook or equivalent is defined for this service.
+- **No per-job alerts.** `failures` and `freshness` are aggregate. A noisy
+  period would e-mail the same alert without saying which job caused it.
+- **Skipped slots are quiet.** A cursor-based job that skips a slot because the
+  lease was busy exits 0 and logs a `skipped` line. Only `freshness` notices
+  repeated skips, and only after its window passes.
+- **Log retention is 30 days and quota-bound.** Nothing older than that is
+  queryable, and a day over quota loses logs.
 - **Per-collector failures are not surfaced anywhere except the log lines and
   the delivered digest's own banner.** There is no running count of "how often
   has collector X failed this month."
@@ -84,13 +117,13 @@ in (4) does.
   fallback-chain trigger rate) are tracked or exported anywhere, despite
   [QA-07](../requirements/quality-attributes.md) naming cost as a quality
   attribute and [RISK-004](../risks/architecture-risks.md) tracking the fallback
-  chain's unbounded-cost exposure — that exposure is currently invisible until
-  the owner notices a bill.
+  chain's cost exposure. The monthly budget notifies the owner of Azure spend,
+  not of Claude API spend, so that exposure is still invisible until the owner
+  notices a bill.
 
 ### Where this fits
 
 See [deployment-architecture.md](../deployment/deployment-architecture.md) for
 where the container and its logs physically run, and
-[availability.md](../reliability/availability.md) for how the absence of
-automated alerting interacts with "a missed run is tolerable, a duplicate
-delivery is not."
+[availability.md](../reliability/availability.md) for how detection interacts
+with "a missed run is tolerable, a duplicate delivery is not."
