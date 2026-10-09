@@ -137,14 +137,15 @@ the same prefix with `:environment:azure-production`, audience
 `api://AzureADTokenExchange`. Read the exact prefix from `sub_claim_prefix` in
 `gh api repos/Dezoxy/notification-digest/actions/oidc/customization/sub`; the
 name-only form `repo:Dezoxy/notification-digest:...` does not match and fails
-`terraform init` with `AADSTS700213`. Restrict both environments to `main`. GitHub does
-not offer required reviewers on this private personal repository, so approval
-is a two-step dispatch: review the saved plan, then dispatch the apply with
-that plan run's ID. The apply job fails closed unless that run is a successful
-`azure-deploy` plan from `main` at the same commit. The one exception is a merged
-image-pin bump, which `release-apply` deploys without a dispatch once its guard
-accepts the plan (see [Image upgrades](#image-upgrades)); its federated credential
-is the same `azure-production` environment. These repository/Entra
+`terraform init` with `AADSTS700213`. Restrict both environments to `main`. GitHub
+offered no required reviewers on this personal repository while it was private,
+and the workflow does not rely on them, so approval is a two-step dispatch:
+review the saved plan, then dispatch the apply with that plan run's ID. The
+apply job fails closed unless that run is a successful `azure-deploy` plan
+from `main` at the same commit. The one exception is a merged image-pin
+bump, which `release-apply` deploys without a dispatch once its guard
+accepts the plan (see [Image upgrades](#image-upgrades)); its federated
+credential is the same `azure-production` environment. These repository/Entra
 settings are prerequisites, not settings that the workflow YAML can enforce by
 itself.
 
@@ -217,8 +218,50 @@ GHCR pulls use a read-packages PAT via a Key Vault-backed registry password
 reference; Azure managed identity cannot directly authenticate to GHCR. OAuth,
 session strings, cookies and publication credentials never enter Terraform
 inputs. AzureRM may store provider-computed Storage/Log Analytics keys in state:
-protect backend state and private one-day plan artifacts; do not share binary
+protect backend state and short-lived plan artifacts; do not share binary
 plans. Shared Key storage authentication is disabled.
+
+### Public repository
+
+The repository has been public since 2026-10-09. Consequences, each checked
+against `.github/workflows/` and `infra/azure/`:
+
+- Workflow logs are readable by anyone, and so are the `azure-plan-*` artifacts
+  while they exist (`deployment.tfplan`, `deployment-plan.txt`,
+  `production.auto.tfvars.json`, `backend.hcl`). They can include resource
+  names, Azure IDs and the nonsecret Terraform inputs.
+- Secrets are Key Vault references (`key_vault_secret_id` in
+  `infra/azure/main.tf`) and never Terraform inputs, so no Key Vault secret value
+  appears in the inputs, the plan text or the logs. The binary `deployment.tfplan`
+  also embeds the prior state, so treat it as sensitive even though it is
+  downloadable. The storage accounts have shared-key access disabled, so their
+  keys are unusable. The Log Analytics workspace shared key (ingestion only) is
+  the one provider-computed credential that may appear in a plan; it cannot be
+  disabled because the Container Apps environment uses it.
+- The exposure window is cut to roughly the length of a run. The `release-apply`
+  job of an image-pin run deletes that run's `azure-plan-<run_id>` artifact in a
+  final `always()` step, so it is removed after success, failure, a refused
+  guard, a noop or a cancellation. The artifact of a manual plan lives until
+  that plan is applied (the `apply` job deletes it when it ends, whatever the
+  outcome) or at most one day (`retention-days: 1`). Deletion is best-effort: a
+  failure raises a `::warning::` and the artifact still expires after one day.
+  To delete a manual plan's artifact early, find its id and delete it:
+
+  ```sh
+  gh api repos/Dezoxy/notification-digest/actions/runs/PLAN_RUN_ID/artifacts \
+    --jq '.artifacts[] | {id, name}'
+  gh api -X DELETE repos/Dezoxy/notification-digest/actions/artifacts/ARTIFACT_ID
+  ```
+
+- Runs triggered by fork pull requests get no secrets and no OIDC token (GitHub
+  withholds both), and the repository requires maintainer approval for every
+  external contributor. No workflow that runs on `pull_request` references an
+  environment, a secret or a repository variable, and `azure-deploy` runs only
+  from `main`.
+- Both deploy environments, `azure-plan` and `azure-production`, are restricted
+  to `main` by deployment branch policy.
+- The container image `ghcr.io/dezoxy/notification-digest` stays private; Azure
+  pulls it with the Key Vault-backed read-packages token.
 
 ## Copy digest secrets to the dedicated vault
 

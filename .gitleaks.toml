@@ -1,0 +1,18 @@
+# Secret-scan config for .github/workflows/gitleaks.yml.
+# Extends the gitleaks default ruleset; the allowlist below is the only
+# suppression and is kept as narrow as the findings allow.
+[extend]
+useDefault = true
+
+# Test fixtures that trip `generic-api-key` (4 findings across history: two
+# commits each in these two files). The values are made-up strings used to
+# exercise redaction/rendering, not credentials. Scoped by rule AND path so a
+# real secret in these files under any other rule, or in any other file under
+# this rule, is still reported.
+[[allowlists]]
+description = "Known false positives: generic-api-key in test fixtures"
+targetRules = ["generic-api-key"]
+paths = [
+  '''^tests/test_cloud_state\.py$''',
+  '''^workers/news-site/test/render\.test\.mjs$''',
+]

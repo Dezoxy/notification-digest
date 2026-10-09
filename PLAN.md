@@ -101,6 +101,7 @@ notification-digest/
 │       ├── release.yml           # build + push digest image to GHCR on git tag (or called by auto-release)
 │       ├── auto-release.yml      # gate + next patch tag + release for merges touching shipped files
 │       ├── pr-summary.yml        # post-merge PR summary -> docs/pr-summaries/pr-<n>.md
+│       ├── gitleaks.yml          # secret scan (gitleaks, pinned + sha256-verified) on every PR and push to main
 │       ├── architecture-pdf.yml  # operator-run: architecture PDF -> a GitHub release
 │       ├── azure-validate.yml    # credential-free Terraform validation
 │       ├── azure-application.yml # lint, offline/failure tests and container build
@@ -238,6 +239,8 @@ notification-digest/
 ├── compose.yml                    # local dev: one-shot `digest` service + env file, no host deps
 ├── pyproject.toml                 # uv-managed, Python >=3.12, collectors/rendering and Azure Blob/identity SDKs
 ├── renovate.json                  # dependency automation; twifork is dashboard-gated (hand audit per bump)
+├── .gitleaks.toml                 # gitleaks config: default rules + narrow test-fixture allowlist (rule AND path)
+├── SECURITY.md                    # private vulnerability reporting via GitHub; best-effort, latest release only
 └── .env.example                   # documents every env var from §4.7, no real values
 ```
 
@@ -618,7 +621,7 @@ Cost: reasoning tokens are billed as output and are the main unknown, so `run_op
 
 Not part of this repo — tracked here for continuity into `~/developer/homelab`.
 
-**Release pipeline:** this repo is a versioned, released artifact, same as the owner's other self-made apps. `.github/workflows/release.yml` builds the Docker image on git tag push and publishes it to GHCR as `ghcr.io/dezoxy/notification-digest:<tag>`, published from the private repo `Dezoxy/notification-digest`. No image is ever built on the VM. Renovate, already running in the `~/developer/homelab` repo, opens a PR bumping the pinned `digest` tag whenever a new release lands in GHCR; deploy after that is a separate, manual step — either the homelab repo's Makefile/Ansible invocation by hand, or its own GitHub Actions. Historically, changing code in this repo shipped nothing until a tag was cut **and** the homelab repo bumped and deployed. Since the Azure migration, `.github/workflows/auto-release.yml` cuts the next patch tag for merges touching shipped files and the Azure pin follows through Renovate and the guarded `azure-deploy`; the homelab bump/deploy remains its own step until cutover.
+**Release pipeline:** this repo is a versioned, released artifact, same as the owner's other self-made apps. `.github/workflows/release.yml` builds the Docker image on git tag push and publishes it to GHCR as `ghcr.io/dezoxy/notification-digest:<tag>`, published from the repo `Dezoxy/notification-digest` (public since 2026-10-09; the image itself stays private). No image is ever built on the VM. Renovate, already running in the `~/developer/homelab` repo, opens a PR bumping the pinned `digest` tag whenever a new release lands in GHCR; deploy after that is a separate, manual step — either the homelab repo's Makefile/Ansible invocation by hand, or its own GitHub Actions. Historically, changing code in this repo shipped nothing until a tag was cut **and** the homelab repo bumped and deployed. Since the Azure migration, `.github/workflows/auto-release.yml` cuts the next patch tag for merges touching shipped files and the Azure pin follows through Renovate and the guarded `azure-deploy`; the homelab bump/deploy remains its own step until cutover.
 
 **Ansible `myapps` role additions:**
 - New compose service block for `digest` (pulls the pinned `ghcr.io/dezoxy/notification-digest` image tag — never built on the VM, same pattern as `netcheck` pinned to `ghcr.io/dezoxy/netcheck:2.9.0` in the role defaults — env from Key Vault-sourced vars, volumes for `/srv/appdata/digest`).

@@ -62,3 +62,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+        env:
+          # The repository is public: skip uploading the .dockerbuild build-record
+          # artifact, which anyone could download. Documented in
+          # docker/build-push-action v7 "Environment variables".
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
