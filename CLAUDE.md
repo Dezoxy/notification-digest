@@ -99,6 +99,12 @@ true at the multi-channel cutover.
   pushes to main are blocked by `.githooks/pre-push` (activated per-clone
   with `git config core.hooksPath .githooks`); `ALLOW_MAIN_PUSH=1` exists
   only for bootstrap.
+- `main` is protected by the ruleset "main protection": a pull request is
+  required, force-push and deletion are blocked, and repo admins can bypass only
+  through a pull request. The checks `test-and-build`, `validate`, `gitleaks`
+  and `news-site` run on every PR (their workflows are deliberately not
+  path-filtered) and are the required status checks; they are added to the
+  ruleset after these workflows reached main.
 - Dependency bumps arrive as Renovate PRs (`renovate.json`), one at a time,
   weekday mornings. The /docs-sync and /pr-summary rules below are written
   for PRs a session drives and do not apply to them -- a bot cannot run
@@ -127,16 +133,15 @@ true at the multi-channel cutover.
   findings gate PRs; other reviewers' threads are informational.
 - After merging a PR, `/pr-summary <n>` (or
   `uv run python scripts/pr_summary.py <n>`) produces the post-merge run-over
-  summary. A markdown copy also lands automatically at
-  `docs/pr-summaries/pr-<n>.md` on merge (CI: `.github/workflows/pr-summary.yml`,
-  `scripts/pr_summary.py <n> --markdown`) — the skill/script above remain the
-  way to get the narrative, human-synthesized version on demand.
+  summary. Nothing writes `docs/pr-summaries/` automatically any more: the CI
+  workflow that did was removed, and the existing files there are historical.
+  The skill/script above is the way to get the narrative on demand.
 - Whenever a session is involved in a merge (it drove the PR, or the owner
   reports merging one), it must run /pr-summary for that PR and deliver the
-  four-section narrative to the owner in its reply. The CI file stays
-  data-only; the narrative lives in the conversation unless the owner asks to
-  persist it, in which case prepend it to `docs/pr-summaries/pr-<n>.md` via a
-  small docs PR (direct pushes to main stay hook-blocked).
+  four-section narrative to the owner in its reply. The narrative lives in the
+  conversation unless the owner asks to persist it, in which case write it to
+  `docs/pr-summaries/pr-<n>.md` through a normal docs PR (direct pushes to main
+  stay hook-blocked).
 
 ## Agent harness
 

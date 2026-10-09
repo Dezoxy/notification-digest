@@ -1,11 +1,11 @@
 name: azure-application
 
+# Deliberately not path-filtered: a required check that does not report blocks a
+# PR forever, and this job is a required status check on main.
 on:
   pull_request:
-    paths: ['digest/**', 'tests/**', 'scripts/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
   push:
     branches: [main]
-    paths: ['digest/**', 'tests/**', 'scripts/**', 'pyproject.toml', 'uv.lock', 'Dockerfile', '.github/workflows/azure-application.yml']
 
 permissions:
   contents: read

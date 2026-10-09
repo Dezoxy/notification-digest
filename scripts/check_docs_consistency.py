@@ -31,7 +31,7 @@ VIEWS_DSL = ARCH / "model" / "views.dsl"
 
 # Generated output and templates with example links are not documentation.
 # Consumer additions for this repository:
-#   pr-summaries  CI writes these from a merged PR (.github/workflows/pr-summary.yml).
+#   pr-summaries  historical files a CI workflow once wrote from merged PRs (since removed).
 #                 Their links are narrative references relative to the repo root,
 #                 not to the file, so they can never resolve here. The generator
 #                 owns that format; hand-editing 100+ generated files would not.

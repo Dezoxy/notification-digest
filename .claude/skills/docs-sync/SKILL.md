@@ -81,7 +81,9 @@ docs explaining why a worker lives where it no longer lives.
      SHIP in every page. Editing them changes rendered bytes: run
      `npm run golden` there and let the golden diff be the review artifact.
      Never introduce a backtick or `${` in those files.
-   - `docs/pr-summaries/` is CI-generated — never hand-edit it.
+   - `docs/pr-summaries/` holds historical generated files — never hand-edit
+     them. Nothing generates new ones automatically any more; a persisted
+     narrative arrives only through an explicit docs PR.
 
 6. Close with proof in the PR body: one line per doc touched saying what
    was false and what verified the fix ("README table listed 16 modules,

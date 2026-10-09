@@ -6,7 +6,7 @@
 | [Azure migration](azure-migration.md) | App-owned target hosting, state handoff, schedule activation and cloud recovery; production cutover pending |
 | [Incidents](#incidents) | What actually went wrong, and what changed because of it |
 | [Design guidance](redesign-design-guidance.md) | Design principles distilled for the news-site work |
-| PR summaries | `pr-summaries/pr-<n>.md`, written automatically when a pull request merges. Generated output, not hand-maintained |
+| PR summaries | `pr-summaries/pr-<n>.md`, historical summaries written by a CI workflow that has been removed. Generated output, not hand-maintained; nothing adds new ones automatically |
 
 ## Incidents
 
