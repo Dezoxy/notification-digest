@@ -28,7 +28,7 @@ RUN apt-get update \
 
 # Owner-approved current CLI; subscription OAuth and editorial settings stay.
 # The measured VM baseline was 2.1.284; the homelab global pin is separate.
-RUN npm install -g @anthropic-ai/claude-code@2.1.294
+RUN npm install -g @anthropic-ai/claude-code@2.1.295
 
 WORKDIR /app
 
