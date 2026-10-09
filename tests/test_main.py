@@ -11,6 +11,7 @@ import pytest
 import digest.deliver as deliver_mod
 import digest.main as main_mod
 import digest.summarize as summarize_mod
+from digest.anthropic_api import FederationConfig
 from digest.collectors.base import CollectResult
 from digest.collectors.polymarket import PolymarketCollectResult
 from digest.config import Config
@@ -4748,10 +4749,17 @@ def test_deliver_channels_hidden_channel_does_not_suppress_the_others(conn, monk
     assert emailed == ["sent"]
 
 
-# --- OpenRouter fallback chain wiring (digest/main.py's _fallback_legs) ---
+# --- Claude API fallback chain wiring (digest/main.py's _fallback_legs) ---
+
+_FEDERATION = FederationConfig(
+    rule_id="fdrl_test",
+    organization_id="11111111-2222-3333-4444-555555555555",
+    service_account_id="svac_test",
+    audience="api://11111111-2222-3333-4444-555555555555",
+)
 
 
-def test_deliver_summarize_receives_fallback_legs_when_openrouter_configured(conn, monkeypatch):
+def test_deliver_summarize_receives_fallback_legs_when_federation_configured(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     captured = {}
 
@@ -4763,15 +4771,16 @@ def test_deliver_summarize_receives_fallback_legs_when_openrouter_configured(con
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
 
-    cfg = replace(_cfg(), openrouter_api_key="sk-or-test-key")
+    cfg = replace(_cfg(), anthropic_federation=_FEDERATION)
     ok = _deliver(conn, cfg, [])
 
     assert ok is True
     assert captured["fallbacks"] != ()
     assert all(leg.model in cfg.fallback_models for leg in captured["fallbacks"])
+    assert all(leg.federation is _FEDERATION for leg in captured["fallbacks"])
 
 
-def test_deliver_summarize_receives_empty_fallbacks_when_openrouter_unconfigured(conn, monkeypatch):
+def test_deliver_summarize_receives_empty_fallbacks_when_federation_unconfigured(conn, monkeypatch):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
     captured = {}
 
@@ -4783,7 +4792,7 @@ def test_deliver_summarize_receives_empty_fallbacks_when_openrouter_unconfigured
     monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
     monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
 
-    cfg = _cfg()  # openrouter_api_key defaults to None -- unconfigured
+    cfg = _cfg()  # anthropic_federation defaults to None -- unconfigured
 
     ok = _deliver(conn, cfg, [])
 
@@ -4791,7 +4800,7 @@ def test_deliver_summarize_receives_empty_fallbacks_when_openrouter_unconfigured
     assert captured["fallbacks"] == ()
 
 
-def test_deliver_translate_digest_receives_fallback_legs_when_openrouter_configured(
+def test_deliver_translate_digest_receives_fallback_legs_when_federation_configured(
     conn, monkeypatch
 ):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
@@ -4809,15 +4818,16 @@ def test_deliver_translate_digest_receives_fallback_legs_when_openrouter_configu
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
 
-    cfg = replace(_cfg(), translate_hu_enabled=True, openrouter_api_key="sk-or-test-key")
+    cfg = replace(_cfg(), translate_hu_enabled=True, anthropic_federation=_FEDERATION)
     ok = _deliver(conn, cfg, [])
 
     assert ok is True
     assert captured["fallbacks"] != ()
     assert all(leg.model in cfg.fallback_light_models for leg in captured["fallbacks"])
+    assert all(leg.federation is _FEDERATION for leg in captured["fallbacks"])
 
 
-def test_deliver_translate_digest_receives_empty_fallbacks_when_openrouter_unconfigured(
+def test_deliver_translate_digest_receives_empty_fallbacks_when_federation_unconfigured(
     conn, monkeypatch
 ):
     commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
@@ -4835,7 +4845,7 @@ def test_deliver_translate_digest_receives_empty_fallbacks_when_openrouter_uncon
 
     monkeypatch.setattr(main_mod, "translate_digest", fake_translate)
 
-    cfg = replace(_cfg(), translate_hu_enabled=True)  # openrouter_api_key unset
+    cfg = replace(_cfg(), translate_hu_enabled=True)  # anthropic_federation unset
     ok = _deliver(conn, cfg, [])
 
     assert ok is True

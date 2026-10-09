@@ -212,8 +212,8 @@ def generate_arc_context(
        meaningfully address, and PLAN.md §11.6's own Config list
        (CONTEXT_MODEL, CONTEXT_TIMEOUT_SECONDS -- no fallback field)
        confirms this was the intended shape. This is UNRELATED to, and
-       unchanged by, the `fallbacks`/OpenRouter chain documented below: that
-       chain reaches for a DIFFERENT provider on ANY primary failure
+       unchanged by, the `fallbacks`/Claude API chain documented below: that
+       chain reaches for the API instead of the CLI on ANY primary failure
        (subscription limits, transient CLI errors -- not just a safeguards
        refusal), which is exactly why `run_with_fallbacks` catches every
        failure shape uniformly rather than special-casing
@@ -270,7 +270,7 @@ def generate_arc_context(
     from one that legitimately ended at exactly the cap.
 
     `fallbacks` (default `()`, matching every existing direct call and
-    test) is this primer's own OpenRouter chain, on the LIGHT tier
+    test) is this primer's own Claude API chain, on the LIGHT tier
     (`Config.fallback_light_models`, the same tier `translate_digest` uses
     -- see digest/main.py's `_fallback_legs`): writing a few short,
     factual paragraphs is closer to translation's "no editorial judgment"

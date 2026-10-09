@@ -10,7 +10,9 @@ in West Europe, with 0.5 vCPU, 1 GiB, no platform retries and a 50-minute
 platform timeout. The runner allows at most ten minutes waiting
 for the lease and 35 minutes of active work, then fences the process group.
 It preserves `CLAUDE_CODE_OAUTH_TOKEN` subscription authentication, models,
-effort, prompts, translations, verification and OpenRouter fallbacks. The owner
+effort, prompts, translations and verification; fallbacks move from OpenRouter
+to the Claude API over workload identity federation (no key; see
+[Claude API fallback](#claude-api-fallback-workload-identity-federation)). The owner
 requested the current Claude CLI, so the migration image now pins **2.1.294**
 (the official npm latest and Anthropic release verified on 2026-10-08). That
 release requires Node >=22: the Dockerfile copies Node/npm from the official
@@ -193,8 +195,10 @@ The app configuration was rendered offline from the declared homelab defaults
 and host overrides on 2026-10-08. Recheck the baseline against final live
 configuration before cutover: collector flags, feeds/allowlists, topics,
 model/effort/budgets, translation, verification, context, delivery channels and
-fallback omission semantics. Leaving `FALLBACK_MODELS` unset retains the app's
-defaults; an empty value disables them. Azure env values are literal: keep
+fallback omission semantics. The fallback chain exists only when the four
+`ANTHROPIC_*` federation identifiers are set; with them set, leaving
+`FALLBACK_MODELS` unset retains the app's defaults and an empty value disables
+that tier. Azure env values are literal: keep
 `$FET,$ASI` as single dollars, unlike homelab Compose env-file escaping.
 
 Choose globally unique names for the runtime storage account, **different**
@@ -526,6 +530,159 @@ newer image has not migrated the state. Once it has, recovery is a restore from 
 daily backup (see [Interrupted runs and recovery](#interrupted-runs-and-recovery)),
 not an image rollback.
 
+## Claude API fallback (workload identity federation)
+
+The summarizer's primary call is `claude -p` on the subscription. When it fails
+(safeguards refusal, usage limit, timeout, empty output) the same prompt is
+retried against the Claude API, billed to prepaid API credits, in the order of
+`FALLBACK_MODELS` (editorial tier: `claude-opus-5-5,claude-sonnet-5-5`) or
+`FALLBACK_LIGHT_MODELS` (translation and arc context:
+`claude-sonnet-5-5,claude-haiku-5-5`). There is **no API key**: the runner's
+user-assigned managed identity (`notification-digest-runner`) requests an Entra
+token for a dedicated audience app registration (`api://<APP_ID>`), exchanges it
+at `https://api.anthropic.com/v1/oauth/token` (RFC 7523 jwt-bearer, Anthropic
+Workload Identity Federation) for a short-lived access token and calls
+`/v1/messages` with it, once per fallback call. The decision and its
+alternatives are [ADR 9](architecture/decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md).
+
+The chain is off until all four required variables are set. Everything below is
+identifiers, not secrets: nothing Anthropic-related is stored in the vault, and
+the `digest-openrouter-api-key` secret is no longer used. An expired or
+misconfigured federation fails **only at fallback time, never at startup**, so
+the smoke test in step 5 is part of the setup, not an optional extra.
+
+### Setup
+
+1. **Entra audience.** Entra only issues a token for an audience that exists in
+   the tenant, so register one app and its service principal (the exact steps
+   are in Anthropic's
+   [Azure provider guide](https://platform.claude.com/docs/en/manage-claude/wif-providers/azure#register-the-token-audience);
+   re-read them before running anything):
+
+   ```sh
+   APP_ID=$(az ad app create --display-name claude-api-federation \
+     --sign-in-audience AzureADMyOrg --query appId -o tsv)
+   az ad app update --id "$APP_ID" --identifier-uris "api://$APP_ID" \
+     --set api.requestedAccessTokenVersion=2
+   az ad sp create --id "$APP_ID"
+   ```
+
+   `requestedAccessTokenVersion=2` makes the tokens v2.0, which the rule below
+   assumes. Select the tenant and subscription explicitly. Without this
+   registration the first fallback fails with `AADSTS500011`/`AADSTS50001`.
+
+2. **Claude Console** (Settings, Workload identity, Connect workload, Microsoft
+   Entra ID):
+   - Issuer `https://login.microsoftonline.com/<TENANT_ID>/v2.0` (the v2.0
+     selector, discovery mode). The wizard creates the issuer with a 7500 s
+     maximum JWT lifetime; managed identity tokens carry up to 24 hours between
+     `iat` and `exp`, so edit the issuer afterwards (Settings, Workload
+     identity, Issuers) and raise `max_jwt_lifetime_seconds` to `86400`.
+     Otherwise every exchange fails with an opaque 401.
+   - A service account placed in a **dedicated workspace with a monthly spend
+     limit**. That limit is the only cap on the cost if every call falls
+     through; nothing in the code caps spend.
+   - A federation rule on that service account matching the runner identity:
+     `audience` = `<APP_ID>` (the bare GUID, not the `api://` form), claim `oid`
+     = `<RUNNER_IDENTITY_OBJECT_ID>` and claim `tid` = `<TENANT_ID>`. Get the
+     object ID with `az identity show --name notification-digest-runner
+     --resource-group <APP_RESOURCE_GROUP> --query principalId -o tsv`. Never
+     use a wildcard or partial `subject_prefix`: without an `oid` match the
+     rule authorizes every managed identity in the tenant.
+   - Note the rule ID (`fdrl_...`), organization ID (a UUID), service account ID
+     (`svac_...`) and, optionally, the workspace ID (`wrkspc_...`).
+
+3. **Variables.** Add the non-secret values to `app_env` in the
+   `AZURE_TERRAFORM_VARS_JSON` variable of the `azure-plan` GitHub environment
+   (the shape is in
+   [production.auto.tfvars.example](../infra/azure/production.auto.tfvars.example)):
+   `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`,
+   `ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_FEDERATION_AUDIENCE`
+   (`api://<APP_ID>`), and optionally `ANTHROPIC_WORKSPACE_ID`. Set all four
+   required ones or none: a partial set stops every job at startup with a
+   `ConfigError` naming the missing variables. The managed identity's client id
+   is the existing `DIGEST_CLOUD_IDENTITY_CLIENT_ID` that Terraform already
+   injects; do not add it. This is a non-image change, so the release guard
+   refuses it by design: dispatch `azure-deploy` with `operation=plan`, review
+   the plan (only job environment changes), then `operation=apply` with that
+   `plan_run_id`, as in [Validate, release and provision disabled
+   jobs](#validate-release-and-provision-disabled-jobs).
+
+4. **Remove the OpenRouter key.** Delete `OPENROUTER_API_KEY` from
+   `secret_names` in the same variable (the application no longer reads it).
+   After that apply, the `digest-openrouter-api-key` secret may be deleted from
+   the digest Key Vault; the operator needs the temporary scoped grant described
+   under [Temporary operator access](#temporary-operator-access) and should
+   revoke it afterwards. The migration manifest
+   `infra/azure/secret-migration.json` no longer lists it either.
+
+5. **Smoke test.** Before relying on the chain, start one execution of a job
+   with its command overridden to `python -c` plus the program below. It builds
+   the real configuration and makes one tiny call through the same code path a
+   fallback uses, printing nothing but `OK` on success. It takes no lease, reads
+   no state and sends nothing to Telegram or the site, so any job will do. An
+   execution override replaces the container wholesale, so copy the job's own
+   `env`, `image` and resources and change only the command:
+
+   ```python
+   from digest.anthropic_api import run_anthropic
+   from digest.config import Config
+
+   cfg = Config.from_env()
+   assert cfg.anthropic_federation is not None, "federation variables unset"
+   run_anthropic("Reply with one word.", "claude-haiku-5-5", 60, cfg.anthropic_federation)
+   print("OK")
+   ```
+
+   ```sh
+   JOB=digest-relay   # any of the nine; the command override means nothing else runs
+   az containerapp job show -g <APP_RESOURCE_GROUP> -n "$JOB" -o json > job.json
+   jq --rawfile prog smoke.py '.properties.template.containers[0] |
+     {containers: [{name, image, command: ["python", "-c", $prog], env,
+                    resources: {cpu: .resources.cpu, memory: .resources.memory}}]}' \
+     job.json > body.json
+   az rest --method post --body @body.json \
+     --url "https://management.azure.com$(jq -r .id job.json)/start?api-version=2024-03-01"
+   rm -f job.json body.json
+   ```
+
+   Save the program above as `smoke.py` first. `job.json` and `body.json` hold
+   only secret references, never values, but delete them anyway. Read the result
+   with `az containerapp job execution show` and the execution's console log.
+
+   A traceback names a step and an HTTP status or exception type, never a body,
+   token or URL. If the exchange returns 401, check the Console's authentication
+   history for the deny reason, then the usual causes: issuer URL not matching
+   the token's `iss`, the 86400 s lifetime in step 2, a rule `audience` that is
+   not the bare `<APP_ID>`, or an `oid` that is not the runner identity's. Repeat
+   the test after any change to the rule, the issuer or the audience app.
+
+### Operating it
+
+- **Security boundary.** The identifiers are not secrets. The `claude -p`
+  subprocess environment withholds `IDENTITY_ENDPOINT`, `IDENTITY_HEADER` and
+  every `ANTHROPIC_*` variable (`claude_subprocess_env`): the first two would let
+  content-facing code mint tokens for the runner identity (Blob state, API
+  credit), and an `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` reaching the CLI
+  would take precedence over `CLAUDE_CODE_OAUTH_TOKEN` and silently move every
+  digest from the flat subscription to metered API billing. Never set either of
+  those variables in `app_env` or the job.
+- **Cost.** A fallback call bills the chosen model's API price for one digest's
+  tokens, with `output_config.effort` fixed at `high` and `max_tokens` 32000. The
+  earlier OpenRouter estimate does not carry over and no replacement figure is
+  claimed here: measure it from the `claude api usage: model=... input_tokens=...
+  output_tokens=...` line logged by the first real fallback, then size the
+  workspace's monthly limit from it. A reply ending in `max_tokens` or `refusal`
+  counts as a failed leg and the chain moves on.
+- **Provenance.** A digest served by a fallback records the Claude API model and
+  `fallback: true`, shown on the site as the `↻` marker.
+- **Rollback.** Remove the four variables through the same plan/apply to return
+  to Claude CLI only; nothing else depends on them. Disabling the federation rule
+  in the Console stops exchanges immediately.
+- **Retired code.** `digest/openrouter.py` and `tests/test_openrouter.py` remain,
+  unwired, and are deleted in a follow-up once the first real fallback has proven
+  this leg.
+
 ## State handoff and activation
 
 Complete shared homelab alert separation first: jobs-refresh currently uses
@@ -603,7 +760,8 @@ Record cloud execution IDs, image/configuration pins and status-only evidence
 for **every enabled collector and publication lane**: Telegram/relay, X, RSS,
 Reddit, Hacker News, Polymarket, Patreon and positions as configured. Verify
 subscription Claude calls, HU translation, daily web verification, configured
-OpenRouter fallback authentication, Telegram notifications, site ingest and
+Claude API fallback authentication (the federation smoke test, and a real
+fallback if one has occurred), Telegram notifications, site ingest and
 email only if enabled. A TCP connection or one successful digest is insufficient:
 validate authenticated requests and actual parsing/publication, including paid
 Patreon access. An empty healthy feed can pass with authenticated/status evidence;

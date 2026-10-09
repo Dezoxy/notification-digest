@@ -104,7 +104,7 @@ def summarize_post(
     the digest link rather than on mere row presence.
 
     `fallbacks` (default `()`, matching every existing direct call and
-    test) is this post's own OpenRouter fallback chain -- see
+    test) is this post's own Claude API fallback chain -- see
     digest/summarize.py's `run_with_fallbacks` for the full mechanics, and
     `fallback_budget_seconds` (default 180) the SHARED wall-clock budget
     every leg of that chain draws from together. digest/main.py's

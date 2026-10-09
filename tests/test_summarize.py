@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 import digest.summarize as summarize_mod
+from digest.anthropic_api import EFFORT, AnthropicApiError, FederationConfig
 from digest.emailer import render_html
-from digest.openrouter import OpenRouterError
 from digest.state import Item
 from digest.summarize import (
     FallbackLeg,
@@ -2737,8 +2737,16 @@ def test_summarize_end_to_end_tldr_is_citation_free_and_body_renumbers_from_one(
 # --- run_with_fallbacks ---
 
 
-def _leg(model: str = "openai/gpt-5.6-sol") -> FallbackLeg:
-    return FallbackLeg(model=model, api_key="sk-test-key")
+_FEDERATION = FederationConfig(
+    rule_id="fdrl_test",
+    organization_id="11111111-2222-3333-4444-555555555555",
+    service_account_id="svac_test",
+    audience="api://11111111-2222-3333-4444-555555555555",
+)
+
+
+def _leg(model: str = "claude-opus-5-5") -> FallbackLeg:
+    return FallbackLeg(model=model, federation=_FEDERATION)
 
 
 class TestRunWithFallbacks:
@@ -2746,7 +2754,7 @@ class TestRunWithFallbacks:
         leg_calls = []
         monkeypatch.setattr(
             summarize_mod,
-            "run_openrouter",
+            "run_anthropic",
             lambda *a, **k: leg_calls.append(a) or "should not be used",
         )
 
@@ -2767,73 +2775,69 @@ class TestRunWithFallbacks:
         assert model_run == ModelRun(model="claude-opus-5", effort="high", fallback=False)
 
     def test_primary_raises_first_leg_serves(self, monkeypatch):
-        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+        def fake_run_anthropic(prompt, model, timeout_seconds, federation):
             return f"output from {model}"
 
-        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_run_anthropic)
 
         def boom_primary():
             raise SummarizeError("claude -p returned empty output")
 
         result, model_run = run_with_fallbacks(
             primary=boom_primary,
-            fallbacks=(_leg("openai/gpt-5.6-sol"),),
+            fallbacks=(_leg("claude-opus-5-5"),),
             prompt="p",
             budget_seconds=180,
             primary_model="claude-opus-5",
             primary_effort="high",
         )
 
-        assert result == "output from openai/gpt-5.6-sol"
+        assert result == "output from claude-opus-5-5"
         # A fallback leg served: model_run names THAT leg's own model, at
-        # digest.openrouter.REASONING_EFFORT (never primary_effort), with
+        # digest.anthropic_api.EFFORT (never primary_effort), with
         # fallback=True.
-        assert model_run == ModelRun(
-            model="openai/gpt-5.6-sol", effort=summarize_mod.REASONING_EFFORT, fallback=True
-        )
+        assert model_run == ModelRun(model="claude-opus-5-5", effort=EFFORT, fallback=True)
 
     def test_first_leg_raises_second_leg_serves(self, monkeypatch):
-        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
-            if model == "openai/gpt-5.6-sol":
-                raise OpenRouterError("openrouter call failed with status 500")
+        def fake_run_anthropic(prompt, model, timeout_seconds, federation):
+            if model == "claude-opus-5-5":
+                raise AnthropicApiError("claude api messages call failed with status 500")
             return f"output from {model}"
 
-        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_run_anthropic)
 
         def boom_primary():
             raise SummarizeError("claude -p returned empty output")
 
         result, model_run = run_with_fallbacks(
             primary=boom_primary,
-            fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+            fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
             prompt="p",
             budget_seconds=180,
             primary_model="claude-opus-5",
             primary_effort="high",
         )
 
-        assert result == "output from z-ai/glm-5.3"
-        assert model_run == ModelRun(
-            model="z-ai/glm-5.3", effort=summarize_mod.REASONING_EFFORT, fallback=True
-        )
+        assert result == "output from claude-sonnet-5-5"
+        assert model_run == ModelRun(model="claude-sonnet-5-5", effort=EFFORT, fallback=True)
 
     def test_first_leg_output_fails_validate_second_leg_serves(self, monkeypatch):
-        # An OpenRouter model declining returns ordinary prose with HTTP 200
+        # A fallback model declining in ordinary prose returns HTTP 200
         # -- a "successful" call whose output is unusable. validate() must
         # treat that exactly like a leg that raised, and move on.
-        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
-            if model == "openai/gpt-5.6-sol":
+        def fake_run_anthropic(prompt, model, timeout_seconds, federation):
+            if model == "claude-opus-5-5":
                 return "I can't help with that."
             return "## Real heading\n\nreal content"
 
-        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_run_anthropic)
 
         def boom_primary():
             raise SummarizeError("claude -p returned empty output")
 
         result, model_run = run_with_fallbacks(
             primary=boom_primary,
-            fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+            fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
             prompt="p",
             budget_seconds=180,
             primary_model="claude-opus-5",
@@ -2842,15 +2846,13 @@ class TestRunWithFallbacks:
         )
 
         assert result == "## Real heading\n\nreal content"
-        assert model_run == ModelRun(
-            model="z-ai/glm-5.3", effort=summarize_mod.REASONING_EFFORT, fallback=True
-        )
+        assert model_run == ModelRun(model="claude-sonnet-5-5", effort=EFFORT, fallback=True)
 
     def test_all_legs_fail_raises_summarize_error_naming_each_model_and_type(self, monkeypatch):
-        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
-            raise OpenRouterError("openrouter call failed with status 500")
+        def fake_run_anthropic(prompt, model, timeout_seconds, federation):
+            raise AnthropicApiError("claude api messages call failed with status 500")
 
-        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_run_anthropic)
 
         def boom_primary():
             raise SummarizeError("claude -p returned empty output, prompt was SECRET-PROMPT-TEXT")
@@ -2858,7 +2860,7 @@ class TestRunWithFallbacks:
         with pytest.raises(SummarizeError) as exc_info:
             run_with_fallbacks(
                 primary=boom_primary,
-                fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+                fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
                 prompt="the prompt containing SECRET-PROMPT-TEXT",
                 budget_seconds=180,
                 primary_model="claude-opus-5",
@@ -2866,11 +2868,11 @@ class TestRunWithFallbacks:
             )
 
         message = str(exc_info.value)
-        assert "openai/gpt-5.6-sol: OpenRouterError" in message
-        assert "z-ai/glm-5.3: OpenRouterError" in message
+        assert "claude-opus-5-5: AnthropicApiError" in message
+        assert "claude-sonnet-5-5: AnthropicApiError" in message
         assert "SECRET-PROMPT-TEXT" not in message
         # Chained from the LAST leg's own exception.
-        assert isinstance(exc_info.value.__cause__, OpenRouterError)
+        assert isinstance(exc_info.value.__cause__, AnthropicApiError)
 
     def test_empty_fallbacks_reraises_the_exact_primary_exception_object(self):
         the_original = SummarizeError("claude -p returned empty output")
@@ -2901,11 +2903,11 @@ class TestRunWithFallbacks:
 
         leg_calls = []
 
-        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+        def fake_run_anthropic(prompt, model, timeout_seconds, federation):
             leg_calls.append(model)
-            raise OpenRouterError("openrouter call failed with status 500")
+            raise AnthropicApiError("claude api messages call failed with status 500")
 
-        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_run_anthropic)
 
         def boom_primary():
             raise SummarizeError("claude -p returned empty output")
@@ -2913,15 +2915,15 @@ class TestRunWithFallbacks:
         with pytest.raises(SummarizeError) as exc_info:
             run_with_fallbacks(
                 primary=boom_primary,
-                fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+                fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
                 prompt="p",
                 budget_seconds=180,
                 primary_model="claude-opus-5",
                 primary_effort="high",
             )
 
-        assert leg_calls == ["openai/gpt-5.6-sol"]
-        assert "z-ai/glm-5.3: skipped" in str(exc_info.value)
+        assert leg_calls == ["claude-opus-5-5"]
+        assert "claude-sonnet-5-5: skipped" in str(exc_info.value)
 
     def test_a_timing_out_primary_still_gets_the_full_fallback_budget(self, monkeypatch):
         # REGRESSION (bug found in review, before this feature ever shipped):
@@ -2944,11 +2946,11 @@ class TestRunWithFallbacks:
 
         leg_calls = []
 
-        def fake_run_openrouter(prompt, model, timeout_seconds, api_key):
+        def fake_run_anthropic(prompt, model, timeout_seconds, federation):
             leg_calls.append((model, timeout_seconds))
             return "## Fallback briefing"
 
-        monkeypatch.setattr(summarize_mod, "run_openrouter", fake_run_openrouter)
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_run_anthropic)
 
         def timing_out_primary():
             now[0] += 600.0  # CLAUDE_TIMEOUT_SECONDS in production
@@ -2956,7 +2958,7 @@ class TestRunWithFallbacks:
 
         output, model_run = run_with_fallbacks(
             primary=timing_out_primary,
-            fallbacks=(_leg("openai/gpt-5.6-sol"), _leg("z-ai/glm-5.3")),
+            fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
             prompt="p",
             budget_seconds=180,
             primary_model="claude-opus-5",
@@ -2964,14 +2966,12 @@ class TestRunWithFallbacks:
         )
 
         assert output == "## Fallback briefing"
-        assert leg_calls == [("openai/gpt-5.6-sol", 180)]
-        assert model_run == ModelRun(
-            model="openai/gpt-5.6-sol", effort=summarize_mod.REASONING_EFFORT, fallback=True
-        )
+        assert leg_calls == [("claude-opus-5-5", 180)]
+        assert model_run == ModelRun(model="claude-opus-5-5", effort=EFFORT, fallback=True)
 
     def test_fallback_serving_logs_a_warning(self, monkeypatch, caplog):
         monkeypatch.setattr(
-            summarize_mod, "run_openrouter", lambda *a, **k: "output from the fallback"
+            summarize_mod, "run_anthropic", lambda *a, **k: "output from the fallback"
         )
 
         def boom_primary():
@@ -2980,11 +2980,11 @@ class TestRunWithFallbacks:
         with caplog.at_level("WARNING"):
             run_with_fallbacks(
                 primary=boom_primary,
-                fallbacks=(_leg("openai/gpt-5.6-sol"),),
+                fallbacks=(_leg("claude-opus-5-5"),),
                 prompt="p",
                 budget_seconds=180,
                 primary_model="claude-opus-5",
                 primary_effort="high",
             )
 
-        assert any("openai/gpt-5.6-sol" in r.message for r in caplog.records)
+        assert any("claude-opus-5-5" in r.message for r in caplog.records)

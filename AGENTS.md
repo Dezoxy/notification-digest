@@ -6,8 +6,8 @@ X/Twitter notifications (twifork — a maintained twikit fork that still imports
 as `twikit` — cookie session, unofficial API, ToS risk accepted by the owner),
 plus RSS/Reddit/Polymarket/Hacker News collectors, tracks state in SQLite,
 summarizes new items with the Claude CLI headless (`claude -p`, falling back to
-OpenRouter models when that call fails), and delivers a
-structured digest with deep links. Two lanes run outside that cascade on their
+Claude API models over workload identity federation when that call fails), and
+delivers a structured digest with deep links. Two lanes run outside that cascade on their
 own timers and into their own Telegram topics: `patreon` (one paid post per
 message) and `positions` (the tracked-project tracker, silent when nothing
 material happened). A third mode, `relay`, forwards public-channel posts
@@ -257,8 +257,21 @@ change stay manual: a tag or merge alone never activates Azure schedules.
 Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth. The owner requested current
 CLI 2.1.294 (Node >=22); keep it pinned and verify subscription/editorial behavior
 in the Azure pilot. The VM baseline was 2.1.284 and has not been redeployed;
-this migration does not introduce Anthropic API billing. Recovery stays within
-Azure; returning execution to the VM is outside the approved migration.
+the primary path stays on the flat-fee subscription. Anthropic API billing
+happens only when `claude -p` fails and the fallback chain runs: it calls the
+Claude API with a token obtained by federating the job's managed identity (an
+Entra token for a dedicated audience app, exchanged at Anthropic), billed to
+prepaid credits, with no API key anywhere. The four required identifiers
+(`ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`,
+`ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_FEDERATION_AUDIENCE`) are non-secret
+`app_env` values; none set means no fallback, a partial set is a startup error.
+Never let `IDENTITY_ENDPOINT`, `IDENTITY_HEADER` or any `ANTHROPIC_*` variable
+into the `claude -p` subprocess env (`claude_subprocess_env`): an
+`ANTHROPIC_API_KEY` there would override the OAuth token and silently move
+every digest to metered billing. Setup and the required smoke test:
+`docs/azure-migration.md#claude-api-fallback-workload-identity-federation`.
+Recovery stays within Azure; returning execution to the VM is outside the
+approved migration.
 Cloud X-cookie rotation uses `python -m digest.cloud_cookies PRIVATE_JSON_FILE`
 with explicit `--operator-login` for workstation Azure CLI access; canonical
 cookies live in runtime Blob state, not a duplicate dedicated-vault seed. Daily

@@ -153,10 +153,18 @@ deploy time and must never be committed or logged.
 | `RELAY_TG_CHANNELS` | Telegram usernames (no `@`) whose new posts the `relay` run mode forwards verbatim into the hub topic via the user session. Requires a numeric `TELEGRAM_NOTIFY_CHAT_ID`. The bot token is optional but recommended: without it the forwards arrive **silently for you**, since Telegram never notifies an account about its own messages. |
 
 **Summarization** — every model call goes to `claude -p` first; if that fails
-for any reason (safeguards refusal, usage limit, timeout, empty output) and
-`OPENROUTER_API_KEY` is set, the same prompt is retried against each
-`FALLBACK_MODELS` entry in order. `verify.py` is excluded: it is the only call
-that needs live web tools, which no fallback can provide.
+for any reason (safeguards refusal, usage limit, timeout, empty output) and the
+Claude API federation below is configured, the same prompt is retried against
+each `FALLBACK_MODELS` entry in order, as a Claude API call billed to prepaid
+API credits (the primary stays on the flat-fee subscription). There is no API
+key: the Azure job's managed identity requests an Entra token for a dedicated
+audience app registration and exchanges it at Anthropic (Workload Identity
+Federation) for a short-lived access token, once per fallback call. The
+`claude -p` subprocess never sees that identity or any `ANTHROPIC_*` variable.
+Setup and the smoke test are in the
+[Azure runbook](docs/azure-migration.md#claude-api-fallback-workload-identity-federation).
+`verify.py` is excluded: it is the only call that needs live web tools, which
+no fallback can provide.
 
 
 | Variable | Description |
@@ -171,9 +179,10 @@ that needs live web tools, which no fallback can provide.
 | `VERIFY_DAILY_ENABLED` | Web-verification pass over the daily brief (`false`). |
 | `VERIFY_DAILY_TIMEOUT_SECONDS` / `VERIFY_DAILY_MAX_WEB_OPS` | Its budget (`600`) and its self-policed tool-call guidance (`20`). |
 | `VERIFY_DAILY_MODEL` / `VERIFY_DAILY_EFFORT` | Default to `ANTHROPIC_MODEL` / `CLAUDE_EFFORT`. |
-| `OPENROUTER_API_KEY` | Enables the OpenRouter fallback chain. Unset = Claude only, exactly as before. **(secret)** |
-| `FALLBACK_MODELS` | Editorial-tier chain, tried in order when the Claude call fails (`openai/gpt-5.6-sol,z-ai/glm-5.3`). Explicitly empty disables this tier. |
-| `FALLBACK_LIGHT_MODELS` | Same for translation and context primers (`openai/gpt-5.6-terra,deepseek/deepseek-v4-flash`). |
+| `ANTHROPIC_FEDERATION_RULE_ID` / `ANTHROPIC_ORGANIZATION_ID` / `ANTHROPIC_SERVICE_ACCOUNT_ID` / `ANTHROPIC_FEDERATION_AUDIENCE` | Enable the Claude API fallback chain (`fdrl_...`, organization UUID, `svac_...`, `api://<APP_ID>`). Identifiers, not secrets. **All four or none**: a partial set is a startup error naming the missing ones; none set = Claude CLI only, exactly as before. |
+| `ANTHROPIC_WORKSPACE_ID` | Optional (`wrkspc_...`) workspace for the exchanged token. The managed identity's client id is the existing `DIGEST_CLOUD_IDENTITY_CLIENT_ID`. |
+| `FALLBACK_MODELS` | Editorial-tier chain, tried in order when the Claude CLI call fails (`claude-opus-5-5,claude-sonnet-5-5`). Entries must be `claude-...` ids. Explicitly empty disables this tier. |
+| `FALLBACK_LIGHT_MODELS` | Same for translation and context primers (`claude-sonnet-5-5,claude-haiku-5-5`). |
 | `FALLBACK_TIMEOUT_SECONDS` | Wall-clock budget **shared by all legs of one call** (`180`), started when the Claude call fails. |
 | `CONTEXT_ENABLED` | Story-arc context primers, generated after the daily brief ships (`false`). |
 | `CONTEXT_MAX_PER_RUN` / `CONTEXT_MODEL` / `CONTEXT_TIMEOUT_SECONDS` | Primer bounds: calls per daily run (`3`), model (`sonnet`), timeout (`120`). |
@@ -303,7 +312,8 @@ See [the Azure migration runbook](docs/azure-migration.md) for subscription
 authentication, state handoff, activation, cloud recovery and homelab retirement.
 The owner requested current CLI 2.1.294 for the migration image, with official
 Node 22 (tag/digest pinned) to meet its >=22 engine requirement. Subscription
-OAuth, prompts, models and fallbacks stay configured as before; live quality and
+OAuth, prompts and models stay configured as before; fallbacks move to the Claude
+API over workload identity federation (no OpenRouter key); live quality and
 authentication still require the cloud pilot. The VM baseline remains 2.1.284.
 
 The Worker deploys on its own track and is not part of that chain: a tag

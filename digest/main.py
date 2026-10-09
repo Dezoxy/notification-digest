@@ -239,9 +239,9 @@ _MAX_ITEMS_FETCH_POOL = 1000
 
 
 def _fallback_legs(cfg: Config, *, light: bool) -> tuple[FallbackLeg, ...]:
-    """Build one call site's OpenRouter fallback chain, or none if the feature is off.
+    """Build one call site's Claude API fallback chain, or none if the feature is off.
 
-    `cfg.openrouter_api_key` is the master switch (see that field's own
+    `cfg.anthropic_federation` is the master switch (see that field's own
     comment in digest/config.py): unset (`None`) means every one of this
     run's model calls gets `fallbacks=()`, which is exactly the default
     every one of the seven `summarize*`/`translate_digest`/
@@ -261,14 +261,14 @@ def _fallback_legs(cfg: Config, *, light: bool) -> tuple[FallbackLeg, ...]:
     two Config fields' own comments for why the tiers are split rather than
     sharing one list.
 
-    Every leg in the returned tuple carries the SAME `cfg.openrouter_api_key`
-    -- there is exactly one OpenRouter account configured for this
-    deployment, never a per-model key.
+    Every leg shares the one federation config: there is exactly one
+    managed identity and one Claude Console service account for this
+    deployment, never a per-model credential.
     """
-    if cfg.openrouter_api_key is None:
+    if cfg.anthropic_federation is None:
         return ()
     models = cfg.fallback_light_models if light else cfg.fallback_models
-    return tuple(FallbackLeg(model=model, api_key=cfg.openrouter_api_key) for model in models)
+    return tuple(FallbackLeg(model=model, federation=cfg.anthropic_federation) for model in models)
 
 
 def _provenance(

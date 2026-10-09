@@ -386,7 +386,7 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 | `0006-topics.sql` | `topics` (nullable) on `digests`, for the ingest v3 story-arc line. |
 | `0007-deltas.sql` | `deltas` (nullable) on `digests`, for ingest v4 delta persistence — the digest page's "What changed" block and the arc page's per-appearance previously/now line. |
 | `0008-arc-context.sql` | `arc_context`, a new table (not a column) holding one durable background primer per *arc identity*, pushed as an optional `arc_contexts` field on ingest. |
-| `0010-provenance.sql` | `provenance` (nullable) on `digests`, for ingest v5 model provenance — the digest page's "Written by" / "Translated with" lines naming which model summarized (and, when translated, which model translated) the brief, and whether an OpenRouter fallback model served instead of the primary Claude call. |
+| `0010-provenance.sql` | `provenance` (nullable) on `digests`, for ingest v5 model provenance — the digest page's "Written by" / "Translated with" lines naming which model summarized (and, when translated, which model translated) the brief, and whether a Claude API fallback model served instead of the primary `claude -p` call. |
 
 ## Key rotation
 
@@ -744,8 +744,8 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   rendered in the digest page's colophon directly below the source key, one
   labelled line per leg: "Written by" names the model that summarized the
   brief, "Translated with" the model that translated it (only when this
-  digest has a Hungarian version). A leg an OpenRouter fallback model served
-  in place of the primary Claude call is marked with `↻` and a muted chip —
+  digest has a Hungarian version). A leg a Claude API fallback model served
+  in place of the primary `claude -p` call is marked with `↻` and a muted chip —
   the same "glyph is the marker, not color" posture as the source key's
   failed-source pills. Model ids are shown by short name (`claude-opus-5` as
   "Opus 5", `openai/gpt-5.6-terra` as "GPT-5.6 Terra" — see
