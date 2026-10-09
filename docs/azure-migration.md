@@ -586,7 +586,10 @@ the smoke test in step 5 is part of the setup, not an optional extra.
      selector, discovery mode). The wizard creates the issuer with a 7500 s
      maximum JWT lifetime; managed identity tokens carry up to 24 hours between
      `iat` and `exp`, so edit the issuer afterwards (Settings, Workload
-     identity, Issuers) and raise `max_jwt_lifetime_seconds` to `86400`.
+     identity, Issuers) and raise `max_jwt_lifetime_seconds` to `90000`. Anthropic's
+     guide says `86400`, but the token measured from this app's Container Apps
+     jobs lives 86,700 s between `iat` and `exp`, so `86400` would still reject
+     it; read your own token's lifetime if the exchange keeps failing.
      Otherwise every exchange fails with an opaque 401.
    - A service account placed in a **dedicated workspace with a monthly spend
      limit**. That limit is the only cap on the cost if every call falls
@@ -662,7 +665,7 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    A traceback names a step and an HTTP status or exception type, never a body,
    token or URL. If the exchange returns 401, check the Console's authentication
    history for the deny reason, then the usual causes: issuer URL not matching
-   the token's `iss`, the 86400 s lifetime in step 2, a rule `audience` that is
+   the token's `iss`, the 90000 s lifetime in step 2, a rule `audience` that is
    not the bare `<APP_ID>`, or an `oid` that is not the runner identity's. Repeat
    the test after any change to the rule, the issuer or the audience app.
 
