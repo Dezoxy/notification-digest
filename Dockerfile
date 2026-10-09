@@ -12,7 +12,7 @@ FROM python:3.14-slim-bookworm
 # Pinned uv release tag (not :latest) for reproducible builds. Renovate
 # tracks COPY --from=<image>:<tag> references, so it can open a bump PR here
 # same as it does for FROM lines.
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.24 /uv /usr/local/bin/uv
 
 # --- Node.js + Claude Code CLI ---
 # Claude Code 2.1.294 requires Node >=22; bookworm's apt Node 18 is too old.
