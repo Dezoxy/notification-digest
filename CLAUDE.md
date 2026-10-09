@@ -229,10 +229,23 @@ dedicated digest Key Vault; secret values are copied by the reviewed migration
 tool, never managed through Terraform. The existing Azure subscription remains
 the recommended default; select its ID explicitly.
 
-Releases remain explicit git tags: `.github/workflows/release.yml` publishes
-`ghcr.io/dezoxy/notification-digest:<version>`. Azure configuration pins the
-verified migration release. Until cutover, the homelab repository still pins
-and deploys its own image. A tag/merge alone never activates Azure schedules.
+Releases are git tags (`vX.Y.Z` is the only version source; `pyproject.toml`
+stays 0.1.0), built by `.github/workflows/release.yml` and published as
+`ghcr.io/dezoxy/notification-digest:<version>`. A merge to `main` that touches
+shipped files (`Dockerfile`, `digest/`, `prompts/`, `pyproject.toml`, `uv.lock`)
+is gated by lint and tests, tagged as the next patch version by
+`.github/workflows/auto-release.yml` and built; docs-, workflow- and infra-only
+merges release nothing, and minor/major tags are still pushed by hand. Azure pins
+the image in the tracked `infra/azure/image.auto.tfvars.json` (not in
+`AZURE_TERRAFORM_VARS_JSON`). Renovate bumps it after each release, and a merged
+bump DOES deploy the image: `azure-deploy` runs on the push and its
+`release-apply` job applies the plan only if `scripts/azure_release_guard.py`
+finds nothing but the image of all nine jobs changed (see
+`docs/azure-migration.md#image-upgrades`); anything else is refused and goes
+through the manual plan/apply. So once jobs exist, merged shipped code reaches
+Azure without a manual step. Until cutover, the homelab repository still pins and
+deploys its own image. Schedule activation and every non-image infrastructure
+change stay manual: a tag or merge alone never activates Azure schedules.
 Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth. The owner requested current
 CLI 2.1.294 (Node >=22); keep it pinned and verify subscription/editorial behavior
 in the Azure pilot. The VM baseline was 2.1.284 and has not been redeployed;

@@ -141,7 +141,10 @@ name-only form `repo:Dezoxy/notification-digest:...` does not match and fails
 not offer required reviewers on this private personal repository, so approval
 is a two-step dispatch: review the saved plan, then dispatch the apply with
 that plan run's ID. The apply job fails closed unless that run is a successful
-`azure-deploy` plan from `main` at the same commit. These repository/Entra
+`azure-deploy` plan from `main` at the same commit. The one exception is a merged
+image-pin bump, which `release-apply` deploys without a dispatch once its guard
+accepts the plan (see [Image upgrades](#image-upgrades)); its federated credential
+is the same `azure-production` environment. These repository/Entra
 settings are prerequisites, not settings that the workflow YAML can enforce by
 itself.
 
@@ -178,7 +181,9 @@ Supply `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
 **variables**. Both plan and apply environments need the same identity,
 subscription and backend locations. `AZURE_TERRAFORM_VARS_JSON` contains reviewed
 nonsecret Terraform inputs, including `key_vault_name` and the environment-name
-to secret-name map `secret_names`. Terraform constructs versionless references
+to secret-name map `secret_names`, but **not** `image`, which is pinned in the
+tracked [image.auto.tfvars.json](../infra/azure/image.auto.tfvars.json) (see
+[Image upgrades](#image-upgrades)). Terraform constructs versionless references
 to the new vault. Secret values never enter Terraform inputs or managed secret
 resources. Do not configure `TF_API_TOKEN` for this Azure stack.
 
@@ -194,10 +199,10 @@ defaults; an empty value disables them. Azure env values are literal: keep
 Choose globally unique names for the runtime storage account, **different**
 backup storage account (`backup_storage_account_name`) and digest vault,
 plus the alert email; update the budget start to the first day of the deployment
-month. Select a tested migration release image before manually executing any
-job. The default `0.28.0` records the source baseline and does **not** contain the
-cloud runner. Activation also requires `migration_release_verified=true`. The
-stack rejects floating tags.
+month. Pin a tested migration release image in `image.auto.tfvars.json` before
+manually executing any job. The variable default `0.28.0` records the source
+baseline and does **not** contain the cloud runner. Activation also requires
+`migration_release_verified=true`. The stack rejects floating tags.
 
 The new Standard Key Vault uses RBAC, purge protection and **seven-day soft
 deletion**. Decide this before the foundation apply: retention is fixed at vault
@@ -367,9 +372,11 @@ make docs
 ```
 
 Backend-free init above downloads providers for validation only; it creates no
-state and performs no plan/apply. Review and merge application changes, then
-publish the explicit `vX.Y.Z` release through the existing release workflow.
-Set the reviewed image pin to its `X.Y.Z` GHCR tag or digest. Run
+state and performs no plan/apply. Review and merge application changes; a merge
+that touches shipped files is released as the next patch version by
+`auto-release.yml`, and an explicit `vX.Y.Z` tag can still be pushed by hand.
+Set the tracked image pin to its `X.Y.Z` GHCR tag or digest in a reviewed PR
+(Renovate normally opens it; see [Image upgrades](#image-upgrades)). Run
 `azure-deploy` with `operation=plan`. Inspect resource ownership, RBAC, cost,
 image/configuration, state retention and the dedicated vault. The foundation
 plan must contain
@@ -389,10 +396,92 @@ gh workflow run azure-deploy.yml --ref main -f operation=apply -f plan_run_id=<p
 
 Apply refuses a run that is not a successful `azure-deploy` plan from `main` at
 the same commit, and uses that exact saved plan. Artifacts expire after one day,
-so an old plan cannot be applied. Azure tables/KQL, image pull, CLI authentication,
+so an old plan cannot be applied. Only a plan dispatched manually can be applied
+this way; the plan of an image-pin push run is consumed by its own guarded
+`release-apply` job. Azure tables/KQL, image pull, CLI authentication,
 cloud egress and measured resource use remain live pilot checks; validation
 does not prove them. Check a subsequent no-op plan for provider drift around
 Key Vault-backed job secrets before activating schedules.
+
+## Image upgrades
+
+The whole chain is automatic once jobs exist:
+
+1. A merge to `main` that changes shipped files (`Dockerfile`, `digest/`,
+   `prompts/`, `pyproject.toml`, `uv.lock`) starts `auto-release.yml`. It runs
+   `ruff` and `pytest`, then tags the next patch version after the highest
+   `vX.Y.Z` tag, creates the GitHub release and calls `release.yml` to build the
+   image. (A tag created with the built-in token does not trigger the tag-push
+   workflow, hence the direct call.) Docs-only, workflow-only and infra-only
+   merges release nothing, and the pin file is deliberately outside the path
+   filter, so a pin bump can never cut a release. Minor and major versions stay
+   manual: push `vX.Y.0` and later releases continue from it.
+   If the build fails after the tag exists, re-run the failed job: the tag
+   stays, no image means no pin PR, and the next release continues from it.
+2. Renovate opens a PR that bumps the pin and merges it once CI passes. Renovate
+   keeps one PR open at a time, so the pin PR waits behind any other open
+   Renovate PR: merge or close that one first.
+3. The merge deploys the image through the guarded apply below.
+
+The image is pinned in one place, the tracked
+[infra/azure/image.auto.tfvars.json](../infra/azure/image.auto.tfvars.json), which
+Terraform loads automatically. The pin merge is the deploy: a push to `main` that
+touches the pin starts `azure-deploy`, whose `plan` job plans as usual and whose
+`release-apply` job (environment `azure-production`) applies that same saved plan
+only if `scripts/azure_release_guard.py` accepts it.
+`release-apply` holds the workflow's concurrency group while it waits, so other
+`azure-deploy` runs queue behind it for up to about an hour.
+
+**One-time step.** Remove the `image` key from `AZURE_TERRAFORM_VARS_JSON`. The
+workflow writes that variable to `production.auto.tfvars.json`, which Terraform
+loads after the pin and would silently override it. Every plan therefore fails
+if the variable still sets an image different from the pin, and ignores one equal
+to the pin with a warning. Do this before the first pin PR merges.
+
+**What the guard accepts.** An empty plan finishes successfully without applying
+(for example while `jobs_enabled=false`). Otherwise all of these must hold:
+
+- every change is an in-place `update` of an `azurerm_container_app_job`; any
+  create, delete or replace, and any other resource, is refused;
+- every job in the plan is updated: all nine move together, because they share
+  one SQLite state behind a lease and a partial bump could let an old image open
+  a database that a newer one migrated;
+- the only difference between each job's `before` and `after` is the container
+  image, with nothing unknown until apply (a short allowlist covers the
+  provider-computed `event_stream_endpoint` and `outbound_ip_addresses`);
+- the new image is identical across jobs, equals the tracked pin and is an exact
+  release tag or digest (the `image` variable's own pattern).
+
+`schedules_enabled`, `jobs_enabled`, environment values, crons and secrets
+never change through this path, so schedule activation stays explicit.
+
+**Then it waits and applies.** `release-apply` waits up to 20 minutes for the
+pinned image to exist in GHCR (the pin can merge before `release.yml` finishes),
+signs in to Azure, and waits up to 45 minutes until no job has a Running or
+Processing execution and no job's cron fires within the next five minutes (UTC).
+An execution whose status cannot be read counts as busy. Only then does it run
+`terraform apply` on the saved plan.
+
+**On refusal** (or a timeout) the job fails and nothing is applied. Read the
+verdict in the log, then use the manual path above: `operation=plan`, review,
+`operation=apply`. A manual plan after a refused bump includes the image change
+together with whatever the guard objected to. The first bump after cutover should be
+compared with the guard by hand: Terraform may mark more provider-computed
+attributes unknown on an update than the allowlist expects, in which case the
+guard refuses safely and the allowlist needs extending.
+
+**There is no human gate** between merging shipped code and production: the
+checks are `ruff`, `pytest`, the repository's CI on the pin PR and the guard. To
+stop a release, do not merge the code; to stop one that is tagged, close the
+Renovate pin PR (or revert the pin on `main`, which deploys through the guard
+again). Remember that a reverted pin only helps while the state schema is
+unchanged, as below.
+
+**Rollback and schema.** A pin is rolled back by a revert PR, which goes through
+the same guard. Schema migrations are one-way, so that is only safe while the
+newer image has not migrated the state. Once it has, recovery is a restore from the
+daily backup (see [Interrupted runs and recovery](#interrupted-runs-and-recovery)),
+not an image rollback.
 
 ## State handoff and activation
 
@@ -635,7 +724,8 @@ uv run python -m digest.cloud_state --operator-login export /PRIVATE/RESTORE_VER
 Verify bundle/database/cookie hashes and row counts. For actual recovery, choose
 a new recovery namespace instead of `restore-test`, update Terraform `namespace`
 while jobs are drained, review/apply and resume only after lineage verification.
-Re-pin a compatible prior cloud image if required; preserve uncertain-delivery
+Revert the image pin (see [Image upgrades](#image-upgrades)) if a compatible
+prior cloud image is required; preserve uncertain-delivery
 records across recovery. Restoring an older backup can replay confirmed sends
 that happened after that snapshot: reconcile destination history and affected
 cursors/delivery intent before resuming publication.

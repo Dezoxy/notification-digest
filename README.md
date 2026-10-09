@@ -221,7 +221,10 @@ Docker auto-create the host directory as root on first run, which shadows
 that chown and leaves the uid-1000 process unable to write — silently
 breaking the container. `compose.yml` here is for local dev only — the VM's
 production compose service lives in the separate homelab repo (see
-Deployment below). Releases are cut by pushing a git tag (`vX.Y.Z`);
+Deployment below). Releases are git tags (`vX.Y.Z`); a merge to `main` that
+changes shipped files (`Dockerfile`, `digest/`, `prompts/`, `pyproject.toml`,
+`uv.lock`) is tagged as the next patch version by
+`.github/workflows/auto-release.yml`, and minor/major tags are pushed by hand.
 `.github/workflows/release.yml` builds and pushes the image to GHCR.
 
 To inspect the archive without a shell in the running container:
@@ -271,8 +274,9 @@ directory's `README.md`, which is the authoritative document for the site.
 
 ## Deployment
 
-Production currently runs on the homelab `01-myapps-vm`. A git tag triggers
-`.github/workflows/release.yml`, which builds and publishes the image to GHCR;
+Production currently runs on the homelab `01-myapps-vm`. A git tag (pushed by
+hand, or created by `auto-release.yml` after a merge touching shipped files)
+builds and publishes the image to GHCR through `.github/workflows/release.yml`;
 the separate `~/Developer/toom-platform-homelab` repository pins the tag and
 deploys its systemd timers, Ansible `myapps` role and Key Vault secrets.
 
@@ -283,6 +287,9 @@ app-owned Key Vault. The existing subscription is sufficient for this workload;
 select its ID explicitly. Source secrets remain intact during the reviewed copy.
 Provision the foundation first, copy/verify secrets, then create the nine Manual
 jobs. Jobs and schedules default to disabled; merging does not move production.
+Once jobs exist, a merged bump of the tracked image pin
+(`infra/azure/image.auto.tfvars.json`) deploys that image automatically, but only
+when a guard confirms the plan changes nothing except the image of all nine jobs.
 See [the Azure migration runbook](docs/azure-migration.md) for subscription
 authentication, state handoff, activation, cloud recovery and homelab retirement.
 The owner requested current CLI 2.1.294 for the migration image, with official

@@ -5,4 +5,6 @@ backend.hcl
 *.tfplan
 *.auto.tfvars
 *.auto.tfvars.json
+# The image pin is tracked: a merged bump of this file is the release trigger.
+!image.auto.tfvars.json
 crash.log
