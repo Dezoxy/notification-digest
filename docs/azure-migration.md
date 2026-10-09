@@ -234,6 +234,20 @@ against `.github/workflows/` and `infra/azure/`:
   while they exist (`deployment.tfplan`, `deployment-plan.txt`,
   `production.auto.tfvars.json`, `backend.hcl`). They can include resource
   names, Azure IDs and the nonsecret Terraform inputs.
+- The plain job settings in `app_env` are not secrets but several are personal
+  (Telegram chat and thread ids, mail addresses). `infra/azure/main.tf` marks
+  their values `sensitive()`, so plan and apply logs print `(sensitive value)`
+  while the variable names stay readable for review. This matters because job
+  variables are an ordered list: inserting one shifts every later entry, and
+  Terraform then prints all of them as changed. The first plan after the
+  marking shows every job as updated in place with "The value is unchanged".
+  The marking is partial. It does not cover the `azure-plan-*` artifact, whose
+  `production.auto.tfvars.json` and binary `deployment.tfplan` hold the same
+  values in clear for as long as the artifact exists (see below); it does not
+  cover `alert_email`, a separate input that still prints when the alert or
+  budget resources change; and it does not reach logs written before the
+  marking, so delete those runs' logs if they matter. Closing the artifact gap
+  means encrypting it with an environment secret before upload.
 - Secrets are Key Vault references (`key_vault_secret_id` in
   `infra/azure/main.tf`) and never Terraform inputs, so no Key Vault secret value
   appears in the inputs, the plan text or the logs. The binary `deployment.tfplan`
