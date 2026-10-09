@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import io
 import json
 import subprocess
 import urllib.error
@@ -261,6 +262,48 @@ def test_pagination_cross_host_rejected_before_token_use():
     with pytest.raises(migration.MigrationError, match="unexpected pagination endpoint"):
         client.request("source-vault", "GET", "https://attacker.example/secrets")
     client._opener.open.assert_not_called()
+
+
+def test_pagination_accepts_explicit_default_port():
+    client = object.__new__(migration.VaultClient)
+    client._token = VALUE
+    client._opener = Mock()
+    client._opener.open.return_value.__enter__ = Mock(return_value=io.BytesIO(b'{"value": []}'))
+    client._opener.open.return_value.__exit__ = Mock(return_value=False)
+    url = "https://source-vault.vault.azure.net:443/secrets?api-version=7.4&$skiptoken=x"
+    assert client.request("source-vault", "GET", url) == {"value": []}
+    client._opener.open.assert_called_once()
+    assert client._opener.open.call_args.args[0].full_url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://source-vault.vault.azure.net:8443/secrets",
+        "http://source-vault.vault.azure.net/secrets",
+        "https://source-vault.vault.azure.net@attacker.example/secrets",
+        "https://user@source-vault.vault.azure.net/secrets",
+        "https://source-vault.vault.azure.net:notaport/secrets",
+        "https://source-vault.vault.azure.net.attacker.example/secrets",
+    ],
+)
+def test_pagination_rejects_unsafe_endpoints_before_token_use(url):
+    client = object.__new__(migration.VaultClient)
+    client._token = VALUE
+    client._opener = Mock()
+    with pytest.raises(migration.MigrationError, match="unexpected pagination endpoint"):
+        client.request("source-vault", "GET", url)
+    client._opener.open.assert_not_called()
+
+
+def test_metadata_accepts_default_port_in_record_id():
+    client = object.__new__(migration.VaultClient)
+    client.request = Mock(
+        return_value={
+            "value": [{"id": "https://source-vault.vault.azure.net:443/secrets/digest-a"}]
+        }
+    )
+    assert set(client.metadata("source-vault")) == {"digest-a"}
 
 
 def test_metadata_follows_pages_and_rejects_loop():

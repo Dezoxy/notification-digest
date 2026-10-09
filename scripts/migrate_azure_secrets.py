@@ -68,6 +68,21 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _is_vault_url(parsed: urllib.parse.SplitResult, vault: str) -> bool:
+    """True only for https on the vault's own host, default port, no userinfo."""
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == f"{vault}.vault.azure.net".lower()
+        and port in (None, 443)
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
 class VaultClient:
     """Minimal Key Vault REST client, authenticated by the operator's Azure CLI."""
 
@@ -102,7 +117,7 @@ class VaultClient:
         origin = f"https://{vault}.vault.azure.net"
         url = origin + path if path.startswith("/") else path
         parsed = urllib.parse.urlsplit(url)
-        if parsed.scheme != "https" or parsed.netloc != f"{vault}.vault.azure.net":
+        if not _is_vault_url(parsed, vault):
             raise MigrationError("Key Vault returned an unexpected pagination endpoint.")
         req = urllib.request.Request(
             url,
@@ -133,7 +148,7 @@ class VaultClient:
             page = self.request(vault, "GET", path)
             for record in page.get("value", []):
                 parsed = urllib.parse.urlsplit(record["id"])
-                if parsed.netloc != f"{vault}.vault.azure.net":
+                if not _is_vault_url(parsed, vault):
                     raise MigrationError("Key Vault returned an unexpected secret endpoint.")
                 parts = parsed.path.strip("/").split("/")
                 if len(parts) != 2 or parts[0] != "secrets":
