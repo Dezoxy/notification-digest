@@ -3,7 +3,7 @@
 //
 // Runtime dependencies and delivery tooling are deliberately kept apart: the
 // runtime views answer "what does one digest run touch", the Delivery view
-// answers "how does a change reach the VM". Both are tagged "External" so the
+// answers "how does a change reach the jobs". Both are tagged "External" so the
 // shared palette keeps its meaning; the separation is made by the views.
 
 owner = person "Owner" "Single owner, operator and only reader. Reads the digest in Telegram and on the news site."
@@ -21,22 +21,23 @@ hackerNews = softwareSystem "Hacker News" "Publishes the front page through the 
 newsFeeds = softwareSystem "News Feeds" "Third-party RSS and Atom feeds followed for general news." "External"
 
 // ── Summarization ────────────────────────────────────────────────────────────
-anthropic = softwareSystem "Claude" "Summarizes a window of collected items. Primary summarizer, invoked headless." "External"
-openRouter = softwareSystem "OpenRouter" "Serves fallback models when the primary summarizer call fails." "External"
+// One box for one real system. The runner reaches Claude two ways: the headless
+// CLI on the owner's subscription, and the API when that call fails (ADR 9).
+anthropic = softwareSystem "Claude" "Summarizes a window of collected items. Reached through the headless CLI, and through the API when that call fails." "External"
+entra = softwareSystem "Microsoft Entra ID" "Issues the short-lived token the runner presents to the Claude API. The runner's managed identity is the only credential." "External"
 
 // ── Delivery channels ────────────────────────────────────────────────────────
-smtpRelay = softwareSystem "SMTP Relay" "Accepts the digest as e-mail. Implemented and still the role default, but disabled on the live host." "External"
+smtpRelay = softwareSystem "SMTP Relay" "Accepts the digest as e-mail. Implemented and still the application default, but disabled in production." "External"
 
-// ── Delivery tooling (how a change reaches the VM, not part of a run) ────────
-githubActions = softwareSystem "GitHub Actions" "Builds the runtime image from a version tag and publishes it." "External"
+// ── Delivery tooling (how a change reaches the jobs, not part of a run) ──────
+githubActions = softwareSystem "GitHub Actions" "Tests each merge, releases and publishes the runtime image, and applies the Azure deployment." "External"
 imageRegistry = softwareSystem "GHCR" "Stores the versioned runtime image. Private; pulled with a read-only token." "External"
-homelabDeploy = softwareSystem "Homelab Deploy" "Ansible role that pins the image version and configures the host. Lives in a separate repository." "External"
-keyVault = softwareSystem "Azure Key Vault" "Holds every runtime secret. Injected as environment variables at deploy time." "External"
+renovate = softwareSystem "Renovate" "Moves the pinned image version to each new release through a pull request." "External"
+keyVault = softwareSystem "Azure Key Vault" "Holds every runtime secret. The jobs reference them; no value is stored in the deployment." "External"
 
 // ── Relationships that do not involve the system in scope ────────────────────
 owner -> telegram "Reads the delivered digest in" "Telegram app" "Person"
-owner -> githubActions "Cuts a release by pushing a version tag to" "Git" "Person"
-owner -> homelabDeploy "Bumps the pinned image version and deploys with" "Ansible" "Person"
+owner -> githubActions "Merges a change that is released by" "Git, pull request" "Person"
 githubActions -> imageRegistry "Publishes the versioned runtime image to" "OCI over HTTPS"
-homelabDeploy -> imageRegistry "Pulls the pinned runtime image from" "OCI over HTTPS"
-homelabDeploy -> keyVault "Fetches runtime secrets from" "HTTPS, Azure AD"
+renovate -> imageRegistry "Detects each new image release in" "OCI over HTTPS"
+renovate -> githubActions "Merges the image pin bump that starts a deployment in" "Git, pull request"

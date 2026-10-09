@@ -35,7 +35,7 @@ styles {
     }
 
     // Groups mark trust boundaries; their tint follows the layer they hold.
-    element "Group:Homelab VM (private)" {
+    element "Group:Azure subscription (private)" {
         color ${SLATE_LABEL}
         stroke ${SLATE_STROKE}
         background ${SLATE_FRAME}
