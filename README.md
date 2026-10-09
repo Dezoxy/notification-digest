@@ -157,8 +157,9 @@ for any reason (safeguards refusal, usage limit, timeout, empty output) and the
 Claude API federation below is configured, the same prompt is retried against
 each `FALLBACK_MODELS` entry in order, as a Claude API call billed to prepaid
 API credits (the primary stays on the flat-fee subscription). There is no API
-key: the Azure job's managed identity requests an Entra token for a dedicated
-audience app registration and exchanges it at Anthropic (Workload Identity
+key: the Azure job's managed identity trades its token with Entra, through a
+federated credential on a dedicated audience app registration, for a
+short-lived app token, then exchanges that at Anthropic (Workload Identity
 Federation) for a short-lived access token, once per fallback call. The
 `claude -p` subprocess never sees that identity or any `ANTHROPIC_*` variable.
 Setup and the smoke test are in the
@@ -179,7 +180,7 @@ no fallback can provide.
 | `VERIFY_DAILY_ENABLED` | Web-verification pass over the daily brief (`false`). |
 | `VERIFY_DAILY_TIMEOUT_SECONDS` / `VERIFY_DAILY_MAX_WEB_OPS` | Its budget (`600`) and its self-policed tool-call guidance (`20`). |
 | `VERIFY_DAILY_MODEL` / `VERIFY_DAILY_EFFORT` | Default to `ANTHROPIC_MODEL` / `CLAUDE_EFFORT`. |
-| `ANTHROPIC_FEDERATION_RULE_ID` / `ANTHROPIC_ORGANIZATION_ID` / `ANTHROPIC_SERVICE_ACCOUNT_ID` / `ANTHROPIC_FEDERATION_AUDIENCE` | Enable the Claude API fallback chain (`fdrl_...`, organization UUID, `svac_...`, `api://<APP_ID>`). Identifiers, not secrets. **All four or none**: a partial set is a startup error naming the missing ones; none set = Claude CLI only, exactly as before. |
+| `ANTHROPIC_FEDERATION_RULE_ID` / `ANTHROPIC_ORGANIZATION_ID` / `ANTHROPIC_SERVICE_ACCOUNT_ID` / `ANTHROPIC_FEDERATION_AUDIENCE` / `ANTHROPIC_FEDERATION_TENANT_ID` | Enable the Claude API fallback chain (`fdrl_...`, organization UUID, `svac_...`, `api://<APP_ID>`, Entra tenant ID). Identifiers, not secrets. **All five or none**: a partial set is a startup error naming the missing ones; none set = Claude CLI only, exactly as before. |
 | `ANTHROPIC_WORKSPACE_ID` | Optional (`wrkspc_...`) workspace for the exchanged token. The managed identity's client id is the existing `DIGEST_CLOUD_IDENTITY_CLIENT_ID`. |
 | `FALLBACK_MODELS` | Editorial-tier chain, tried in order when the Claude CLI call fails (`claude-opus-5-5,claude-sonnet-5-5`). Entries must be `claude-...` ids. Explicitly empty disables this tier. |
 | `FALLBACK_LIGHT_MODELS` | Same for translation and context primers (`claude-sonnet-5-5,claude-haiku-5-5`). |

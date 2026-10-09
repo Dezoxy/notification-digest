@@ -1251,11 +1251,13 @@ def test_telegram_patreon_thread_id_is_parsed(monkeypatch):
 # --- Claude API fallback chain (ANTHROPIC_* federation, FALLBACK_*MODELS) ---
 
 _FEDERATION_UUID = "11111111-2222-3333-4444-555555555555"
+_FEDERATION_TENANT = "99999999-8888-7777-6666-555555555555"
 _FEDERATION_ENV = {
     "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_0123abcDEF",
     "ANTHROPIC_ORGANIZATION_ID": _FEDERATION_UUID,
     "ANTHROPIC_SERVICE_ACCOUNT_ID": "svac_0123abcDEF",
     "ANTHROPIC_FEDERATION_AUDIENCE": f"api://{_FEDERATION_UUID}",
+    "ANTHROPIC_FEDERATION_TENANT_ID": _FEDERATION_TENANT,
 }
 
 
@@ -1281,7 +1283,7 @@ def test_anthropic_federation_unset_defaults_to_none(monkeypatch):
     assert Config.from_env().anthropic_federation is None
 
 
-def test_anthropic_federation_all_four_set_builds_the_config(monkeypatch):
+def test_anthropic_federation_all_five_set_builds_the_config(monkeypatch):
     _set_base_env(monkeypatch)
     _set_federation_env(monkeypatch)
 
@@ -1292,6 +1294,7 @@ def test_anthropic_federation_all_four_set_builds_the_config(monkeypatch):
     assert federation.organization_id == _FEDERATION_UUID
     assert federation.service_account_id == "svac_0123abcDEF"
     assert federation.audience == f"api://{_FEDERATION_UUID}"
+    assert federation.tenant_id == _FEDERATION_TENANT
     assert federation.workspace_id is None
     assert federation.identity_client_id is None
 
@@ -1327,7 +1330,7 @@ def test_anthropic_federation_partially_set_names_the_missing_variable(monkeypat
         assert value not in message
 
 
-def test_anthropic_federation_only_one_set_names_the_other_three(monkeypatch):
+def test_anthropic_federation_only_one_set_names_the_other_four(monkeypatch):
     _set_base_env(monkeypatch)
     _clear_federation_env(monkeypatch)
     monkeypatch.setenv(
@@ -1350,6 +1353,7 @@ def test_anthropic_federation_only_one_set_names_the_other_three(monkeypatch):
         ("ANTHROPIC_ORGANIZATION_ID", "not-a-uuid-zzzz"),
         ("ANTHROPIC_SERVICE_ACCOUNT_ID", "svac_has spaces"),
         ("ANTHROPIC_FEDERATION_AUDIENCE", "https://wrong-scheme-1234"),
+        ("ANTHROPIC_FEDERATION_TENANT_ID", "not-a-tenant-zzzz"),
         ("ANTHROPIC_WORKSPACE_ID", "ws-wrong-prefix-1"),
     ],
 )

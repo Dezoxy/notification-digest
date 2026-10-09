@@ -2742,6 +2742,7 @@ _FEDERATION = FederationConfig(
     organization_id="11111111-2222-3333-4444-555555555555",
     service_account_id="svac_test",
     audience="api://11111111-2222-3333-4444-555555555555",
+    tenant_id="99999999-8888-7777-6666-555555555555",
 )
 
 

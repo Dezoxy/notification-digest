@@ -12,10 +12,12 @@ option 3 and the provider, model lists and `OPENROUTER_API_KEY` switch in its
 Decision. The chain design itself (a primary, ordered fallback legs, one shared
 budget, per-leg validation, per-digest provenance) stays accepted there.
 
-The code is implemented and tested; production still runs on the VM and the
-federation is not configured anywhere. No fallback has run against the Claude
-API yet, so the new leg is unproven until the smoke test and the first real
-fallback in [the runbook](../../azure-migration.md#claude-api-fallback-workload-identity-federation).
+The code is implemented and tested. On 2026-10-09 a one-off execution in the
+Azure job environment proved the whole chain (managed identity, Entra app
+token, Anthropic exchange, one Messages call) with the token step supplied by
+hand; the released code path must pass the same smoke test after it deploys.
+No real fallback has served a digest yet. See
+[the runbook](../../azure-migration.md#claude-api-fallback-workload-identity-federation).
 
 ## Context
 
@@ -54,18 +56,32 @@ Rationale for rejecting option 1 beyond the points above: not recorded.
 
 ## Decision
 
-Option 3. `digest/anthropic_api.py`'s `run_anthropic` requests an Entra token
-for a dedicated audience app registration (`api://<APP_ID>`) from the job's
-managed identity, exchanges it at `https://api.anthropic.com/v1/oauth/token`
-(RFC 7523 jwt-bearer) for a short-lived access token, and calls `/v1/messages`.
+Option 3. `digest/anthropic_api.py`'s `run_anthropic` trades the job's managed
+identity token with Entra for a short-lived token of a dedicated app
+registration (`api://<APP_ID>`), exchanges that at
+`https://api.anthropic.com/v1/oauth/token` (RFC 7523 jwt-bearer) for a
+short-lived access token, and calls `/v1/messages`.
+
+The Entra step has two hops, found necessary while setting it up. A token the
+managed identity requests for the audience directly lives 86,700 s between
+`iat` and `exp`, and Anthropic rejects an assertion longer than the issuer's
+maximum JWT lifetime (`jwt_lifetime_too_long`). The Claude Console accepts at
+most 86,400 s there, and the Admin API that accepts more is unavailable to
+individual organizations. So the managed identity's token is presented to Entra
+as a client assertion, through a federated identity credential on the app
+registration, and Entra returns an app token that lives 3,900 s. Anthropic sees
+the app's service principal, which the federation rule matches; the managed
+identity is trusted only by Entra, and only as that one subject.
+
 It makes one fresh exchange per fallback call, uses plain `urllib` and no SDK,
 fixes `output_config.effort` at `high` with `max_tokens` 32000, and counts a
 reply that ends in `max_tokens` or `refusal` as a failed leg, so
 `run_with_fallbacks` moves on to the next one.
 
 Configuration is the non-secret identifiers `ANTHROPIC_FEDERATION_RULE_ID`,
-`ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` and
-`ANTHROPIC_FEDERATION_AUDIENCE`, required together (a partial set is a startup
+`ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID`,
+`ANTHROPIC_FEDERATION_AUDIENCE` and `ANTHROPIC_FEDERATION_TENANT_ID`, required
+together (a partial set is a startup
 `ConfigError`), plus an optional `ANTHROPIC_WORKSPACE_ID`. With none set there
 is no fallback chain and the Claude CLI behaves exactly as before. The default
 chains are now `claude-opus-5-5,claude-sonnet-5-5` (editorial tier) and

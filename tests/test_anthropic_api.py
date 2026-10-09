@@ -25,6 +25,7 @@ _FEDERATION = FederationConfig(
     organization_id="11111111-2222-3333-4444-555555555555",
     service_account_id="svac_test",
     audience="api://11111111-2222-3333-4444-555555555555",
+    tenant_id="99999999-8888-7777-6666-555555555555",
 )
 
 
@@ -280,17 +281,33 @@ def test_json_that_is_not_an_object_raises(fake_api):
         run_anthropic("p", "claude-opus-5-5", 60, _FEDERATION)
 
 
+class _FakeAssertionCredential:
+    """Stands in for ClientAssertionCredential: asks for the assertion, returns an app token."""
+
+    seen: dict = {}
+
+    def __init__(self, tenant_id, client_id, func):
+        type(self).seen = {"tenant_id": tenant_id, "client_id": client_id}
+        self._func = func
+
+    def get_token(self, *scopes):
+        type(self).seen["assertion"] = self._func()
+        type(self).seen["scopes"] = scopes
+        return type("Token", (), {"token": _ENTRA_JWT})()
+
+
 def test_entra_token_failure_names_the_type_not_the_text(monkeypatch, caplog):
     import azure.identity
 
-    class _BrokenCredential:
+    class _BrokenIdentity:
         def __init__(self, client_id=None):
             pass
 
         def get_token(self, *scopes):
             raise RuntimeError("secret-looking text")
 
-    monkeypatch.setattr(azure.identity, "ManagedIdentityCredential", _BrokenCredential)
+    monkeypatch.setattr(azure.identity, "ManagedIdentityCredential", _BrokenIdentity)
+    monkeypatch.setattr(azure.identity, "ClientAssertionCredential", _FakeAssertionCredential)
     sent = []
     monkeypatch.setattr(api_mod.urllib.request, "urlopen", lambda *a, **k: sent.append(a))
 
@@ -304,24 +321,37 @@ def test_entra_token_failure_names_the_type_not_the_text(monkeypatch, caplog):
     assert sent == []
 
 
-def test_entra_token_requests_the_federation_audience_scope(monkeypatch):
+def test_entra_token_trades_the_identity_token_for_an_app_token(monkeypatch):
     import azure.identity
 
-    seen = {}
+    identity_seen = {}
 
-    class _Credential:
+    class _Identity:
         def __init__(self, client_id=None):
-            seen["client_id"] = client_id
+            identity_seen["client_id"] = client_id
 
         def get_token(self, *scopes):
-            seen["scopes"] = scopes
-            return type("Token", (), {"token": _ENTRA_JWT})()
+            identity_seen["scopes"] = scopes
+            return type("Token", (), {"token": "managed-identity-assertion"})()
 
-    monkeypatch.setattr(azure.identity, "ManagedIdentityCredential", _Credential)
+    monkeypatch.setattr(azure.identity, "ManagedIdentityCredential", _Identity)
+    monkeypatch.setattr(azure.identity, "ClientAssertionCredential", _FakeAssertionCredential)
     federation = FederationConfig(**{**_FEDERATION.__dict__, "identity_client_id": "client-123"})
 
+    # The app token is returned, never the managed identity's own (24 hour) token.
     assert api_mod._entra_token(federation) == _ENTRA_JWT
-    assert seen == {"client_id": "client-123", "scopes": (f"{_FEDERATION.audience}/.default",)}
+    # Hop 1: the managed identity is asked for Entra's token-exchange audience.
+    assert identity_seen == {
+        "client_id": "client-123",
+        "scopes": ("api://AzureADTokenExchange/.default",),
+    }
+    # Hop 2: that token is the client assertion for the audience app in this tenant.
+    assert _FakeAssertionCredential.seen == {
+        "tenant_id": _FEDERATION.tenant_id,
+        "client_id": "11111111-2222-3333-4444-555555555555",
+        "assertion": "managed-identity-assertion",
+        "scopes": (f"{_FEDERATION.audience}/.default",),
+    }
 
 
 # --- run_anthropic: budget ---

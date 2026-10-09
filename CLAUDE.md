@@ -259,11 +259,13 @@ CLI 2.1.294 (Node >=22); keep it pinned and verify subscription/editorial behavi
 in the Azure pilot. The VM baseline was 2.1.284 and has not been redeployed;
 the primary path stays on the flat-fee subscription. Anthropic API billing
 happens only when `claude -p` fails and the fallback chain runs: it calls the
-Claude API with a token obtained by federating the job's managed identity (an
-Entra token for a dedicated audience app, exchanged at Anthropic), billed to
-prepaid credits, with no API key anywhere. The four required identifiers
+Claude API with a token obtained by federating the job's managed identity (it
+trades its token with Entra for a short-lived app token of a dedicated audience
+app, then exchanges that at Anthropic), billed to prepaid credits, with no API
+key anywhere. The five required identifiers
 (`ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`,
-`ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_FEDERATION_AUDIENCE`) are non-secret
+`ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_FEDERATION_AUDIENCE`,
+`ANTHROPIC_FEDERATION_TENANT_ID`) are non-secret
 `app_env` values; none set means no fallback, a partial set is a startup error.
 Never let `IDENTITY_ENDPOINT`, `IDENTITY_HEADER` or any `ANTHROPIC_*` variable
 into the `claude -p` subprocess env (`claude_subprocess_env`): an

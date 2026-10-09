@@ -568,7 +568,7 @@ class Config:
     # primary's own exception unchanged (see that function's own docstring,
     # point 4) -- so an unconfigured deployment behaves byte-for-byte as it
     # did before this feature existed. Holds identifiers only (rule,
-    # organization, service account, Entra audience): authentication is the
+    # organization, service account, Entra tenant and audience): authentication is the
     # job's managed identity federated into the Claude API (Workload Identity
     # Federation), so no API key exists to carry here, log or leak.
     anthropic_federation: FederationConfig | None = None
@@ -1169,6 +1169,7 @@ _FEDERATION_ID_PATTERNS = {
     "ANTHROPIC_ORGANIZATION_ID": re.compile(rf"^{_UUID}$"),
     "ANTHROPIC_SERVICE_ACCOUNT_ID": re.compile(r"^svac_[A-Za-z0-9_-]+$"),
     "ANTHROPIC_FEDERATION_AUDIENCE": re.compile(rf"^api://{_UUID}$"),
+    "ANTHROPIC_FEDERATION_TENANT_ID": re.compile(rf"^{_UUID}$"),
 }
 _WORKSPACE_ID_RE = re.compile(r"^wrkspc_[A-Za-z0-9_-]+$")
 
@@ -1176,7 +1177,7 @@ _WORKSPACE_ID_RE = re.compile(r"^wrkspc_[A-Za-z0-9_-]+$")
 def _optional_federation() -> FederationConfig | None:
     """Read the Claude API federation settings, all-or-nothing.
 
-    None of the four required variables set means the fallback chain is off
+    None of the five required variables set means the fallback chain is off
     (Config.anthropic_federation's own comment). Some but not all set is a
     ConfigError NAMING the missing variables: a half-configured chain would
     otherwise look enabled and fail only when the primary does, which for a
@@ -1206,6 +1207,7 @@ def _optional_federation() -> FederationConfig | None:
         organization_id=values["ANTHROPIC_ORGANIZATION_ID"],
         service_account_id=values["ANTHROPIC_SERVICE_ACCOUNT_ID"],
         audience=values["ANTHROPIC_FEDERATION_AUDIENCE"],
+        tenant_id=values["ANTHROPIC_FEDERATION_TENANT_ID"],
         workspace_id=workspace_id,
         identity_client_id=_optional_str_or_none("DIGEST_CLOUD_IDENTITY_CLIENT_ID"),
     )

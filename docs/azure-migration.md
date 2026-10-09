@@ -195,7 +195,7 @@ The app configuration was rendered offline from the declared homelab defaults
 and host overrides on 2026-10-08. Recheck the baseline against final live
 configuration before cutover: collector flags, feeds/allowlists, topics,
 model/effort/budgets, translation, verification, context, delivery channels and
-fallback omission semantics. The fallback chain exists only when the four
+fallback omission semantics. The fallback chain exists only when the five
 `ANTHROPIC_*` federation identifiers are set; with them set, leaving
 `FALLBACK_MODELS` unset retains the app's defaults and an empty value disables
 that tier. Azure env values are literal: keep
@@ -537,15 +537,28 @@ The summarizer's primary call is `claude -p` on the subscription. When it fails
 retried against the Claude API, billed to prepaid API credits, in the order of
 `FALLBACK_MODELS` (editorial tier: `claude-opus-5-5,claude-sonnet-5-5`) or
 `FALLBACK_LIGHT_MODELS` (translation and arc context:
-`claude-sonnet-5-5,claude-haiku-5-5`). There is **no API key**: the runner's
-user-assigned managed identity (`notification-digest-runner`) requests an Entra
-token for a dedicated audience app registration (`api://<APP_ID>`), exchanges it
-at `https://api.anthropic.com/v1/oauth/token` (RFC 7523 jwt-bearer, Anthropic
-Workload Identity Federation) for a short-lived access token and calls
-`/v1/messages` with it, once per fallback call. The decision and its
-alternatives are [ADR 9](architecture/decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md).
+`claude-sonnet-5-5,claude-haiku-5-5`). There is **no API key**. The runner's
+user-assigned managed identity (`notification-digest-runner`) trades its own
+token with Entra for a short-lived token of a dedicated app registration
+(`api://<APP_ID>`), exchanges that at `https://api.anthropic.com/v1/oauth/token`
+(RFC 7523 jwt-bearer, Anthropic Workload Identity Federation) for a short-lived
+access token and calls `/v1/messages` with it, once per fallback call. The
+decision and its alternatives are
+[ADR 9](architecture/decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md).
 
-The chain is off until all four required variables are set. Everything below is
+**Why two hops inside Entra.** Asking the managed identity for the audience
+directly looks simpler and is what Anthropic's Azure guide shows, but it cannot
+work here. That token lives 86,700 s between `iat` and `exp` (measured), and
+Anthropic rejects an assertion longer than the issuer's maximum JWT lifetime
+with the deny reason `jwt_lifetime_too_long`. The Claude Console accepts at
+most 86,400 s for that limit, and the Admin API, which accepts up to 176,400 s,
+is not available to individual organizations (every call returns 404). So the
+managed identity's token is presented to Entra as a client assertion, through a
+federated identity credential on the app registration, and Entra returns an
+ordinary app token that lives 3,900 s. Anthropic therefore sees the app's
+service principal, and the managed identity is trusted only by Entra.
+
+The chain is off until all five required variables are set. Everything below is
 identifiers, not secrets: nothing Anthropic-related is stored in the vault, and
 the `digest-openrouter-api-key` secret is no longer used. An expired or
 misconfigured federation fails **only at fallback time, never at startup**, so
@@ -553,42 +566,58 @@ the smoke test in step 5 is part of the setup, not an optional extra.
 
 ### Setup
 
-1. **Entra audience.** Entra only issues a token for an audience that exists in
-   the tenant, so register one app and its service principal (the exact steps
-   are in Anthropic's
-   [Azure provider guide](https://platform.claude.com/docs/en/manage-claude/wif-providers/azure#register-the-token-audience);
-   re-read them before running anything):
+1. **Entra app and federated credential.** Register one app that is both the
+   token audience and the identity Anthropic will see, then let the runner's
+   managed identity act as it:
 
    ```sh
    APP_ID=$(az ad app create --display-name claude-api-federation \
      --sign-in-audience AzureADMyOrg --query appId -o tsv)
-   az ad app update --id "$APP_ID" --identifier-uris "api://$APP_ID" \
-     --set api.requestedAccessTokenVersion=2
    az ad sp create --id "$APP_ID"
+   az rest --method PATCH \
+     --uri "https://graph.microsoft.com/v1.0/applications(appId='$APP_ID')" \
+     --headers "Content-Type=application/json" \
+     --body "{\"identifierUris\":[\"api://$APP_ID\"],\"api\":{\"requestedAccessTokenVersion\":2}}"
+   az ad app show --id "$APP_ID" \
+     --query "{uris:identifierUris, tokenVersion:api.requestedAccessTokenVersion}" -o json
+
+   RUNNER_OID=$(az identity show --name notification-digest-runner \
+     --resource-group <APP_RESOURCE_GROUP> --query principalId -o tsv)
+   az ad app federated-credential create --id "$APP_ID" --parameters "{
+     \"name\": \"digest-runner-managed-identity\",
+     \"issuer\": \"https://login.microsoftonline.com/<TENANT_ID>/v2.0\",
+     \"subject\": \"$RUNNER_OID\",
+     \"audiences\": [\"api://AzureADTokenExchange\"]}"
+
+   az ad sp show --id "$APP_ID" --query id -o tsv   # the object ID the rule matches
    ```
 
-   `requestedAccessTokenVersion=2` makes the tokens v2.0, which the rule below
-   assumes. Select the tenant and subscription explicitly. Without this
-   registration the first fallback fails with `AADSTS500011`/`AADSTS50001`.
+   The Graph call sets the identifier URI and `requestedAccessTokenVersion=2`
+   in one step, which makes the tokens v2.0 as the rule below assumes.
+   Anthropic's guide uses `az ad app update --set
+   api.requestedAccessTokenVersion=2` instead, but that fails on a freshly
+   created app (`Couldn't find 'api' in ''`) because the `api` property does not
+   exist yet, and it leaves the URI and version unset; the `show` is there to
+   catch exactly that. The federated credential names exactly one subject, the
+   runner identity's object ID, so no other identity in the tenant can act as
+   the app. Select the tenant and subscription explicitly.
 
 2. **Claude Console** (Settings, Workload identity, Connect workload, Microsoft
    Entra ID):
    - Issuer `https://login.microsoftonline.com/<TENANT_ID>/v2.0` (the v2.0
-     selector, discovery mode). The wizard creates the issuer with a 7500 s
-     maximum JWT lifetime; managed identity tokens carry up to 24 hours between
-     `iat` and `exp`, so edit the issuer afterwards (Settings, Workload
-     identity, Issuers) and raise `max_jwt_lifetime_seconds` to `86400`.
-     Otherwise every exchange fails with an opaque 401.
+     selector, discovery mode). Leave its maximum JWT lifetime at the wizard's
+     7500 s: the app token lives 3,900 s.
    - A service account placed in a **dedicated workspace with a monthly spend
      limit**. That limit is the only cap on the cost if every call falls
      through; nothing in the code caps spend.
-   - A federation rule on that service account matching the runner identity:
-     `audience` = `<APP_ID>` (the bare GUID, not the `api://` form), claim `oid`
-     = `<RUNNER_IDENTITY_OBJECT_ID>` and claim `tid` = `<TENANT_ID>`. Get the
-     object ID with `az identity show --name notification-digest-runner
-     --resource-group <APP_RESOURCE_GROUP> --query principalId -o tsv`. Never
-     use a wildcard or partial `subject_prefix`: without an `oid` match the
-     rule authorizes every managed identity in the tenant.
+   - A federation rule on that service account matching the **app's service
+     principal**, not the managed identity: subject pattern and claim `oid` =
+     the object ID printed by the last command of step 1, expected audience =
+     `<APP_ID>` (the bare GUID, not the `api://` form). The wizard's "Object
+     (principal) ID" field fills both the subject and `oid`. Never use a
+     wildcard or partial subject. Keep the rule's own **Token lifetime** at 10
+     minutes: it bounds the Anthropic token that comes back, and the app uses a
+     fresh one per call.
    - Note the rule ID (`fdrl_...`), organization ID (a UUID), service account ID
      (`svac_...`) and, optionally, the workspace ID (`wrkspc_...`).
 
@@ -598,9 +627,10 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    [production.auto.tfvars.example](../infra/azure/production.auto.tfvars.example)):
    `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`,
    `ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_FEDERATION_AUDIENCE`
-   (`api://<APP_ID>`), and optionally `ANTHROPIC_WORKSPACE_ID`. Set all four
-   required ones or none: a partial set stops every job at startup with a
-   `ConfigError` naming the missing variables. The managed identity's client id
+   (`api://<APP_ID>`), `ANTHROPIC_FEDERATION_TENANT_ID` (the Entra tenant), and
+   optionally `ANTHROPIC_WORKSPACE_ID`. Set all five required ones or none: a
+   partial set stops every job at startup with a `ConfigError` naming the
+   missing variables. The managed identity's client id
    is the existing `DIGEST_CLOUD_IDENTITY_CLIENT_ID` that Terraform already
    injects; do not add it. This is a non-image change, so the release guard
    refuses it by design: dispatch `azure-deploy` with `operation=plan`, review
@@ -651,11 +681,19 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    with `az containerapp job execution show` and the execution's console log.
 
    A traceback names a step and an HTTP status or exception type, never a body,
-   token or URL. If the exchange returns 401, check the Console's authentication
-   history for the deny reason, then the usual causes: issuer URL not matching
-   the token's `iss`, the 86400 s lifetime in step 2, a rule `audience` that is
-   not the bare `<APP_ID>`, or an `oid` that is not the runner identity's. Repeat
-   the test after any change to the rule, the issuer or the audience app.
+   token or URL. Every denial at the exchange is the same opaque 401; the real
+   reason is recorded only in the Console's authentication history (Settings,
+   Workload identity), which also shows the claims Anthropic read. The reasons
+   met while setting this up:
+   - `jwt_lifetime_too_long`: the assertion lives longer than the issuer's
+     limit. With this design the app token is 3,900 s; this reason means the
+     managed identity's own 24-hour token reached Anthropic instead.
+   - `match_subject_prefix`: the rule's subject is not the app's service
+     principal object ID (for example, it still names the managed identity).
+
+   An `entra token request failed` error is raised before Anthropic is
+   contacted: check the federated credential's subject and issuer in step 1.
+   Repeat the test after any change to the rule, the issuer or the app.
 
 ### Operating it
 
@@ -676,7 +714,7 @@ the smoke test in step 5 is part of the setup, not an optional extra.
   counts as a failed leg and the chain moves on.
 - **Provenance.** A digest served by a fallback records the Claude API model and
   `fallback: true`, shown on the site as the `↻` marker.
-- **Rollback.** Remove the four variables through the same plan/apply to return
+- **Rollback.** Remove the five variables through the same plan/apply to return
   to Claude CLI only; nothing else depends on them. Disabling the federation rule
   in the Console stops exchanges immediately.
 - **Retired code.** `digest/openrouter.py` and `tests/test_openrouter.py` remain,

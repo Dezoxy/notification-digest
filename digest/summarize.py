@@ -703,7 +703,7 @@ class FallbackLeg:
     """One Claude API model in a fallback chain: which model, and how to authenticate.
 
     `federation` carries identifiers only (rule, organization, service account,
-    Entra audience), never a credential: the job's managed identity is the
+    Entra tenant and audience), never a credential: the job's managed identity is the
     credential and is exchanged per call (digest/anthropic_api.py). A repr of
     this dataclass in a traceback therefore leaks nothing.
     """

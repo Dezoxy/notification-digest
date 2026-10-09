@@ -9,15 +9,15 @@ this module: the Claude API, billed to the owner's prepaid API credits, one
 HTTP request per leg.
 
 NO API KEY, NO SDK. The Azure job already holds a managed identity. This module
-asks it for an Entra token whose audience is a dedicated app registration,
-exchanges that token at `/v1/oauth/token` (RFC 7523 jwt-bearer, Anthropic's
-Workload Identity Federation) for a short-lived `sk-ant-oat01-...` access token,
-and sends that as a Bearer token. Nothing static is stored anywhere, so there
-is nothing to rotate or leak. The exchange runs once per call, never cached:
-fallbacks are rare and a fresh exchange cannot trip the issuer's single-use
-`jti` replay check. Plain `urllib`, like every other outbound call in this
-codebase (`publish.py`, the collectors) -- two small POSTs do not justify the
-`anthropic` SDK as a dependency.
+trades that identity's token with Entra for a short-lived token of a dedicated
+app registration (`_entra_token`), exchanges it at `/v1/oauth/token` (RFC 7523
+jwt-bearer, Anthropic's Workload Identity Federation) for a short-lived
+`sk-ant-oat01-...` access token, and sends that as a Bearer token. Nothing
+static is stored anywhere, so there is nothing to rotate or leak. The exchange
+runs once per call, never cached: fallbacks are rare. Plain `urllib` for the
+two Anthropic POSTs, like every other outbound call in this codebase
+(`publish.py`, the collectors) -- they do not justify the `anthropic` SDK as a
+dependency.
 
 SECRETS POSTURE. The request body is the pipeline's own prompt, built from
 scraped Telegram/X text, and an HTTP error body can echo request content back.
@@ -80,16 +80,18 @@ class FederationConfig:
     """Everything needed to federate, none of it secret.
 
     Identifiers only: the rule, organization, service account and workspace ids
-    from the Claude Console and the Entra audience (`api://<app id>`). The
-    credential is the managed identity itself, which never appears in config.
-    `identity_client_id` selects one of several user-assigned identities and is
-    the same value the Blob state client already uses.
+    from the Claude Console, the Entra tenant and the Entra audience
+    (`api://<app id>`). The credential is the managed identity itself, which
+    never appears in config. `identity_client_id` selects one of several
+    user-assigned identities and is the same value the Blob state client
+    already uses.
     """
 
     rule_id: str
     organization_id: str
     service_account_id: str
     audience: str
+    tenant_id: str
     workspace_id: str | None = None
     identity_client_id: str | None = None
 
@@ -99,12 +101,35 @@ def validate_model_id(model: str) -> bool:
     return bool(_MODEL_ID_RE.match(model))
 
 
+# The audience Entra requires on a token that is presented as a client
+# assertion through a federated identity credential.
+_ENTRA_EXCHANGE_SCOPE = "api://AzureADTokenExchange/.default"
+
+
 def _entra_token(federation: FederationConfig) -> str:
-    """Ask the job's managed identity for an Entra token for the federation audience."""
-    from azure.identity import ManagedIdentityCredential
+    """Trade the managed identity's token for a short-lived token of the audience app.
+
+    Two hops inside Entra, not one. Asking the managed identity for the
+    audience directly returns a token that lives about 24 hours (86,700 s
+    between `iat` and `exp`, measured), and Anthropic rejects an assertion
+    longer than the issuer's limit (`jwt_lifetime_too_long`). The Claude
+    Console caps that limit at 86,400 s and the Admin API that could raise it
+    is not available to individual organizations, so that token can never be
+    accepted. Instead the managed identity's token is presented to Entra as a
+    client assertion, through a federated identity credential on the audience
+    app registration, and Entra returns an ordinary app token that lives about
+    an hour (3,900 s, measured). The identity Anthropic sees is therefore the
+    app's service principal; the managed identity is trusted only by Entra.
+    """
+    from azure.identity import ClientAssertionCredential, ManagedIdentityCredential
 
     try:
-        credential = ManagedIdentityCredential(client_id=federation.identity_client_id)
+        identity = ManagedIdentityCredential(client_id=federation.identity_client_id)
+        credential = ClientAssertionCredential(
+            federation.tenant_id,
+            federation.audience.removeprefix("api://"),
+            lambda: identity.get_token(_ENTRA_EXCHANGE_SCOPE).token,
+        )
         return credential.get_token(f"{federation.audience}/.default").token
     except Exception as exc:
         logger.warning("claude api: entra token request failed: %s", type(exc).__name__)
