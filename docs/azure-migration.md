@@ -562,14 +562,23 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    ```sh
    APP_ID=$(az ad app create --display-name claude-api-federation \
      --sign-in-audience AzureADMyOrg --query appId -o tsv)
-   az ad app update --id "$APP_ID" --identifier-uris "api://$APP_ID" \
-     --set api.requestedAccessTokenVersion=2
    az ad sp create --id "$APP_ID"
+   az rest --method PATCH \
+     --uri "https://graph.microsoft.com/v1.0/applications(appId='$APP_ID')" \
+     --headers "Content-Type=application/json" \
+     --body "{\"identifierUris\":[\"api://$APP_ID\"],\"api\":{\"requestedAccessTokenVersion\":2}}"
+   az ad app show --id "$APP_ID" \
+     --query "{uris:identifierUris, tokenVersion:api.requestedAccessTokenVersion}" -o json
    ```
 
-   `requestedAccessTokenVersion=2` makes the tokens v2.0, which the rule below
-   assumes. Select the tenant and subscription explicitly. Without this
-   registration the first fallback fails with `AADSTS500011`/`AADSTS50001`.
+   The Graph call sets the identifier URI and `requestedAccessTokenVersion=2`
+   in one step, which makes the tokens v2.0 as the rule below assumes. Anthropic's
+   guide uses `az ad app update --set api.requestedAccessTokenVersion=2` instead,
+   but that fails on a freshly created app (`Couldn't find 'api' in ''`) because
+   the `api` property does not exist yet, and it leaves the URI and version
+   unset; the final `show` is there to catch exactly that. Select the tenant and
+   subscription explicitly. Without this registration the first fallback fails
+   with `AADSTS500011`/`AADSTS50001`.
 
 2. **Claude Console** (Settings, Workload identity, Connect workload, Microsoft
    Entra ID):
