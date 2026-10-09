@@ -108,6 +108,22 @@ def test_image_only_bump_of_all_jobs_applies():
     assert OLD in reason and NEW in reason and "9 jobs" in reason
 
 
+def test_sensitivity_marks_do_not_affect_the_decision():
+    # main.tf marks every plain env value sensitive so public plan logs print
+    # "(sensitive value)". `terraform show -json` still carries the real values
+    # in before/after and reports the marks separately; the first plan after
+    # the marking differs ONLY in those marks. The guard must keep comparing
+    # values, so an image bump that arrives together with it still applies.
+    p = bump_plan()
+    for change in p["resource_changes"]:
+        if change["type"] == guard.JOB_TYPE:
+            env_marks = {"template": [{"container": [{"env": [{"value": True}]}]}]}
+            change["change"]["before_sensitive"] = {"template": [{"container": [{"env": [{}]}]}]}
+            change["change"]["after_sensitive"] = env_marks
+
+    assert check(p)[0] == "apply"
+
+
 def test_computed_outputs_may_be_unknown_after_apply():
     p = bump_plan()
     for change in p["resource_changes"][2:]:

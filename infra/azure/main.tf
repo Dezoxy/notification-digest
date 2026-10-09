@@ -181,8 +181,12 @@ resource "azurerm_container_app_job" "digest" {
       dynamic "env" {
         for_each = merge(var.app_env, local.cloud_env, each.key == "backup" ? local.backup_env : {})
         content {
-          name  = env.key
-          value = env.value
+          name = env.key
+          # Not secrets, but personal (chat ids, addresses), and this repository's
+          # workflow logs are public: a plan prints "(sensitive value)" instead.
+          # Names stay readable so a plan can still be reviewed. The plan JSON
+          # that scripts/azure_release_guard.py compares keeps the real values.
+          value = sensitive(env.value)
         }
       }
       dynamic "env" {
