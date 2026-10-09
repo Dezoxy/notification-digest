@@ -8,16 +8,16 @@ plus RSS/Reddit/Polymarket/Hacker News collectors, tracks state in SQLite,
 summarizes new items with the Claude CLI headless (`claude -p`, falling back to
 Claude API models over workload identity federation when that call fails), and
 delivers a structured digest with deep links. Two lanes run outside that cascade on their
-own timers and into their own Telegram topics: `patreon` (one paid post per
+own schedules and into their own Telegram topics: `patreon` (one paid post per
 message) and `positions` (the tracked-project tracker, silent when nothing
 material happened). A third mode, `relay`, forwards public-channel posts
 verbatim into a hub topic — no summarization, no state beyond a cursor.
 See PLAN.md for the full plan and current phase status.
 
-Delivery is multi-channel (PR #25). On the real VM the live channels are a
+Delivery is multi-channel (PR #25). In production the live channels are a
 **Telegram TL;DR ping** and the **news site**; **email is disabled**
-(`myapps_digest_email_enabled: false` in the homelab host_vars). Email is still
-fully implemented and remains the role DEFAULT, so a host that never configures
+(`EMAIL_ENABLED=false` in the Azure job settings). Email is still
+fully implemented and remains the app DEFAULT, so a host that never configures
 the other two keeps working — the app refuses to start with every channel
 disabled. Don't describe this service as "emails a digest": that stopped being
 true at the multi-channel cutover.
@@ -220,22 +220,24 @@ verified without looking at the rendered view.
 
 ## Deploy note
 
-Production currently runs on `01-myapps-vm`, deployed from
-`~/Developer/toom-platform-homelab` (Ansible `myapps`, systemd timers and Key Vault
-wiring). Changes here do not move or stop the VM runtime by themselves.
+Production has run on nine scheduled Azure Container Apps jobs in West Europe
+since 2026-10-08. Before that it ran on the homelab VM `01-myapps-vm`, deployed
+from `~/Developer/toom-platform-homelab` (Ansible `myapps`, systemd timers). The
+VM no longer runs the digest: its timers were drained and stopped at cutover and
+its old state directory and backups were left in place, frozen. Removing the
+digest role from the homelab repository is a separate change there. Returning
+execution to the VM is outside the approved design; recovery stays within Azure.
 
-The approved Azure target is app-owned in `infra/azure/`, with the migration
-and cloud recovery procedure in `docs/azure-migration.md`. Provision the
-foundation with `jobs_enabled=false`, copy/verify digest secrets, then enable
-its nine jobs in Manual mode with schedules disabled.
-`.github/workflows/azure-validate.yml` validates
-IaC without credentials; `azure-application.yml` runs lint/tests/container build;
-`azure-deploy.yml` produces an OIDC-authenticated saved plan and explicitly
-approved apply. Azure Blob Storage holds Terraform state in a separate
-bootstrapped backend resource group; never create local state. This stack owns a
-dedicated digest Key Vault; secret values are copied by the reviewed migration
-tool, never managed through Terraform. The existing Azure subscription remains
-the recommended default; select its ID explicitly.
+The Azure stack is app-owned in `infra/azure/`; `docs/azure-migration.md` holds
+the cutover history, the operating and cloud recovery procedures.
+`.github/workflows/azure-validate.yml` validates IaC without credentials;
+`azure-application.yml` runs lint/tests/container build; `azure-deploy.yml`
+produces an OIDC-authenticated saved plan and explicitly approved apply. Azure
+Blob Storage holds Terraform state in a separate bootstrapped backend resource
+group; never create local state. This stack owns a dedicated digest Key Vault;
+secret values were copied by the reviewed migration tool, never managed through
+Terraform. The existing Azure subscription is the one in use; select its ID
+explicitly.
 
 Releases are git tags (`vX.Y.Z` is the only version source; `pyproject.toml`
 stays 0.1.0), built by `.github/workflows/release.yml` and published as
@@ -250,13 +252,13 @@ bump DOES deploy the image: `azure-deploy` runs on the push and its
 `release-apply` job applies the plan only if `scripts/azure_release_guard.py`
 finds nothing but the image of all nine jobs changed (see
 `docs/azure-migration.md#image-upgrades`); anything else is refused and goes
-through the manual plan/apply. So once jobs exist, merged shipped code reaches
-Azure without a manual step. Until cutover, the homelab repository still pins and
-deploys its own image. Schedule activation and every non-image infrastructure
-change stay manual: a tag or merge alone never activates Azure schedules.
-Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth. The owner requested current
-CLI 2.1.294 (Node >=22); keep it pinned and verify subscription/editorial behavior
-in the Azure pilot. The VM baseline was 2.1.284 and has not been redeployed;
+through the manual plan/apply. So merged shipped code reaches Azure without a
+manual step. Every schedule change and every non-image infrastructure change
+stays manual: a tag or merge alone never changes an Azure schedule.
+Preserve `CLAUDE_CODE_OAUTH_TOKEN` subscription auth. The Claude CLI and Node
+are pinned in the `Dockerfile` (Node >=22 is required) and bumped by Renovate;
+keep them pinned and check subscription/editorial behavior after a bump. The VM
+baseline was 2.1.284 and was not redeployed;
 the primary path stays on the flat-fee subscription. Anthropic API billing
 happens only when `claude -p` fails and the fallback chain runs: it calls the
 Claude API with a token obtained by federating the job's managed identity (it
@@ -272,13 +274,12 @@ into the `claude -p` subprocess env (`claude_subprocess_env`): an
 `ANTHROPIC_API_KEY` there would override the OAuth token and silently move
 every digest to metered billing. Setup and the required smoke test:
 `docs/azure-migration.md#claude-api-fallback-workload-identity-federation`.
-Recovery stays within Azure; returning execution to the VM is outside the
-approved migration.
 Cloud X-cookie rotation uses `python -m digest.cloud_cookies PRIVATE_JSON_FILE`
 with explicit `--operator-login` for workstation Azure CLI access; canonical
 cookies live in runtime Blob state, not a duplicate dedicated-vault seed. Daily
 backup copies use a separate account/writer identity attached only to the backup
-job; pilot recovery must prove a restore from that account.
+job; no restore from that account has been exercised yet, so prove one before
+relying on it.
 
 Operator cloud commands use temporary private working directories and clean them
 up after closing SQLite connections, stopping watchdogs and releasing leases.

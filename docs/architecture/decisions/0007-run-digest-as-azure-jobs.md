@@ -13,8 +13,8 @@ The Terraform backend and shared-vault choice are superseded by
 [8. Isolate digest Azure state and secrets](0008-isolate-digest-azure-state-and-secrets.md).
 The remaining hosting/runtime decision stays accepted.
 
-Implementation is being prepared; production remains on the VM until the
-verified state handoff and explicit schedule activation.
+Implemented and in production since 2026-10-08, when the state was handed over
+and the Azure schedules were activated. The VM no longer runs the digest.
 
 ## Context
 

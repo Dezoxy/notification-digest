@@ -31,8 +31,8 @@ Two things reach a reader:
 | A public archive of past digests on a website | Anyone with the address |
 
 The website is the only part of this system the public can reach. Everything
-else runs on one machine in the owner's home and is not reachable from the
-internet.
+else runs as short-lived scheduled jobs in one Microsoft Azure region
+(West Europe) and is not reachable from the internet.
 
 Three separate lanes run on their own schedules and never mix: the main
 digest, one for paid posts, and one that tracks a small set of projects and
@@ -41,13 +41,17 @@ tracker that reports "nothing today" every day stops being read.
 
 ### What it costs, and what is not controlled
 
-The running costs are a single machine the owner already owns, a free-tier
-website host, and payment per summary to a language-model provider.
+The running costs are the Azure subscription that hosts the scheduled jobs and
+their storage, a free-tier website host, and the language model. The main
+summary runs on the owner's existing Claude subscription; only a fallback to
+the Claude API is billed per use.
 
-The model spend is the one cost with no ceiling. There is no cap enforced in
-the system: an unusually busy window costs more, and a failure that falls back
-to a second provider costs more again. This is a known, accepted exposure
-rather than an oversight — see **Architecture Risks** later in this document
+Neither bill has a hard ceiling. A monthly budget alert tells the owner when
+cloud spend runs high, but it does not stop anything. There is also no cap
+enforced in the system on summarization: an unusually busy window costs more,
+and a failure that falls back to the Claude API costs more again. This is a
+known, accepted exposure rather than an oversight — see **Architecture
+Risks** later in this document
 ([RISK-004](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/risks/architecture-risks.md)).
 
 ### What could go wrong
@@ -62,10 +66,11 @@ reassuring one:
   using the owner's own sessions. If those leaked, the loss would be access to
   those accounts — not merely to this system. This is the sharpest risk here
   and it is covered in **Trust Boundaries**.
-- **There is one machine.** No second site, no automatic failover. If it is
-  lost, the service is down until it is rebuilt by hand, and up to a day of
-  collected history may be gone. Recovery has never been timed, so no honest
-  estimate of "how long" exists — see **Disaster Recovery**.
+- **There is one cloud region.** No second region, no automatic failover. If it
+  were lost, the service is down until it is rebuilt by hand, and up to a day
+  of collected history may be gone. Restoring from the recovery copy has never
+  been exercised and recovery has never been timed, so no honest estimate of
+  "how long" exists — see **Disaster Recovery**.
 - **A missed digest is acceptable; a repeated one is not.** The system is
   built so that re-running it cannot deliver the same digest twice. One known
   gap remains: restoring from a backup can re-send something already sent

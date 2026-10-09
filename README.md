@@ -36,8 +36,8 @@ Telegram/X/keyword       ├─> own run ─> Claude ─> its own Telegram topic
   position matches ──────┘             (never the site — see below)
 ```
 
-Each run mode has its own systemd timer on the VM (scheduling lives in the
-homelab repo, not here):
+Each run mode has its own scheduled Azure Container Apps job (the cron
+schedules are declared in `infra/azure/main.tf`):
 
 | Mode | Command | Cadence | Input | Telegram topic |
 |---|---|---|---|---|
@@ -90,18 +90,20 @@ startup: the Telegram TL;DR links to the digest's own site page, so hiding
 only the site would ship a real ping pointing at a page that was never
 published. It is accepted on the window path only.
 
-Which runs use it is a homelab scheduling decision, not this repo's: the VM
-splits the 6-hourly window into three timers — 06/12 UTC plain, 00 UTC
+Which runs use it is a scheduling decision (`infra/azure/main.tf`, mapped to
+arguments in `digest/cloud_run.py`): the Azure jobs split the 6-hourly window
+into three — `daytime` at 06/12 UTC plain, `overnight` at 00 UTC
 `hide:telegram` (no 2am Budapest ping, but the site still carries overnight
-news for morning readers), and 18 UTC `hide:telegram,site` (the 20:30 daily
-brief republishes that same window 30 minutes later).
+news for morning readers), and `evening` at 18 UTC `hide:telegram,site` (the
+20:30 daily brief republishes that same window 30 minutes later).
 
 `--force` is the owner's manual escape hatch past `run_daily`'s duplicate-fire
 guard, for a deliberate second daily run on the same day. It is read only
 alongside `daily`.
 
-Runs as a one-shot container (`docker compose run --rm digest`) on a systemd
-timer, not a long-running service.
+Runs as a one-shot container (`docker compose run --rm digest` locally, an
+Azure Container Apps job in production) on a schedule, not a long-running
+service.
 
 ## Quickstart (local dev)
 
@@ -238,9 +240,9 @@ container's uid-1000 (non-root) user, so the volume is writable from the
 very first `docker compose run`. A bind mount, by contrast, would have
 Docker auto-create the host directory as root on first run, which shadows
 that chown and leaves the uid-1000 process unable to write — silently
-breaking the container. `compose.yml` here is for local dev only — the VM's
-production compose service lives in the separate homelab repo (see
-Deployment below). Releases are git tags (`vX.Y.Z`); a merge to `main` that
+breaking the container. `compose.yml` here is for local dev only — production
+runs as Azure Container Apps jobs (see Deployment below). Releases are git tags
+(`vX.Y.Z`); a merge to `main` that
 changes shipped files (`Dockerfile`, `digest/`, `prompts/`, `pyproject.toml`,
 `uv.lock`) is tagged as the next patch version by
 `.github/workflows/auto-release.yml`, and minor/major tags are pushed by hand.
@@ -284,7 +286,7 @@ It is a separate program with a separate toolchain and a separate deploy:
 |---|---|---|
 | Language | Python 3.12 (uv) | JavaScript (no build step) |
 | Tests | `uv run pytest` | `cd workers/news-site && npm ci && npm test` |
-| Ships via | git tag -> GHCR image -> homelab | `wrangler deploy` from `workers/news-site` |
+| Ships via | git tag -> GHCR image -> image pin in `infra/azure/` -> Azure jobs | `wrangler deploy` from `workers/news-site` |
 
 The two are coupled only by the ingest contract (`INGEST_KEY`, the payload
 shape validated in `workers/news-site/src/ingest.js`) and by the `#sN`
@@ -293,29 +295,30 @@ directory's `README.md`, which is the authoritative document for the site.
 
 ## Deployment
 
-Production currently runs on the homelab `01-myapps-vm`. A git tag (pushed by
-hand, or created by `auto-release.yml` after a merge touching shipped files)
-builds and publishes the image to GHCR through `.github/workflows/release.yml`;
-the separate `~/Developer/toom-platform-homelab` repository pins the tag and
-deploys its systemd timers, Ansible `myapps` role and Key Vault secrets.
+Production has run on Azure since 2026-10-08, as nine scheduled Container Apps
+Jobs in West Europe. Before that it ran on the homelab `01-myapps-vm` (systemd
+timers, deployed by the separate `~/Developer/toom-platform-homelab`
+repository); that VM no longer runs the digest. A git tag (pushed by hand, or
+created by `auto-release.yml` after a merge touching shipped files) builds and
+publishes the image to GHCR through `.github/workflows/release.yml`.
 
-The approved Azure target is prepared here in `infra/azure/`: nine Container Apps
-Jobs, leased Blob-backed SQLite bundles and explicit reviewed OIDC plan/apply.
-Terraform state uses a separate Azure Blob backend; digest credentials use an
-app-owned Key Vault. The existing subscription is sufficient for this workload;
-select its ID explicitly. Source secrets remain intact during the reviewed copy.
-Provision the foundation first, copy/verify secrets, then create the nine Manual
-jobs. Jobs and schedules default to disabled; merging does not move production.
-Once jobs exist, a merged bump of the tracked image pin
+The Azure stack lives here in `infra/azure/`: nine Container Apps Jobs, leased
+Blob-backed SQLite bundles and explicit reviewed OIDC plan/apply. Terraform state
+uses a separate Azure Blob backend; digest credentials use an app-owned Key
+Vault. A merged bump of the tracked image pin
 (`infra/azure/image.auto.tfvars.json`) deploys that image automatically, but only
-when a guard confirms the plan changes nothing except the image of all nine jobs.
-See [the Azure migration runbook](docs/azure-migration.md) for subscription
-authentication, state handoff, activation, cloud recovery and homelab retirement.
-The owner requested current CLI 2.1.294 for the migration image, with official
-Node 22 (tag/digest pinned) to meet its >=22 engine requirement. Subscription
-OAuth, prompts and models stay configured as before; fallbacks move to the Claude
-API over workload identity federation (no OpenRouter key); live quality and
-authentication still require the cloud pilot. The VM baseline remains 2.1.284.
+when a guard confirms the plan changes nothing except the image of all nine jobs;
+every other infrastructure change, including any schedule, goes through the
+manual plan/apply. See [the Azure migration runbook](docs/azure-migration.md)
+for subscription authentication, the state handoff and activation history,
+cloud recovery and homelab retirement. Recovery stays within Azure; there is no
+procedure for returning execution to the VM.
+The Claude CLI and the official Node image are pinned in the `Dockerfile`
+(Node by tag and digest; the CLI needs Node >=22) and bumped by Renovate.
+Subscription OAuth, prompts and models stay
+configured as before; when `claude -p` fails, the fallback is the Claude API
+over workload identity federation (no API key, no OpenRouter). The VM baseline
+was 2.1.284.
 
 The Worker deploys on its own track and is not part of that chain: a tag
 here ships the Python service only. Deploying the site is `wrangler deploy`
@@ -332,7 +335,7 @@ until the jar is replaced. Since 0.26.3 the rotated jar is persisted after
 every clean collect, so this should be rare — but it is still the recovery
 procedure when it happens.
 
-**Symptom:** `x auth/cookie error: InvalidSession` in the journal, `"x": "failed"`
+**Symptom:** `x auth/cookie error: InvalidSession` in the run logs, `"x": "failed"`
 in `run_summary`, and `failed_sources: ["x"]` on the digest.
 
 ### 1. Use a dedicated browser session
@@ -402,7 +405,7 @@ PY
 
 ### 4. Select the active runtime
 
-**After Azure cutover:** use the guarded [cloud X-cookie rotation
+**Current (Azure):** use the guarded [cloud X-cookie rotation
 procedure](docs/azure-migration.md#rotate-the-cloud-x-cookie-jar). Pass the private
 JSON to `uv run python -m digest.cloud_cookies /PRIVATE/cookies.json
 --operator-login` with the configured Azure runtime namespace and scoped Blob
@@ -410,7 +413,9 @@ access. This updates canonical seed/live state under the lease; no X-cookie
 secret exists in the dedicated vault. Verify a Manual X-enabled run before
 resuming schedules. A homelab vault update does not reach cloud jobs.
 
-**Current VM only, before cutover:** follow the upload and deploy steps below.
+**Retired VM path:** the digest no longer runs on the VM, so the upload and
+deploy steps below no longer reach production. They are kept as the record of
+how the VM was rotated.
 
 **`--tags` is mandatory, not decoration.** `az keyvault secret set` creates a
 new secret VERSION, and versions do not inherit tags. The deploy discovers
@@ -456,7 +461,7 @@ az keyvault secret set-attributes --vault-name kv-homelab-prod-th \
   --tags envvar=DIGEST_X_COOKIES folder=digest file-encoding=utf-8
 ```
 
-### 5. Deploy (current VM only)
+### 5. Deploy (retired VM path)
 
 Deploy `01-myapps-vm` (Configuration only) from the homelab repo. Ansible
 rewrites the seed file, whose mtime then jumps ahead of the stale
@@ -475,13 +480,14 @@ Then confirm with the next digest's `source_counts`, which should carry an
 ### The other session credentials
 
 `REDDIT_SESSION_COOKIE`, `PATREON_SESSION_COOKIE` and `TG_SESSION` are also
-long-lived session credentials. Before cutover, update the homelab vault and
-deploy the VM. After cutover, use the [dedicated-vault credential rotation
+long-lived session credentials. Until the 2026-10-08 cutover they were rotated
+by updating the homelab vault and deploying the VM; now use the
+[dedicated-vault credential rotation
 procedure](docs/azure-migration.md#credential-rotation-after-cutover): update the
 active digest vault, verify a Manual Azure run, then resume jobs. Homelab deploy
 is no longer the rotation path. These credentials have none of the X mechanics
-above: they are env vars
-rather than files, sent as hand-built headers over stateless `urllib` (or, for
+above: they are env vars rather than files, sent as hand-built headers over
+stateless `urllib` (or, for
 Telegram, an MTProto auth key), so nothing rotates and there is no live jar.
 Each already reports its own auth death explicitly — see `reddit.py`'s 401/403
 branch, `patreon.py`'s `current_user_can_view` check (Patreon degrades to
@@ -490,13 +496,14 @@ prefetch abort.
 
 ## Status
 
-In production on the owner's VM. Five run modes — window (three timers,
-two of them `hide:`-suppressed), daily, weekly, patreon and positions — are on
-their own systemd timers; `relay` (added 2026-09) runs there only once the
-homelab repo adds its hourly timer. The live delivery channels are the Telegram TL;DR
-ping and the news site, with email implemented but disabled there. Hungarian
-translation, the daily verification pass and story-arc context primers are all
-enabled on that deployment, though each defaults off here.
+In production on Azure Container Apps jobs since 2026-10-08; the owner's homelab
+VM ran it before that. Nine jobs, each on its own schedule: three window jobs
+(`daytime`, `overnight` and `evening`, the latter two `hide:`-suppressed),
+`daily`, `weekly`, `patreon`, `positions`, `relay` and a `backup` job. The live
+delivery channels are the Telegram TL;DR ping and the news site, with email
+implemented but disabled there. Hungarian translation, the daily verification
+pass and story-arc context primers are all enabled on that deployment, though
+each defaults off here.
 See PLAN.md for the phased plan and per-phase progress.
 `docs/pr-summaries/` holds historical per-PR summaries that a since-removed CI
 workflow generated — don't hand-edit them. New ones are produced on demand with

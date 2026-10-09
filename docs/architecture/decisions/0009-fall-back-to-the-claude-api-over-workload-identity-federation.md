@@ -12,11 +12,10 @@ option 3 and the provider, model lists and `OPENROUTER_API_KEY` switch in its
 Decision. The chain design itself (a primary, ordered fallback legs, one shared
 budget, per-leg validation, per-digest provenance) stays accepted there.
 
-The code is implemented and tested. On 2026-10-09 a one-off execution in the
-Azure job environment proved the whole chain (managed identity, Entra app
-token, Anthropic exchange, one Messages call) with the token step supplied by
-hand; the released code path must pass the same smoke test after it deploys.
-No real fallback has served a digest yet. See
+The code is implemented, tested and deployed. On 2026-10-09 the runbook's smoke
+test passed on the released image with the job's own settings: one execution
+went through the whole chain (managed identity, Entra app token, Anthropic
+exchange, one Messages call). No real fallback has served a digest yet. See
 [the runbook](../../azure-migration.md#claude-api-fallback-workload-identity-federation).
 
 ## Context
