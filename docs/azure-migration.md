@@ -584,13 +584,30 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    Entra ID):
    - Issuer `https://login.microsoftonline.com/<TENANT_ID>/v2.0` (the v2.0
      selector, discovery mode). The wizard creates the issuer with a 7500 s
-     maximum JWT lifetime; managed identity tokens carry up to 24 hours between
-     `iat` and `exp`, so edit the issuer afterwards (Settings, Workload
-     identity, Issuers) and raise `max_jwt_lifetime_seconds` to `90000`. Anthropic's
-     guide says `86400`, but the token measured from this app's Container Apps
-     jobs lives 86,700 s between `iat` and `exp`, so `86400` would still reject
-     it; read your own token's lifetime if the exchange keeps failing.
-     Otherwise every exchange fails with an opaque 401.
+     maximum JWT lifetime, and the Console offered at most 24 hours (86400 s)
+     when editing it. That is not enough: the managed identity token measured
+     from this app's Container Apps jobs lives 86,700 s between `iat` and `exp`
+     (`exp` minus `iat` must not exceed the issuer's limit), and a lower limit
+     fails every exchange with an opaque 401 whose reason, `jwt_lifetime_too_long`,
+     is visible only in the Console's authentication history. The Admin API
+     accepts up to 176400 s, so raise it there to `90000`. It needs an
+     `org:admin` OAuth token from your own login (an API key is not accepted);
+     use a shell you reserve for administration:
+
+     ```sh
+     ant auth login --profile admin --scope "org:admin"
+     export ANTHROPIC_AUTH_TOKEN=$(ant auth print-credentials --profile admin --access-token)
+     curl --fail-with-body -sS -X POST \
+       "https://api.anthropic.com/v1/organizations/federation_issuers/<ISSUER_ID>" \
+       -H "authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+       -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+       -d '{"max_jwt_lifetime_seconds": 90000}'
+     unset ANTHROPIC_AUTH_TOKEN; ant profile activate default
+     ```
+
+     The issuer id (`fdis_...`) is in the Console under Settings, Workload
+     identity, Issuers. Read your own token's lifetime if the exchange still
+     fails.
    - A service account placed in a **dedicated workspace with a monthly spend
      limit**. That limit is the only cap on the cost if every call falls
      through; nothing in the code caps spend.
@@ -665,7 +682,7 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    A traceback names a step and an HTTP status or exception type, never a body,
    token or URL. If the exchange returns 401, check the Console's authentication
    history for the deny reason, then the usual causes: issuer URL not matching
-   the token's `iss`, the 90000 s lifetime in step 2, a rule `audience` that is
+   the token's `iss`, the issuer lifetime limit in step 2, a rule `audience` that is
    not the bare `<APP_ID>`, or an `oid` that is not the runner identity's. Repeat
    the test after any change to the rule, the issuer or the audience app.
 
