@@ -584,15 +584,21 @@ the smoke test in step 5 is part of the setup, not an optional extra.
    Entra ID):
    - Issuer `https://login.microsoftonline.com/<TENANT_ID>/v2.0` (the v2.0
      selector, discovery mode). The wizard creates the issuer with a 7500 s
-     maximum JWT lifetime, and the Console offered at most 24 hours (86400 s)
-     when editing it. That is not enough: the managed identity token measured
-     from this app's Container Apps jobs lives 86,700 s between `iat` and `exp`
-     (`exp` minus `iat` must not exceed the issuer's limit), and a lower limit
-     fails every exchange with an opaque 401 whose reason, `jwt_lifetime_too_long`,
-     is visible only in the Console's authentication history. The Admin API
-     accepts up to 176400 s, so raise it there to `90000`. It needs an
-     `org:admin` OAuth token from your own login (an API key is not accepted);
-     use a shell you reserve for administration:
+     maximum JWT lifetime and gives no field to change it. Raise it afterwards
+     to `90000` (Settings, Workload identity, Issuers, edit the issuer, Max JWT
+     lifetime). Anthropic's guide says `86400`, which is too low here: the
+     managed identity token measured from this app's Container Apps jobs lives
+     86,700 s between `iat` and `exp`, and `exp` minus `iat` must not exceed the
+     issuer's limit. Do not confuse it with the federation rule's **Token
+     lifetime** (60 to 86400 s, the lifetime of the Anthropic token that comes
+     back; leave it at its default). A limit that is too low fails every
+     exchange with an opaque 401 whose reason, `jwt_lifetime_too_long`, is
+     visible only in the Console's authentication history.
+
+     If the Console field refuses `90000`, set it through the Admin API, which
+     accepts up to 176400 s. It needs an `org:admin` OAuth token from your own
+     login (an API key is not accepted); use a shell you reserve for
+     administration:
 
      ```sh
      ant auth login --profile admin --scope "org:admin"
