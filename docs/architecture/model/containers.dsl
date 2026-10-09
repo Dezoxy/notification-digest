@@ -8,7 +8,7 @@
 notificationDigest = softwareSystem "Notification Digest" "Collects the owner's notifications on a schedule, summarizes each window with an LLM and delivers a digest with deep links." {
 
     group "Azure subscription (private)" {
-        runner = container "Digest Runner" "Collects new items per source, summarizes the window and delivers the result. One short-lived process per scheduled run." "Python 3.12, Azure Container Apps job" "Layer Run"
+        runner = container "Digest Runner" "Collects new items per source, summarizes the window and delivers the result. One short-lived process per scheduled run." "Python 3.14, Azure Container Apps job" "Layer Run"
         state = container "State Database" "System of record: collected items, per-source cursors, digests and delivery state. Keeps re-runs idempotent. One lease admits one run at a time." "SQLite bundle in Azure Blob Storage" "Layer Data,Database"
     }
 
