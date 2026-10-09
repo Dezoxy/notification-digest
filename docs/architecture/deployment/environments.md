@@ -33,6 +33,6 @@ mandatory there; there is no `MODE=staging`.
   ([disaster-recovery.md](../reliability/disaster-recovery.md) is exercised
   directly against production backups, because no scaled-down production
   look-alike exists).
-- A CI job (`pr-summary.yml`) runs on GitHub-hosted runners against `main` after
-  merge; it is a documentation job (`scripts/pr_summary.py`), not a deployment
-  or a third environment.
+- `scripts/pr_summary.py` produces post-merge PR summaries on demand
+  (`/pr-summary`); no CI job runs it. Like the CI workflows, it is a
+  documentation tool, not a deployment or a third environment.

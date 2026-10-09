@@ -1,11 +1,11 @@
 name: azure-validate
 
+# Deliberately not path-filtered: a required check that does not report blocks a
+# PR forever, and this job is a required status check on main.
 on:
   pull_request:
-    paths: ['infra/azure/**', '.github/workflows/azure*.yml']
   push:
     branches: [main]
-    paths: ['infra/azure/**', '.github/workflows/azure*.yml']
 
 permissions:
   contents: read

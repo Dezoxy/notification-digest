@@ -1,0 +1,33 @@
+name: news-site
+
+# Deliberately not path-filtered: a required check that does not report blocks a
+# PR forever, and this job is a required status check on main.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  news-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: workers/news-site
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Same major as the Node stage of the repo's Dockerfile; the Worker's
+          # package.json declares no engines and there is no .nvmrc.
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: workers/news-site/package-lock.json
+      - run: npm ci
+      # Invariant tests + byte-comparison against the committed goldens + prettier
+      # check. A change that should alter rendered output regenerates the goldens
+      # locally (`npm run golden`); CI only ever checks.
+      - run: npm test

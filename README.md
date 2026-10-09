@@ -487,4 +487,6 @@ ping and the news site, with email implemented but disabled there. Hungarian
 translation, the daily verification pass and story-arc context primers are all
 enabled on that deployment, though each defaults off here.
 See PLAN.md for the phased plan and per-phase progress.
-`docs/pr-summaries/` is auto-generated on merge (see `.github/workflows/pr-summary.yml`) — don't hand-edit it.
+`docs/pr-summaries/` holds historical per-PR summaries that a since-removed CI
+workflow generated — don't hand-edit them. New ones are produced on demand with
+`/pr-summary <n>`.

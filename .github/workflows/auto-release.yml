@@ -8,8 +8,8 @@ name: auto-release
 #
 # Loop safety: the path filter is exactly what the Dockerfile copies. The pin file
 # Renovate bumps after each release (infra/azure/image.auto.tfvars.json) and the
-# docs commits CI pushes (docs/pr-summaries/) are NOT in it, so neither can cut a
-# release. Workflow-only, docs-only and infra-only merges release nothing.
+# docs files (docs/pr-summaries/ and the rest of docs/) are NOT in it, so neither
+# can cut a release. Workflow-only, docs-only and infra-only merges release nothing.
 #
 # Minor and major bumps stay manual: push vX.Y.0 by hand (release.yml builds it)
 # and later automatic releases continue from the highest tag.
