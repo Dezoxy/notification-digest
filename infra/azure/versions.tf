@@ -3,7 +3,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 5.4.0"
+      version = "~> 5.9.0"
     }
   }
   # Bootstrap this separate backend before init. GitHub OIDC accesses state
