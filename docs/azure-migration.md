@@ -241,10 +241,13 @@ against `.github/workflows/` and `infra/azure/`:
   variables are an ordered list: inserting one shifts every later entry, and
   Terraform then prints all of them as changed. The first plan after the
   marking shows every job as updated in place with "The value is unchanged".
-  The marking does not cover the `azure-plan-*` artifact, whose
-  `production.auto.tfvars.json` holds the same values in clear for as long as
-  the artifact exists (see below), nor logs written before the marking; delete
-  those runs' logs if they matter.
+  The marking is partial. It does not cover the `azure-plan-*` artifact, whose
+  `production.auto.tfvars.json` and binary `deployment.tfplan` hold the same
+  values in clear for as long as the artifact exists (see below); it does not
+  cover `alert_email`, a separate input that still prints when the alert or
+  budget resources change; and it does not reach logs written before the
+  marking, so delete those runs' logs if they matter. Closing the artifact gap
+  means encrypting it with an environment secret before upload.
 - Secrets are Key Vault references (`key_vault_secret_id` in
   `infra/azure/main.tf`) and never Terraform inputs, so no Key Vault secret value
   appears in the inputs, the plan text or the logs. The binary `deployment.tfplan`
