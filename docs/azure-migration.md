@@ -960,6 +960,29 @@ The slot must match the schedule, be in the past and not already completed.
 Run with the same configured Azure identity/namespace and image; do not launch
 an unguarded `python -m digest` process against production cloud state.
 
+For a failed window summarization, first inspect a validated copy of the latest
+persisted bundle. Check `cloud_completed_slots`, unclaimed `items` (`digest_id IS
+NULL`), the relevant `digests` and their per-channel flags, and
+`cloud_delivery_intents`. Collection commits items and cursors before synthesis;
+a failed summary leaves those items unclaimed and the slot incomplete. A later
+window may already have claimed and delivered them. Do not reset cursors, delete
+digests or replay an already delivered backlog. Reconcile `inflight` or
+`uncertain` Telegram delivery against the destination before any resend.
+
+After reviewing the state and deploying the fix, a daytime catch-up uses an Azure
+job execution override with the same configured identity and namespace:
+
+```sh
+python -m digest.cloud_run daytime --catch-up-slot 2026-10-10T12:00:00+00:00
+```
+
+This processes the current unclaimed backlog and newly collected items, subject
+to the normal selection limits; it does not reconstruct an exact historical
+window. Verify a successful execution, persisted slot completion, channel flags
+and the actual destinations. Repeating a completed slot skips work. An alert
+automatically resolving only means its rolling query condition cleared; it does
+not prove the missed digest was recovered.
+
 Telegram sending and Blob checkpoints cannot commit atomically. An uncertain
 send blocks automatic resend for that channel. Inspect the destination and
 decide whether the digest was received. Record the confirmed outcome under the
@@ -1063,8 +1086,15 @@ from this **separate account**, not merely a second namespace in runtime storage
 
 ## Alerts, cost and residency
 
-Two aggregate log rules evaluate every 15 minutes: failures/uncertain delivery
-and missing successful runs. They have no dimension splitting. Freshness uses
+Two log rules evaluate every 15 minutes: failures/uncertain delivery
+and missing successful runs. Failures split by logical `Job` and `FailureStage`,
+so the alert context identifies the affected job and stage. Window jobs report
+`collection`, `summarization` or `delivery`; known synthesis failures in aggregate
+jobs also report `summarization`. Watchdog failures report `lease` or `runtime`,
+entrypoint exceptions report `entrypoint`, and platform system errors report
+`platform`. Unclassified and older application logs use `application`. Resource
+names supply the job when a log has no `job=` field. Each failing job/stage pair
+can produce its own alert. Freshness remains aggregate and uses
 20 hours for daytime, 26 hours for daily/overnight/evening/backup, six hours for
 positions, two hours for Patreon/relay; weekly is checked Sunday after 23:00
 Budapest through Monday before 22:00 while its expected result is inside Azure's

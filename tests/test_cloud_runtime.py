@@ -2,6 +2,7 @@
 
 import sqlite3
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -13,6 +14,7 @@ from digest.cloud_run import LeaseWatchdog, _dispatch, run_job, scheduled_slot
 from digest.config import CloudConfig, Config, ConfigError
 from digest.publish import TelegramSendError
 from digest.state import (
+    Item,
     cloud_slot_completed,
     commit_new_items,
     complete_cloud_slot,
@@ -228,6 +230,19 @@ def test_context_defaults_to_local_after_failure():
     assert not cloud_context.active()
 
 
+def test_failure_reporting_is_scoped_to_cloud_execution():
+    outer, inner = [], []
+    cloud_context.report_failure("collection")
+    with cloud_execution(CloudHooks(lambda: None, Mock(), outer.append)):
+        cloud_context.report_failure("collection")
+        with cloud_execution(CloudHooks(lambda: None, Mock(), inner.append)):
+            cloud_context.report_failure("summarization")
+        cloud_context.report_failure("delivery")
+    cloud_context.report_failure("delivery")
+    assert outer == ["collection", "delivery"]
+    assert inner == ["summarization"]
+
+
 def test_cloud_config_rejects_endpoint_injection_without_echoing_value(monkeypatch):
     monkeypatch.setenv("DIGEST_CLOUD_ACCOUNT_URL", "https://attacker.example/token")
     with pytest.raises(ConfigError, match="DIGEST_CLOUD_ACCOUNT_URL") as error:
@@ -299,6 +314,7 @@ def test_runtime_budget_fences_and_logs_before_kill(caplog):
     watcher._watch()
     fence.assert_called_once()
     assert "cloud_job event=failure job=daily error_type=RuntimeBudgetExceeded" in caplog.text
+    assert "failure_stage=runtime" in caplog.text
 
 
 async def test_stale_lease_prevents_mtproto_forward():
@@ -363,6 +379,101 @@ def test_failed_work_retains_checkpoint_but_does_not_complete_slot(tmp_path, mon
     assert get_cursors(db, "telegram") == {"group": "100"}
     db.close()
     assert state.checkpoint.call_count >= 3
+
+
+def test_failed_summary_can_recover_persisted_items_without_duplicate_delivery(
+    tmp_path, monkeypatch, caplog
+):
+    from digest import main
+    from digest.summarize import ModelRun, SummarizeError
+
+    cfg = replace(
+        _config(),
+        email_enabled=False,
+        site_publish_url="https://site.example/ingest",
+        site_ingest_key="mock",
+        site_public_base="https://site.example",
+    )
+    cloud = CloudConfig(
+        "https://digeststore.blob.core.windows.net", "digest", data_dir=str(tmp_path)
+    )
+    state = Mock(lease_deadline=time.monotonic() + 60)
+    durable = sqlite3.connect(":memory:")
+    init_db(durable)
+
+    def restore():
+        restored = sqlite3.connect(tmp_path / "state.db")
+        durable.backup(restored)
+        restored.close()
+
+    state.restore.side_effect = restore
+    state.checkpoint.side_effect = lambda db: db.backup(durable)
+    item = Item(
+        source="telegram",
+        source_id="1:1",
+        chat_id="1",
+        author="mock",
+        text="A collected story",
+        url="https://t.me/example/1",
+        fetched_at=datetime.now(UTC).isoformat(),
+    )
+    body = "**TL;DR:** A recovered story.\n\n## Updates\n\nA collected story."
+    summarize = Mock(
+        side_effect=[
+            SummarizeError("fallback budget exhausted"),
+            (body, {}, [], ModelRun("claude-sonnet-5-5", "high", True)),
+        ]
+    )
+    monkeypatch.setattr(main, "summarize", summarize)
+    monkeypatch.setattr(main, "archive", Mock())
+    site, telegram = Mock(), Mock()
+    monkeypatch.setattr(deliver, "publish_to_site", site)
+    monkeypatch.setattr(deliver, "send_telegram_tldr", telegram)
+
+    def dispatch(job, config):
+        db = connect(config.state_db_path)
+        try:
+            commit_new_items(db, [item], {("telegram", "1"): "1"})
+            return main._deliver(db, config, [])
+        finally:
+            db.close()
+
+    dispatch_mock = Mock(side_effect=dispatch)
+    monkeypatch.setattr("digest.cloud_run._dispatch", dispatch_mock)
+    missed = datetime(2026, 7, 5, 12, tzinfo=UTC)
+    slot = scheduled_slot("daytime", missed + timedelta(hours=1), catch_up_slot=missed)
+    caplog.set_level("INFO")
+    try:
+        assert run_job("daytime", cloud, cfg, slot, state) is False
+        assert durable.execute(
+            "SELECT count(*) FROM items WHERE digest_id IS NULL"
+        ).fetchone()[0] == 1
+        assert durable.execute("SELECT count(*) FROM digests").fetchone()[0] == 0
+        assert get_cursors(durable, "telegram") == {"1": "1"}
+        assert not cloud_slot_completed(durable, "daytime", slot)
+        assert "failure_stage=summarization" in caplog.text
+        site.assert_not_called()
+        telegram.assert_not_called()
+
+        assert run_job("daytime", cloud, cfg, slot, state) is True
+        assert durable.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+        assert durable.execute(
+            "SELECT count(*) FROM items WHERE digest_id IS NULL"
+        ).fetchone()[0] == 0
+        digest_id, site_done, telegram_done = durable.execute(
+            "SELECT id, site_published, telegram_sent FROM digests"
+        ).fetchone()
+        assert (site_done, telegram_done) == (1, 1)
+        assert get_delivery_intent(durable, digest_id, "telegram") == "confirmed"
+        assert cloud_slot_completed(durable, "daytime", slot)
+
+        assert run_job("daytime", cloud, cfg, slot, state) is True
+        assert dispatch_mock.call_count == 2
+        assert summarize.call_count == 2
+        site.assert_called_once()
+        telegram.assert_called_once()
+    finally:
+        durable.close()
 
 
 def test_fence_exits_even_when_namespace_process_group_is_missing(monkeypatch):

@@ -12,7 +12,19 @@ locals {
         or Log_s contains "cloud delivery uncertain"
         or tostring(column_ifexists("Type_s", "")) == "Error"
         or tostring(column_ifexists("Reason_s", "")) in ("ContainerCrashing", "ErrImagePull", "ImagePullBackOff", "JobExecutionFailed")
-    | summarize Failures = count()
+    | extend Job = coalesce(
+        extract(@"\bjob=([a-z]+)\b", 1, Log_s),
+        extract(@"^digest-([a-z]+)(?:-|$)", 1, tostring(column_ifexists("ContainerJobName_s", ""))),
+        extract(@"^digest-([a-z]+)(?:-|$)", 1, tostring(column_ifexists("ContainerAppName_s", ""))),
+        extract(@"^digest-([a-z]+)(?:-|$)", 1, tostring(column_ifexists("ContainerGroupName_s", ""))),
+        "unknown")
+    | extend FailureStage = coalesce(
+        extract(@"\bfailure_stage=([a-z_]+)\b", 1, Log_s),
+        iff(Log_s contains "cloud delivery uncertain", "delivery", ""),
+        iff(tostring(column_ifexists("Type_s", "")) == "Error"
+            or tostring(column_ifexists("Reason_s", "")) in ("ContainerCrashing", "ErrImagePull", "ImagePullBackOff", "JobExecutionFailed"), "platform", ""),
+        "application")
+    | summarize Failures = count() by Job, FailureStage
   KQL
   # Azure log-alert lookback is bounded to two days. Weekly freshness is
   # evaluated after Sunday evening through Monday evening, while the expected
@@ -66,7 +78,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "digest" {
   enabled                 = var.schedules_enabled
   auto_mitigation_enabled = true
   # Tables are created on first execution. Validate real schema/KQL in pilot
-  # before enabling schedules and these two aggregate (unsplit) alerts.
+  # before enabling schedules, failure dimensions and aggregate freshness.
   skip_query_validation = true
   criteria {
     query                   = each.value.query
@@ -74,6 +86,14 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "digest" {
     metric_measure_column   = each.value.column
     operator                = "GreaterThan"
     threshold               = 0
+    dynamic "dimension" {
+      for_each = each.key == "failures" ? toset(["Job", "FailureStage"]) : toset([])
+      content {
+        name     = dimension.value
+        operator = "Include"
+        values   = ["*"]
+      }
+    }
     failing_periods {
       minimum_failing_periods_to_trigger_alert = 1
       number_of_evaluation_periods             = 1
