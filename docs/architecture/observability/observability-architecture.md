@@ -66,8 +66,9 @@ The failure rule now declares dimensions for the logical job and failure stage;
 the freshness rule remains aggregate. Application logs identify known collection,
 synthesis and delivery failures, with generic categories for unclassified or
 older logs. Platform failures use the resource name to identify the job. These
-dimensions are implemented and query-tested; deployment and a real notification
-with those dimensions still need confirmation. Query validation remains skipped
+dimensions were deployed and read back from Azure on 2026-10-10, and the query
+was tested against real and synthetic logs. A notification received by the owner
+with the new dimensions still needs confirmation. Query validation remains skipped
 in Terraform because the log tables do not exist before the first execution.
 
 On 2026-10-09, shortly after activation, the `freshness`

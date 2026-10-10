@@ -723,6 +723,17 @@ the smoke test in step 5 is part of the setup, not an optional extra.
 
 ### Operating it
 
+- **Timeout budget.** Production sets `CLAUDE_TIMEOUT_SECONDS=600` and
+  `FALLBACK_TIMEOUT_SECONDS=600`. The subscription CLI has its own timeout;
+  after it fails, the API fallback chain shares a separate 600-second budget
+  across two models, initially reserving roughly 300 seconds for each. Unused
+  time carries forward. The application default remains 180 seconds when no
+  override is configured. During the 2026-10-10 recovery, both API models
+  exhausted their shares of the 180-second budget. With the 600-second override,
+  the first API model completed summarization in approximately 191 seconds;
+  translation, site publication, Telegram delivery and the completed-slot
+  checkpoint then succeeded. The existing 35-minute cloud runtime watchdog
+  remains the outer limit.
 - **Security boundary.** The identifiers are not secrets. The `claude -p`
   subprocess environment withholds `IDENTITY_ENDPOINT`, `IDENTITY_HEADER` and
   every `ANTHROPIC_*` variable (`claude_subprocess_env`): the first two would let
