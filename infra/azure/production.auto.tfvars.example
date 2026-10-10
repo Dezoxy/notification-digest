@@ -23,6 +23,8 @@ app_env = {
   DIGEST_TO = "owner@example.com"
   ANTHROPIC_MODEL = "claude-opus-5-5"
   CLAUDE_TIMEOUT_SECONDS = "600"
+  # Separate shared API fallback budget; two models get about 300s each.
+  FALLBACK_TIMEOUT_SECONDS = "600"
   CLAUDE_EFFORT = "high"
   CLAUDE_CONFIG_DIR = "/tmp/claude-home"
   DISABLE_AUTOUPDATER = "1"
