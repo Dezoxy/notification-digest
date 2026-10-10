@@ -437,6 +437,8 @@ def _deliver(
     """
     telegram_state = TelegramRunState()
     all_ok = deliver_pending(conn, cfg, telegram_state)
+    if not all_ok:
+        cloud_context.report_failure("delivery")
 
     # Positions items are claimed by `run_positions`, not here (see
     # digest/positions.py's module docstring for the clean cut). Passing the
@@ -517,6 +519,7 @@ def _deliver(
         )
     except SummarizeError as exc:
         logger.error("summarization failed: %s", exc)
+        cloud_context.report_failure("summarization")
         return False
 
     # Hungarian translation: a soft-failing PRODUCTION step, run AFTER
@@ -597,6 +600,8 @@ def _deliver(
         hidden=hidden,
     )
     all_ok = all_ok and ok
+    if not ok:
+        cloud_context.report_failure("delivery")
 
     # One Opus call per run keeps cost and runtime bounded -- do NOT loop
     # summarize here even if a remainder is left; the 6-hourly timer is the
@@ -955,6 +960,8 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
             if failed
         ]
 
+        if failed_sources:
+            cloud_context.report_failure("collection")
         delivered = _deliver(conn, cfg, failed_sources, hidden)
 
         pruned = prune_delivered_items(
@@ -1318,6 +1325,7 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
             )
         except SummarizeError as exc:
             logger.error("daily brief summarization failed: %s", exc)
+            cloud_context.report_failure("summarization")
             return False
 
         # PLAN.md §11.4: optional verification pass, draft -> verify ->
@@ -1609,6 +1617,7 @@ def run_weekly(cfg: Config) -> bool:
             )
         except SummarizeError as exc:
             logger.error("weekly brief summarization failed: %s", exc)
+            cloud_context.report_failure("summarization")
             return False
 
         # Hungarian translation: same optional, soft-failing production step
@@ -2047,6 +2056,7 @@ def run_positions(cfg: Config) -> bool:
             )
         except SummarizeError as exc:
             logger.error("positions: summarization failed: %s", exc)
+            cloud_context.report_failure("summarization")
             return False
 
         if body_md is None:

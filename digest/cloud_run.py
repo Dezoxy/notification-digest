@@ -131,7 +131,12 @@ class LeaseWatchdog:
     def _fail(self, reason: str = "LeaseLost") -> None:
         if not self.failed.is_set():
             self.failed.set()
-            logger.error("cloud_job event=failure job=%s error_type=%s", self.job, reason)
+            logger.error(
+                "cloud_job event=failure job=%s error_type=%s failure_stage=%s",
+                self.job,
+                reason,
+                "runtime" if reason == "RuntimeBudgetExceeded" else "lease",
+            )
             self.fence()
 
     def _renew(self) -> None:
@@ -204,6 +209,7 @@ def run_job(job: str, cloud: CloudConfig, cfg: Config, slot: str, state: CloudSt
     watchdog = LeaseWatchdog(state, _fence_process_group, job=job)
     watchdog.start()
     conn = None
+    failures: list[cloud_context.FailureStage] = []
     try:
         state.restore()
         data_dir = Path(cloud.data_dir)
@@ -217,7 +223,7 @@ def run_job(job: str, cloud: CloudConfig, cfg: Config, slot: str, state: CloudSt
         # Upgrade once before installing hooks, then persist the complete schema.
         init_db(conn)
         with cloud_context.cloud_execution(
-            cloud_context.CloudHooks(watchdog.guard, state.checkpoint)
+            cloud_context.CloudHooks(watchdog.guard, state.checkpoint, failures.append)
         ):
             cloud_context.checkpoint(conn)
             if cloud_slot_completed(conn, job, slot):
@@ -235,12 +241,14 @@ def run_job(job: str, cloud: CloudConfig, cfg: Config, slot: str, state: CloudSt
             cloud_context.checkpoint(conn)
             if ok:
                 complete_cloud_slot(conn, job, slot)
+            failure_stage = "none" if ok else (failures[-1] if failures else "application")
             logger.info(
-                "cloud_job event=%s job=%s slot=%s duration_seconds=%.2f",
+                "cloud_job event=%s job=%s slot=%s duration_seconds=%.2f failure_stage=%s",
                 "success" if ok else "failure",
                 job,
                 slot,
                 time.monotonic() - started,
+                failure_stage,
             )
             return ok
     finally:
@@ -277,7 +285,11 @@ def main() -> None:
         if not run_job(args.job, cloud, cfg, slot, state):
             raise SystemExit(1)
     except (Exception, cloud_context.CloudSafetyError) as exc:
-        logger.error("cloud_job event=failure job=%s error_type=%s", args.job, type(exc).__name__)
+        logger.error(
+            "cloud_job event=failure job=%s error_type=%s failure_stage=entrypoint",
+            args.job,
+            type(exc).__name__,
+        )
         raise SystemExit(1) from None
 
 

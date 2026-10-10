@@ -2751,6 +2751,121 @@ def _leg(model: str = "claude-opus-5-5") -> FallbackLeg:
 
 
 class TestRunWithFallbacks:
+    def test_timeout_reserves_time_for_second_fallback(self, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr(summarize_mod.time, "monotonic", lambda: now[0])
+        calls = []
+
+        def fake_api(prompt, model, timeout_seconds, federation):
+            calls.append((model, timeout_seconds))
+            if model == "claude-opus-5-5":
+                now[0] += timeout_seconds
+                raise AnthropicApiError("request timed out")
+            now[0] += 30
+            return "## Recovered digest"
+
+        def primary():
+            raise SummarizeError("primary failed")
+
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_api)
+        output, model_run = run_with_fallbacks(
+            primary=primary,
+            fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+        )
+
+        assert calls == [("claude-opus-5-5", 90), ("claude-sonnet-5-5", 90)]
+        assert output == "## Recovered digest"
+        assert model_run.model == "claude-sonnet-5-5"
+        assert now[0] == 120
+
+    def test_fast_failure_donates_unused_time(self, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr(summarize_mod.time, "monotonic", lambda: now[0])
+        calls = []
+
+        def fake_api(prompt, model, timeout_seconds, federation):
+            calls.append((model, timeout_seconds))
+            if model == "claude-opus-5-5":
+                now[0] += 10
+                raise AnthropicApiError("request failed")
+            return "## Recovered digest"
+
+        def primary():
+            raise SummarizeError("primary failed")
+
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_api)
+        run_with_fallbacks(
+            primary=primary,
+            fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+        )
+        assert calls == [("claude-opus-5-5", 90), ("claude-sonnet-5-5", 170)]
+
+    def test_failed_validation_consumes_shared_budget(self, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr(summarize_mod.time, "monotonic", lambda: now[0])
+        calls = []
+
+        def fake_api(prompt, model, timeout_seconds, federation):
+            calls.append((model, timeout_seconds))
+            return "invalid" if model == "claude-opus-5-5" else "valid"
+
+        def validate(output):
+            if output == "invalid":
+                now[0] += 40
+                raise SummarizeError("invalid output")
+
+        def primary():
+            raise SummarizeError("primary failed")
+
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_api)
+        output, _ = run_with_fallbacks(
+            primary=primary,
+            fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
+            prompt="p",
+            budget_seconds=180,
+            primary_model="claude-opus-5",
+            primary_effort="high",
+            validate=validate,
+        )
+        assert output == "valid"
+        assert calls == [("claude-opus-5-5", 90), ("claude-sonnet-5-5", 140)]
+
+    def test_successful_output_after_deadline_is_rejected(self, monkeypatch):
+        now = [0.0]
+        monkeypatch.setattr(summarize_mod.time, "monotonic", lambda: now[0])
+        calls = []
+
+        def fake_api(prompt, model, timeout_seconds, federation):
+            calls.append(model)
+            return "output"
+
+        def validate(output):
+            now[0] += 180
+
+        def primary():
+            raise SummarizeError("primary failed")
+
+        monkeypatch.setattr(summarize_mod, "run_anthropic", fake_api)
+        with pytest.raises(SummarizeError):
+            run_with_fallbacks(
+                primary=primary,
+                fallbacks=(_leg("claude-opus-5-5"), _leg("claude-sonnet-5-5")),
+                prompt="p",
+                budget_seconds=180,
+                primary_model="claude-opus-5",
+                primary_effort="high",
+                validate=validate,
+            )
+        assert calls == ["claude-opus-5-5"]
+
     def test_primary_succeeds_legs_never_called(self, monkeypatch):
         leg_calls = []
         monkeypatch.setattr(
@@ -2967,7 +3082,7 @@ class TestRunWithFallbacks:
         )
 
         assert output == "## Fallback briefing"
-        assert leg_calls == [("claude-opus-5-5", 180)]
+        assert leg_calls == [("claude-opus-5-5", 90)]
         assert model_run == ModelRun(model="claude-opus-5-5", effort=EFFORT, fallback=True)
 
     def test_fallback_serving_logs_a_warning(self, monkeypatch, caplog):

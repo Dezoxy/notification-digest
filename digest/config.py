@@ -598,15 +598,16 @@ class Config:
     # dynamically (see `context_model`'s own comment for that exact
     # precedent).
     fallback_light_models: tuple[str, ...] = ("claude-sonnet-5-5", "claude-haiku-5-5")
-    # The SHARED wall-clock budget for one call's entire fallback chain --
+    # The SHARED timeout budget for one call's entire fallback chain --
     # every leg together, never per leg (digest/summarize.py's
     # `run_with_fallbacks`, point 3 of its own docstring). 180s is sized
     # against the homelab's systemd `TimeoutStartSec` ceilings the same way
     # translate_timeout_seconds' own comment describes: a run mode that
     # calls a handful of these chains (e.g. the daily run's summarize_daily,
     # translate_digest, and generate_arc_context calls) must still add a
-    # BOUNDED, not per-fallback-model-count-scaled, worst case to that run's
-    # total wall-clock.
+    # shared timeout allowance, not one full allowance per fallback model.
+    # Transport/authentication overhead can overrun it; the runtime watchdog
+    # supplies the hard process limit.
     fallback_timeout_seconds: int = 180
     # Hacker News collector (digest/collectors/hackernews.py). Like
     # x_enabled/polymarket_enabled/reddit_enabled, this is an explicit on/off

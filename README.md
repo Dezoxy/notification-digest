@@ -186,7 +186,7 @@ no fallback can provide.
 | `ANTHROPIC_WORKSPACE_ID` | Optional (`wrkspc_...`) workspace for the exchanged token. The managed identity's client id is the existing `DIGEST_CLOUD_IDENTITY_CLIENT_ID`. |
 | `FALLBACK_MODELS` | Editorial-tier chain, tried in order when the Claude CLI call fails (`claude-opus-5-5,claude-sonnet-5-5`). Entries must be `claude-...` ids. Explicitly empty disables this tier. |
 | `FALLBACK_LIGHT_MODELS` | Same for translation and context primers (`claude-sonnet-5-5,claude-haiku-5-5`). |
-| `FALLBACK_TIMEOUT_SECONDS` | Wall-clock budget **shared by all legs of one call** (`180`), started when the Claude call fails. |
+| `FALLBACK_TIMEOUT_SECONDS` | API timeout budget **shared by all fallback models of one call** (`180`), started after the Claude CLI fails. Each attempt receives an equal share of the time remaining across the models still to try; unused time passes forward. Separate from `CLAUDE_TIMEOUT_SECONDS`. Transport/authentication overhead can overrun request timeouts; the outer runtime limit remains the hard stop. |
 | `CONTEXT_ENABLED` | Story-arc context primers, generated after the daily brief ships (`false`). |
 | `CONTEXT_MAX_PER_RUN` / `CONTEXT_MODEL` / `CONTEXT_TIMEOUT_SECONDS` | Primer bounds: calls per daily run (`3`), model (`sonnet`), timeout (`120`). |
 

@@ -7,16 +7,21 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Literal
 
 
 class CloudSafetyError(BaseException):
     """Stop the execution, bypassing the existing collectors' soft failures."""
 
 
+FailureStage = Literal["summarization", "delivery", "collection"]
+
+
 @dataclass(frozen=True)
 class CloudHooks:
     guard: Callable[[], None]
     checkpoint: Callable[[sqlite3.Connection], object]
+    failure: Callable[[FailureStage], None] | None = None
 
 
 _hooks: ContextVar[CloudHooks | None] = ContextVar("digest_cloud_hooks", default=None)
@@ -35,6 +40,13 @@ def cloud_execution(hooks: CloudHooks) -> Iterator[None]:
 def active() -> bool:
     """Whether cloud delivery safeguards are required."""
     return _hooks.get() is not None
+
+
+def report_failure(stage: FailureStage) -> None:
+    """Record an application failure category for the current cloud job."""
+    hooks = _hooks.get()
+    if hooks is not None and hooks.failure is not None:
+        hooks.failure(stage)
 
 
 def guard() -> None:

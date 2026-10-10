@@ -8,8 +8,8 @@ a Log Analytics workspace that collects them, and two log-based alerts and a
 budget notification that e-mail the owner. The honest summary, stated plainly
 rather than implied: **a missed or broken run is noticed because an alert
 e-mails the owner, or because the digest does not arrive or arrives with a
-visible failure banner** — and neither alert has yet been recorded catching a
-real failure.
+visible failure banner**. On 2026-10-10, the failure alert notified the owner
+after a daytime synthesis exhausted its API fallback budget.
 
 Until 2026-10-08 the digest ran on a homelab VM and its logs went to journald
 and, if the host shipped them, Loki and Grafana. That path no longer receives
@@ -62,18 +62,20 @@ the job schedules.
 | `freshness` | A job has no success inside its expected window: `daytime` 20 hours; `overnight`, `evening`, `daily`, `weekly` and `backup` 26 hours; `positions` 6 hours; `patreon` and `relay` 2 hours | A job that did not run, or kept skipping or failing, produces no failure line at all. This is the alert that notices silence, including a skipped cursor slot, which exits 0 |
 | Monthly budget | Actual spend on the application resource group reaches 80% and 100% of the monthly amount | Early notice of unexpected cost. It does **not** cap spending, and it covers the application resource group only, not the backup or Terraform-backend groups |
 
-Two limits to keep in view. Both alert rules are aggregate: they do not say
-which job failed, so the owner reads the log lines for that. And the alert
-queries were declared before the log tables existed, with query validation
-skipped; the runbook makes confirming the real table columns, error reasons and
-notification routing a pilot task. Treat "an alert reaches the owner on a real
-failed run" as **designed and deployed, not yet observed**.
+The failure rule now declares dimensions for the logical job and failure stage;
+the freshness rule remains aggregate. Application logs identify known collection,
+synthesis and delivery failures, with generic categories for unclassified or
+older logs. Platform failures use the resource name to identify the job. These
+dimensions are implemented and query-tested; deployment and a real notification
+with those dimensions still need confirmation. Query validation remains skipped
+in Terraform because the log tables do not exist before the first execution.
 
-One data point exists. On 2026-10-09, shortly after activation, the `freshness`
+On 2026-10-09, shortly after activation, the `freshness`
 alert e-mailed the owner because jobs that had not yet had their first
 scheduled run counted as stale. That shows the rule evaluates and its
-notification is delivered; it was not a failed run, and the `failures` alert
-has not been seen to fire.
+notification is delivered; it was not a failed run. On 2026-10-10, `failures`
+also fired after the daytime job failed synthesis. The alert later automatically
+resolved as its rolling condition cleared; that does not prove digest recovery.
 
 ### How a failure actually becomes visible
 
@@ -88,8 +90,8 @@ In order of what is actually known to happen, most to least reliable:
 3. **The Container Apps job execution history** and its Log Analytics lines,
    checked by hand, show a failed or skipped run and its log lines (including
    `run_summary`/`digest_delivery`) if the owner goes looking.
-4. **An alert e-mail** from `failures` or `freshness`, as above — deployed, but
-   not yet recorded as having fired on a real incident.
+4. **An alert e-mail** from `failures` or `freshness`, as above — both notification
+   paths have been observed, including a real synthesis failure.
 
 Beyond the digest content, the alerts above are the only mechanism that pushes a
 failure notification to the owner.
@@ -103,8 +105,9 @@ failure notification to the owner.
   distributed tracing, but there is also no correlation ID threading a run's log
   lines together beyond timestamp proximity within one execution's logs.
 - **No dashboard.** No Azure workbook or equivalent is defined for this service.
-- **No per-job alerts.** `failures` and `freshness` are aggregate. A noisy
-  period would e-mail the same alert without saying which job caused it.
+- **Freshness has no per-job dimensions.** Its aggregate alert still requires
+  inspecting the logs to identify stale jobs. Failure dimensions identify the
+  job and known stage, but generic stages still need log investigation.
 - **Skipped slots are quiet.** A cursor-based job that skips a slot because the
   lease was busy exits 0 and logs a `skipped` line. Only `freshness` notices
   repeated skips, and only after its window passes.

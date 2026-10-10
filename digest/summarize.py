@@ -808,16 +808,20 @@ def run_with_fallbacks(
        and the loop moves on to the next one.
     3. SHARED BUDGET, NOT ONE PER LEG, AND IT STARTS WHEN THE PRIMARY
        FAILS. Every fallback leg together gets `budget_seconds`, never
-       `budget_seconds` each: leg N is given `budget_seconds - elapsed`,
-       where `elapsed` is measured from the moment the PRIMARY raised (via
+       `budget_seconds` each: the remaining time is divided equally among
+       the remaining legs, subject to the 15-second attempt minimum. Fast
+       failures donate unused time to later legs. `elapsed` is measured
+       from the moment the PRIMARY raised (via
        `time.monotonic()`, immune to wall-clock adjustments), NOT from the
        moment this function was entered -- see the comment at the clock's
        own assignment for the production failure that distinction prevents.
        A leg is SKIPPED -- logged, not attempted -- when that remainder is
        below `_MIN_FALLBACK_SECONDS`
-       (see that constant's own comment). This is what keeps one call's
-       total worst-case wall-clock bounded at exactly one budget, which is
-       what the homelab's systemd `TimeoutStartSec` assertions are sized
+       (see that constant's own comment). The deadline is checked between
+       attempts and after validation; blocking SDK or transport work may
+       overrun its allocated timeout. The configured timeout allowance is
+       one shared budget, which the homelab's systemd `TimeoutStartSec`
+       assertions are sized
        against (mirroring, at the fallback-chain level, the exact reasoning
        Config.translate_timeout_seconds' own comment gives for capping
        BOTH of translate_digest's legs together rather than each
@@ -913,13 +917,19 @@ def run_with_fallbacks(
         # primary attempted zero legs.
         #
         # The homelab's systemd TimeoutStartSec assertions are sized against
-        # exactly this shape: one call's worst case is the PRIMARY's own
-        # timeout PLUS one whole `budget_seconds`, never more, because the
-        # legs share the budget between them (point 3 above).
+        # this shape: the PRIMARY's own timeout plus one shared API budget.
+        # Transport/authentication overhead can overrun request timeouts;
+        # the outer runtime watchdog remains the hard process limit.
         start = time.monotonic()
+        logger.warning(
+            "run_with_fallbacks: primary %s failed with %s; starting %ds API fallback budget",
+            primary_model,
+            type(primary_exc).__name__,
+            budget_seconds,
+        )
         failures: list[str] = []
         last_exc: Exception = primary_exc
-        for leg in fallbacks:
+        for index, leg in enumerate(fallbacks):
             remaining = budget_seconds - (time.monotonic() - start)
             if remaining < _MIN_FALLBACK_SECONDS:
                 logger.warning(
@@ -932,10 +942,23 @@ def run_with_fallbacks(
                 )
                 failures.append(f"{leg.model}: skipped (budget exhausted)")
                 continue
+            # Reserve time for the remaining API models. Unused time from a
+            # fast failure passes to later attempts, including validation time.
+            attempt_seconds = max(
+                _MIN_FALLBACK_SECONDS, int(remaining / (len(fallbacks) - index))
+            )
+            logger.info(
+                "run_with_fallbacks: allocating %ds to %s with %.1fs shared budget remaining",
+                attempt_seconds,
+                leg.model,
+                remaining,
+            )
             try:
-                output = run_anthropic(prompt, leg.model, int(remaining), leg.federation)
+                output = run_anthropic(prompt, leg.model, attempt_seconds, leg.federation)
                 if validate is not None:
                     validate(output)
+                if time.monotonic() - start >= budget_seconds:
+                    raise SummarizeError("API fallback shared budget exhausted")
             except Exception as leg_exc:
                 last_exc = leg_exc
                 failures.append(f"{leg.model}: {type(leg_exc).__name__}")
@@ -2291,7 +2314,7 @@ def summarize(
     `fallbacks` (default `()`, matching every existing direct call and test)
     is this window digest's own Claude API fallback chain -- see
     `run_with_fallbacks`'s own docstring for the full mechanics.
-    `fallback_budget_seconds` (default 180) is the SHARED wall-clock budget
+    `fallback_budget_seconds` (default 180) is the SHARED API timeout budget
     for every leg of that chain together, not per leg -- see point 3 of that
     same docstring. digest/main.py's `_deliver` passes
     `cfg.fallback_timeout_seconds` and a chain built from
