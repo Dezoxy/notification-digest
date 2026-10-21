@@ -487,9 +487,9 @@ procedure](docs/azure-migration.md#credential-rotation-after-cutover): update th
 active digest vault, verify a Manual Azure run, then resume jobs. Reddit is the
 exception: `scripts/rotate_reddit_cookie.py` checks the cookie and writes it
 without pausing jobs, and the next scheduled run is the verification (see that
-procedure). Homelab deploy is no longer the rotation path. These credentials have none of the X mechanics
-above: they are env vars rather than files, sent as hand-built headers over
-stateless `urllib` (or, for
+procedure). Homelab deploy is no longer the rotation path. These credentials
+have none of the X mechanics above: they are env vars rather than files, sent
+as hand-built headers over stateless `urllib` (or, for
 Telegram, an MTProto auth key), so nothing rotates and there is no live jar.
 Each already reports its own auth death explicitly — see `reddit.py`'s 401/403
 branch, `patreon.py`'s `current_user_can_view` check (Patreon degrades to
