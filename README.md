@@ -484,8 +484,10 @@ long-lived session credentials. Until the 2026-10-08 cutover they were rotated
 by updating the homelab vault and deploying the VM; now use the
 [dedicated-vault credential rotation
 procedure](docs/azure-migration.md#credential-rotation-after-cutover): update the
-active digest vault, verify a Manual Azure run, then resume jobs. Homelab deploy
-is no longer the rotation path. These credentials have none of the X mechanics
+active digest vault, verify a Manual Azure run, then resume jobs. Reddit is the
+exception: `scripts/rotate_reddit_cookie.py` checks the cookie and writes it
+without pausing jobs, and the next scheduled run is the verification (see that
+procedure). Homelab deploy is no longer the rotation path. These credentials have none of the X mechanics
 above: they are env vars rather than files, sent as hand-built headers over
 stateless `urllib` (or, for
 Telegram, an MTProto auth key), so nothing rotates and there is no live jar.

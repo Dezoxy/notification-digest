@@ -160,6 +160,7 @@ notification-digest/
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
 │   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
+│   ├── rotate_reddit_cookie.py    # interactive Reddit cookie check + scoped-grant Key Vault rotation
 │   ├── azure_release_guard.py     # image-bump plan check and idle wait for the auto-apply job
 │   ├── next_release_version.py    # next patch tag from `git tag --list`, for auto-release
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
