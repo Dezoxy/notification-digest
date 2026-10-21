@@ -914,8 +914,20 @@ wait for job secret-reference refresh, and prove the next Manual run authenticat
 with the new version before reactivating schedules. If refresh fails, use the
 reviewed Azure job replacement path while jobs are drained. Preserve delivery
 and cursor state. Remove the temporary role, verify lost access and erase the
-private input after successful validation. Reddit/Patreon/OAuth rotations follow
+private input after successful validation. Patreon/OAuth rotations follow
 the same dedicated-vault procedure using their exact manifest names/tags.
+
+Reddit has its own helper: `uv run python scripts/rotate_reddit_cookie.py
+--vault YOUR_DIGEST_VAULT`. It reads the `reddit_session` cookie from a hidden
+prompt (no private file), checks it against Reddit with the collector's own
+code path and, if that fails, once more with a browser User-Agent, so a
+rejected cookie and a rejected User-Agent are told apart before Azure is
+touched. It then grants Secrets Officer on that one secret, writes a new version
+with the current tags and validity preserved, reads it back, and revokes only
+the assignment it created. It skips pause/drain on purpose: the Reddit collector
+has no cursor or state, so a run that overlaps the rotation can at worst fail
+Reddit once. Verify by checking the next window run's `run_summary` for
+`"reddit": "ok"`.
 
 ### Rotate the cloud X cookie jar
 
