@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import urllib.error
 from pathlib import Path
@@ -293,11 +294,15 @@ def opener(monkeypatch):
     monkeypatch.setattr(rotate.urllib.request, "build_opener", lambda *handlers: FakeOpener())
 
 
-def test_check_proxy_sends_only_the_key_header(opener, capsys):
+def test_check_proxy_sends_only_the_key_and_collector_user_agent(opener, capsys):
     rotate.check_proxy(PROXY_URL + "/", PROXY_KEY)
     (request,) = FakeOpener.requests
     assert request.full_url == f"{PROXY_URL}/api/me.json"
-    assert dict(request.header_items()) == {"X-proxy-key": PROXY_KEY}
+    # The collector's UA, not urllib's default: Cloudflare blocks Python-urllib (1010).
+    assert dict(request.header_items()) == {
+        "X-proxy-key": PROXY_KEY,
+        "User-agent": rotate.reddit._USER_AGENT,
+    }
     assert "Proxy accepted the key (HTTP 200)." in capsys.readouterr().out
 
 
@@ -305,6 +310,15 @@ def test_check_proxy_403_is_rejection(opener):
     FakeOpener.outcome = _http(403)
     with pytest.raises(rotate.MigrationError, match=r"proxy rejected the key \(HTTP 403\)"):
         rotate.check_proxy(PROXY_URL, PROXY_KEY)
+
+
+def test_check_proxy_cloudflare_1010_is_not_reported_as_key_rejection(opener):
+    FakeOpener.outcome = urllib.error.HTTPError(
+        PROXY_URL, 403, "Forbidden", {}, io.BytesIO(b"error code: 1010")
+    )
+    with pytest.raises(rotate.MigrationError, match="error 1010") as excinfo:
+        rotate.check_proxy(PROXY_URL, PROXY_KEY)
+    assert "rejected the key" not in str(excinfo.value)
 
 
 @pytest.mark.parametrize("code", [302, 401, 502])
