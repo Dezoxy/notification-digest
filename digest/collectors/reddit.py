@@ -41,22 +41,33 @@ client-side by the React app on every page load), which a single exported
 points at `old.reddit.com`, deliberately, not the modern domain. It is the
 DEFAULT of `api_base`; production overrides it (next section).
 
-Proxy (REDDIT_API_BASE / REDDIT_PROXY_KEY)
+Proxy (REDDIT_API_BASE / REDDIT_PROXY_KEY / REDDIT_ACCESS_CLIENT_*)
 ----------------------------------------------------------------------
-Since 2026-10-21 Reddit answers every request from Azure egress (AS8075)
-with `403 Blocked`, while Cloudflare egress is accepted. In production
-`REDDIT_API_BASE` therefore points at the owner's `reddit-proxy` Cloudflare
-Worker, which relays the two endpoints this module uses (`/api/me.json`,
-`/r/<sub>/top.json`) to old.reddit.com, and `REDDIT_PROXY_KEY` (a secret --
-never logged, same rules as the cookie) authenticates to it via an
-`x-proxy-key` header, added only when a key is configured. Modeled on the
-Polymarket proxy. The `reddit_session` cookie still lives ONLY in the
-digest's own secret store and is sent per request, forwarded verbatim by the
-Worker; the Worker stores nothing. The Worker strips `Location` from
-upstream responses, so a not-logged-in session (old.reddit.com redirecting
-to the login page) surfaces as `HTTPError 302` -- which, going through the
-proxy, means "not logged in" -- instead of urllib following a redirect from
-a blocked Azure IP.
+Reddit answers Azure egress (AS8075) with `403 Blocked` (since 2026-10-21), so
+production never talks to old.reddit.com directly. The Cloudflare Worker
+`reddit-proxy` worked until 2026-10-22, when Reddit began answering LOGGED-IN
+requests from Cloudflare Workers egress with its HTML "blocked by network
+security" 403 (anonymous requests were unaffected, and the same cookie works
+from a residential IP). Reddit is disabled in production until the replacement
+is live (ADR 11): the owner's homelab proxy,
+`https://reddit-proxy.toomhorvath.com`, behind a Cloudflare Access app that
+admits only a service token. For it, the pair
+`REDDIT_ACCESS_CLIENT_ID` / `REDDIT_ACCESS_CLIENT_SECRET` is sent as
+`CF-Access-Client-Id` / `CF-Access-Client-Secret`, only when both are set. The
+Worker stays a supported configuration: only `REDDIT_API_BASE` and the headers
+differ, and `REDDIT_PROXY_KEY` still adds `x-proxy-key` when set. All of these
+are secrets -- never logged, same rules as the cookie. The `reddit_session`
+cookie lives ONLY in the digest's own secret store and is sent per request; the
+proxies store nothing. The proxies strip `Location` from Reddit's own login
+redirect, so a 3xx with no `Location` means "not logged in".
+
+Redirects are never followed (`_open`): behind Access a rejected or missing
+service token is a 302 to `<team>.cloudflareaccess.com`, which urllib would
+follow and misreport as "not logged in (non-JSON)". A 3xx surfaces as
+`HTTPError` instead, and `_describe_verify_failure` labels a 3xx by its
+`Location` host and a 403 by a class of its body (proxy key rejected, Cloudflare
+1010, Reddit network block), so the next failure is attributable from one log
+line. Only the label is logged, never header or body text.
 
 User-Agent (unproven for a cookie session, not a live-verified requirement)
 ----------------------------------------------------------------------
@@ -175,6 +186,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from digest.collectors.base import CollectResult
 from digest.state import Item
@@ -348,11 +360,35 @@ def _build_item(post: _ParsedPost, subreddit: str, fetched_at: str) -> Item:
     )
 
 
-def _session_headers(session_cookie: str, proxy_key: str | None = None) -> dict[str, str]:
-    """Build the Cookie + User-Agent (+ `x-proxy-key`) headers every request sends.
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect so a 3xx surfaces as `urllib.error.HTTPError`."""
 
-    `x-proxy-key` is added only when `proxy_key` is set (module docstring's
-    "Proxy" section); it is a secret and is never logged, like the cookie.
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _open(request: urllib.request.Request) -> Any:
+    """Open `request` without following redirects (module docstring's "Proxy" section).
+
+    The single network seam of this module; tests replace it.
+    """
+    return _OPENER.open(request, timeout=_REQUEST_TIMEOUT_SECONDS)
+
+
+def _session_headers(
+    session_cookie: str,
+    proxy_key: str | None = None,
+    access_client_id: str | None = None,
+    access_client_secret: str | None = None,
+) -> dict[str, str]:
+    """Build the Cookie + User-Agent (+ proxy/Access) headers every request sends.
+
+    `x-proxy-key` is added only when `proxy_key` is set, and the Cloudflare
+    Access pair only when BOTH halves are set (module docstring's "Proxy"
+    section); all are secrets and are never logged, like the cookie.
 
     `session_cookie` is stored and sent EXACTLY as exported from the
     browser -- it may contain `%`-escapes, and those are sent verbatim,
@@ -364,6 +400,9 @@ def _session_headers(session_cookie: str, proxy_key: str | None = None) -> dict[
     headers = {"Cookie": f"reddit_session={session_cookie}", "User-Agent": _USER_AGENT}
     if proxy_key:
         headers["x-proxy-key"] = proxy_key
+    if access_client_id and access_client_secret:
+        headers["CF-Access-Client-Id"] = access_client_id
+        headers["CF-Access-Client-Secret"] = access_client_secret
     return headers
 
 
@@ -371,25 +410,71 @@ _REASON_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 ._-]")
 _REASON_MAX_CHARS = 40
 
 
+_FORBIDDEN_JSON_RE = re.compile(r'\{\s*"error"\s*:\s*"forbidden"\s*\}')
+_ERROR_BODY_MAX_BYTES = 2048
+
+
+def _classify_forbidden_body(exc: urllib.error.HTTPError) -> str:
+    """Label a 403 by (at most) the first 2 KiB of its body; never returns body text."""
+    try:
+        body = exc.read(_ERROR_BODY_MAX_BYTES) if exc.fp is not None else b""
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return "unclassified"
+    if _FORBIDDEN_JSON_RE.search(text):
+        return "proxy rejected key"
+    if "error code: 1010" in text:
+        return "cloudflare 1010 block"
+    if "blocked by network security" in text.lower():
+        return "reddit network block"
+    return "unclassified"
+
+
+def _classify_redirect(exc: urllib.error.HTTPError) -> str:
+    """Label a 3xx by the HOST of its `Location` header only; never the path or query."""
+    location = exc.headers.get("Location") if exc.headers is not None else None
+    if not location:
+        return "not logged in"
+    host = (urlsplit(location).hostname or "").lower()
+    if not host:
+        return "relative redirect"
+    if host.endswith(".cloudflareaccess.com"):
+        return "access login redirect (service token rejected or missing)"
+    return f"redirect to {_REASON_UNSAFE_RE.sub('', host)[:_REASON_MAX_CHARS]}"
+
+
 def _describe_verify_failure(exc: Exception) -> str:
     """Log-safe description of a `_verify_session` failure; never the cookie.
 
     `HTTPError` -> status code + sanitized server reason phrase, so a 403
     "Blocked" (IP/client rejected) is distinguishable from a 403 "Forbidden"
-    (session refused), a 429, or a 5xx. `ValueError` (incl. JSONDecodeError)
-    -> Reddit answered 200 with an HTML login page or `{}`. Anything else ->
-    the type name only. `exc.msg`/headers/body/url are never used.
+    (session refused), a 429, or a 5xx; a 3xx adds a label from the `Location`
+    host and a 403 a label from its body (module docstring's "Proxy" section).
+    `ValueError` (incl. JSONDecodeError) -> Reddit answered 200 with an HTML
+    login page or `{}`. Anything else -> the type name only. Only fixed labels
+    and the sanitized host/reason are used: never the message, other headers,
+    body text or url.
     """
     if isinstance(exc, urllib.error.HTTPError):
         reason = _REASON_UNSAFE_RE.sub("", str(exc.reason))[:_REASON_MAX_CHARS]
-        return f"HTTPError {exc.code} {reason}"
+        text = f"HTTPError {exc.code} {reason}"
+        if 300 <= exc.code < 400:
+            return f"{text} ({_classify_redirect(exc)})"
+        if exc.code == 403:
+            return f"{text} ({_classify_forbidden_body(exc)})"
+        return text
     if isinstance(exc, ValueError):
         return f"{type(exc).__name__} (not logged in or non-JSON response)"
     return type(exc).__name__
 
 
 def _verify_session(
-    session_cookie: str, *, api_base: str = _BASE_URL, proxy_key: str | None = None
+    session_cookie: str,
+    *,
+    api_base: str = _BASE_URL,
+    proxy_key: str | None = None,
+    access_client_id: str | None = None,
+    access_client_secret: str | None = None,
 ) -> str:
     """Confirm the session cookie is logged in, returning the owner's own username.
 
@@ -403,14 +488,15 @@ def _verify_session(
     that sets `failed=True` for the whole run and returns immediately with
     zero further network calls (module docstring's "Failure semantics").
 
-    `session_cookie` and `proxy_key` are never logged by this function, directly or via an
-    exception message. The verified username IS logged, but only at debug
-    level -- it's the owner's own account name, not a secret, but no need
-    for info-level noise on every run.
+    `session_cookie` and the proxy/Access secrets are never logged by this
+    function, directly or via an exception message. The verified username IS
+    logged, but only at debug level -- it's the owner's own account name, not a
+    secret, but no need for info-level noise on every run.
     """
     url = f"{api_base}/api/me.json"
-    request = urllib.request.Request(url, headers=_session_headers(session_cookie, proxy_key))
-    with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+    headers = _session_headers(session_cookie, proxy_key, access_client_id, access_client_secret)
+    request = urllib.request.Request(url, headers=headers)
+    with _open(request) as response:
         raw_bytes = response.read()
     data = json.loads(raw_bytes)
     name = data.get("data", {}).get("name") if isinstance(data, dict) else None
@@ -427,6 +513,8 @@ def _fetch_subreddit_posts(
     *,
     api_base: str = _BASE_URL,
     proxy_key: str | None = None,
+    access_client_id: str | None = None,
+    access_client_secret: str | None = None,
 ) -> list[Any]:
     """One GET to `{api_base}/r/{subreddit}/top`, returning the raw `Listing` children.
 
@@ -444,8 +532,9 @@ def _fetch_subreddit_posts(
     NON-auth, non-rate-limit error is routine, not the whole run's signal).
     """
     url = f"{api_base}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
-    request = urllib.request.Request(url, headers=_session_headers(session_cookie, proxy_key))
-    with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+    headers = _session_headers(session_cookie, proxy_key, access_client_id, access_client_secret)
+    request = urllib.request.Request(url, headers=headers)
+    with _open(request) as response:
         raw_bytes = response.read()
     data = json.loads(raw_bytes)
     children = data.get("data", {}).get("children") if isinstance(data, dict) else None
@@ -461,13 +550,16 @@ def collect(
     *,
     api_base: str = _BASE_URL,
     proxy_key: str | None = None,
+    access_client_id: str | None = None,
+    access_client_secret: str | None = None,
 ) -> CollectResult:
     """Fetch today's top posts from every configured subreddit.
 
-    `api_base` / `proxy_key` select the reddit-proxy Worker in production
+    `api_base` / `proxy_key` / `access_client_*` select a reddit proxy
     (module docstring's "Proxy" section); the defaults talk to old.reddit.com
-    directly. Through the proxy, `HTTPError 302` on the verify call means
-    "not logged in". `proxy_key` is never logged.
+    directly. Redirects are never followed; through a proxy, a 3xx without
+    `Location` on the verify call means "not logged in". None of the secrets
+    is ever logged.
 
     Empty `subreddits` -> a fresh, unfailed `CollectResult()` with no network
     calls at all (not even the session verify) -- mirrors rss.py's own
@@ -527,7 +619,13 @@ def collect(
         return result
 
     try:
-        _verify_session(session_cookie, api_base=api_base, proxy_key=proxy_key)
+        _verify_session(
+            session_cookie,
+            api_base=api_base,
+            proxy_key=proxy_key,
+            access_client_id=access_client_id,
+            access_client_secret=access_client_secret,
+        )
     except Exception as exc:
         logger.warning("reddit session verify failed: %s", _describe_verify_failure(exc))
         return CollectResult(failed=True)
@@ -543,7 +641,13 @@ def collect(
 
         try:
             children = _fetch_subreddit_posts(
-                session_cookie, subreddit, posts_per_sub, api_base=api_base, proxy_key=proxy_key
+                session_cookie,
+                subreddit,
+                posts_per_sub,
+                api_base=api_base,
+                proxy_key=proxy_key,
+                access_client_id=access_client_id,
+                access_client_secret=access_client_secret,
             )
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):

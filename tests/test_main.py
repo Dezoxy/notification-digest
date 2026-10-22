@@ -2899,17 +2899,30 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
         reddit_posts_per_sub=15,
         reddit_api_base="https://proxy.example.com",
         reddit_proxy_key="proxy-key-123",
+        reddit_access_client_id="access-id-123",
+        reddit_access_client_secret="access-secret-123",
     )
     expected = CollectResult(items=[_item("reddit-1")])
 
     captured = {}
 
-    def fake_collect(session_cookie, subreddits, posts_per_sub, *, api_base, proxy_key):
+    def fake_collect(
+        session_cookie,
+        subreddits,
+        posts_per_sub,
+        *,
+        api_base,
+        proxy_key,
+        access_client_id,
+        access_client_secret,
+    ):
         captured["session_cookie"] = session_cookie
         captured["subreddits"] = subreddits
         captured["posts_per_sub"] = posts_per_sub
         captured["api_base"] = api_base
         captured["proxy_key"] = proxy_key
+        captured["access_client_id"] = access_client_id
+        captured["access_client_secret"] = access_client_secret
         return expected
 
     monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_collect)
@@ -2923,6 +2936,8 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
         "posts_per_sub": 15,
         "api_base": "https://proxy.example.com",
         "proxy_key": "proxy-key-123",
+        "access_client_id": "access-id-123",
+        "access_client_secret": "access-secret-123",
     }
 
 

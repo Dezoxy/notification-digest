@@ -73,9 +73,12 @@ Ten ADRs, each accepted, each naming its trade-off:
 - **ADR 9** falls back to the Claude API without any API key, by exchanging
   the job's managed-identity token through Microsoft Entra ID and workload
   identity federation.
-- **ADR 10** routes Reddit, which blocks Azure's network, and Polymarket, which
-  ISPs in Hungary block, through the owner's own Cloudflare Workers, trading a
-  Cloudflare dependency and an edge-decrypted cookie for working collection.
+- **ADR 10** routes Polymarket, which ISPs in Hungary block, through the
+  owner's own Cloudflare Worker. Its Reddit part failed on 2026-10-22, when
+  Reddit blocked logged-in sessions from Cloudflare's network.
+- **ADR 11** moves Reddit to a proxy on the owner's Mac mini homelab behind
+  Cloudflare Access, trading a homelab dependency for a residential IP. Decided,
+  not built; Reddit is disabled in production until then.
 
 ### The contracts you do not control
 
@@ -90,8 +93,9 @@ system depends on, already broke completely once against an X webpack
 change. That is why `twifork` is pinned to an **exact version**, not the
 `>=` range every other dependency uses, and every bump is gated behind
 Renovate's Dependency Dashboard with a mandatory hand audit before it can be
-trusted (ADR 1). Reddit and Polymarket are reached through the owner's own
-Cloudflare Workers, not directly (ADR 10). See **Integration Architecture**,
+trusted (ADR 1). Polymarket is reached through the owner's own
+Cloudflare Worker, not directly (ADR 10); Reddit is disabled until its homelab
+proxy exists (ADR 11). See **Integration Architecture**,
 later in this document, for every source, provider and delivery contract in one
 table.
 

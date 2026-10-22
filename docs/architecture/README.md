@@ -121,7 +121,8 @@ the 2026-10-22 render, reviewed the same day.
 | 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; state/vault ownership amended by ADR 8; in production since 2026-10-08 |
 | 8 | [Isolate digest Azure state and secrets](decisions/0008-isolate-digest-azure-state-and-secrets.md) | Accepted for state/vault; deployed with ADR 7 |
 | 9 | [Fall back to the Claude API over workload identity federation](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Accepted; implemented and configured; proven by one smoke test, no real fallback yet |
-| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted; implemented and deployed 2026-10-22; first proxied Reddit run not yet observed |
+| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted for Polymarket; Reddit part superseded by ADR 11 after Reddit blocked Cloudflare egress on 2026-10-22 |
+| 11 | [Move Reddit to a homelab proxy behind Cloudflare Access](decisions/0011-move-reddit-to-a-homelab-proxy.md) | Accepted 2026-10-22; not built, Reddit disabled until cutover |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

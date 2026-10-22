@@ -142,7 +142,8 @@ deploy time and must never be committed or logged.
 | `NEWS_FEEDS` | Comma-separated RSS/Atom URLs. Enables the news collector iff non-empty. |
 | `REDDIT_ENABLED` | Reddit collector switch (`false`). |
 | `REDDIT_SESSION_COOKIE` | Required when Reddit is enabled. **(secret)** |
-| `REDDIT_API_BASE` / `REDDIT_PROXY_KEY` | Endpoint (default `https://old.reddit.com`) and its key. **(secret)** Production points the base at the `reddit-proxy` Worker. |
+| `REDDIT_API_BASE` / `REDDIT_PROXY_KEY` | Endpoint (default `https://old.reddit.com`) and its key. **(secret)** Production is disabled pending the homelab proxy `https://reddit-proxy.toomhorvath.com` (behind Cloudflare Access); the `reddit-proxy` Worker is still supported. |
+| `REDDIT_ACCESS_CLIENT_ID` / `REDDIT_ACCESS_CLIENT_SECRET` | Cloudflare Access service token for the homelab proxy, both or neither. **(secret)** |
 | `REDDIT_SUBREDDITS` | Comma-separated names, no `r/` prefix. Required when enabled. |
 | `REDDIT_POSTS_PER_SUB` | Posts pulled per subreddit per run. |
 | `POLYMARKET_ENABLED` | Polymarket collector switch (`false`). |
@@ -497,10 +498,14 @@ branch, `patreon.py`'s `current_user_can_view` check (Patreon degrades to
 HTTP 200 with empty bodies rather than erroring), and `telegram.py`'s
 prefetch abort.
 
-Reddit blocks Azure egress (since 2026-10-21), so from Azure the Reddit
-collector goes through the owner's `reddit-proxy` Cloudflare Worker
-(`REDDIT_API_BASE` / `REDDIT_PROXY_KEY`); the cookie itself stays in the digest
-vault and is sent per request. Store the proxy key with
+Reddit blocks Azure egress (since 2026-10-21) and, since 2026-10-22, logged-in
+requests from Cloudflare Workers, so from Azure the Reddit collector needs the
+homelab proxy `https://reddit-proxy.toomhorvath.com` behind Cloudflare Access
+(`REDDIT_API_BASE` / `REDDIT_ACCESS_CLIENT_ID` / `REDDIT_ACCESS_CLIENT_SECRET`,
+plus `REDDIT_PROXY_KEY`, which that proxy checks as the Worker did; production
+is disabled until it exists, ADR 11). The `reddit-proxy` Worker is still a
+supported configuration; the cookie itself stays in the digest vault and is
+sent per request. Store the proxy key with
 `scripts/rotate_reddit_cookie.py --proxy-key --key-file PATH`.
 
 ## Status

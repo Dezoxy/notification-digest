@@ -42,10 +42,12 @@ unofficial, ToS-risk access with no sanctioned fallback if the platform
 revokes it (RISK-003, RISK-007): Reddit's session exists because Reddit's Data
 Team refused the owner's official API application, and Patreon's is a paid
 subscription, so an adverse action there costs money, not just access.
-Since 2026-10-22 the Reddit cookie also passes through a Cloudflare Worker the
-owner runs, decrypted at the edge, because Reddit blocks Azure's network
-([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md); the first proxied Reddit run had not been observed when this
-was written).
+Reddit blocks Azure's network, and on 2026-10-22 it also blocked logged-in
+sessions from Cloudflare's, so the Worker the cookie briefly passed through
+([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md)) stopped working. Reddit collection has been disabled in
+production since about 19:30 UTC that day. The decided replacement is a proxy on
+the owner's Mac mini homelab behind Cloudflare Access, which makes Reddit depend
+on the homelab; it is not built yet ([ADR 11](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)).
 RISK-007 is **not** marked accepted — the risk register calls it an open gap,
 because CLAUDE.md's hard rules name only the X collector explicitly, not
 Reddit or Patreon.
