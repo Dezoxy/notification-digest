@@ -38,7 +38,25 @@ session model this cookie was issued under. `www.reddit.com`'s current
 frontend instead expects a short-lived `token_v2` JWT (refreshed
 client-side by the React app on every page load), which a single exported
 `reddit_session` cookie value cannot substitute for. `_BASE_URL` therefore
-points at `old.reddit.com`, deliberately, not the modern domain.
+points at `old.reddit.com`, deliberately, not the modern domain. It is the
+DEFAULT of `api_base`; production overrides it (next section).
+
+Proxy (REDDIT_API_BASE / REDDIT_PROXY_KEY)
+----------------------------------------------------------------------
+Since 2026-10-21 Reddit answers every request from Azure egress (AS8075)
+with `403 Blocked`, while Cloudflare egress is accepted. In production
+`REDDIT_API_BASE` therefore points at the owner's `reddit-proxy` Cloudflare
+Worker, which relays the two endpoints this module uses (`/api/me.json`,
+`/r/<sub>/top.json`) to old.reddit.com, and `REDDIT_PROXY_KEY` (a secret --
+never logged, same rules as the cookie) authenticates to it via an
+`x-proxy-key` header, added only when a key is configured. Modeled on the
+Polymarket proxy. The `reddit_session` cookie still lives ONLY in the
+digest's own secret store and is sent per request, forwarded verbatim by the
+Worker; the Worker stores nothing. The Worker strips `Location` from
+upstream responses, so a not-logged-in session (old.reddit.com redirecting
+to the login page) surfaces as `HTTPError 302` -- which, going through the
+proxy, means "not logged in" -- instead of urllib following a redirect from
+a blocked Azure IP.
 
 User-Agent (unproven for a cookie session, not a live-verified requirement)
 ----------------------------------------------------------------------
@@ -177,7 +195,9 @@ _USER_AGENT = "linux:notification-digest:v1 (personal digest)"
 
 # old.reddit.com is the surface that accepts a bare `reddit_session` cookie
 # as full authentication for its `.json` endpoints -- see module docstring's
-# "Why old.reddit.com, not www.reddit.com" section.
+# "Why old.reddit.com, not www.reddit.com" section. Default `api_base`;
+# production overrides it with the reddit-proxy Worker (module docstring's
+# "Proxy" section).
 _BASE_URL = "https://old.reddit.com"
 
 # Courtesy pacing between per-subreddit requests. Logged-in old.reddit.com's
@@ -328,8 +348,11 @@ def _build_item(post: _ParsedPost, subreddit: str, fetched_at: str) -> Item:
     )
 
 
-def _session_headers(session_cookie: str) -> dict[str, str]:
-    """Build the Cookie + User-Agent headers every request in this module sends.
+def _session_headers(session_cookie: str, proxy_key: str | None = None) -> dict[str, str]:
+    """Build the Cookie + User-Agent (+ `x-proxy-key`) headers every request sends.
+
+    `x-proxy-key` is added only when `proxy_key` is set (module docstring's
+    "Proxy" section); it is a secret and is never logged, like the cookie.
 
     `session_cookie` is stored and sent EXACTLY as exported from the
     browser -- it may contain `%`-escapes, and those are sent verbatim,
@@ -338,7 +361,10 @@ def _session_headers(session_cookie: str) -> dict[str, str]:
     exception message built around it -- callers only log an exception's
     TYPE NAME (see `_verify_session`/`collect`).
     """
-    return {"Cookie": f"reddit_session={session_cookie}", "User-Agent": _USER_AGENT}
+    headers = {"Cookie": f"reddit_session={session_cookie}", "User-Agent": _USER_AGENT}
+    if proxy_key:
+        headers["x-proxy-key"] = proxy_key
+    return headers
 
 
 _REASON_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 ._-]")
@@ -362,10 +388,12 @@ def _describe_verify_failure(exc: Exception) -> str:
     return type(exc).__name__
 
 
-def _verify_session(session_cookie: str) -> str:
+def _verify_session(
+    session_cookie: str, *, api_base: str = _BASE_URL, proxy_key: str | None = None
+) -> str:
     """Confirm the session cookie is logged in, returning the owner's own username.
 
-    GETs `{_BASE_URL}/api/me.json` with `_session_headers`. A logged-in
+    GETs `{api_base}/api/me.json` with `_session_headers`. A logged-in
     session returns a JSON object with `data.name` (the account's username);
     an anonymous or dead session returns `{}`. Raises `ValueError` when
     `data.name` is missing or blank -- deliberately unguarded otherwise
@@ -375,13 +403,13 @@ def _verify_session(session_cookie: str) -> str:
     that sets `failed=True` for the whole run and returns immediately with
     zero further network calls (module docstring's "Failure semantics").
 
-    `session_cookie` is never logged by this function, directly or via an
+    `session_cookie` and `proxy_key` are never logged by this function, directly or via an
     exception message. The verified username IS logged, but only at debug
     level -- it's the owner's own account name, not a secret, but no need
     for info-level noise on every run.
     """
-    url = f"{_BASE_URL}/api/me.json"
-    request = urllib.request.Request(url, headers=_session_headers(session_cookie))
+    url = f"{api_base}/api/me.json"
+    request = urllib.request.Request(url, headers=_session_headers(session_cookie, proxy_key))
     with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
         raw_bytes = response.read()
     data = json.loads(raw_bytes)
@@ -392,8 +420,15 @@ def _verify_session(session_cookie: str) -> str:
     return name
 
 
-def _fetch_subreddit_posts(session_cookie: str, subreddit: str, posts_per_sub: int) -> list[Any]:
-    """One GET to `{_BASE_URL}/r/{subreddit}/top`, returning the raw `Listing` children.
+def _fetch_subreddit_posts(
+    session_cookie: str,
+    subreddit: str,
+    posts_per_sub: int,
+    *,
+    api_base: str = _BASE_URL,
+    proxy_key: str | None = None,
+) -> list[Any]:
+    """One GET to `{api_base}/r/{subreddit}/top`, returning the raw `Listing` children.
 
     `t=day` + `limit={posts_per_sub}` + `raw_json=1` -- see module
     docstring's "No cursor axis" section for why `t=day` (not a cursor) is
@@ -408,8 +443,8 @@ def _fetch_subreddit_posts(session_cookie: str, subreddit: str, posts_per_sub: i
     "Mid-run back-off" section -- a single subreddit's fetch failing on a
     NON-auth, non-rate-limit error is routine, not the whole run's signal).
     """
-    url = f"{_BASE_URL}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
-    request = urllib.request.Request(url, headers=_session_headers(session_cookie))
+    url = f"{api_base}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
+    request = urllib.request.Request(url, headers=_session_headers(session_cookie, proxy_key))
     with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
         raw_bytes = response.read()
     data = json.loads(raw_bytes)
@@ -423,8 +458,16 @@ def collect(
     session_cookie: str,
     subreddits: Sequence[str],
     posts_per_sub: int,
+    *,
+    api_base: str = _BASE_URL,
+    proxy_key: str | None = None,
 ) -> CollectResult:
     """Fetch today's top posts from every configured subreddit.
+
+    `api_base` / `proxy_key` select the reddit-proxy Worker in production
+    (module docstring's "Proxy" section); the defaults talk to old.reddit.com
+    directly. Through the proxy, `HTTPError 302` on the verify call means
+    "not logged in". `proxy_key` is never logged.
 
     Empty `subreddits` -> a fresh, unfailed `CollectResult()` with no network
     calls at all (not even the session verify) -- mirrors rss.py's own
@@ -484,7 +527,7 @@ def collect(
         return result
 
     try:
-        _verify_session(session_cookie)
+        _verify_session(session_cookie, api_base=api_base, proxy_key=proxy_key)
     except Exception as exc:
         logger.warning("reddit session verify failed: %s", _describe_verify_failure(exc))
         return CollectResult(failed=True)
@@ -499,7 +542,9 @@ def collect(
             time.sleep(_INTER_SUB_SLEEP_SECONDS)
 
         try:
-            children = _fetch_subreddit_posts(session_cookie, subreddit, posts_per_sub)
+            children = _fetch_subreddit_posts(
+                session_cookie, subreddit, posts_per_sub, api_base=api_base, proxy_key=proxy_key
+            )
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 logger.warning(

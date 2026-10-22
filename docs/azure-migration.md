@@ -929,6 +929,23 @@ has no cursor or state, so a run that overlaps the rotation can at worst fail
 Reddit once. Verify by checking the next window run's `run_summary` for
 `"reddit": "ok"`.
 
+Since 2026-10-21 Reddit answers Azure egress with `403 Blocked`, so production
+reaches it through the `reddit-proxy` Cloudflare Worker (`REDDIT_API_BASE`),
+authenticated by a shared key (`REDDIT_PROXY_KEY`, secret `digest-reddit-proxy-key`).
+Store or rotate that key with `openssl rand -hex 32 > KEYFILE; chmod 600 KEYFILE`
+(set the same value on the Worker), then `uv run python scripts/rotate_reddit_cookie.py
+--vault YOUR_DIGEST_VAULT --proxy-key --key-file KEYFILE [--proxy-url
+https://YOUR-WORKER]`. The key comes from the private file (a symlink or any
+group/other permission is refused), never from a prompt or argument, and the
+Reddit cookie check is skipped. With `--proxy-url` the script first sends one
+key-only request to the Worker and stops before touching Azure on HTTP 403. On
+first use it creates the secret (tags `envvar=REDDIT_PROXY_KEY`, `folder=digest`);
+because a secret that does not exist yet cannot be an RBAC scope, this mode
+grants the temporary Secrets Officer role on the vault instead of the secret
+and still revokes only the assignment it created. Delete the key file
+afterwards. Through the proxy, `HTTPError 302` in the Reddit verify log line
+means the session is not logged in (the Worker strips `Location`).
+
 ### Rotate the cloud X cookie jar
 
 X has no secret in the dedicated vault: its current jar is in leased runtime
