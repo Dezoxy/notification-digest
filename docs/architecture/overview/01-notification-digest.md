@@ -27,7 +27,10 @@ accepts an inbound connection from a source.
 ![Context view: who reads the digest, what writes it, and where it comes out](embed:Context)
 
 Collection is deliberately kept out of that picture — seven sources would bury
-the question it answers. They have their own view:
+the question it answers. They have their own view. Two of them, Reddit and
+Polymarket, are reached through the owner's own Cloudflare Workers because the
+direct path is blocked
+([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md)):
 
 ![Sources view: the accounts and feeds one run collects from](embed:Sources)
 

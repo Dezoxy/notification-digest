@@ -42,6 +42,10 @@ unofficial, ToS-risk access with no sanctioned fallback if the platform
 revokes it (RISK-003, RISK-007): Reddit's session exists because Reddit's Data
 Team refused the owner's official API application, and Patreon's is a paid
 subscription, so an adverse action there costs money, not just access.
+Since 2026-10-22 the Reddit cookie also passes through a Cloudflare Worker the
+owner runs, decrypted at the edge, because Reddit blocks Azure's network
+([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md); the first proxied Reddit run had not been observed when this
+was written).
 RISK-007 is **not** marked accepted — the risk register calls it an open gap,
 because CLAUDE.md's hard rules name only the X collector explicitly, not
 Reddit or Patreon.
