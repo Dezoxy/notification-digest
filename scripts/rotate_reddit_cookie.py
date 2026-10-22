@@ -17,6 +17,18 @@ or passed as a command argument.
 Deliberate deviation from the docs/azure-migration.md rotation runbook: no
 pause/drain. The Reddit collector has no cursor or state, so a run overlapping
 the rotation can at worst fail Reddit once.
+
+Proxy key mode: --proxy-key --key-file PATH stores the shared secret of the
+`reddit-proxy` Cloudflare Worker (REDDIT_PROXY_KEY) instead of the cookie, in
+the secret `digest-reddit-proxy-key` unless --secret says otherwise. PATH must
+be a private (chmod 600) regular file holding `openssl rand -hex 32`; there is
+no prompt and no Reddit check. Optional --proxy-url https://... first sends one
+GET /api/me.json with only the key (no cookie, no redirects) and stops before
+touching Azure on HTTP 403. This mode creates the secret on first use (tags
+envvar=REDDIT_PROXY_KEY, folder=digest, text/plain). A secret that does not
+exist yet cannot be an RBAC scope, so the temporary Secrets Officer role is
+granted on the VAULT in this mode (the cookie mode keeps the secret scope);
+exactly the created assignment is still revoked in `finally`.
 """
 
 from __future__ import annotations
@@ -26,6 +38,9 @@ import getpass
 import importlib.util
 import itertools
 import json
+import os
+import re
+import stat
 import subprocess
 import sys
 import time
@@ -56,6 +71,15 @@ preserved_metadata = _migrate.preserved_metadata
 preflight = _migrate.preflight
 
 DEFAULT_SECRET = "digest-reddit-session"
+DEFAULT_PROXY_SECRET = "digest-reddit-proxy-key"
+# Metadata for a proxy-key secret that does not exist yet (mirrors the other
+# digest secrets: envvar tag consumed by infra, text/plain).
+NEW_PROXY_SECRET_METADATA: dict[str, Any] = {
+    "attributes": {"enabled": True},
+    "tags": {"envvar": "REDDIT_PROXY_KEY", "folder": "digest"},
+    "contentType": "text/plain",
+}
+PROXY_KEY_RE = re.compile(r"[0-9a-f]{64}")  # openssl rand -hex 32
 ROLE = "Key Vault Secrets Officer"
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -86,6 +110,52 @@ def normalize_cookie(raw: str) -> str:
     if len(cookie) < MIN_COOKIE_LENGTH:
         raise MigrationError("Cookie is too short to be a reddit_session value.")
     return cookie
+
+
+def read_proxy_key(path: str) -> str:
+    """Read the proxy key from a private regular file; never echo its content.
+
+    Rejects symlinks, non-regular files and any group/other permission bit,
+    then requires exactly 64 lowercase hex characters (`openssl rand -hex 32`).
+    """
+    try:
+        info = os.lstat(path)
+    except OSError:
+        raise MigrationError("Cannot read key file.") from None
+    if not stat.S_ISREG(info.st_mode):
+        raise MigrationError("Key file must be a regular file (not a symlink).")
+    if info.st_mode & 0o077:
+        raise MigrationError("Key file must be private (chmod 600).")
+    try:
+        with open(path, encoding="ascii") as handle:
+            key = handle.read().strip()
+    except (OSError, UnicodeError):
+        raise MigrationError("Cannot read key file.") from None
+    if not PROXY_KEY_RE.fullmatch(key):
+        raise MigrationError("Key file must contain 64 lowercase hex characters.")
+    return key
+
+
+def check_proxy(url: str, key: str) -> None:
+    """GET `{url}/api/me.json` with only the proxy key; stop on 403, accept anything else.
+
+    No cookie is sent and redirects are not followed (the Worker strips
+    `Location`, so a 302 is the normal "key accepted, not logged in" answer).
+    """
+    if not url.startswith("https://") or any(c.isspace() for c in url):
+        raise MigrationError("--proxy-url must be an https:// URL.")
+    request = urllib.request.Request(f"{url.rstrip('/')}/api/me.json", headers={"x-proxy-key": key})
+    opener = urllib.request.build_opener(_migrate.NoRedirect())
+    try:
+        with opener.open(request, timeout=reddit._REQUEST_TIMEOUT_SECONDS):  # noqa: SLF001
+            code = 200
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            raise MigrationError("proxy rejected the key (HTTP 403)") from None
+        code = exc.code
+    except (OSError, ValueError) as exc:
+        raise MigrationError(f"proxy check failed ({type(exc).__name__}).") from None
+    print(f"Proxy accepted the key (HTTP {code}).")
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -200,17 +270,28 @@ def retry_while_forbidden[T](action: Callable[[], T], label: str) -> T:
     raise MigrationError(f"Role assignment did not grant {label} access within 5 minutes.")
 
 
-def _write_and_verify(client: Any, vault: str, secret: str, cookie: str, latest: dict) -> str:
-    body = {"value": cookie, **preserved_metadata(latest)}
+def _write_and_verify(client: Any, vault: str, secret: str, value: str, latest: dict) -> str:
+    body = {"value": value, **preserved_metadata(latest)}
     retry_while_forbidden(lambda: client.put(vault, secret, body), "write")
     stored = client.get(vault, secret)
-    if stored.get("value") != cookie or preserved_metadata(stored) != preserved_metadata(body):
+    if stored.get("value") != value or preserved_metadata(stored) != preserved_metadata(body):
         raise MigrationError("Read-back verification failed; stop and inspect the secret.")
     return str(stored.get("id", "unknown")).rstrip("/").rsplit("/", 1)[-1]
 
 
-def rotate(vault: str, secret: str, subscription: str | None, cookie: str) -> None:
-    """Grant, wait, write, verify; always revoke exactly the assignment created here."""
+def rotate(
+    vault: str,
+    secret: str,
+    subscription: str | None,
+    value: str,
+    *,
+    create_if_missing: bool = False,
+) -> None:
+    """Grant, wait, write, verify; always revoke exactly the assignment created here.
+
+    `create_if_missing` (proxy-key mode) creates an absent secret and grants the
+    role on the vault instead of the secret, since a missing secret is no scope.
+    """
     oid = az("ad", "signed-in-user", "show", "--query", "id", "-o", "tsv")
     vault_id = az(
         "keyvault", "show", "--name", vault, "--query", "id", "-o", "tsv",
@@ -218,7 +299,7 @@ def rotate(vault: str, secret: str, subscription: str | None, cookie: str) -> No
     )  # fmt: skip
     if not oid or not vault_id:
         raise MigrationError("Could not resolve operator or vault identity.")
-    scope = f"{vault_id}/secrets/{secret}"
+    scope = vault_id if create_if_missing else f"{vault_id}/secrets/{secret}"
     assignment_id = az(
         "role", "assignment", "create",
         "--assignee-object-id", oid,
@@ -230,15 +311,30 @@ def rotate(vault: str, secret: str, subscription: str | None, cookie: str) -> No
     )  # fmt: skip
     if not assignment_id:
         raise MigrationError("Role assignment returned no id; check for a leftover assignment.")
-    print("Temporary role granted.")
+    if create_if_missing:
+        print("Temporary role granted on the vault (the secret may not exist yet).")
+    else:
+        print("Temporary role granted.")
     try:
         client = VaultClient(subscription)
-        latest = latest_version(
-            retry_while_forbidden(lambda: list_versions(client, vault, secret), "read")
-        )
-        # Fail closed rather than copy a disabled/expired state onto the new version.
-        preflight(latest, secret, time.time())
-        version = _write_and_verify(client, vault, secret, cookie, latest)
+
+        def read_versions() -> list[dict[str, Any]]:
+            try:
+                return list_versions(client, vault, secret)
+            except MigrationError as exc:
+                if create_if_missing and "HTTP 404" in str(exc):
+                    return []  # secret absent: created below
+                raise
+
+        versions = retry_while_forbidden(read_versions, "read")
+        if versions or not create_if_missing:
+            latest = latest_version(versions)
+            # Fail closed rather than copy a disabled/expired state onto the new version.
+            preflight(latest, secret, time.time())
+        else:
+            latest = NEW_PROXY_SECRET_METADATA
+            print(f"Secret {secret} does not exist; creating it.")
+        version = _write_and_verify(client, vault, secret, value, latest)
         print(f"Stored and verified new version {version}.")
     finally:
         try:
@@ -258,17 +354,45 @@ def main(argv: list[str] | None = None) -> int:
     """Run the interactive rotation."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--vault", required=True, help="Dedicated digest Key Vault name")
-    parser.add_argument("--secret", default=DEFAULT_SECRET, help="Secret name")
+    parser.add_argument(
+        "--secret",
+        help=f"Secret name (default {DEFAULT_SECRET}; {DEFAULT_PROXY_SECRET} with --proxy-key)",
+    )
     parser.add_argument("--subscription", help="Azure CLI subscription ID or name")
     parser.add_argument(
         "--no-verify",
         action="store_true",
         help="Store the cookie even if the Reddit check fails",
     )
+    parser.add_argument(
+        "--proxy-key",
+        action="store_true",
+        help="Store the reddit-proxy shared secret (from --key-file) instead of the cookie",
+    )
+    parser.add_argument("--key-file", help="With --proxy-key: private file holding the key")
+    parser.add_argument("--proxy-url", help="With --proxy-key: https URL of the Worker to check")
     args = parser.parse_args(argv)
+    if args.proxy_key and not args.key_file:
+        parser.error("--proxy-key requires --key-file PATH")
+    if (args.key_file or args.proxy_url) and not args.proxy_key:
+        parser.error("--key-file and --proxy-url require --proxy-key")
     try:
         vault = validate_name(args.vault, vault=True)
-        secret = validate_name(args.secret)
+        secret = validate_name(
+            args.secret or (DEFAULT_PROXY_SECRET if args.proxy_key else DEFAULT_SECRET)
+        )
+        if args.proxy_key:
+            key = read_proxy_key(args.key_file)
+            if args.proxy_url:
+                check_proxy(args.proxy_url, key)
+            rotate(vault, secret, args.subscription, key, create_if_missing=True)
+            del key
+            print(
+                "Done. Make sure REDDIT_PROXY_KEY maps to this secret in the job secret_names, "
+                "and that the same key is set on the Worker; jobs pick up a new version after "
+                "the platform's Key Vault refresh (up to ~30 min)."
+            )
+            return 0
         cookie = normalize_cookie(
             getpass.getpass("Paste reddit_session cookie value (input hidden): ")
         )

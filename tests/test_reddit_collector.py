@@ -284,6 +284,108 @@ def test_subreddit_request_url_params_and_cookie_header(monkeypatch: pytest.Monk
     assert request.get_header("User-agent") == _USER_AGENT
 
 
+# --- proxy: api_base / proxy_key ---
+
+_PROXY_BASE = "https://reddit-proxy.example.workers.dev"
+_PROXY_KEY = "proxy-key-that-must-never-appear-in-logs"
+
+
+def _capture_requests(monkeypatch: pytest.MonkeyPatch, outcomes: dict | None = None) -> list:
+    """Record every request; `outcomes` maps full_url -> bytes/Exception (default: empty)."""
+    requests: list = []
+
+    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+        requests.append(request)
+        url = request.full_url  # type: ignore[attr-defined]
+        if outcomes and url in outcomes:
+            outcome = outcomes[url]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return _FakeResponse(outcome)
+        if url.endswith("/api/me.json"):
+            return _FakeResponse(_me_response())
+        return _FakeResponse(_listing([]))
+
+    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    _no_sleep(monkeypatch)
+    return requests
+
+
+def test_custom_api_base_is_used_for_both_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = _capture_requests(monkeypatch)
+
+    collect(_SESSION_COOKIE, ["news"], 5, api_base=_PROXY_BASE)
+
+    assert [r.full_url for r in requests] == [
+        f"{_PROXY_BASE}/api/me.json",
+        f"{_PROXY_BASE}/r/news/top.json?t=day&limit=5&raw_json=1",
+    ]
+
+
+def test_proxy_key_header_sent_on_every_request_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = _capture_requests(monkeypatch)
+
+    collect(_SESSION_COOKIE, ["news"], 10, api_base=_PROXY_BASE, proxy_key=_PROXY_KEY)
+
+    assert len(requests) == 2
+    for request in requests:
+        assert request.get_header("X-proxy-key") == _PROXY_KEY
+        assert request.get_header("Cookie") == f"reddit_session={_SESSION_COOKIE}"
+
+
+def test_proxy_key_header_absent_when_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = _capture_requests(monkeypatch)
+
+    collect(_SESSION_COOKIE, ["news"], 10)
+
+    assert len(requests) == 2
+    assert all(not r.has_header("X-proxy-key") for r in requests)
+    assert all(r.full_url.startswith(reddit_module._BASE_URL) for r in requests)
+
+
+def test_verify_http_302_through_proxy_fails_run_and_logs_status(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    requests = _capture_requests(
+        monkeypatch, {f"{_PROXY_BASE}/api/me.json": _http_error_reason(302, "Found")}
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = collect(_SESSION_COOKIE, ["news"], 10, api_base=_PROXY_BASE, proxy_key=_PROXY_KEY)
+
+    assert result.failed is True
+    assert result.items == []
+    assert len(requests) == 1  # no subreddit request after a failed verify
+    assert "reddit session verify failed: HTTPError 302 Found" in caplog.text
+
+
+def test_proxy_key_never_logged_on_failure_paths(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Verify failure.
+    _capture_requests(
+        monkeypatch, {f"{_PROXY_BASE}/api/me.json": _http_error_reason(403, "Blocked")}
+    )
+    with caplog.at_level("DEBUG"):
+        collect(_SESSION_COOKIE, ["news"], 10, api_base=_PROXY_BASE, proxy_key=_PROXY_KEY)
+    # Mid-run 403, 429 and a generic per-subreddit failure.
+    for code in (403, 429, 500):
+        _capture_requests(
+            monkeypatch,
+            {
+                f"{_PROXY_BASE}/r/news/top.json?t=day&limit=10&raw_json=1": _http_error_reason(
+                    code, "x"
+                )
+            },
+        )
+        with caplog.at_level("DEBUG"):
+            collect(_SESSION_COOKIE, ["news"], 10, api_base=_PROXY_BASE, proxy_key=_PROXY_KEY)
+
+    assert caplog.text
+    assert _PROXY_KEY not in caplog.text
+    assert _SESSION_COOKIE not in caplog.text
+
+
 # --- per-sub fault tolerance vs total failure ---
 
 

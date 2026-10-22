@@ -2897,15 +2897,19 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
         reddit_session_cookie="cookie-value",
         reddit_subreddits=("news", "hungary"),
         reddit_posts_per_sub=15,
+        reddit_api_base="https://proxy.example.com",
+        reddit_proxy_key="proxy-key-123",
     )
     expected = CollectResult(items=[_item("reddit-1")])
 
     captured = {}
 
-    def fake_collect(session_cookie, subreddits, posts_per_sub):
+    def fake_collect(session_cookie, subreddits, posts_per_sub, *, api_base, proxy_key):
         captured["session_cookie"] = session_cookie
         captured["subreddits"] = subreddits
         captured["posts_per_sub"] = posts_per_sub
+        captured["api_base"] = api_base
+        captured["proxy_key"] = proxy_key
         return expected
 
     monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_collect)
@@ -2917,6 +2921,8 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
         "session_cookie": "cookie-value",
         "subreddits": ("news", "hungary"),
         "posts_per_sub": 15,
+        "api_base": "https://proxy.example.com",
+        "proxy_key": "proxy-key-123",
     }
 
 
@@ -2956,7 +2962,7 @@ def test_run_merges_reddit_items_into_commit_alongside_telegram(monkeypatch, tmp
         monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
     )
 
-    def fake_reddit_collect(session_cookie, subreddits, posts_per_sub):
+    def fake_reddit_collect(session_cookie, subreddits, posts_per_sub, **kwargs):
         return CollectResult(items=[reddit_item])
 
     monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_reddit_collect)
