@@ -341,6 +341,27 @@ def _session_headers(session_cookie: str) -> dict[str, str]:
     return {"Cookie": f"reddit_session={session_cookie}", "User-Agent": _USER_AGENT}
 
 
+_REASON_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 ._-]")
+_REASON_MAX_CHARS = 40
+
+
+def _describe_verify_failure(exc: Exception) -> str:
+    """Log-safe description of a `_verify_session` failure; never the cookie.
+
+    `HTTPError` -> status code + sanitized server reason phrase, so a 403
+    "Blocked" (IP/client rejected) is distinguishable from a 403 "Forbidden"
+    (session refused), a 429, or a 5xx. `ValueError` (incl. JSONDecodeError)
+    -> Reddit answered 200 with an HTML login page or `{}`. Anything else ->
+    the type name only. `exc.msg`/headers/body/url are never used.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        reason = _REASON_UNSAFE_RE.sub("", str(exc.reason))[:_REASON_MAX_CHARS]
+        return f"HTTPError {exc.code} {reason}"
+    if isinstance(exc, ValueError):
+        return f"{type(exc).__name__} (not logged in or non-JSON response)"
+    return type(exc).__name__
+
+
 def _verify_session(session_cookie: str) -> str:
     """Confirm the session cookie is logged in, returning the owner's own username.
 
@@ -417,8 +438,10 @@ def collect(
     docstring's "Failure semantics": every subsequent request depends on a
     confirmed logged-in session, so its failure is the whole run's signal,
     exactly like telegram.py's single session or x.py's single timeline.
-    Only the exception's TYPE NAME is logged, never the cookie or any
-    exception message that might embed it.
+    What is logged: for an `HTTPError`, its status code plus Reddit's reason
+    phrase (e.g. "Blocked" vs "Forbidden"), sanitized to `[A-Za-z0-9 ._-]`
+    and truncated; for anything else, only the exception's TYPE NAME. Never
+    the cookie or any exception message that might embed it.
 
     Each subreddit is then fetched (`_fetch_subreddit_posts`) independently,
     wrapped in its own try/except. `urllib.error.HTTPError` with
@@ -463,7 +486,7 @@ def collect(
     try:
         _verify_session(session_cookie)
     except Exception as exc:
-        logger.warning("reddit session verify failed: %s", type(exc).__name__)
+        logger.warning("reddit session verify failed: %s", _describe_verify_failure(exc))
         return CollectResult(failed=True)
 
     fetched_at = datetime.now(UTC).isoformat()

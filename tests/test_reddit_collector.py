@@ -168,6 +168,83 @@ def test_verify_not_logged_in_body_marks_whole_run_failed(
     assert result.items == []
 
 
+def _verify_raises(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+        if request.full_url == _ME_URL:  # type: ignore[attr-defined]
+            raise exc
+        raise AssertionError("no subreddit request should be made when verify fails")
+
+    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    _no_sleep(monkeypatch)
+
+
+def _http_error_reason(code: int, reason: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url="https://old.reddit.com/api/me.json", code=code, msg=reason, hdrs=None, fp=None
+    )
+
+
+def test_verify_http_error_logs_status_and_reason(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _verify_raises(monkeypatch, _http_error_reason(403, "Blocked"))
+
+    with caplog.at_level("WARNING"):
+        result = collect(_SESSION_COOKIE, ["news"], 10)
+
+    assert result.failed is True
+    assert result.items == []
+    assert "reddit session verify failed: HTTPError 403 Blocked" in caplog.text
+
+
+def test_verify_http_error_reason_is_sanitized_and_truncated(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    junk = "Bad\nGate<way>\r" + "x" * 100
+    _verify_raises(monkeypatch, _http_error_reason(502, junk))
+
+    with caplog.at_level("WARNING"):
+        collect(_SESSION_COOKIE, ["news"], 10)
+
+    (record,) = [r for r in caplog.records if "session verify failed" in r.message]
+    prefix = "reddit session verify failed: HTTPError 502 "
+    assert record.message.startswith(prefix)
+    assert "\n" not in record.message and "\r" not in record.message
+    assert "<" not in record.message
+    assert record.message == prefix + ("BadGateway" + "x" * 100)[:40]
+
+
+def test_verify_value_error_logs_not_logged_in_hint(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _verify_raises(monkeypatch, ValueError("reddit session cookie is not logged in"))
+
+    with caplog.at_level("WARNING"):
+        result = collect(_SESSION_COOKIE, ["news"], 10)
+
+    assert result.failed is True
+    assert "ValueError (not logged in or non-JSON response)" in caplog.text
+
+
+def test_verify_http_error_never_logs_the_cookie_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    exc = urllib.error.HTTPError(
+        url=f"https://old.reddit.com/api/me.json?c={_SESSION_COOKIE}",
+        code=403,
+        msg="Forbidden",
+        hdrs={"Cookie": f"reddit_session={_SESSION_COOKIE}"},  # type: ignore[arg-type]
+        fp=None,
+    )
+    _verify_raises(monkeypatch, exc)
+
+    with caplog.at_level("DEBUG"):
+        collect(_SESSION_COOKIE, ["news"], 10)
+
+    assert "HTTPError 403 Forbidden" in caplog.text
+    assert _SESSION_COOKIE not in caplog.text
+
+
 def test_verify_failure_never_logs_the_cookie_value(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
