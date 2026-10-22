@@ -48,10 +48,10 @@ the whole system.
 
 | Key | Audience | Question | Selection | Omits (and where that lives) | Update trigger | Visual check |
 |---|---|---|---|---|---|---|
-| Landscape | Everyone | Which systems does the digest sit between? | Everything except delivery tooling | Delivery tooling, which is the `Delivery` view's question | A source or channel is added or removed | Verified 2026-10-09 |
+| Landscape | Everyone | Which systems does the digest sit between? | Everything except delivery tooling: 13 elements, 13 arrows, including Egress Proxies between the runner and Reddit/Polymarket | Delivery tooling, which is the `Delivery` view's question | A source, channel or egress proxy is added or removed | Verified 2026-10-22, minor flaw: the fan-out lines to Telegram and X pass behind the X arrow label, unchanged from the 2026-10-09 layout |
 | Context | Everyone | Who reads the digest, what writes it, and where does it come out? | Owner, the system, Claude, Telegram, SMTP | The six non-Telegram sources — they are `Sources`; including all seven blew the overview budget. Entra, which only serves the fallback call and belongs to `Security` | Delivery channels or the model provider change | Verified 2026-10-09 |
-| Sources | Engineers | Which accounts and feeds does a run collect from? | The system plus all seven collection sources | Delivery and state, which `Context` and `Containers` cover | A collector is added or retired | Rendered, not reviewed |
-| Containers | Engineers, architects | What are the building blocks, and which side of the trust boundary is each on? | All four containers, both trust-boundary groups and Telegram | Non-Telegram sources and SMTP (disabled in production); the model provider and Entra, which `Context`, `Security` and `DigestRun` cover; delivery tooling | A container or interface changes | Verified 2026-10-09 |
+| Sources | Engineers | Which accounts and feeds does a run collect from? | The system, all seven collection sources and Egress Proxies, which stand between the runner and Reddit/Polymarket (9 elements, 8 arrows, against the 10/12 technical budget) | Delivery and state, which `Context` and `Containers` cover | A collector or egress proxy is added or retired | Verified 2026-10-22 |
+| Containers | Engineers, architects | What are the building blocks, and which side of the trust boundary is each on? | All four containers, both trust-boundary groups and Telegram | Non-Telegram sources, Egress Proxies (a collection-path element, like the sources it fronts) and SMTP (disabled in production); the model provider and Entra, which `Context`, `Security` and `DigestRun` cover; delivery tooling | A container or interface changes | Verified 2026-10-22 (re-rendered; unchanged, Egress Proxies excluded) |
 | Security | Owner, reviewer | What is reachable from the internet, where do secrets and identity come from, and what stays private? | The four containers plus Key Vault, Entra and the deploy path | Collection sources; their credentials are covered in [trust boundaries](security/trust-boundaries.md) | Exposure, secret flow, identity or network policy changes | Verified 2026-10-09 |
 | DigestRun | Engineers | What happens during one scheduled digest run? | Runner, state, Telegram, the summarizer, the site | Fallback path (the Claude API call and its Entra token) and the non-digest lanes; see [ADR 9](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Run ordering, failure handling or delivery changes | Reviewed 2026-10-09: known defect, see below |
 | Delivery | Operators | How does a code change reach the running jobs? | Owner, Actions, registry, Renovate, Key Vault, the runner | Everything that happens during a run — none of this does | The release or deploy procedure changes | Verified 2026-10-09 |
@@ -92,15 +92,21 @@ two relationships exist between the runner and Telegram (collection over
 MTProto, delivery over the Bot API) and without it the view drew the
 collection one twice.
 
-**Sources** is rendered but has **not** been reviewed at reading size. Treat
-that row as unverified: a valid DSL is not a presentation-ready diagram. Run
-`make view` to check it.
+**Sources** and **Landscape** were reviewed at reading size on 2026-10-22,
+after both gained Egress Proxies (ADR 10). In `Sources` the runner's arrow to
+the proxies sits in line with the other sources and the two relay arrows fan
+out below it without crossings. In `Landscape` Reddit and Polymarket form their
+own column behind the proxies. Its one flaw predates the change: the fan-out
+lines to Telegram and X pass behind the X arrow label, exactly as in the
+2026-10-09 render. A valid DSL is still not a presentation-ready diagram; run
+`make view` after the next change.
 
-`Landscape` sits at 12 elements against the 7/8 audience-overview budget. It is
+`Landscape` sits at 13 elements against the 7/8 audience-overview budget. It is
 kept there deliberately: a landscape's job is breadth, the rendered fan is
-legible with no crossings, and the focused questions are answered by `Context`
-and `Sources`. That is the rendered evidence the budget rule asks for before
-exceeding it.
+legible (one label overlap, see above), and the focused questions are answered
+by `Context` and `Sources`. That is the rendered evidence the budget rule asks
+for before exceeding it, recorded when it stood at 12 and re-stated at 13 from
+the 2026-10-22 render, reviewed the same day.
 
 ## Decisions
 
@@ -115,6 +121,7 @@ exceeding it.
 | 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; state/vault ownership amended by ADR 8; in production since 2026-10-08 |
 | 8 | [Isolate digest Azure state and secrets](decisions/0008-isolate-digest-azure-state-and-secrets.md) | Accepted for state/vault; deployed with ADR 7 |
 | 9 | [Fall back to the Claude API over workload identity federation](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Accepted; implemented and configured; proven by one smoke test, no real fallback yet |
+| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted; implemented and deployed 2026-10-22; first proxied Reddit run not yet observed |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

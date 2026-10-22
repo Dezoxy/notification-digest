@@ -23,6 +23,7 @@ describes Azure; where the VM matters it is named as history.
 | Recovery copies | Backup storage account in a separate resource group, same region | Azure Blob Storage | Written daily by the `backup` job under a separate identity ([backup-strategy.md](../reliability/backup-strategy.md)) |
 | Secrets | A dedicated digest Key Vault | Azure Key Vault | Resolved at job start through Key Vault references and the runner's managed identity. No secret value is a Terraform input |
 | News Site | Cloudflare Workers | Cloudflare Worker, JavaScript (`workers/news-site/`) | Deployed independently with `wrangler`, not from this repo's release pipeline |
+| Egress Proxies | Cloudflare Workers (workers.dev) | `polymarket-proxy` and `reddit-proxy`, JavaScript | In the owner's `toom-edge` repository, deployed outside this repo's Terraform and release pipeline. They relay Reddit and Polymarket requests the runner cannot make directly ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)) |
 | Site Database | Cloudflare D1 | Managed | Rendering copy only; disposable, rebuilt from the state database ([ADR 0003](../decisions/0003-sqlite-is-the-source-of-truth.md)) |
 
 The jobs and their state live in one Azure region, West Europe, in one

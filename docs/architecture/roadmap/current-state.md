@@ -56,6 +56,11 @@ entirely:
   (`HACKERNEWS_ENABLED`) — each isolated per
   [P-05](../principles/architecture-principles.md), so one failing never
   suppresses the others.
+- Reddit and Polymarket are reached through the owner's Egress Proxies
+  (`REDDIT_API_BASE`, `POLYMARKET_API_BASE`), Cloudflare Workers outside this
+  repository ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)). Reddit moved behind its proxy on
+  2026-10-22 after Reddit began answering Azure egress with `403`; the first
+  proxied Reddit run had not been observed when this was written.
 - Patreon collects only in `patreon` mode, structurally excluded from the window sweep.
 - Positions and relay read from the same sources as the window collectors but
   claim their own items via a separate membership rule — they are not additional

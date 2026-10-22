@@ -17,6 +17,11 @@ x = softwareSystem "X" "Hosts the owner's notifications timeline. Unofficial API
 reddit = softwareSystem "Reddit" "Serves top-of-day posts for the configured subreddits. Cookie session." "External"
 patreon = softwareSystem "Patreon" "Hosts paid-tier posts of one campaign. Cookie session." "External"
 polymarket = softwareSystem "Polymarket" "Publishes prediction-market prices used for swing detection." "External"
+// One box for both proxies: the same pattern (an authenticated Cloudflare
+// Worker relaying a fixed set of requests), the same owner repository
+// (toom-edge), the way News Feeds stands for many feeds. They sit between the
+// runner and Reddit/Polymarket because the direct path is blocked (ADR 10).
+egressProxies = softwareSystem "Egress Proxies" "The owner's authenticated Cloudflare Workers (polymarket-proxy, reddit-proxy) that relay a fixed set of collector requests from Cloudflare's network where the direct path is blocked." "External"
 hackerNews = softwareSystem "Hacker News" "Publishes the front page through the public Algolia API." "External"
 newsFeeds = softwareSystem "News Feeds" "Third-party RSS and Atom feeds followed for general news." "External"
 
@@ -41,3 +46,5 @@ owner -> githubActions "Merges a change that is released by" "Git, pull request"
 githubActions -> imageRegistry "Publishes the versioned runtime image to" "OCI over HTTPS"
 renovate -> imageRegistry "Detects each new image release in" "OCI over HTTPS"
 renovate -> githubActions "Merges the image pin bump that starts a deployment in" "Git, pull request"
+egressProxies -> reddit "Relays allowlisted post requests, with the runner's cookie session, to" "HTTPS from Cloudflare egress"
+egressProxies -> polymarket "Relays market-price requests to" "HTTPS/JSON"

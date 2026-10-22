@@ -55,7 +55,7 @@ Architecture**, later in this document, for the exact mechanisms.
 
 ### The decisions already made
 
-Nine ADRs, each accepted, each naming its trade-off:
+Ten ADRs, each accepted, each naming its trade-off:
 
 - **ADR 1** pins the X client exactly, trading automation for an audited bump.
 - **ADR 2** falls back across models on refusal, trading a cost cap for uptime.
@@ -73,6 +73,9 @@ Nine ADRs, each accepted, each naming its trade-off:
 - **ADR 9** falls back to the Claude API without any API key, by exchanging
   the job's managed-identity token through Microsoft Entra ID and workload
   identity federation.
+- **ADR 10** routes Reddit, which blocks Azure's network, and Polymarket, which
+  ISPs in Hungary block, through the owner's own Cloudflare Workers, trading a
+  Cloudflare dependency and an edge-decrypted cookie for working collection.
 
 ### The contracts you do not control
 
@@ -87,8 +90,10 @@ system depends on, already broke completely once against an X webpack
 change. That is why `twifork` is pinned to an **exact version**, not the
 `>=` range every other dependency uses, and every bump is gated behind
 Renovate's Dependency Dashboard with a mandatory hand audit before it can be
-trusted (ADR 1). See **Integration Architecture**, later in this document,
-for every source, provider and delivery contract in one table.
+trusted (ADR 1). Reddit and Polymarket are reached through the owner's own
+Cloudflare Workers, not directly (ADR 10). See **Integration Architecture**,
+later in this document, for every source, provider and delivery contract in one
+table.
 
 ### What is already known to be wrong, and what a change must satisfy
 

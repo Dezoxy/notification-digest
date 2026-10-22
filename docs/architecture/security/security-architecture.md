@@ -16,10 +16,17 @@ region (West Europe), and exposes no listener
 port; it is a finite Azure Container Apps job that starts on a cron schedule,
 makes only outbound connections (to Telegram, X, Reddit, Patreon, Polymarket,
 Hacker News, RSS feeds, the Claude CLI, the Claude API (fallback), the News
-Site, and optionally an SMTP relay), and exits. The same service ran on a
+Site, and optionally an SMTP relay), and exits. Reddit and Polymarket are
+reached through the owner's own Egress Proxies (Cloudflare Workers) rather than
+directly ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)). The same service ran on a
 homelab VM until 2026-10-08; that VM no longer runs it. See [trust-boundaries.md](trust-boundaries.md) for the
 boundary-by-boundary detail and the model in
 [`../model/containers.dsl`](../model/containers.dsl).
+
+Those proxies are the one other internet-reachable part of the collection path.
+They sit outside this system's model and Terraform (the owner's `toom-edge`
+repository, deployed on workers.dev). They are not open relays: each has a
+hardcoded upstream, GET only, a path allowlist and a timing-safe shared key.
 
 The News Site itself has no login and no Cloudflare Access in front of it. Its
 reader-facing routes sit under an unguessable capability token in the URL path
@@ -33,7 +40,8 @@ to what" below.
 | Digest Runner | Telegram | MTProto, `TG_SESSION` (Telethon `StringSession`) — the owner's own **personal account**, not a bot | Read access to the owner's own groups/channels; also used to send relay forwards |
 | Digest Runner | Telegram Bot API | `TELEGRAM_NOTIFY_BOT_TOKEN` | Send-only access to post the TL;DR digest and section links into the owner's chat/topics |
 | Digest Runner | X | `X_COOKIES_PATH` / `X_COOKIES` (owner's session cookie), via `twifork` (twikit fork) | Read access to the owner's own notifications timeline. Unofficial API; no sanctioned alternative exists at this tier ([C-03](../requirements/constraints.md)) |
-| Digest Runner | Reddit | `REDDIT_SESSION_COOKIE` (owner's own logged-in session) | Read access to top-of-day posts in configured subreddits. Reddit formally declined the owner's official API application; the cookie session is the only remaining path |
+| Digest Runner | Reddit, through `reddit-proxy` | `REDDIT_SESSION_COOKIE` (owner's own logged-in session), sent on every request to the proxy, plus `REDDIT_PROXY_KEY` in an `x-proxy-key` header to authenticate to the proxy itself | Read access to top-of-day posts in configured subreddits. Reddit formally declined the owner's official API application; the cookie session is the only remaining path, and Reddit answers Azure egress with `403` since 2026-10-21 ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)). The proxy forwards only the cookie, user-agent and accept headers, stores nothing and has Workers Logs disabled; the cookie is decrypted at the owner's Cloudflare edge |
+| Digest Runner | Polymarket, through `polymarket-proxy` | `POLYMARKET_PROXY_KEY` in an `x-proxy-key` header | Read access to market prices over `/markets` only; no account credential is involved. polymarket.com is ISP-blocked in Hungary |
 | Digest Runner | Patreon | `PATREON_SESSION_COOKIE` (owner's own paid-tier session) | Read access to one campaign's paid-tier posts |
 | Digest Runner | Claude CLI | `CLAUDE_CODE_OAUTH_TOKEN`, forwarded to the `claude -p` subprocess | Summarizes each window on the owner's flat-fee subscription ([C-08](../requirements/constraints.md)) |
 | Digest Runner | Claude API (fallback only) | No stored credential: the job's managed identity trades its token with Entra, through a federated credential on a dedicated audience app registration, for a short-lived app token, then exchanges that at Anthropic (Workload Identity Federation) for a short-lived access token, once per fallback call ([ADR 9](../decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md)) | Re-runs a failed summarization against prepaid API credits. The federation rule matches the audience app's service principal object ID (the managed identity is trusted only by Entra, via the federated credential on that app); the service account sits in a dedicated workspace with a monthly spend limit |
@@ -175,6 +183,10 @@ unlock is classified and where it ends up.
 
 ### Open points
 
+- The Reddit session cookie now crosses the owner's Cloudflare account on
+  every Reddit request, and the proxy endpoints are reachable from the internet
+  with only a shared key in front of them ([RISK-002](../risks/architecture-risks.md),
+  [ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
 - The X, Reddit, and Patreon collectors all depend on an unofficial,
   ToS-violating access path the owner has explicitly accepted the risk of
   ([C-03](../requirements/constraints.md),

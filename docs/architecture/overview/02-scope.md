@@ -22,6 +22,7 @@
 | The retired homelab VM, the Proxmox node and the home network | The separate `homelab` repository. The VM ran production until 2026-10-08 and no longer runs the digest |
 | Anything that happens inside a source platform | Telegram, X, Reddit, Patreon, Polymarket, Hacker News and the feed publishers |
 | Model behaviour and pricing | The model provider (Anthropic) |
+| The Cloudflare Workers that relay Reddit and Polymarket requests (`polymarket-proxy`, `reddit-proxy`) | The owner's `toom-edge` repository, deployed outside this repository's Terraform; the digest's dependence on them is in scope ([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md)) |
 | The content itself | Third parties wrote it; this system summarizes and links to it ([C-04](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)) |
 
 ### Deliberately not built
