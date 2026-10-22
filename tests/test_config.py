@@ -349,6 +349,54 @@ def test_positions_tg_channels_prefixed_entry_raises_config_error(monkeypatch):
         Config.from_env()
 
 
+# --- REDDIT_API_BASE / REDDIT_PROXY_KEY ---
+
+
+def test_reddit_proxy_defaults_when_unset(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("REDDIT_API_BASE", raising=False)
+    monkeypatch.delenv("REDDIT_PROXY_KEY", raising=False)
+
+    config = Config.from_env()
+
+    assert config.reddit_api_base == "https://old.reddit.com"
+    assert config.reddit_proxy_key is None
+
+
+def test_reddit_api_base_custom_value_strips_trailing_slash(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("REDDIT_API_BASE", "https://reddit-proxy.example.workers.dev/")
+
+    config = Config.from_env()
+
+    assert config.reddit_api_base == "https://reddit-proxy.example.workers.dev"
+
+
+def test_reddit_api_base_non_http_raises_config_error(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("REDDIT_API_BASE", "ftp://proxy.example.com")
+
+    with pytest.raises(ConfigError, match="REDDIT_API_BASE"):
+        Config.from_env()
+
+
+def test_reddit_proxy_key_is_used_and_hidden_from_repr(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("REDDIT_PROXY_KEY", "super-secret-reddit-key")
+
+    config = Config.from_env()
+
+    assert config.reddit_proxy_key == "super-secret-reddit-key"
+    assert "super-secret-reddit-key" not in repr(config)
+
+
+def test_reddit_proxy_key_blank_counts_as_unset(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("REDDIT_PROXY_KEY", "   ")
+
+    assert Config.from_env().reddit_proxy_key is None
+
+
 # --- POLYMARKET_ENABLED / POLYMARKET_API_BASE / POLYMARKET_PROXY_KEY /
 #     POLYMARKET_TOP_N / POLYMARKET_SWING_THRESHOLD ---
 

@@ -160,7 +160,7 @@ notification-digest/
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
 │   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
-│   ├── rotate_reddit_cookie.py    # interactive Reddit cookie check + scoped-grant Key Vault rotation
+│   ├── rotate_reddit_cookie.py    # interactive Reddit cookie check + scoped-grant Key Vault rotation (--proxy-key: reddit-proxy key)
 │   ├── azure_release_guard.py     # image-bump plan check and idle wait for the auto-apply job
 │   ├── next_release_version.py    # next patch tag from `git tag --list`, for auto-release
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
@@ -464,6 +464,8 @@ Every var below is read in `config.py`'s `Config.from_env`, except `CLAUDE_CONFI
 | `POLYMARKET_SWING_THRESHOLD` | collectors/polymarket.py | absolute probability-point swing that triggers a report, exclusive (0,1) (default `0.15`) |
 | `REDDIT_ENABLED` | main.py, collectors/reddit.py | master switch for the Reddit collector (default `false`) |
 | `REDDIT_SESSION_COOKIE` | collectors/reddit.py | owner's logged-in `reddit_session` cookie value, required when enabled (secret) |
+| `REDDIT_API_BASE` | collectors/reddit.py | Reddit base URL (default `https://old.reddit.com`; the owner's `reddit-proxy` Cloudflare Worker in production, since Reddit blocks Azure egress) |
+| `REDDIT_PROXY_KEY` | collectors/reddit.py | optional `x-proxy-key` header for the reddit-proxy Worker (secret) |
 | `REDDIT_SUBREDDITS` | collectors/reddit.py | comma-separated subreddit names, no `r/` prefix, required when enabled |
 | `REDDIT_POSTS_PER_SUB` | collectors/reddit.py | top-of-day posts requested per subreddit, 1–25 (default `10`) |
 | `EMAIL_ENABLED` | deliver.py | master switch for the email channel (default `true`) |
@@ -496,7 +498,7 @@ Synchronous urllib collector, enabled via `POLYMARKET_ENABLED` (an explicit flag
 
 ### 4.10 `collectors/reddit.py`
 
-Synchronous urllib collector, enabled via `REDDIT_ENABLED`. Authenticates with the owner's own logged-in `reddit_session` browser cookie (`REDDIT_SESSION_COOKIE`) against `old.reddit.com`'s `.json` endpoints — Reddit's Data Team formally refused this owner's OAuth API application, and anonymous `.json` access comes back a hard 403 regardless of pacing, so a cookie session (the same ToS-risk posture `collectors/x.py` already takes) is what remains. Fetches `REDDIT_POSTS_PER_SUB` top-of-day posts from each of `REDDIT_SUBREDDITS`. No cursor axis — idempotency is `UNIQUE(source, source_id)` alone, exactly like `rss.py`'s news source. The session-verify call gates the whole run (any failure sets `failed=True` and stops before any subreddit is fetched); once verified, each subreddit is fetched independently and a single subreddit failing is logged and skipped, but a 401/403/429 partway through aborts the rest of the run immediately (no retry, no re-verify — the next scheduled run is the retry), mirroring `x.py`'s own back-off posture for an unofficial, cookie-based API. Full rationale in the module's own docstring.
+Synchronous urllib collector, enabled via `REDDIT_ENABLED`. Authenticates with the owner's own logged-in `reddit_session` browser cookie (`REDDIT_SESSION_COOKIE`) against `old.reddit.com`'s `.json` endpoints — Reddit's Data Team formally refused this owner's OAuth API application, and anonymous `.json` access comes back a hard 403 regardless of pacing, so a cookie session (the same ToS-risk posture `collectors/x.py` already takes) is what remains. Fetches `REDDIT_POSTS_PER_SUB` top-of-day posts from each of `REDDIT_SUBREDDITS`. No cursor axis — idempotency is `UNIQUE(source, source_id)` alone, exactly like `rss.py`'s news source. The session-verify call gates the whole run (any failure sets `failed=True` and stops before any subreddit is fetched); once verified, each subreddit is fetched independently and a single subreddit failing is logged and skipped, but a 401/403/429 partway through aborts the rest of the run immediately (no retry, no re-verify — the next scheduled run is the retry), mirroring `x.py`'s own back-off posture for an unofficial, cookie-based API. Full rationale in the module's own docstring. Requests go to `REDDIT_API_BASE` (default `old.reddit.com`; the owner's `reddit-proxy` Cloudflare Worker in production, because Reddit answers Azure egress with `403 Blocked`), with an `x-proxy-key` header when `REDDIT_PROXY_KEY` is set; through the proxy, `HTTPError 302` on the verify call means "not logged in".
 
 ### 4.11 `digest/daily.py`
 

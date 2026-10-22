@@ -476,6 +476,16 @@ class Config:
     # dead) -- never logged. Required (ConfigError via _require_str) when
     # reddit_enabled is True.
     reddit_session_cookie: str | None = field(default=None, repr=False)
+    # Base URL digest/collectors/reddit.py sends its requests to. Azure's
+    # egress (AS8075) is answered with `403 Blocked` by Reddit since
+    # 2026-10-21, so in production this points at the owner's `reddit-proxy`
+    # Cloudflare Worker; the default is the real old.reddit.com (what a
+    # homelab/operator machine uses directly). Mirrors polymarket_api_base.
+    reddit_api_base: str = "https://old.reddit.com"
+    # SECRET: authenticates to the owner's reddit-proxy Worker via the
+    # `x-proxy-key` header -- never logged. Optional (unset when talking to
+    # old.reddit.com directly). repr=False like polymarket_proxy_key.
+    reddit_proxy_key: str | None = field(default=None, repr=False)
     # Comma-separated subreddit names WITHOUT the "r/" prefix (e.g.
     # "Futurology,LocalLLaMA,MachineLearning,news,hungary"). Required,
     # non-empty, when reddit_enabled is True -- there is no sane default
@@ -697,6 +707,8 @@ class Config:
         reddit_enabled = _parse_bool(os.environ.get("REDDIT_ENABLED", "false"))
         reddit_session_cookie: str | None = None
         reddit_subreddits: tuple[str, ...] = ()
+        reddit_api_base = _optional_url("REDDIT_API_BASE", default="https://old.reddit.com")
+        reddit_proxy_key = _optional_secret("REDDIT_PROXY_KEY")
         reddit_posts_per_sub = _optional_int_in_range(
             "REDDIT_POSTS_PER_SUB", default=10, minimum=1, maximum=25
         )
@@ -838,6 +850,8 @@ class Config:
             polymarket_swing_threshold=polymarket_swing_threshold,
             reddit_enabled=reddit_enabled,
             reddit_session_cookie=reddit_session_cookie,
+            reddit_api_base=reddit_api_base,
+            reddit_proxy_key=reddit_proxy_key,
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
             hackernews_enabled=hackernews_enabled,
@@ -1286,8 +1300,9 @@ def _optional_keyword_tuple(name: str) -> tuple[str, ...]:
 def _optional_url(name: str, *, default: str) -> str:
     """Read an optional http(s) URL env var, falling back to `default`, trailing slash stripped.
 
-    Used for POLYMARKET_API_BASE, which digest/collectors/polymarket.py
-    interpolates directly into a request URL as f"{base}/markets?...". A
+    Used for POLYMARKET_API_BASE and REDDIT_API_BASE, which
+    digest/collectors/polymarket.py and digest/collectors/reddit.py
+    interpolate directly into a request URL as f"{base}/markets?...". A
     typo'd or non-URL value there would surface as an opaque request
     failure deep inside a scheduled run instead of a clear startup error --
     validating the scheme here catches that early, mirroring
@@ -1308,9 +1323,10 @@ def _optional_url(name: str, *, default: str) -> str:
 def _optional_secret(name: str) -> str | None:
     """Read an optional secret env var, defaulting to None. Blank counts as unset.
 
-    Used for POLYMARKET_PROXY_KEY -- an opaque shared-secret header value
-    the collector sends to the owner's own Cloudflare Worker proxy
-    (digest/collectors/polymarket.py). Unlike every other _optional_*
+    Used for POLYMARKET_PROXY_KEY and REDDIT_PROXY_KEY -- opaque
+    shared-secret header values the collectors send to the owner's own
+    Cloudflare Worker proxies (digest/collectors/polymarket.py,
+    digest/collectors/reddit.py). Unlike every other _optional_*
     helper in this module there is no format to validate (it's an arbitrary
     bearer-style string) and, being a secret, its value must never be
     echoed in any ConfigError -- there is also no failure mode for a plain
