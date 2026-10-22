@@ -141,16 +141,29 @@ def check_proxy(url: str, key: str) -> None:
 
     No cookie is sent and redirects are not followed (the Worker strips
     `Location`, so a 302 is the normal "key accepted, not logged in" answer).
+    Sends the collector's own User-Agent: Cloudflare answers urllib's default
+    `Python-urllib/x.y` with `403 error code: 1010` before the Worker runs,
+    which would look exactly like a rejected key. That block is reported
+    separately from the Worker's own JSON `forbidden`.
     """
     if not url.startswith("https://") or any(c.isspace() for c in url):
         raise MigrationError("--proxy-url must be an https:// URL.")
-    request = urllib.request.Request(f"{url.rstrip('/')}/api/me.json", headers={"x-proxy-key": key})
+    request = urllib.request.Request(
+        f"{url.rstrip('/')}/api/me.json",
+        headers={"x-proxy-key": key, "User-Agent": reddit._USER_AGENT},  # noqa: SLF001
+    )
     opener = urllib.request.build_opener(_migrate.NoRedirect())
     try:
         with opener.open(request, timeout=reddit._REQUEST_TIMEOUT_SECONDS):  # noqa: SLF001
             code = 200
     except urllib.error.HTTPError as exc:
         if exc.code == 403:
+            body = exc.read(200).decode("utf-8", "replace") if exc.fp else ""
+            if "error code: 1010" in body:
+                raise MigrationError(
+                    "Cloudflare blocked the request before the Worker (error 1010); "
+                    "the key was not checked."
+                ) from None
             raise MigrationError("proxy rejected the key (HTTP 403)") from None
         code = exc.code
     except (OSError, ValueError) as exc:
