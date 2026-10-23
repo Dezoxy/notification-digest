@@ -30,7 +30,6 @@ from digest.main import (
     _run_hackernews_collector,
     _run_news_collector,
     _run_polymarket_collector,
-    _run_reddit_collector,
     _run_x_collector,
     run_daily,
     run_weekly,
@@ -2346,7 +2345,7 @@ def test_run_logs_run_summary_line_with_exactly_the_enabled_collectors(
     monkeypatch, tmp_path, caplog
 ):
     # Telegram is always enabled; X is turned on here via x_enabled=True.
-    # news/polymarket/reddit/hackernews stay off (plain _cfg() defaults), so
+    # news/polymarket/hackernews stay off (plain _cfg() defaults), so
     # the run_summary line's "collectors" dict must contain exactly telegram+x,
     # not every collector this module knows how to run. Reuses this test
     # file's own end-to-end _run() wiring pattern (see the test right below,
@@ -2863,168 +2862,6 @@ def test_run_polymarket_failure_surfaces_in_failed_sources(monkeypatch, tmp_path
     ok = asyncio.run(main_mod._run(cfg))
 
     assert captured["failed_sources"] == ["polymarket"]
-    assert ok is False
-
-
-# --- _run_reddit_collector (Reddit collector, Config.reddit_enabled-gated) ---
-
-
-def test_run_reddit_disabled_never_calls_collector():
-    cfg = replace(_cfg(), reddit_enabled=False)
-
-    result = _run_reddit_collector(cfg)
-
-    assert result == CollectResult()
-
-
-def test_run_reddit_disabled_collect_function_untouched(monkeypatch):
-    cfg = replace(_cfg(), reddit_enabled=False)
-
-    def boom_collect(*a, **k):
-        raise AssertionError("reddit_collector.collect must not be called when disabled")
-
-    monkeypatch.setattr(main_mod.reddit_collector, "collect", boom_collect)
-
-    result = _run_reddit_collector(cfg)
-
-    assert result == CollectResult()
-
-
-def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypatch):
-    cfg = replace(
-        _cfg(),
-        reddit_enabled=True,
-        reddit_request_interval_seconds=30,
-        reddit_max_wait_seconds=77,
-        reddit_subreddits=("news", "hungary"),
-        reddit_posts_per_sub=15,
-        reddit_api_base="https://proxy.example.com",
-        reddit_proxy_key="proxy-key-123",
-        reddit_access_client_id="access-id-123",
-        reddit_access_client_secret="access-secret-123",
-    )
-    expected = CollectResult(items=[_item("reddit-1")])
-
-    captured = {}
-
-    def fake_collect(
-        subreddits,
-        posts_per_sub,
-        *,
-        api_base,
-        proxy_key,
-        access_client_id,
-        access_client_secret,
-        request_interval_seconds,
-        max_wait_seconds,
-    ):
-        captured["subreddits"] = subreddits
-        captured["posts_per_sub"] = posts_per_sub
-        captured["api_base"] = api_base
-        captured["proxy_key"] = proxy_key
-        captured["access_client_id"] = access_client_id
-        captured["access_client_secret"] = access_client_secret
-        captured["request_interval_seconds"] = request_interval_seconds
-        captured["max_wait_seconds"] = max_wait_seconds
-        return expected
-
-    monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_collect)
-
-    result = _run_reddit_collector(cfg)
-
-    assert result is expected
-    assert captured == {
-        "subreddits": ("news", "hungary"),
-        "posts_per_sub": 15,
-        "api_base": "https://proxy.example.com",
-        "proxy_key": "proxy-key-123",
-        "access_client_id": "access-id-123",
-        "access_client_secret": "access-secret-123",
-        "request_interval_seconds": 30,
-        "max_wait_seconds": 77,
-    }
-
-
-def test_run_reddit_collector_crash_is_caught_returns_failed_result(monkeypatch):
-    cfg = replace(_cfg(), reddit_enabled=True)
-
-    def boom_collect(*a, **k):
-        raise RuntimeError("reddit api shape changed")
-
-    monkeypatch.setattr(main_mod.reddit_collector, "collect", boom_collect)
-
-    result = _run_reddit_collector(cfg)
-
-    assert result.failed is True
-    assert result.items == []
-
-
-# --- _run: reddit wiring end to end (merge into commit, failed_sources) ---
-
-
-def test_run_merges_reddit_items_into_commit_alongside_telegram(monkeypatch, tmp_path):
-    cfg = replace(_cfg(), state_db_path=str(tmp_path / "state.db"), reddit_enabled=True)
-
-    tg_item = _item("1")
-    reddit_item = Item(
-        source="reddit",
-        source_id="h1",
-        chat_id=None,
-        chat_title="r/hungary",
-        author="bob",
-        text="headline [score 100, 5 comments] body",
-        url="https://www.reddit.com/r/hungary/comments/h1/napi/",
-        fetched_at="2026-07-29T10:00:00+00:00",
-    )
-
-    _patch_telegram_client(
-        monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
-    )
-
-    def fake_reddit_collect(subreddits, posts_per_sub, **kwargs):
-        return CollectResult(items=[reddit_item])
-
-    monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_reddit_collect)
-
-    captured = {}
-
-    def fake_commit_new_items(conn, items, cursor_updates):
-        captured["items"] = items
-        captured["cursor_updates"] = cursor_updates
-        return len(items)
-
-    monkeypatch.setattr(main_mod, "commit_new_items", fake_commit_new_items)
-    monkeypatch.setattr(
-        main_mod, "_deliver", lambda conn, cfg, failed_sources, hidden=frozenset(): True
-    )
-
-    ok = asyncio.run(main_mod._run(cfg))
-
-    assert ok is True
-    assert captured["items"] == [tg_item, reddit_item]
-    # reddit never contributes a cursor_update -- only telegram's shows up.
-    assert captured["cursor_updates"] == {("telegram", "123"): "1"}
-
-
-def test_run_reddit_collector_failure_surfaces_in_failed_sources(monkeypatch, tmp_path):
-    cfg = replace(_cfg(), state_db_path=str(tmp_path / "state.db"), reddit_enabled=True)
-
-    _patch_telegram_client(monkeypatch, CollectResult())
-    monkeypatch.setattr(
-        main_mod.reddit_collector, "collect", lambda *a, **k: CollectResult(failed=True)
-    )
-
-    captured = {}
-
-    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
-        captured["failed_sources"] = failed_sources
-        return True
-
-    monkeypatch.setattr(main_mod, "_deliver", fake_deliver)
-
-    ok = asyncio.run(main_mod._run(cfg))
-
-    assert captured["failed_sources"] == ["reddit"]
     assert ok is False
 
 

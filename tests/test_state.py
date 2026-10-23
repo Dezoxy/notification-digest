@@ -1032,24 +1032,39 @@ def test_init_db_migrates_pre_polymarket_source_check_with_preexisting_rows(tmp_
     old_conn.close()
 
 
-# --- items CHECK expanded to accept 'reddit' ---
+# --- historical 'reddit' rows (collector retired) ---
 
 
-def test_fresh_db_accepts_reddit_source_item(conn):
-    item = _item(
-        "h1",
-        source="reddit",
-        chat_id=None,
-        chat_title="r/hungary",
-        author="bob",
-        url="https://www.reddit.com/r/hungary/comments/h1/napi/",
+def _insert_stored_reddit_row(conn, source_id: str = "h1") -> None:
+    # Bypasses commit_new_items on purpose: the write path no longer accepts
+    # 'reddit', but rows stored before the collector was retired remain.
+    conn.execute(
+        """
+        INSERT INTO items (source, source_id, chat_id, chat_title, author, text, url, fetched_at)
+        VALUES ('reddit', ?, NULL, 'r/hungary', 'bob', 'napi', ?, '2026-07-29T10:00:00+00:00')
+        """,
+        (source_id, f"https://www.reddit.com/r/hungary/comments/{source_id}/napi/"),
     )
-    inserted = commit_new_items(conn, [item], {})
+    conn.commit()
 
-    assert inserted == 1
+
+def test_commit_new_items_rejects_new_reddit_item(conn):
+    item = _item("h1", source="reddit", chat_id=None, chat_title="r/hungary")
+    with pytest.raises(ValueError, match="unknown item source"):
+        commit_new_items(conn, [item], {})
+
+
+def test_stored_reddit_item_still_reads_digests_and_counts(conn):
+    _insert_stored_reddit_row(conn)
+    commit_new_items(conn, [_item("1")], {})
+
     items = get_unsummarized_items(conn)
-    assert items[0].source == "reddit"
-    assert items[0].chat_title == "r/hungary"
+    assert {i.source for i in items} == {"reddit", "telegram"}
+    assert count_unsummarized_items(conn) == 2
+
+    digest_id = create_digest(conn, "## body", items)
+
+    assert get_digest_source_counts(conn, digest_id) == {"reddit": 1, "telegram": 1}
 
 
 def test_init_db_migrates_pre_reddit_source_check_with_preexisting_rows(tmp_path: Path):
@@ -1118,20 +1133,7 @@ def test_init_db_migrates_pre_reddit_source_check_with_preexisting_rows(tmp_path
 
     init_db(old_conn)  # applies (no-op) news/polymarket migrations, then the reddit-CHECK one
 
-    commit_new_items(
-        old_conn,
-        [
-            _item(
-                "h1",
-                source="reddit",
-                chat_id=None,
-                chat_title="r/hungary",
-                author="bob",
-                url="https://www.reddit.com/r/hungary/comments/h1/napi/",
-            )
-        ],
-        {},
-    )
+    _insert_stored_reddit_row(old_conn)
 
     rows = {row[0]: row[1] for row in old_conn.execute("SELECT id, source FROM items").fetchall()}
     assert rows[tg_id] == "telegram"  # pre-existing row preserved, same id

@@ -14,22 +14,19 @@ Runner, the State Database — lives in the owner's Azure subscription, in one
 region (West Europe), and exposes no listener
 ([A-04](../requirements/assumptions.md)). The Digest Runner never listens on a
 port; it is a finite Azure Container Apps job that starts on a cron schedule,
-makes only outbound connections (to Telegram, X, Reddit, Patreon, Polymarket,
+makes only outbound connections (to Telegram, X, Patreon, Polymarket,
 Hacker News, RSS feeds, the Claude CLI, the Claude API (fallback), the News
 Site, and optionally an SMTP relay), and exits. Polymarket is
 reached through the owner's own Egress Proxy (a Cloudflare Worker) rather than
 directly ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
-Reddit is disabled in production since 2026-10-22; its path is anonymous public
-feeds through a homelab proxy behind Cloudflare Access, with no cookie
-([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md),
-[ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md)). The same service ran on a
+Reddit was retired on 2026-10-23 ([ADR 12](../decisions/0012-retire-reddit-collection.md)). The digest ran on a
 homelab VM until 2026-10-08; that VM no longer runs it. See [trust-boundaries.md](trust-boundaries.md) for the
 boundary-by-boundary detail and the model in
 [`../model/containers.dsl`](../model/containers.dsl).
 
-Those proxies are the one other internet-reachable part of the collection path.
-They sit outside this system's model and Terraform (the owner's `toom-edge`
-repository, deployed on workers.dev). They are not open relays: each has a
+The Polymarket proxy is the one other internet-reachable part of the collection
+path. It sits outside this system's model and Terraform (the owner's `toom-edge`
+repository, deployed on workers.dev). It is not an open relay: it has a
 hardcoded upstream, GET only, a path allowlist and a timing-safe shared key.
 
 The News Site itself has no login and no Cloudflare Access in front of it. Its
@@ -44,7 +41,6 @@ to what" below.
 | Digest Runner | Telegram | MTProto, `TG_SESSION` (Telethon `StringSession`) — the owner's own **personal account**, not a bot | Read access to the owner's own groups/channels; also used to send relay forwards |
 | Digest Runner | Telegram Bot API | `TELEGRAM_NOTIFY_BOT_TOKEN` | Send-only access to post the TL;DR digest and section links into the owner's chat/topics |
 | Digest Runner | X | `X_COOKIES_PATH` / `X_COOKIES` (owner's session cookie), via `twifork` (twikit fork) | Read access to the owner's own notifications timeline. Unofficial API; no sanctioned alternative exists at this tier ([C-03](../requirements/constraints.md)) |
-| Digest Runner | Reddit public Atom feeds, through the homelab proxy (disabled until the collector change is released) | No Reddit credential. `REDDIT_PROXY_KEY` in an `x-proxy-key` header and the Cloudflare Access service token `digest-reddit` (`REDDIT_ACCESS_CLIENT_ID`, `REDDIT_ACCESS_CLIENT_SECRET`) in `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers authenticate to the proxy only | Read access to the top-of-day posts of configured subreddits, from feeds that are public and anonymous ([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md)). Reddit formally declined the owner's official API application and refuses logged-in sessions from Linux clients, so the earlier cookie route ([ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md)) is not used. The proxy exposes one RSS route, forwards no cookie, stores nothing; Cloudflare Access admits only the service token. The personal Reddit session no longer leaves the vault |
 | Digest Runner | Polymarket, through `polymarket-proxy` | `POLYMARKET_PROXY_KEY` in an `x-proxy-key` header | Read access to market prices over `/markets` only; no account credential is involved. polymarket.com is ISP-blocked in Hungary |
 | Digest Runner | Patreon | `PATREON_SESSION_COOKIE` (owner's own paid-tier session) | Read access to one campaign's paid-tier posts |
 | Digest Runner | Claude CLI | `CLAUDE_CODE_OAUTH_TOKEN`, forwarded to the `claude -p` subprocess | Summarizes each window on the owner's flat-fee subscription ([C-08](../requirements/constraints.md)) |
@@ -81,7 +77,7 @@ echoing its value.
 Secrets in play, by where they end up:
 
 - **Personal account sessions/cookies** (`TG_SESSION`, X/Patreon
-  cookies; Reddit's cookie is no longer used): the sharpest secret class in
+  cookies): the sharpest secret class in
   this system — see "What is deliberately absent" below. The Telegram session
   is a Key Vault secret; the X cookie jar lives in the runtime Blob state
   instead (see below).
@@ -154,7 +150,7 @@ credentials. None of these are gaps waiting to be filled; each follows from
   front of the News Site — there is no team to tune one, and the site's
   actual access control is the capability token, not request filtering.
 - **No SIEM or centralized alerting on auth events** — a compromised
-  Telegram/X/Reddit/Patreon session surfaces only as a collector auth
+  Telegram/X/Patreon session surfaces only as a collector auth
   failure in the run's own logs, or not at all, if the attacker uses the
   session quietly. This is a known, accepted blind spot, not a monitored one.
 - **No automated secret rotation.** Every secret above is rotated by hand,
@@ -190,15 +186,11 @@ unlock is classified and where it ends up.
 
 - The Polymarket proxy endpoint is reachable from the internet with only a
   shared key in front of it ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
-  Reddit's anonymous feed requests also cross it, behind Cloudflare Access
-  plus the shared key; they carry no credential of the owner's
-  ([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md),
-  [RISK-002](../risks/architecture-risks.md)).
-- The X and Patreon collectors, and Reddit's anonymous feeds, all depend on an unofficial,
+- The X and Patreon collectors both depend on an unofficial,
   ToS-violating access path the owner has explicitly accepted the risk of
   ([C-03](../requirements/constraints.md),
   [A-02](../requirements/assumptions.md),
-  [A-06](../requirements/assumptions.md)); none of the three has an
+  [A-06](../requirements/assumptions.md)); neither has an
   official fallback if access is revoked.
 - No detection exists inside this system for a compromised Azure subscription,
   deployment identity or GitHub environment — that assumption is carried by

@@ -48,9 +48,9 @@ the whole system.
 
 | Key | Audience | Question | Selection | Omits (and where that lives) | Update trigger | Visual check |
 |---|---|---|---|---|---|---|
-| Landscape | Everyone | Which systems does the digest sit between? | Everything except delivery tooling: 13 elements, 13 arrows, including Egress Proxies between the runner and Reddit/Polymarket | Delivery tooling, which is the `Delivery` view's question | A source, channel or egress proxy is added or removed | Verified 2026-10-22, minor flaw: the fan-out lines to Telegram and X pass behind the X arrow label, unchanged from the 2026-10-09 layout |
-| Context | Everyone | Who reads the digest, what writes it, and where does it come out? | Owner, the system, Claude, Telegram, SMTP | The six non-Telegram sources — they are `Sources`; including all seven blew the overview budget. Entra, which only serves the fallback call and belongs to `Security` | Delivery channels or the model provider change | Verified 2026-10-09 |
-| Sources | Engineers | Which accounts and feeds does a run collect from? | The system, all seven collection sources and Egress Proxies, which stand between the runner and Reddit/Polymarket (9 elements, 8 arrows, against the 10/12 technical budget) | Delivery and state, which `Context` and `Containers` cover | A collector or egress proxy is added or retired | Verified 2026-10-22 |
+| Landscape | Everyone | Which systems does the digest sit between? | Everything except delivery tooling: 12 elements, 12 arrows, including Egress Proxies between the runner and Polymarket | Delivery tooling, which is the `Delivery` view's question | A source, channel or egress proxy is added or removed | Verified at reading size 2026-10-23 after Reddit's removal (ADR 12), minor flaw: the fan-out lines to Telegram and X pass behind the X arrow label |
+| Context | Everyone | Who reads the digest, what writes it, and where does it come out? | Owner, the system, Claude, Telegram, SMTP | The five non-Telegram sources — they are `Sources`; including all six blew the overview budget. Entra, which only serves the fallback call and belongs to `Security` | Delivery channels or the model provider change | Verified 2026-10-09 |
+| Sources | Engineers | Which accounts and feeds does a run collect from? | The system, all six collection sources and Egress Proxies, which stands between the runner and Polymarket (8 elements, 7 arrows, against the 10/12 technical budget) | Delivery and state, which `Context` and `Containers` cover | A collector or egress proxy is added or retired | Verified at reading size 2026-10-23 after Reddit's removal (ADR 12) |
 | Containers | Engineers, architects | What are the building blocks, and which side of the trust boundary is each on? | All four containers, both trust-boundary groups and Telegram | Non-Telegram sources, Egress Proxies (a collection-path element, like the sources it fronts) and SMTP (disabled in production); the model provider and Entra, which `Context`, `Security` and `DigestRun` cover; delivery tooling | A container or interface changes | Verified 2026-10-22 (re-rendered; unchanged, Egress Proxies excluded) |
 | Security | Owner, reviewer | What is reachable from the internet, where do secrets and identity come from, and what stays private? | The four containers plus Key Vault, Entra and the deploy path | Collection sources; their credentials are covered in [trust boundaries](security/trust-boundaries.md) | Exposure, secret flow, identity or network policy changes | Verified 2026-10-09 |
 | DigestRun | Engineers | What happens during one scheduled digest run? | Runner, state, Telegram, the summarizer, the site | Fallback path (the Claude API call and its Entra token) and the non-digest lanes; see [ADR 9](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Run ordering, failure handling or delivery changes | Reviewed 2026-10-09: known defect, see below |
@@ -93,20 +93,21 @@ MTProto, delivery over the Bot API) and without it the view drew the
 collection one twice.
 
 **Sources** and **Landscape** were reviewed at reading size on 2026-10-22,
-after both gained Egress Proxies (ADR 10). In `Sources` the runner's arrow to
-the proxies sits in line with the other sources and the two relay arrows fan
-out below it without crossings. In `Landscape` Reddit and Polymarket form their
-own column behind the proxies. Its one flaw predates the change: the fan-out
-lines to Telegram and X pass behind the X arrow label, exactly as in the
-2026-10-09 render. A valid DSL is still not a presentation-ready diagram; run
-`make view` after the next change.
+after both gained Egress Proxies (ADR 10), when Reddit was still drawn. Reddit was
+removed from the model on 2026-10-23 (ADR 12); both views lost one element and
+the proxy's relay arrow to it, and have **not been re-rendered**, so their rows
+carry no verified date until `make view` is looked at. The one flaw recorded
+on 2026-10-22 predates the change: the fan-out lines to Telegram and X pass
+behind the X arrow label, exactly as in the 2026-10-09 render. A valid DSL is
+still not a presentation-ready diagram.
 
-`Landscape` sits at 13 elements against the 7/8 audience-overview budget. It is
-kept there deliberately: a landscape's job is breadth, the rendered fan is
-legible (one label overlap, see above), and the focused questions are answered
-by `Context` and `Sources`. That is the rendered evidence the budget rule asks
-for before exceeding it, recorded when it stood at 12 and re-stated at 13 from
-the 2026-10-22 render, reviewed the same day.
+`Landscape` sits at 12 elements against the 7/8 audience-overview budget. It is
+kept there deliberately: a landscape's job is breadth, the fan was legible when
+last rendered (one label overlap, see above), and the focused questions are
+answered by `Context` and `Sources`. That is the rendered evidence the budget
+rule asks for before exceeding it, recorded at 12 elements, re-stated at 13 from
+the 2026-10-22 render, and back at 12 after Reddit's removal (re-rendered and
+checked 2026-10-23).
 
 ## Decisions
 
@@ -121,9 +122,9 @@ the 2026-10-22 render, reviewed the same day.
 | 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; state/vault ownership amended by ADR 8; in production since 2026-10-08 |
 | 8 | [Isolate digest Azure state and secrets](decisions/0008-isolate-digest-azure-state-and-secrets.md) | Accepted for state/vault; deployed with ADR 7 |
 | 9 | [Fall back to the Claude API over workload identity federation](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Accepted; implemented and configured; proven by one smoke test, no real fallback yet |
-| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted for Polymarket; Reddit part superseded by ADR 11 (Worker path failed 2026-10-22) |
-| 11 | [Move Reddit to a homelab proxy behind Cloudflare Access](decisions/0011-move-reddit-to-a-homelab-proxy.md) | Accepted 2026-10-22; cookie route superseded by ADR 12 after its cause was disproved on 2026-10-23; proxy and Access interface reused |
-| 12 | [Collect Reddit from public RSS feeds through the homelab proxy](decisions/0012-collect-reddit-from-public-rss-feeds.md) | Accepted 2026-10-23; proxy side deployed, collector change not yet released, Reddit disabled until cutover |
+| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted for Polymarket; Reddit part superseded by ADR 11, then ADR 12 (Worker path failed 2026-10-22) |
+| 11 | [Move Reddit to a homelab proxy behind Cloudflare Access](decisions/0011-move-reddit-to-a-homelab-proxy.md) | Superseded by ADR 12 (accepted 2026-10-22; built, then its premise was disproved on 2026-10-23) |
+| 12 | [Retire Reddit collection](decisions/0012-retire-reddit-collection.md) | Accepted 2026-10-23; code removal and operator teardown follow |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

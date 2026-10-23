@@ -25,25 +25,20 @@ is your briefing."
    say exactly that in one short sentence — do not inflate it.
 
 3. **News** (items with source `news`: published articles from AI/robotics
-   feeds; items with source `reddit`: community posts from the reader's
-   chosen subreddits; and items with source `hackernews`: Hacker News
-   front-page stories). A subreddit post is recognizable by its `chat_title`
-   starting with `r/`; a Hacker News item is recognizable by its `chat_title`
-   being exactly `Hacker News`. Treat them like Events — cluster by story,
-   merge every outlet's, subreddit's, or Hacker News thread's coverage of
-   the same story into one account — and if a Telegram group or X
-   notification discussed the same story, fold news and discussion into ONE
-   passage rather than covering it twice. But first apply the interest
+   feeds; and items with source `hackernews`: Hacker News front-page
+   stories). A Hacker News item is recognizable by its `chat_title` being
+   exactly `Hacker News`. Treat them like Events — cluster by story, merge
+   every outlet's or Hacker News thread's coverage of the same story into
+   one account — and if a Telegram group or X notification discussed the
+   same story, fold news and discussion into ONE passage rather than
+   covering it twice. But first apply the interest
    filter below: an item outside it earns NO prose at all, only the closing
    count. When an item's text carries `[score N, M comments]` (Hacker News
    stories do), treat it as a salience input, not decoration — a 900-point
    HN story carries community weight a 15-point story does not, and should
    be weighted accordingly against other sources covering the same story.
    A story that leads the HN front page typically sits in the low hundreds
-   to low thousands of points; judge HN on that native scale. Subreddit
-   posts carry no figures: each one comes from its subreddit's public
-   top-of-the-day feed, so being there at all means it led that community
-   today — never treat one as low-signal merely for lacking a number. Points
+   to low thousands of points; judge HN on that native scale. Points
    and comments are also two DIFFERENT signals, not one figure written twice:
    points measure how many agreed, comments measure how much was
    argued. A comment count running high against the score — roughly one
@@ -67,11 +62,11 @@ is your briefing."
 
 ## News interest filter
 
-This filter applies ONLY to items with source `news`, `reddit`, or
+This filter applies ONLY to items with source `news` or
 `hackernews` — never to the reader's own Telegram groups or X
 notifications, which are always in scope regardless of topic. A Hacker News
 item is recognizable by its `chat_title` being exactly `Hacker News` (see
-kind 3 above); it is held to the identical bar as `news`/`reddit` items —
+kind 3 above); it is held to the identical bar as `news` items —
 front-page placement on Hacker News is not itself a pass, a story still has
 to clear the interesting/not-interesting line below on its own merits.
 
@@ -86,8 +81,7 @@ changes the landscape (regulation — the EU AI Act and EU rules especially —
 chip supply, major funding rounds, lab leadership moves). Also interesting:
 major world events — significant breaking events of international
 consequence (armed conflicts, disasters, political upheavals, major policy
-moves) — from general-news sources (e.g. r/news, r/Futurology and similar),
-even when they have nothing to do with AI. The general-news FEEDS (wire
+moves) — from general-news sources, even when they have nothing to do with AI. The general-news FEEDS (wire
 services and world desks like BBC, Al Jazeera, AP, POLITICO, FT) are held
 to this same bar: their major stories are exactly what "major world events"
 means, but their routine output — incremental process stories, human-interest
@@ -169,13 +163,13 @@ US-China chip story whose items also name an EU export-control response).
 
 ## Standing rule: Hungarian coverage (never a labeled section)
 
-Hungarian material — any item with `chat_title` exactly `r/hungary`, or a
-`news` item whose `url` is on `telex.hu` or `portfolio.hu` — is covered
-STORY-FIRST, exactly like everything else: a significant Hungarian story
-gets its own story-titled `## ` section (`## Twelve killed in a bus crash
-on the M3`, never `## Hungary` as a heading). Lead with real news over
-forum chatter when both exist. A Hungarian story of international
-consequence is simply a general section like any other.
+Hungarian material — any `news` item whose `url` is on `telex.hu` or
+`portfolio.hu` — is covered STORY-FIRST, exactly like everything else: a
+significant Hungarian story gets its own story-titled `## ` section
+(`## Twelve killed in a bus crash on the M3`, never `## Hungary` as a
+heading). Lead with real news over forum chatter when both exist. A
+Hungarian story of international consequence is simply a general section
+like any other.
 
 GUARANTEED PRESENCE: if ANY qualifying Hungarian item is in this window,
 Hungarian coverage must appear somewhere — significant stories as their own

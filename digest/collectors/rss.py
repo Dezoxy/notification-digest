@@ -49,17 +49,13 @@ logger = logging.getLogger(__name__)
 _FEED_TIMEOUT_SECONDS = 15
 
 # Minimum spacing, in seconds, between two fetches of the SAME host within
-# one `collect()` call -- see `collect`'s per-host pacing block. Reddit's
-# public `.rss` feeds are what make this necessary: live-verified from the
-# production IP, requests spaced 3s apart to reddit.com got 429 on 4 of 5
-# subreddits, while 45s spacing got 200 on 4 of 5 (the 5th still 429'd --
-# Reddit's throttling isn't perfectly deterministic, but 45s is what turns
-# "mostly blocked" into "mostly works"). A host that appears only once in
-# NEWS_FEEDS -- true of every ordinary news feed today -- never triggers a
-# wait at all; this only fires on a REPEAT of the same host later in the
-# same feed_urls list. Five reddit.com subreddits at 45s apart adds ~3
-# minutes of wall clock to a run, comfortably inside digest.service's 600s
-# TimeoutStartSec.
+# one `collect()` call -- see `collect`'s per-host pacing block. It exists
+# because some hosts rate-limit rapid repeat requests (live-verified against
+# a host serving several feeds: 3s spacing drew 429s on most requests, 45s
+# spacing mostly succeeded). A host that appears only once in NEWS_FEEDS --
+# true of every ordinary news feed today -- never triggers a wait at all;
+# this only fires on a REPEAT of the same host later in the same feed_urls
+# list.
 _MIN_SECONDS_BETWEEN_SAME_HOST = 45
 
 # Entries published within this many hours of "now" are candidates. This
@@ -75,9 +71,7 @@ _MIN_SECONDS_BETWEEN_SAME_HOST = 45
 # Track the run interval if it changes: this was 12h while the timer ran
 # 3-hourly (homelab's myapps_digest_on_calendar). Keeping the 4x ratio, not
 # the absolute 12h, is what preserves the missed-run tolerance -- at 6h,
-# a 12h window would leave only 2 runs of slack. 24h also lines up with
-# reddit.py's own _LOOKBACK_HOURS, which is 24 for unrelated reasons
-# (Reddit's t=day window), so the two no-cursor collectors now agree.
+# a 12h window would leave only 2 runs of slack.
 _LOOKBACK_HOURS = 24
 
 # Bounds per-feed work. The lookback window trims real feeds far below this
@@ -96,12 +90,6 @@ _USER_AGENT = "digest-rss/1.0"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-
-# Matches the `/r/<sub>` path segment in a reddit.com URL. Restricted to
-# subreddit-legal characters (letters, digits, underscore) rather than "up
-# to the next slash" so it stops cleanly before a `.rss`/`.json` suffix or a
-# sort segment glued on without a separating slash (e.g. `/r/hungary.rss`).
-_REDDIT_SUBREDDIT_PATH_RE = re.compile(r"/r/([A-Za-z0-9_]+)")
 
 # chat_title overrides keyed by feed HOST (exact hostname or a parent
 # domain -- `_feed_display_title` matches suffix-wise, so "bbc.co.uk"
@@ -129,7 +117,7 @@ _FEED_TITLE_OVERRIDES: dict[str, str] = {
 
 
 def _feed_display_title(feed_url: str, feed_title: str | None) -> str | None:
-    """The chat_title for a non-reddit feed: a host-keyed override, else the feed's own title.
+    """The chat_title for a feed: a host-keyed override, else the feed's own title.
 
     Matches `_FEED_TITLE_OVERRIDES` by exact hostname or any parent domain
     (`www.ft.com` -> "ft.com" entry), so publisher CDN/subdomain choices
@@ -215,31 +203,6 @@ def _entry_source_id(entry: Any, link: str) -> str:
     return link
 
 
-def _reddit_chat_title(feed_url: str, feed_title: str | None) -> str | None:
-    """The `r/<sub>` chat_title override for a reddit.com feed URL, or `feed_title` unchanged.
-
-    Reddit's own `<title>` on a subreddit `.rss` feed is publisher copy like
-    "top scoring links : hungary" -- not usable as chat_title. For any feed
-    URL whose host is `reddit.com` or a subdomain of it, this instead derives
-    `f"r/{sub}"` from the URL's own `/r/<sub>/` path segment (case-preserved
-    exactly as it appears in the URL). This is load-bearing, not cosmetic:
-    prompts/digest.md's standing Hungary rule keys on `chat_title` being
-    exactly `r/hungary`, and digest/collectors/reddit.py's OAuth collector
-    (PR #32) produces that identical `f"r/{subreddit}"` shape -- so a
-    subreddit ingested via either path presents identically to the prompt.
-
-    Falls back to `feed_title` (still possibly None) for a non-reddit host,
-    or for a reddit.com URL with no parseable `/r/<sub>/` segment.
-    """
-    host = urlsplit(feed_url).hostname
-    if host is None or not (host == "reddit.com" or host.endswith(".reddit.com")):
-        return feed_title
-    match = _REDDIT_SUBREDDIT_PATH_RE.search(urlsplit(feed_url).path)
-    if match is None:
-        return feed_title
-    return f"r/{match.group(1)}"
-
-
 def _entries_from_feed(parsed: Any, feed_url: str) -> list[Item]:
     """Extract candidate Items from one already-parsed feed, newest-first, capped.
 
@@ -252,10 +215,7 @@ def _entries_from_feed(parsed: Any, feed_url: str) -> list[Item]:
     """
     feed_title = parsed.feed.get("title")
     feed_title = feed_title if isinstance(feed_title, str) and feed_title else None
-    # Reddit's `r/<sub>` derivation wins for reddit hosts (it is load-bearing
-    # for the Hungarian-coverage rule's r/hungary match); every other host
-    # goes through the display-title override map.
-    chat_title = _reddit_chat_title(feed_url, _feed_display_title(feed_url, feed_title))
+    chat_title = _feed_display_title(feed_url, feed_title)
     fetched_at = datetime.now(UTC).isoformat()
     cutoff = datetime.now(UTC).timestamp() - _LOOKBACK_HOURS * 3600
 
@@ -364,10 +324,9 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
 
     Entries are yielded newest-first per feed (feedparser's own entry order),
     capped at `_MAX_ENTRIES_PER_FEED`, with `chat_title` set to the feed's
-    own title (`parsed.feed.title`), playing the same "which group" digest
-    provenance role Telegram's `chat_title` plays for a channel -- except for
-    a reddit.com feed URL, where `_reddit_chat_title` overrides it with
-    `f"r/{sub}"` instead (see that function's docstring).
+    own title (`parsed.feed.title`), or a host-keyed override from
+    `_FEED_TITLE_OVERRIDES`, playing the same "which group" digest
+    provenance role Telegram's `chat_title` plays for a channel.
 
     Before each feed is fetched, if its host was already fetched EARLIER IN
     THIS SAME `collect()` call less than `_MIN_SECONDS_BETWEEN_SAME_HOST`
@@ -377,8 +336,7 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
     NOT module state, so nothing leaks between collect() calls or between
     test runs. A host that appears only once in `feed_urls` never sleeps at
     all, so today's ordinary (one-feed-per-host) news list is unaffected;
-    this only matters once multiple feed URLs share a host, as owner config
-    now does for reddit.com subreddit feeds.
+    this only matters once multiple feed URLs share a host.
     """
     result = CollectResult()
 

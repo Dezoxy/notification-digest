@@ -640,8 +640,8 @@ def test_pacing_sleeps_for_repeated_host_but_not_distinct_hosts(
 
     body = _rss("")
     urls = {
-        "https://reddit.com/r/one/.rss": body,
-        "https://reddit.com/r/two/.rss": body,
+        "https://example.org/one.rss": body,
+        "https://example.org/two.rss": body,
         "https://example.com/feed": body,
     }
     _patch_urlopen(monkeypatch, urls)
@@ -663,110 +663,18 @@ def test_pacing_state_does_not_leak_between_collect_calls(
     monkeypatch.setattr(rss_module.time, "monotonic", lambda: 1000.0)
 
     body = _rss("")
-    _patch_urlopen(monkeypatch, {"https://reddit.com/r/one/.rss": body})
+    _patch_urlopen(monkeypatch, {"https://example.org/one.rss": body})
 
-    collect(["https://reddit.com/r/one/.rss"])
-    collect(["https://reddit.com/r/one/.rss"])
+    collect(["https://example.org/one.rss"])
+    collect(["https://example.org/one.rss"])
 
     assert sleep_calls == []
 
 
-# --- reddit chat_title normalization ---
+# --- chat_title ---
 
 
-def test_reddit_feed_url_chat_title_overridden_to_r_slash_sub(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recent = _rfc822(_NOW - timedelta(hours=1))
-    body = _rss(
-        f"""
-        <item>
-          <title>Some Post</title>
-          <link>https://example.com/post</link>
-          <guid>guid-post</guid>
-          <pubDate>{recent}</pubDate>
-        </item>
-        """,
-        feed_title="top scoring links : hungary",
-    )
-    _patch_urlopen(monkeypatch, {"https://www.reddit.com/r/hungary/.rss": body})
-
-    result = collect(["https://www.reddit.com/r/hungary/.rss"])
-
-    assert len(result.items) == 1
-    assert result.items[0].chat_title == "r/hungary"
-
-
-def test_reddit_feed_url_preserves_mixed_case_subreddit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recent = _rfc822(_NOW - timedelta(hours=1))
-    body = _rss(
-        f"""
-        <item>
-          <title>Some Post</title>
-          <link>https://example.com/post2</link>
-          <guid>guid-post2</guid>
-          <pubDate>{recent}</pubDate>
-        </item>
-        """,
-        feed_title="top scoring links : AskReddit",
-    )
-    _patch_urlopen(monkeypatch, {"https://www.reddit.com/r/AskReddit/.rss": body})
-
-    result = collect(["https://www.reddit.com/r/AskReddit/.rss"])
-
-    assert len(result.items) == 1
-    assert result.items[0].chat_title == "r/AskReddit"
-
-
-def test_reddit_feed_url_trailing_slash_and_query_variant(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recent = _rfc822(_NOW - timedelta(hours=1))
-    body = _rss(
-        f"""
-        <item>
-          <title>Some Post</title>
-          <link>https://example.com/post3</link>
-          <guid>guid-post3</guid>
-          <pubDate>{recent}</pubDate>
-        </item>
-        """,
-        feed_title="top scoring links : hungary",
-    )
-    _patch_urlopen(monkeypatch, {"https://www.reddit.com/r/hungary/?limit=25": body})
-
-    result = collect(["https://www.reddit.com/r/hungary/?limit=25"])
-
-    assert len(result.items) == 1
-    assert result.items[0].chat_title == "r/hungary"
-
-
-def test_reddit_host_with_no_sub_segment_falls_back_to_feed_title(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recent = _rfc822(_NOW - timedelta(hours=1))
-    body = _rss(
-        f"""
-        <item>
-          <title>Some Post</title>
-          <link>https://example.com/post4</link>
-          <guid>guid-post4</guid>
-          <pubDate>{recent}</pubDate>
-        </item>
-        """,
-        feed_title="reddit.com front page",
-    )
-    _patch_urlopen(monkeypatch, {"https://www.reddit.com/.rss": body})
-
-    result = collect(["https://www.reddit.com/.rss"])
-
-    assert len(result.items) == 1
-    assert result.items[0].chat_title == "reddit.com front page"
-
-
-def test_non_reddit_feed_keeps_its_own_feed_title(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_feed_keeps_its_own_feed_title(monkeypatch: pytest.MonkeyPatch) -> None:
     recent = _rfc822(_NOW - timedelta(hours=1))
     body = _rss(
         f"""

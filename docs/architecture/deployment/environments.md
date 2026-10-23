@@ -28,7 +28,7 @@ and a manual deploy from a separate repository; it is Azure now.
   jobs; the Terraform plan prints non-secret job settings as sensitive, because
   this repository and its workflow logs are public. Local secrets live only in
   the developer's own untracked `.env`.
-- `X_ENABLED`, `REDDIT_ENABLED`, `POLYMARKET_ENABLED`, `HACKERNEWS_ENABLED` and
+- `X_ENABLED`, `POLYMARKET_ENABLED`, `HACKERNEWS_ENABLED` and
   the Patreon/positions/relay allowlists are empty/off unless explicitly
   configured — a fresh local checkout runs with almost every optional collector
   disabled until the developer opts in, same as a fresh production deploy would.

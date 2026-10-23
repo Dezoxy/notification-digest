@@ -284,8 +284,13 @@ WEEKLY_LOOKBACK_WINDOW = timedelta(days=7)
 # no CHECK constraint (see _SCHEMA's comment on items.source and
 # commit_new_items's docstring) -- adding a new source is a one-line edit
 # here instead of a full-table rebuild migration.
+#
+# "reddit" is deliberately absent: the collector is retired, so nothing may
+# write a new reddit item. Rows already stored with source='reddit' stay
+# readable -- only the write path (commit_new_items) consults this set; the
+# read paths take `source` verbatim from the row.
 _KNOWN_SOURCES = frozenset(
-    {"telegram", "x", "news", "polymarket", "reddit", "hackernews", "patreon", "relay"}
+    {"telegram", "x", "news", "polymarket", "hackernews", "patreon", "relay"}
 )
 
 # Sources that run their OWN delivery pipeline rather than feeding the
@@ -1030,12 +1035,13 @@ def _migrate_expand_source_check_for_reddit(conn: sqlite3.Connection) -> None:
 
     Only `items` is rebuilt here -- `cursors` is deliberately left at its
     `('telegram', 'x', 'news')` CHECK, unchanged since the polymarket
-    migration. The Reddit collector has no cursor axis at all (see
-    digest/collectors/reddit.py's module docstring, "No cursor axis"): its
-    idempotency comes entirely from `UNIQUE(source, source_id)` on `items`
-    itself, exactly like rss.py's `news` source -- there is no reddit-specific
-    state table the way Polymarket has `polymarket_probs`, and no reason to
-    ever insert a 'reddit' row into `cursors`.
+    migration. The Reddit collector (since retired) had no cursor axis at
+    all: its idempotency came entirely from `UNIQUE(source, source_id)` on
+    `items` itself, exactly like rss.py's `news` source -- there is no
+    reddit-specific state table the way Polymarket has `polymarket_probs`,
+    and no reason to ever insert a 'reddit' row into `cursors`. The migration
+    stays as part of the bootstrap chain for old databases, which may hold
+    historical `source='reddit'` rows that must keep loading.
 
     Idempotent via the same `_table_ddl` + substring check as the news and
     polymarket migrations: does nothing if `items`' own stored DDL already

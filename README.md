@@ -26,9 +26,9 @@ issues privately, as described in [SECURITY.md](SECURITY.md).
 Telegram (Telethon) ─┐                                              ┌─> Telegram TL;DR ping
 X/Twitter (twifork)  │                                              │
 RSS / news feeds     ├─> collectors ─> SQLite state ─> Claude ──────┼─> news site (workers/news-site/)
-Reddit               │                  (items, cursors, summarize  │
-Polymarket           │                    digests, deltas, + trans- ├─> SMTP email (implemented,
-Hacker News         ─┘                    arc keys/context)  late   │   disabled on the deployment)
+Polymarket           │                  (items, cursors, summarize  │
+Hacker News         ─┘                    digests, deltas, + trans- ├─> SMTP email (implemented,
+                                          arc keys/context)  late   │   disabled on the deployment)
                                                                     └─> markdown archive
 
 Patreon (own collector) ─┐
@@ -140,13 +140,6 @@ deploy time and must never be committed or logged.
 | `X_ENABLED` | Master switch for the X collector (`false`). |
 | `X_COOKIES_PATH` / `X_COOKIES` | X session cookies — supply exactly one. **(secret)** With `X_COOKIES_PATH`, the rotated jar is persisted alongside it as `<path>.live` after every successful collect, and whichever of the two is newer is used — so refreshing the seed file automatically takes precedence again. |
 | `NEWS_FEEDS` | Comma-separated RSS/Atom URLs. Enables the news collector iff non-empty. |
-| `REDDIT_ENABLED` | Reddit collector switch (`false`). |
-| `REDDIT_API_BASE` / `REDDIT_PROXY_KEY` | Endpoint (default `https://www.reddit.com`) and its key. **(secret)** Reddit is read from its anonymous public Atom feeds, no cookie (`REDDIT_SESSION_COOKIE` is no longer read). Production is disabled until the homelab proxy `https://reddit-proxy.toomhorvath.com` (behind Cloudflare Access) is live. |
-| `REDDIT_ACCESS_CLIENT_ID` / `REDDIT_ACCESS_CLIENT_SECRET` | Cloudflare Access service token for the homelab proxy, both or neither. **(secret)** |
-| `REDDIT_SUBREDDITS` | Comma-separated names, no `r/` prefix. Required when enabled. |
-| `REDDIT_POSTS_PER_SUB` | Posts pulled per subreddit per run. |
-| `REDDIT_REQUEST_INTERVAL_SECONDS` | Wait between subreddits when Reddit's rate-limit headers are absent (`65`, 1–600). |
-| `REDDIT_MAX_WAIT_SECONDS` | Upper bound on every wait between subreddits (`120`, 1–900). |
 | `POLYMARKET_ENABLED` | Polymarket collector switch (`false`). |
 | `POLYMARKET_API_BASE` / `POLYMARKET_PROXY_KEY` | Endpoint and its key. **(secret)** |
 | `POLYMARKET_TOP_N` / `POLYMARKET_SWING_THRESHOLD` | How many markets, and the probability move that makes one notable. |
@@ -487,28 +480,15 @@ long-lived session credentials. Until the 2026-10-08 cutover they were rotated
 by updating the homelab vault and deploying the VM; now use the
 [dedicated-vault credential rotation
 procedure](docs/azure-migration.md#credential-rotation-after-cutover): update the
-active digest vault, verify a Manual Azure run, then resume jobs. Reddit no
-longer has a session credential: the collector reads anonymous public feeds, so
-`scripts/rotate_reddit_cookie.py` is obsolete for it. Homelab deploy is no
-longer the rotation path. These credentials have none of the X mechanics above:
-they are env vars rather than files, sent as hand-built headers over stateless
-`urllib` (or, for Telegram, an MTProto auth key), so nothing rotates and there
-is no live jar. Each already reports its own auth death explicitly — see
+active digest vault, verify a Manual Azure run, then resume jobs. Homelab
+deploy is no longer the rotation path. These credentials have none of the X
+mechanics above: they are env vars rather than files, sent as hand-built
+headers over stateless `urllib` (or, for Telegram, an MTProto auth key), so
+nothing rotates and there is no live jar. Each already reports its own auth
+death explicitly — see
 `patreon.py`'s `current_user_can_view` check (Patreon degrades to
 HTTP 200 with empty bodies rather than erroring), and `telegram.py`'s
 prefetch abort.
-
-Reddit is collected from its anonymous public Atom feeds
-(`/r/<sub>/top/.rss?t=day`), with no cookie: Reddit refuses the owner's
-logged-in session from every Linux client, so the cookie path is gone. Reddit
-also blocks Azure egress (since 2026-10-21), so from Azure the collector needs
-the homelab proxy `https://reddit-proxy.toomhorvath.com` behind Cloudflare
-Access (`REDDIT_API_BASE` / `REDDIT_ACCESS_CLIENT_ID` /
-`REDDIT_ACCESS_CLIENT_SECRET`, plus `REDDIT_PROXY_KEY`, which that proxy checks;
-production is disabled until it exists, ADR 11). Anonymous access allows about
-one request per rate-limit window, so subreddits are fetched one at a time and
-paced from Reddit's `x-ratelimit-*` headers (`REDDIT_REQUEST_INTERVAL_SECONDS`,
-`REDDIT_MAX_WAIT_SECONDS`). The feeds carry no score or comment count.
 
 ## Status
 

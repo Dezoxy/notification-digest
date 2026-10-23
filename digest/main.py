@@ -23,7 +23,6 @@ from digest import cloud_context, relay
 from digest.collectors import hackernews as hackernews_collector
 from digest.collectors import patreon as patreon_collector
 from digest.collectors import polymarket as polymarket_collector
-from digest.collectors import reddit as reddit_collector
 from digest.collectors import rss as rss_collector
 from digest.collectors import telegram as telegram_collector
 from digest.collectors import x as x_collector
@@ -231,7 +230,7 @@ _MAX_ITEMS_PER_DIGEST = 250
 # and since every collector stamps one fetched_at for its whole batch and
 # Telegram runs first, a Telegram backlog burst filled the entire window
 # with Telegram alone (live incident: 2026-08-13T07:20Z, a briefing built
-# from 200 telegram items and 0 news/x/reddit/polymarket, and the three
+# from 200 telegram items and 0 news/x/polymarket, and the three
 # runs after it were nearly as skewed). The quota can only balance sources
 # it can actually see, so the pool read must be wide enough to reach past
 # one source's backlog to the items behind it.
@@ -796,57 +795,14 @@ def _run_polymarket_collector(conn: sqlite3.Connection, cfg: Config) -> Polymark
         return PolymarketCollectResult(failed=True)
 
 
-def _run_reddit_collector(cfg: Config) -> CollectResult:
-    """Run one Reddit top-of-day collect pass, if `cfg.reddit_enabled`.
-
-    No-ops entirely (returns a fresh, unfailed CollectResult) when the flag
-    is off -- mirrors `_run_polymarket_collector`'s own flag check, not
-    `_run_news_collector`'s empty-tuple-means-disabled shape: Reddit has no
-    natural "unconfigured" sentinel the way an empty feed list does (see
-    Config.reddit_enabled's own comment).
-
-    Plain `def`, called synchronously from inside this `async def _run` --
-    matching `_run_news_collector`/`_run_polymarket_collector`'s own
-    rationale (collectors already run one at a time; there's nothing else
-    in flight for an executor wrapper to protect against blocking).
-
-    `reddit_collector.collect` already never raises past its own try/except
-    around each per-subreddit request (module
-    docstring's "Failure semantics"), but this call is wrapped in a
-    catch-all here too as a second line of defense, mirroring every other
-    collector wrapper in this module: a not-yet-anticipated bug must not
-    take down the whole run (and the other collectors' already-collected
-    items) before `commit_new_items` gets a chance to persist them. Only the
-    exception's type name is logged -- the underlying error could otherwise
-    embed a proxy secret from a malformed request.
-    """
-    if not cfg.reddit_enabled:
-        return CollectResult()
-
-    try:
-        return reddit_collector.collect(
-            cfg.reddit_subreddits,
-            cfg.reddit_posts_per_sub,
-            api_base=cfg.reddit_api_base,
-            proxy_key=cfg.reddit_proxy_key,
-            access_client_id=cfg.reddit_access_client_id,
-            access_client_secret=cfg.reddit_access_client_secret,
-            request_interval_seconds=cfg.reddit_request_interval_seconds,
-            max_wait_seconds=cfg.reddit_max_wait_seconds,
-        )
-    except Exception as exc:
-        logger.warning("reddit collection crashed unexpectedly: %s", type(exc).__name__)
-        return CollectResult(failed=True)
-
-
 def _run_hackernews_collector(cfg: Config) -> CollectResult:
     """Run one Hacker News front-page collect pass, if `cfg.hackernews_enabled`.
 
     No-ops entirely (returns a fresh, unfailed CollectResult) when the flag
-    is off -- mirrors `_run_reddit_collector`'s/`_run_polymarket_collector`'s
-    own flag check, not `_run_news_collector`'s empty-tuple-means-disabled
-    shape: Hacker News has no natural "unconfigured" sentinel the way an
-    empty feed list does (see Config.hackernews_enabled's own comment).
+    is off -- mirrors `_run_polymarket_collector`'s own flag check, not
+    `_run_news_collector`'s empty-tuple-means-disabled shape: Hacker News has
+    no natural "unconfigured" sentinel the way an empty feed list does (see
+    Config.hackernews_enabled's own comment).
 
     Plain `def`, called synchronously from inside this `async def _run` --
     matching every other synchronous collector wrapper's own rationale
@@ -897,7 +853,6 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
         x_result = await _run_x_collector(conn, cfg)
         news_result = _run_news_collector(cfg)
         polymarket_result = _run_polymarket_collector(conn, cfg)
-        reddit_result = _run_reddit_collector(cfg)
         hackernews_result = _run_hackernews_collector(cfg)
 
         items = (
@@ -905,19 +860,17 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
             + x_result.items
             + news_result.items
             + polymarket_result.items
-            + reddit_result.items
             + hackernews_result.items
         )
         # news never contributes cursor_updates (it has no cursor axis, see
         # digest/collectors/rss.py's module docstring) -- merging its
         # (always-empty) dict in here anyway keeps this line generic over
         # every collector rather than special-casing the one with nothing
-        # to add. reddit is identical (see digest/collectors/reddit.py's
-        # module docstring, "No cursor axis"), and so is hackernews (see
+        # to add. hackernews is identical (see
         # digest/collectors/hackernews.py's module docstring, "No cursor
         # axis"). polymarket ALSO has no cursor axis (its own state lives in
         # the polymarket_probs table, see digest/collectors/polymarket.py's
-        # module docstring), but unlike news/reddit/hackernews it doesn't
+        # module docstring), but unlike news/hackernews it doesn't
         # even have a cursor_updates field on its result type --
         # PolymarketCollectResult is a distinct type carrying `prob_updates`
         # instead (handled below, not here).
@@ -925,7 +878,6 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
             **tg_result.cursor_updates,
             **x_result.cursor_updates,
             **news_result.cursor_updates,
-            **reddit_result.cursor_updates,
             **hackernews_result.cursor_updates,
         }
 
@@ -959,7 +911,6 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
                 ("x", x_result.failed),
                 ("news", news_result.failed),
                 ("polymarket", polymarket_result.failed),
-                ("reddit", reddit_result.failed),
                 ("hackernews", hackernews_result.failed),
             )
             if failed
@@ -999,8 +950,6 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
             collectors["news"] = "failed" if news_result.failed else "ok"
         if cfg.polymarket_enabled:
             collectors["polymarket"] = "failed" if polymarket_result.failed else "ok"
-        if cfg.reddit_enabled:
-            collectors["reddit"] = "failed" if reddit_result.failed else "ok"
         if cfg.hackernews_enabled:
             collectors["hackernews"] = "failed" if hackernews_result.failed else "ok"
         logger.info(

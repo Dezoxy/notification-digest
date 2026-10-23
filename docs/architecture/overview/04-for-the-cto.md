@@ -40,26 +40,21 @@ None carries MFA, a property of the accounts being used unofficially. X and
 Patreon sit on this same unofficial, ToS-risk access with no sanctioned
 fallback if the platform revokes it (RISK-003, RISK-007), and Patreon's is a
 paid subscription, so an adverse action there costs money, not just access.
-Reddit no longer carries a personal credential. Its Data Team refused the
-owner's official API application, Reddit blocks Azure's network, and from
-2026-10-22 it refused logged-in sessions arriving from Linux clients; tests on
-2026-10-23 showed the cause is how the client presents itself, not its network.
-The owner chose not to imitate a browser to get around that, so Reddit is read
-from its anonymous public feeds, through a proxy on the Mac mini homelab behind
-Cloudflare Access. No cookie is sent anywhere, which removes Reddit from the
-account-takeover exposure above; the cost is that Reddit depends on the homelab,
-items lose score and comment counts, and the collector must wait about a minute
-between subreddits (roughly five extra minutes per run). Collection has been
-disabled in production since about 19:30 UTC on 2026-10-22 and returns at the
-cutover ([ADR 12](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0012-collect-reddit-from-public-rss-feeds.md),
-[ADR 11](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)).
+Reddit was retired on 2026-10-23, which removes the one source whose access
+kept breaking and its personal credential with it. Its Data Team refused the
+owner's official API application; from 2026-10-21 it refused logged-in sessions
+arriving from Linux clients, whatever the network; and it ends its RSS feeds on
+2026-11-13 with no replacement for feed readers. The owner chose not to imitate
+a browser to get around that, and the coverage of those subreddits already comes
+from news RSS, Hacker News and X, so nothing replaces it
+([ADR 12](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0012-retire-reddit-collection.md)).
 RISK-007 is **not** marked accepted — the risk register calls it an open gap,
 because CLAUDE.md's hard rules name only the X collector explicitly, not
-Reddit or Patreon.
+Patreon.
 
 ### Whose data this is, and where it goes
 
-Collected item text — Telegram messages, X notifications, Reddit and Patreon
+Collected item text — Telegram messages, X notifications and Patreon
 posts — is written by people other than the owner (C-04). It is classified as
 confidential third-party personal data, retained for 90 days after its digest
 delivers (14 if never summarized), and never republished verbatim: the public

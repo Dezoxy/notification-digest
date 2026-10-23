@@ -6,6 +6,7 @@ Date: 2026-10-22
 
 Accepted for Polymarket; the Reddit part is superseded by
 [11. Move Reddit to a homelab proxy behind Cloudflare Access](0011-move-reddit-to-a-homelab-proxy.md)
+and then by [12. Retire Reddit collection](0012-retire-reddit-collection.md)
 
 Records the existing Polymarket proxy choice and extends it to Reddit. It
 amends nothing: no earlier ADR decided how a blocked source is reached.
@@ -24,7 +25,7 @@ named, had occurred. Reddit was disabled in production
 (`REDDIT_ENABLED=false`, about 19:30 UTC) and moves to this record's option 2,
 built on the homelab; see ADR 11 for the evidence and the interface. ADR 11's
 own amendment of 2026-10-23 corrects the cause: the block was on the client
-fingerprint, not on Cloudflare egress, and ADR 12 collects Reddit anonymously. The
+fingerprint, not on Cloudflare egress, and ADR 12 retires Reddit collection. The
 Polymarket Worker is unaffected and this record stays in force for it. The
 "unverified end to end" consequence below no longer applies: the path was
 observed and failed.

@@ -8,14 +8,14 @@ boundaries below match those declared in
 and "Cloudflare edge (internet-facing)".
 
 ```text
-  Third-party sources (Telegram, X, Reddit, Patreon,        [outbound only —
+  Third-party sources (Telegram, X, Patreon,        [outbound only —
   Polymarket, Hacker News, RSS feeds)                        nothing here ever
         ^                                                    calls in]
         | (1) collection: outbound HTTPS/MTProto,
         |     personal-account credentials
         |
-  Egress Proxies (a Worker, a homelab service) sit on the
-  path to Reddit and Polymarket only, shared key  [(1a)]
+  Egress Proxy (a Worker) sits on the path to
+  Polymarket only, shared key  [(1a)]
         ^
         |
   ============ Azure subscription boundary ===========================
@@ -46,8 +46,8 @@ digest data — see "Delivery tooling" below.
 
 | # | Boundary | Direction | What crosses it | Control |
 |---|---|---|---|---|
-| 1 | Third-party sources ↔ Azure subscription | Outbound only, from the job | Telegram messages (MTProto), X notifications, Patreon posts (HTTPS + cookie), Hacker News stories, RSS entries, and, through boundary 1a, Reddit posts and Polymarket prices | Personal-account credentials held by the Digest Runner; nothing here ever accepts an inbound connection ([C-02](../requirements/constraints.md), [C-03](../requirements/constraints.md)) |
-| 1a | Digest Runner → Egress Proxies → Reddit and Polymarket | Outbound from the job to a Cloudflare Worker (Polymarket) or, for Reddit, to a Cloudflare Access-protected hostname, through the homelab Tunnel to a Mac mini service, then from the owner's home network to Reddit. Reddit is disabled until the collector change is released | Polymarket market-price requests; for Reddit, anonymous requests for public feed paths (`/r/<sub>/top/.rss`), with no cookie and no credential of the owner's. The proxies return only content-type and body | A shared key in an `x-proxy-key` header, compared timing-safely; hardcoded upstream, GET only, path allowlist. The Polymarket Worker is internet-reachable on workers.dev, outside this repository's Terraform ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)). The Reddit proxy adds a dedicated Cloudflare Access application admitting only the service token `digest-reddit`, no published host port, and forwards no cookie ([ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md), [ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md)) |
+| 1 | Third-party sources ↔ Azure subscription | Outbound only, from the job | Telegram messages (MTProto), X notifications, Patreon posts (HTTPS + cookie), Hacker News stories, RSS entries, and, through boundary 1a, Polymarket prices | Personal-account credentials held by the Digest Runner; nothing here ever accepts an inbound connection ([C-02](../requirements/constraints.md), [C-03](../requirements/constraints.md)) |
+| 1a | Digest Runner → Egress Proxy → Polymarket | Outbound from the job to a Cloudflare Worker, which relays to Polymarket | Polymarket market-price requests. The proxy returns only content-type and body | A shared key in an `x-proxy-key` header, compared timing-safely; hardcoded upstream, GET only, path allowlist. The Worker is internet-reachable on workers.dev, outside this repository's Terraform ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)) |
 | 2 | Digest Runner ↔ State Database | Within the subscription, between the job and the runtime storage account | Collected items, cursors, digests, delivery flags, the live X cookie jar, as one immutable state bundle restored to the job's local disk and checkpointed back | The runner's user-assigned managed identity holds Blob Data Contributor on the runtime container only; shared-key access is disabled, so no key opens the account. An exclusive Blob lease on the manifest admits one run at a time, and a run that cannot prove it still holds the lease is killed. `state.db` itself is opened on the job's local disk, never over a network share |
 | 3 | Digest Runner → internet (summarization/delivery) | Outbound only, from the job | The window's collected text, sent to `claude -p` (and, on failure, to the Claude API through a federated, short-lived token that the managed identity obtains by trading its own token with Entra, with no stored key); the rendered digest, sent to the News Site, Telegram, and (if enabled) SMTP | TLS on every leg; `SITE_INGEST_KEY` / `TELEGRAM_NOTIFY_BOT_TOKEN` / SMTP credentials authenticate the Runner to each destination |
 | 4 | Digest Runner → News Site | Outbound only, from the job | One digest per `PUT /ingest/:id` call: `tldr`, `body_html`/`body_md` (pre-sanitized), counts, optional Hungarian fields, topics, deltas, provenance, arc-context primers | `x-ingest-key` header, hash-then-`timingSafeEqual` compare, fails closed if unset. The News Site has no corresponding path back into the subscription or `state.db` |
@@ -78,16 +78,10 @@ digest data — see "Delivery tooling" below.
   scope. This is accepted, not overlooked: the account has one operator, and
   `Referrer-Policy: no-referrer` is what stops the token leaking onward to a
   third-party site through an outbound citation link.
-- **The Reddit cookie no longer leaves the Azure boundary.** It did so through
-  `reddit-proxy` on 2026-10-22 until Reddit refused the path. Under
-  [ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md) Reddit is
-  read anonymously, so no session of the owner's crosses the boundary or
-  Cloudflare's edge; the cookie secret is removed from the vault after the
-  cutover ([RISK-002](../risks/architecture-risks.md)).
 - **The Polymarket proxy is internet-reachable.** The Worker answers on
   workers.dev and is guarded by a shared key, a hardcoded upstream, GET only and
-  a path allowlist. The Reddit Worker was the same until it was retired; the
-  homelab proxy sits behind Cloudflare Access instead.
+  a path allowlist. The Reddit Worker and homelab proxy are gone
+  ([ADR 12](../decisions/0012-retire-reddit-collection.md)).
 - **The Azure boundary (A-04) is an identity boundary, not a network one.**
   The jobs have no listener, but the storage accounts and the digest Key
   Vault answer on their public endpoints to anyone holding a valid Entra

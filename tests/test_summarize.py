@@ -2258,7 +2258,7 @@ def test_allocate_by_source_one_source_cannot_fill_the_whole_budget():
         [_lane_item("telegram", i) for i in range(300)]
         + [_lane_item("x", i) for i in range(40)]
         + [_lane_item("news", i) for i in range(20)]
-        + [_lane_item("reddit", i) for i in range(10)]
+        + [_lane_item("polymarket", i) for i in range(10)]
         + [_lane_item("hackernews", i) for i in range(5)]
     )
 
@@ -2268,14 +2268,35 @@ def test_allocate_by_source_one_source_cannot_fill_the_whole_budget():
     for item in result:
         by_source[item.source] = by_source.get(item.source, 0) + 1
     assert len(result) == 250
-    # x/news/reddit/hackernews are under their quotas -> taken in full;
+    # x/news/polymarket/hackernews are under their quotas -> taken in full;
     # telegram gets its own quota plus every slot the underfull lanes
     # couldn't use.
     assert by_source["x"] == 40
     assert by_source["news"] == 20
-    assert by_source["reddit"] == 10
+    assert by_source["polymarket"] == 10
     assert by_source["hackernews"] == 5
     assert by_source["telegram"] == 175
+
+
+def test_allocate_by_source_tolerates_stored_reddit_items():
+    # The reddit collector is retired, but already-stored source='reddit'
+    # rows can still reach allocation. The lane has no quota (gets 0) and
+    # competes only for slots the quota lanes leave unfilled; nothing raises.
+    items = [_lane_item("reddit", i) for i in range(10)] + [
+        _lane_item("telegram", i) for i in range(300)
+    ]
+
+    result = allocate_by_source(items, 100)
+
+    by_source: dict[str, int] = {}
+    for item in result:
+        by_source[item.source] = by_source.get(item.source, 0) + 1
+    assert len(result) == 100
+    assert by_source.get("reddit", 0) <= 10
+    assert by_source["telegram"] >= 90
+
+    roomy = allocate_by_source(items, 250)
+    assert sum(1 for i in roomy if i.source == "reddit") == 10
 
 
 def test_allocate_by_source_preserves_input_order_and_prefers_oldest():

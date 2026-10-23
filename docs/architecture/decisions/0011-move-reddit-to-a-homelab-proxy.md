@@ -4,11 +4,12 @@ Date: 2026-10-22
 
 ## Status
 
-Accepted for the proxy and Access interface; the logged-in cookie route is
-superseded by
-[12. Collect Reddit from public RSS feeds through the homelab proxy](0012-collect-reddit-from-public-rss-feeds.md).
-The homelab proxy, the Cloudflare Access application, the service token
-`digest-reddit` and the `x-proxy-key` header decided here are reused by ADR 12.
+Superseded by
+[12. Retire Reddit collection](0012-retire-reddit-collection.md). The cookie
+route was disproved on 2026-10-23 (see the amendment below) and Reddit is no
+longer collected at all, so the homelab proxy, the Cloudflare Access application,
+the service token `digest-reddit` and the `x-proxy-key` header decided here are
+removed.
 
 Supersedes the Reddit part of
 [10. Route blocked collectors through egress proxies on Cloudflare Workers](0010-route-blocked-collectors-through-egress-proxies.md):
@@ -51,9 +52,9 @@ macOS source worked. The "Why it should work" reasoning, the Context claim that
 Cloudflare egress is blocked, and the 12:00-versus-18:00 timing on 2026-10-22
 are better read as this filtering rolling out. The residential IP does not help.
 
-The owner chose not to imitate browser fingerprints. Reddit is instead collected
-from its anonymous public feeds with no cookie, through the proxy and Access
-interface decided here: see ADR 12.
+The owner chose not to imitate browser fingerprints. An anonymous-feed route was
+considered and dropped because Reddit ends its RSS feeds on 2026-11-13; Reddit
+collection is retired instead: see ADR 12.
 
 ## Context
 

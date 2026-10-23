@@ -2,7 +2,7 @@
 
 `CollectResult` lives here, not in `collectors/telegram.py`, because no
 collector is the "base" of the others -- telegram is just the collector
-written first, and x.py/rss.py/reddit.py importing it from telegram would be
+written first, and x.py/rss.py importing it from telegram would be
 a misleading dependency edge. (`polymarket.py`'s `PolymarketCollectResult` is
 a deliberately distinct type -- see its own module docstring -- and does not
 use this class.)
