@@ -486,6 +486,11 @@ class Config:
     # `x-proxy-key` header -- never logged. Optional (unset when talking to
     # old.reddit.com directly). repr=False like polymarket_proxy_key.
     reddit_proxy_key: str | None = field(default=None, repr=False)
+    # SECRETS: Cloudflare Access service token for the homelab reddit proxy,
+    # sent as `CF-Access-Client-Id` / `CF-Access-Client-Secret` -- never
+    # logged. Both or neither (a lone half is a ConfigError).
+    reddit_access_client_id: str | None = field(default=None, repr=False)
+    reddit_access_client_secret: str | None = field(default=None, repr=False)
     # Comma-separated subreddit names WITHOUT the "r/" prefix (e.g.
     # "Futurology,LocalLLaMA,MachineLearning,news,hungary"). Required,
     # non-empty, when reddit_enabled is True -- there is no sane default
@@ -709,6 +714,15 @@ class Config:
         reddit_subreddits: tuple[str, ...] = ()
         reddit_api_base = _optional_url("REDDIT_API_BASE", default="https://old.reddit.com")
         reddit_proxy_key = _optional_secret("REDDIT_PROXY_KEY")
+        reddit_access_client_id = _optional_secret("REDDIT_ACCESS_CLIENT_ID")
+        reddit_access_client_secret = _optional_secret("REDDIT_ACCESS_CLIENT_SECRET")
+        if bool(reddit_access_client_id) != bool(reddit_access_client_secret):
+            missing = (
+                "REDDIT_ACCESS_CLIENT_SECRET"
+                if reddit_access_client_id
+                else "REDDIT_ACCESS_CLIENT_ID"
+            )
+            raise ConfigError(f"Reddit Access service token needs both halves; missing {missing}")
         reddit_posts_per_sub = _optional_int_in_range(
             "REDDIT_POSTS_PER_SUB", default=10, minimum=1, maximum=25
         )
@@ -852,6 +866,8 @@ class Config:
             reddit_session_cookie=reddit_session_cookie,
             reddit_api_base=reddit_api_base,
             reddit_proxy_key=reddit_proxy_key,
+            reddit_access_client_id=reddit_access_client_id,
+            reddit_access_client_secret=reddit_access_client_secret,
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
             hackernews_enabled=hackernews_enabled,
@@ -1323,9 +1339,9 @@ def _optional_url(name: str, *, default: str) -> str:
 def _optional_secret(name: str) -> str | None:
     """Read an optional secret env var, defaulting to None. Blank counts as unset.
 
-    Used for POLYMARKET_PROXY_KEY and REDDIT_PROXY_KEY -- opaque
-    shared-secret header values the collectors send to the owner's own
-    Cloudflare Worker proxies (digest/collectors/polymarket.py,
+    Used for POLYMARKET_PROXY_KEY, REDDIT_PROXY_KEY and
+    REDDIT_ACCESS_CLIENT_ID/_SECRET -- opaque header values the collectors
+    send to the owner's own proxies (digest/collectors/polymarket.py,
     digest/collectors/reddit.py). Unlike every other _optional_*
     helper in this module there is no format to validate (it's an arbitrary
     bearer-style string) and, being a secret, its value must never be

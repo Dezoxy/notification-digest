@@ -1,6 +1,6 @@
 """Tests for digest/collectors/reddit.py -- no network, ever.
 
-`urllib.request.urlopen` is monkeypatched to a fake that resolves each
+`reddit._open` (the module's one network seam) is monkeypatched to a fake that resolves each
 request (the session-verify call, and each per-subreddit listing) to
 pre-built JSON bytes or an exception to raise, mirroring
 tests/test_polymarket_collector.py's and tests/test_rss_collector.py's
@@ -10,9 +10,12 @@ monkeypatched to a no-op so these tests don't actually wait.
 
 from __future__ import annotations
 
+import email.message
+import io
 import json
 import time
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -46,14 +49,14 @@ def _patch_urlopen(monkeypatch: pytest.MonkeyPatch, responses: dict) -> None:
     same way the collector itself builds them (`_sub_url`).
     """
 
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         url = request.full_url  # type: ignore[attr-defined]
         outcome = responses[url]
         if isinstance(outcome, Exception):
             raise outcome
         return _FakeResponse(outcome)
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
 
 
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
@@ -118,13 +121,13 @@ def test_verify_request_sends_cookie_header_and_user_agent(
 ) -> None:
     captured: dict = {}
 
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         if request.full_url == _ME_URL:  # type: ignore[attr-defined]
             captured["request"] = request
             return _FakeResponse(_me_response())
         return _FakeResponse(_listing([]))
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     collect(_SESSION_COOKIE, ["news"], 10)
@@ -137,12 +140,12 @@ def test_verify_request_sends_cookie_header_and_user_agent(
 def test_verify_network_failure_marks_whole_run_failed_and_no_subreddits_hit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         if request.full_url == _ME_URL:  # type: ignore[attr-defined]
             raise urllib.error.URLError("connection refused")
         raise AssertionError("no subreddit request should be made when verify fails")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     result = collect(_SESSION_COOKIE, ["news", "hungary"], 10)
@@ -154,12 +157,12 @@ def test_verify_network_failure_marks_whole_run_failed_and_no_subreddits_hit(
 def test_verify_not_logged_in_body_marks_whole_run_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         if request.full_url == _ME_URL:  # type: ignore[attr-defined]
             return _FakeResponse(json.dumps({}).encode())
         raise AssertionError("no subreddit request should be made when verify fails")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     result = collect(_SESSION_COOKIE, ["news"], 10)
@@ -169,12 +172,12 @@ def test_verify_not_logged_in_body_marks_whole_run_failed(
 
 
 def _verify_raises(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         if request.full_url == _ME_URL:  # type: ignore[attr-defined]
             raise exc
         raise AssertionError("no subreddit request should be made when verify fails")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
 
@@ -248,10 +251,10 @@ def test_verify_http_error_never_logs_the_cookie_value(
 def test_verify_failure_never_logs_the_cookie_value(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     with caplog.at_level("DEBUG"):
@@ -266,14 +269,14 @@ def test_verify_failure_never_logs_the_cookie_value(
 def test_subreddit_request_url_params_and_cookie_header(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         url = request.full_url  # type: ignore[attr-defined]
         if url == _ME_URL:
             return _FakeResponse(_me_response())
         captured["request"] = request
         return _FakeResponse(_listing([]))
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     collect(_SESSION_COOKIE, ["LocalLLaMA"], 7)
@@ -294,7 +297,7 @@ def _capture_requests(monkeypatch: pytest.MonkeyPatch, outcomes: dict | None = N
     """Record every request; `outcomes` maps full_url -> bytes/Exception (default: empty)."""
     requests: list = []
 
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         requests.append(request)
         url = request.full_url  # type: ignore[attr-defined]
         if outcomes and url in outcomes:
@@ -306,7 +309,7 @@ def _capture_requests(monkeypatch: pytest.MonkeyPatch, outcomes: dict | None = N
             return _FakeResponse(_me_response())
         return _FakeResponse(_listing([]))
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
     return requests
 
@@ -386,6 +389,218 @@ def test_proxy_key_never_logged_on_failure_paths(
     assert _SESSION_COOKIE not in caplog.text
 
 
+# --- Cloudflare Access service token headers ---
+
+_ACCESS_ID = "fake-access-id.access"
+_ACCESS_SECRET = "fake-access-secret-that-must-never-appear-in-logs"
+
+
+def test_access_headers_sent_on_every_request_when_both_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = _capture_requests(monkeypatch)
+
+    collect(
+        _SESSION_COOKIE,
+        ["news"],
+        10,
+        api_base=_PROXY_BASE,
+        access_client_id=_ACCESS_ID,
+        access_client_secret=_ACCESS_SECRET,
+    )
+
+    assert len(requests) == 2
+    for request in requests:
+        assert request.get_header("Cf-access-client-id") == _ACCESS_ID
+        assert request.get_header("Cf-access-client-secret") == _ACCESS_SECRET
+        assert not request.has_header("X-proxy-key")
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{}, {"access_client_id": _ACCESS_ID}, {"access_client_secret": _ACCESS_SECRET}]
+)
+def test_access_headers_absent_unless_both_set(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict
+) -> None:
+    requests = _capture_requests(monkeypatch)
+
+    collect(_SESSION_COOKIE, ["news"], 10, **kwargs)
+
+    assert len(requests) == 2
+    for request in requests:
+        assert not request.has_header("Cf-access-client-id")
+        assert not request.has_header("Cf-access-client-secret")
+
+
+# --- redirects are never followed ---
+
+
+def test_open_does_not_follow_redirects() -> None:
+    import http.server
+    import threading
+
+    hits: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            hits.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/start")
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            reddit_module._open(request)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert excinfo.value.code == 302
+    assert hits == ["/start"]
+
+
+# --- failure classification ---
+
+
+def _http_error_with(
+    code: int, *, location: str | None = None, body: bytes | None = None, reason: str = "x"
+) -> urllib.error.HTTPError:
+    headers = email.message.Message()
+    if location is not None:
+        headers["Location"] = location
+    fp = io.BytesIO(body) if body is not None else None
+    return urllib.error.HTTPError(
+        url="https://old.reddit.com/api/me.json", code=code, msg=reason, hdrs=headers, fp=fp
+    )
+
+
+@pytest.mark.parametrize(
+    ("location", "label"),
+    [
+        (
+            "https://team.cloudflareaccess.com/cdn-cgi/access/login/x?kid=abc",
+            "access login redirect (service token rejected or missing)",
+        ),
+        (None, "not logged in"),
+        ("https://evil.example.com/path?token=zzz", "redirect to evil.example.com"),
+        ("https://a%b$c.example.com/", "redirect to abc.example.com"),
+        ("/login?dest=x", "relative redirect"),
+    ],
+)
+def test_describe_3xx_classifies_by_location_host(location: str | None, label: str) -> None:
+    exc = _http_error_with(302, location=location, reason="Found")
+
+    assert reddit_module._describe_verify_failure(exc) == f"HTTPError 302 Found ({label})"
+
+
+def test_describe_3xx_host_is_length_capped() -> None:
+    exc = _http_error_with(302, location="https://" + "a" * 100 + ".example.com/")
+
+    out = reddit_module._describe_verify_failure(exc)
+
+    assert out == "HTTPError 302 x (redirect to " + "a" * reddit_module._REASON_MAX_CHARS + ")"
+
+
+@pytest.mark.parametrize(
+    ("body", "label"),
+    [
+        (b'{"error":"forbidden"}', "proxy rejected key"),
+        (b'{ "error" : "forbidden" }\n', "proxy rejected key"),
+        (b"error code: 1010", "cloudflare 1010 block"),
+        (b"<html>You've been Blocked By Network Security.</html>", "reddit network block"),
+        (b"<html>something else</html>", "unclassified"),
+        (b"", "unclassified"),
+        (None, "unclassified"),
+    ],
+)
+def test_describe_403_classifies_by_body(body: bytes | None, label: str) -> None:
+    exc = _http_error_with(403, body=body, reason="Forbidden")
+
+    assert reddit_module._describe_verify_failure(exc) == f"HTTPError 403 Forbidden ({label})"
+
+
+def test_describe_403_unreadable_body_is_unclassified() -> None:
+    class _Broken:
+        def read(self, *a: object) -> bytes:
+            raise OSError("boom")
+
+    exc = urllib.error.HTTPError(
+        url="https://x/",
+        code=403,
+        msg="Forbidden",
+        hdrs=None,
+        fp=_Broken(),  # type: ignore[arg-type]
+    )
+
+    assert reddit_module._describe_verify_failure(exc) == "HTTPError 403 Forbidden (unclassified)"
+
+
+def test_describe_403_reads_at_most_2048_bytes() -> None:
+    # The marker sits past the cap, so it must not be seen.
+    body = b"x" * reddit_module._ERROR_BODY_MAX_BYTES + b"error code: 1010"
+    exc = _http_error_with(403, body=body, reason="Forbidden")
+
+    assert reddit_module._describe_verify_failure(exc).endswith("(unclassified)")
+
+
+def test_verify_redirect_to_access_fails_run_and_logs_label(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    requests = _capture_requests(
+        monkeypatch,
+        {
+            f"{_PROXY_BASE}/api/me.json": _http_error_with(
+                302, location="https://team.cloudflareaccess.com/login", reason="Found"
+            )
+        },
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = collect(_SESSION_COOKIE, ["news"], 10, api_base=_PROXY_BASE)
+
+    assert result.failed is True
+    assert len(requests) == 1
+    assert "HTTPError 302 Found (access login redirect" in caplog.text
+
+
+def test_access_secrets_never_logged_on_failure_paths(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    bodies = [
+        _http_error_with(403, body=f'{{"error":"forbidden","k":"{_ACCESS_SECRET}"}}'.encode()),
+        _http_error_with(403, body=f"blocked by network security {_ACCESS_SECRET}".encode()),
+        _http_error_with(302, location=f"https://team.cloudflareaccess.com/{_ACCESS_SECRET}"),
+        _http_error_with(302, location=f"https://{_PROXY_KEY}.example.com/"),
+    ]
+    for exc in bodies:
+        for url in (
+            f"{_PROXY_BASE}/api/me.json",
+            f"{_PROXY_BASE}/r/news/top.json?t=day&limit=10&raw_json=1",
+        ):
+            _capture_requests(monkeypatch, {url: exc})
+            with caplog.at_level("DEBUG"):
+                collect(
+                    _SESSION_COOKIE,
+                    ["news"],
+                    10,
+                    api_base=_PROXY_BASE,
+                    proxy_key=_PROXY_KEY,
+                    access_client_id=_ACCESS_ID,
+                    access_client_secret=_ACCESS_SECRET,
+                )
+
+    assert caplog.text
+    for secret in (_ACCESS_SECRET, _ACCESS_ID, _SESSION_COOKIE):
+        assert secret not in caplog.text
+
+
 # --- per-sub fault tolerance vs total failure ---
 
 
@@ -427,7 +642,7 @@ def test_empty_subreddits_is_a_noop_no_network_at_all(monkeypatch: pytest.Monkey
     def boom(*a: object, **k: object) -> None:
         raise AssertionError("urlopen must not be called for an empty subreddit list")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(reddit_module, "_open", boom)
 
     result = collect(_SESSION_COOKIE, [], 10)
 
@@ -463,7 +678,7 @@ def test_401_mid_run_aborts_remaining_subreddits_and_marks_failed(
 def test_403_mid_run_never_fetches_the_third_subreddit(monkeypatch: pytest.MonkeyPatch) -> None:
     fetched: list[str] = []
 
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         url = request.full_url  # type: ignore[attr-defined]
         if url == _ME_URL:
             return _FakeResponse(_me_response())
@@ -476,7 +691,7 @@ def test_403_mid_run_never_fetches_the_third_subreddit(monkeypatch: pytest.Monke
         fetched.append("third")
         raise AssertionError("third subreddit must never be fetched after a 403")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     result = collect(_SESSION_COOKIE, ["first", "second", "third"], 10)
@@ -509,7 +724,7 @@ def test_429_mid_run_aborts_remaining_subreddits_and_marks_failed(
 def test_429_mid_run_never_fetches_the_third_subreddit(monkeypatch: pytest.MonkeyPatch) -> None:
     fetched: list[str] = []
 
-    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+    def fake_urlopen(request: object) -> _FakeResponse:
         url = request.full_url  # type: ignore[attr-defined]
         if url == _ME_URL:
             return _FakeResponse(_me_response())
@@ -522,7 +737,7 @@ def test_429_mid_run_never_fetches_the_third_subreddit(monkeypatch: pytest.Monke
         fetched.append("third")
         raise AssertionError("third subreddit must never be fetched after a 429")
 
-    monkeypatch.setattr(reddit_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_module, "_open", fake_urlopen)
     _no_sleep(monkeypatch)
 
     result = collect(_SESSION_COOKIE, ["first", "second", "third"], 10)

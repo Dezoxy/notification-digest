@@ -47,7 +47,7 @@ digest data — see "Delivery tooling" below.
 | # | Boundary | Direction | What crosses it | Control |
 |---|---|---|---|---|
 | 1 | Third-party sources ↔ Azure subscription | Outbound only, from the job | Telegram messages (MTProto), X notifications, Patreon posts (HTTPS + cookie), Hacker News stories, RSS entries, and, through boundary 1a, Reddit posts and Polymarket prices | Personal-account credentials held by the Digest Runner; nothing here ever accepts an inbound connection ([C-02](../requirements/constraints.md), [C-03](../requirements/constraints.md)) |
-| 1a | Digest Runner → Egress Proxies → Reddit and Polymarket | Outbound from the job to a Cloudflare Worker, then outbound from Cloudflare to the source | Reddit request paths with the owner's session cookie in the request; Polymarket market-price requests; the proxies return only content-type and body, so a not-logged-in Reddit session surfaces as HTTP 302 | A shared key in an `x-proxy-key` header, compared timing-safely; hardcoded upstream, GET only, path allowlist. `reddit-proxy` forwards only cookie, user-agent and accept upstream, stores nothing and has Workers Logs disabled. The Workers are internet-reachable on workers.dev, outside this repository's Terraform ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)) |
+| 1a | Digest Runner → Egress Proxies → Reddit and Polymarket | Outbound from the job to a Cloudflare Worker, then outbound from Cloudflare to the source. Reddit is disabled since 2026-10-22; its decided replacement is outbound from the job to a Cloudflare Access-protected hostname, through the homelab Tunnel to a Mac mini service, then from the owner's home network to Reddit | Polymarket market-price requests today; for Reddit, request paths with the owner's session cookie in the request; the proxies return only content-type and body, so a not-logged-in Reddit session surfaces as HTTP 302 | A shared key in an `x-proxy-key` header, compared timing-safely; hardcoded upstream, GET only, path allowlist. The Polymarket Worker is internet-reachable on workers.dev, outside this repository's Terraform ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)). The planned Reddit proxy adds a dedicated Cloudflare Access application admitting only the service token `digest-reddit`, no published host port, and forwards only cookie, user-agent and accept upstream ([ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md), not built) |
 | 2 | Digest Runner ↔ State Database | Within the subscription, between the job and the runtime storage account | Collected items, cursors, digests, delivery flags, the live X cookie jar, as one immutable state bundle restored to the job's local disk and checkpointed back | The runner's user-assigned managed identity holds Blob Data Contributor on the runtime container only; shared-key access is disabled, so no key opens the account. An exclusive Blob lease on the manifest admits one run at a time, and a run that cannot prove it still holds the lease is killed. `state.db` itself is opened on the job's local disk, never over a network share |
 | 3 | Digest Runner → internet (summarization/delivery) | Outbound only, from the job | The window's collected text, sent to `claude -p` (and, on failure, to the Claude API through a federated, short-lived token that the managed identity obtains by trading its own token with Entra, with no stored key); the rendered digest, sent to the News Site, Telegram, and (if enabled) SMTP | TLS on every leg; `SITE_INGEST_KEY` / `TELEGRAM_NOTIFY_BOT_TOKEN` / SMTP credentials authenticate the Runner to each destination |
 | 4 | Digest Runner → News Site | Outbound only, from the job | One digest per `PUT /ingest/:id` call: `tldr`, `body_html`/`body_md` (pre-sanitized), counts, optional Hungarian fields, topics, deltas, provenance, arc-context primers | `x-ingest-key` header, hash-then-`timingSafeEqual` compare, fails closed if unset. The News Site has no corresponding path back into the subscription or `state.db` |
@@ -78,15 +78,18 @@ digest data — see "Delivery tooling" below.
   scope. This is accepted, not overlooked: the account has one operator, and
   `Referrer-Policy: no-referrer` is what stops the token leaking onward to a
   third-party site through an outbound citation link.
-- **The Reddit cookie leaves the Azure boundary on every request.** Since
-  2026-10-22 the session cookie is sent to `reddit-proxy` and is decrypted at
-  the owner's Cloudflare edge before it reaches Reddit. The Worker stores
-  nothing and logs nothing, but those are properties of its code and settings
-  in another repository, not of anything this repository enforces
-  ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md), [RISK-002](../risks/architecture-risks.md)).
-- **The proxies are internet-reachable.** Both Workers answer on workers.dev
-  and are guarded by a shared key, a hardcoded upstream, GET only and a path
-  allowlist.
+- **The Reddit cookie leaves the Azure boundary on every request.** It did so
+  through `reddit-proxy` on 2026-10-22 until Reddit disabled the path; Reddit is
+  now disabled. When it returns, the cookie is sent to the homelab proxy and is
+  decrypted at the owner's Cloudflare edge on the way to the Tunnel. The proxy
+  stores nothing and logs nothing carrying the cookie, but those are properties
+  of its code and settings in other repositories, not of anything this repository
+  enforces
+  ([ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md), [RISK-002](../risks/architecture-risks.md)).
+- **The Polymarket proxy is internet-reachable.** The Worker answers on
+  workers.dev and is guarded by a shared key, a hardcoded upstream, GET only and
+  a path allowlist. The Reddit Worker was the same until Reddit was disabled;
+  the planned homelab proxy sits behind Cloudflare Access instead.
 - **The Azure boundary (A-04) is an identity boundary, not a network one.**
   The jobs have no listener, but the storage accounts and the digest Key
   Vault answer on their public endpoints to anyone holding a valid Entra

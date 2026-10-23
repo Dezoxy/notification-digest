@@ -830,6 +830,8 @@ def _run_reddit_collector(cfg: Config) -> CollectResult:
             cfg.reddit_posts_per_sub,
             api_base=cfg.reddit_api_base,
             proxy_key=cfg.reddit_proxy_key,
+            access_client_id=cfg.reddit_access_client_id,
+            access_client_secret=cfg.reddit_access_client_secret,
         )
     except Exception as exc:
         logger.warning("reddit collection crashed unexpectedly: %s", type(exc).__name__)

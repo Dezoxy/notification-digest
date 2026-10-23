@@ -4,16 +4,28 @@ Date: 2026-10-22
 
 ## Status
 
-Accepted
+Accepted for Polymarket; the Reddit part is superseded by
+[11. Move Reddit to a homelab proxy behind Cloudflare Access](0011-move-reddit-to-a-homelab-proxy.md)
 
 Records the existing Polymarket proxy choice and extends it to Reddit. It
 amends nothing: no earlier ADR decided how a blocked source is reached.
 
 Implemented and deployed on 2026-10-22 (release 0.29.9, then the production
-configuration switched to the Reddit proxy at about 09:00 UTC). At the time of
-writing, **no logged-in Reddit request through Cloudflare has been observed
-yet**: the first proxied Reddit run has not happened, so this ADR does not claim
-that the Reddit path works end to end.
+configuration switched to the Reddit proxy at about 09:00 UTC).
+
+### Amendment, 2026-10-22: the Reddit path failed
+
+The text below is the original decision and is left as written. The 12:00 UTC run
+collected 39 Reddit items through the Worker. From the 18:00 UTC run on, Reddit
+answered logged-in requests from Cloudflare egress with its "blocked by network
+security" page (HTTP 403), while anonymous requests from the same network were
+answered normally. [RISK-014](../risks/architecture-risks.md), which this record
+named, had occurred. Reddit was disabled in production
+(`REDDIT_ENABLED=false`, about 19:30 UTC) and moves to this record's option 2,
+built on the homelab; see ADR 11 for the evidence and the interface. The
+Polymarket Worker is unaffected and this record stays in force for it. The
+"unverified end to end" consequence below no longer applies: the path was
+observed and failed.
 
 ## Context
 

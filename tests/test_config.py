@@ -397,6 +397,43 @@ def test_reddit_proxy_key_blank_counts_as_unset(monkeypatch):
     assert Config.from_env().reddit_proxy_key is None
 
 
+def test_reddit_access_token_defaults_to_none_and_is_hidden_from_repr(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_SECRET", raising=False)
+    config = Config.from_env()
+    assert config.reddit_access_client_id is None
+    assert config.reddit_access_client_secret is None
+
+    monkeypatch.setenv("REDDIT_ACCESS_CLIENT_ID", "fake-access-id.access")
+    monkeypatch.setenv("REDDIT_ACCESS_CLIENT_SECRET", "fake-access-secret")
+    config = Config.from_env()
+    assert config.reddit_access_client_id == "fake-access-id.access"
+    assert config.reddit_access_client_secret == "fake-access-secret"
+    assert "fake-access-id" not in repr(config)
+    assert "fake-access-secret" not in repr(config)
+
+
+@pytest.mark.parametrize(
+    ("present", "missing"),
+    [
+        ("REDDIT_ACCESS_CLIENT_ID", "REDDIT_ACCESS_CLIENT_SECRET"),
+        ("REDDIT_ACCESS_CLIENT_SECRET", "REDDIT_ACCESS_CLIENT_ID"),
+    ],
+)
+def test_reddit_access_token_partial_pair_raises_naming_the_missing_one(
+    monkeypatch, present, missing
+):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv(present, "fake-value-123")
+
+    with pytest.raises(ConfigError, match=missing) as excinfo:
+        Config.from_env()
+    assert "fake-value-123" not in str(excinfo.value)
+
+
 # --- POLYMARKET_ENABLED / POLYMARKET_API_BASE / POLYMARKET_PROXY_KEY /
 #     POLYMARKET_TOP_N / POLYMARKET_SWING_THRESHOLD ---
 
