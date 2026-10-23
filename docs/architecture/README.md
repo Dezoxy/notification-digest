@@ -121,8 +121,9 @@ the 2026-10-22 render, reviewed the same day.
 | 7 | [Run digest as app-owned Azure jobs with leased SQLite snapshots](decisions/0007-run-digest-as-azure-jobs.md) | Accepted; state/vault ownership amended by ADR 8; in production since 2026-10-08 |
 | 8 | [Isolate digest Azure state and secrets](decisions/0008-isolate-digest-azure-state-and-secrets.md) | Accepted for state/vault; deployed with ADR 7 |
 | 9 | [Fall back to the Claude API over workload identity federation](decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md) | Accepted; implemented and configured; proven by one smoke test, no real fallback yet |
-| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted for Polymarket; Reddit part superseded by ADR 11 after Reddit blocked Cloudflare egress on 2026-10-22 |
-| 11 | [Move Reddit to a homelab proxy behind Cloudflare Access](decisions/0011-move-reddit-to-a-homelab-proxy.md) | Accepted 2026-10-22; not built, Reddit disabled until cutover |
+| 10 | [Route blocked collectors through egress proxies on Cloudflare Workers](decisions/0010-route-blocked-collectors-through-egress-proxies.md) | Accepted for Polymarket; Reddit part superseded by ADR 11 (Worker path failed 2026-10-22) |
+| 11 | [Move Reddit to a homelab proxy behind Cloudflare Access](decisions/0011-move-reddit-to-a-homelab-proxy.md) | Accepted 2026-10-22; cookie route superseded by ADR 12 after its cause was disproved on 2026-10-23; proxy and Access interface reused |
+| 12 | [Collect Reddit from public RSS feeds through the homelab proxy](decisions/0012-collect-reddit-from-public-rss-feeds.md) | Accepted 2026-10-23; proxy side deployed, collector change not yet released, Reddit disabled until cutover |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

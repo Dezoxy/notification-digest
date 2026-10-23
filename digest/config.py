@@ -103,7 +103,7 @@ _HEADER_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 # WITHOUT the "r/" prefix (e.g. "Futurology", not "r/Futurology"), matching
 # Reddit's own subreddit name charset (letters, digits, underscore). These
 # values are interpolated directly into a request path by
-# digest/collectors/reddit.py (f"{base}/r/{subreddit}/top?..."), so this is
+# digest/collectors/reddit.py (f"{base}/r/{subreddit}/top/.rss?..."), so this is
 # validated at startup rather than surfacing as an opaque 404/malformed
 # request deep inside a scheduled run.
 _SUBREDDIT_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -468,20 +468,17 @@ class Config:
     # explicit flag is the only unambiguous way to represent "collector
     # present but off" (same rationale as polymarket_enabled's own comment).
     reddit_enabled: bool = False
-    # SECRET (repr=False): the owner's own logged-in Reddit `reddit_session`
-    # browser cookie, sent verbatim as a Cookie header by
-    # digest/collectors/reddit.py to old.reddit.com's .json endpoints (see
-    # that module's docstring for why -- Reddit's Data Team formally refused
-    # this owner's OAuth API application, so app-only OAuth is permanently
-    # dead) -- never logged. Required (ConfigError via _require_str) when
-    # reddit_enabled is True.
-    reddit_session_cookie: str | None = field(default=None, repr=False)
-    # Base URL digest/collectors/reddit.py sends its requests to. Azure's
-    # egress (AS8075) is answered with `403 Blocked` by Reddit since
-    # 2026-10-21, so in production this points at the owner's `reddit-proxy`
-    # Cloudflare Worker; the default is the real old.reddit.com (what a
-    # homelab/operator machine uses directly). Mirrors polymarket_api_base.
-    reddit_api_base: str = "https://old.reddit.com"
+    # Base URL digest/collectors/reddit.py sends its requests to. Reddit's
+    # anonymous public Atom feeds live on www.reddit.com (anonymous
+    # old.reddit.com answers 302). In production this points at the owner's
+    # homelab proxy; the default is the real host (what an operator machine
+    # uses directly). Mirrors polymarket_api_base.
+    #
+    # There is deliberately NO reddit_session_cookie any more: the collector
+    # reads Reddit anonymously (module docstring, 2026-10-23). Production may
+    # still inject REDDIT_SESSION_COOKIE until the operator drops it from
+    # `secret_names`; nothing reads it, so an unread env var is harmless.
+    reddit_api_base: str = "https://www.reddit.com"
     # SECRET: authenticates to the owner's reddit-proxy Worker via the
     # `x-proxy-key` header -- never logged. Optional (unset when talking to
     # old.reddit.com directly). repr=False like polymarket_proxy_key.
@@ -501,6 +498,12 @@ class Config:
     # bounded to [1, 25] for the same "catch a typo/misconfiguration at
     # startup, not deep inside a scheduled run" reason as POLYMARKET_TOP_N.
     reddit_posts_per_sub: int = 10
+    # Pacing for digest/collectors/reddit.py (anonymous feeds allow roughly one
+    # request per rate-limit window). The interval is the wait between
+    # subreddits when Reddit's rate-limit headers are absent; the max caps
+    # every wait, header-driven or not, so an odd header cannot stall a job.
+    reddit_request_interval_seconds: int = 65
+    reddit_max_wait_seconds: int = 120
     # Stable-arc-keys feature (app side): whether the site's ingest validator
     # has ALREADY been updated to accept an optional "key" field on each
     # `topics` entry. Verified 2026-08-10 by reading cloudflare-terraform/
@@ -710,9 +713,8 @@ class Config:
         )
 
         reddit_enabled = _parse_bool(os.environ.get("REDDIT_ENABLED", "false"))
-        reddit_session_cookie: str | None = None
         reddit_subreddits: tuple[str, ...] = ()
-        reddit_api_base = _optional_url("REDDIT_API_BASE", default="https://old.reddit.com")
+        reddit_api_base = _optional_url("REDDIT_API_BASE", default="https://www.reddit.com")
         reddit_proxy_key = _optional_secret("REDDIT_PROXY_KEY")
         reddit_access_client_id = _optional_secret("REDDIT_ACCESS_CLIENT_ID")
         reddit_access_client_secret = _optional_secret("REDDIT_ACCESS_CLIENT_SECRET")
@@ -726,8 +728,13 @@ class Config:
         reddit_posts_per_sub = _optional_int_in_range(
             "REDDIT_POSTS_PER_SUB", default=10, minimum=1, maximum=25
         )
+        reddit_request_interval_seconds = _optional_int_in_range(
+            "REDDIT_REQUEST_INTERVAL_SECONDS", default=65, minimum=1, maximum=600
+        )
+        reddit_max_wait_seconds = _optional_int_in_range(
+            "REDDIT_MAX_WAIT_SECONDS", default=120, minimum=1, maximum=900
+        )
         if reddit_enabled:
-            reddit_session_cookie = _require_str("REDDIT_SESSION_COOKIE")
             reddit_subreddits = _require_subreddit_tuple("REDDIT_SUBREDDITS")
 
         hackernews_enabled = _parse_bool(os.environ.get("HACKERNEWS_ENABLED", "false"))
@@ -863,13 +870,14 @@ class Config:
             polymarket_top_n=polymarket_top_n,
             polymarket_swing_threshold=polymarket_swing_threshold,
             reddit_enabled=reddit_enabled,
-            reddit_session_cookie=reddit_session_cookie,
             reddit_api_base=reddit_api_base,
             reddit_proxy_key=reddit_proxy_key,
             reddit_access_client_id=reddit_access_client_id,
             reddit_access_client_secret=reddit_access_client_secret,
             reddit_subreddits=reddit_subreddits,
             reddit_posts_per_sub=reddit_posts_per_sub,
+            reddit_request_interval_seconds=reddit_request_interval_seconds,
+            reddit_max_wait_seconds=reddit_max_wait_seconds,
             hackernews_enabled=hackernews_enabled,
             hackernews_top_n=hackernews_top_n,
             arc_keys_site_enabled=arc_keys_site_enabled,

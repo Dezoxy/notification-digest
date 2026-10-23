@@ -41,25 +41,22 @@ Discussion-page URL, not the article URL (deliberate, matches reddit.py)
 (`f"https://news.ycombinator.com/item?id={objectID}"`), never the story's
 own `url` field. Two reasons: the discussion page links out to the article
 itself (nothing is lost) AND carries the community thread the digest's
-"[score N, M comments]" salience convention is about -- exactly the value
-digest/collectors/reddit.py's own `permalink`-based URL provides for a
-Reddit post, not the linked article. It is also the STABLE link: an
+"[score N, M comments]" salience convention is about -- the same choice
+digest/collectors/reddit.py makes by linking a Reddit post's comments page,
+not the linked article. It is also the STABLE link: an
 external article URL can rot (paywalled, deleted, moved) while
 `news.ycombinator.com/item?id=...` never does. The article URL, when
 present, is instead folded INTO `Item.text` (see `_build_item`) so the
 summarizer prompt still knows what the story is actually about -- an
 Ask/Show-HN text post simply omits that line, since it never had one.
 
-Score/comments ride IN the item text, not a separate field (matches reddit.py)
+Score/comments ride IN the item text, not a separate field
 ----------------------------------------------------------------------
 `_build_item` folds `[score N, M comments]` directly into `Item.text`
-rather than adding new columns to the shared `Item`/`items` schema -- the
-identical convention digest/collectors/reddit.py's own module docstring
-documents ("Score/comments ride IN the item text") for the identical
-reason: it lets the summarizer prompt (prompts/digest.md) weight a story by
-community signal with no changes to digest/state.py at all. Unlike
-reddit.py's inline `"{title} [score N, M comments] {selftext}"` (a subreddit
-post commonly carries a body worth reading alongside the number), an HN
+rather than adding new columns to the shared `Item`/`items` schema: it lets
+the summarizer prompt (prompts/digest.md) weight a story by community signal
+with no changes to digest/state.py at all. (The Reddit collector used the
+same convention until it moved to public feeds, which carry no score.) An HN
 front-page hit has no body text of its own to append -- so the shape here is
 `title`, then (when present) an explicit `links to: <url>` line, then the
 bracketed salience marker, each separated by a blank line for the

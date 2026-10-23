@@ -811,27 +811,28 @@ def _run_reddit_collector(cfg: Config) -> CollectResult:
     in flight for an executor wrapper to protect against blocking).
 
     `reddit_collector.collect` already never raises past its own try/except
-    around the session verify and each per-subreddit request (module
+    around each per-subreddit request (module
     docstring's "Failure semantics"), but this call is wrapped in a
     catch-all here too as a second line of defense, mirroring every other
     collector wrapper in this module: a not-yet-anticipated bug must not
     take down the whole run (and the other collectors' already-collected
     items) before `commit_new_items` gets a chance to persist them. Only the
     exception's type name is logged -- the underlying error could otherwise
-    embed the session cookie from a malformed request.
+    embed a proxy secret from a malformed request.
     """
     if not cfg.reddit_enabled:
         return CollectResult()
 
     try:
         return reddit_collector.collect(
-            cfg.reddit_session_cookie,
             cfg.reddit_subreddits,
             cfg.reddit_posts_per_sub,
             api_base=cfg.reddit_api_base,
             proxy_key=cfg.reddit_proxy_key,
             access_client_id=cfg.reddit_access_client_id,
             access_client_secret=cfg.reddit_access_client_secret,
+            request_interval_seconds=cfg.reddit_request_interval_seconds,
+            max_wait_seconds=cfg.reddit_max_wait_seconds,
         )
     except Exception as exc:
         logger.warning("reddit collection crashed unexpectedly: %s", type(exc).__name__)

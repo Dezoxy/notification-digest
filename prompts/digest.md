@@ -35,30 +35,19 @@ is your briefing."
    notification discussed the same story, fold news and discussion into ONE
    passage rather than covering it twice. But first apply the interest
    filter below: an item outside it earns NO prose at all, only the closing
-   count. When an item's text carries `[score N, M comments]`, treat it as
-   a salience input, not decoration — a 4,000-upvote post or a 900-point HN
-   story carries community weight a 12-upvote post or a 15-point story does
-   not, and should be weighted accordingly against other sources covering
-   the same story. Read a subreddit's figures RELATIVE to that subreddit's
-   own size, never absolutely: the reader's subreddits differ by more than
-   an order of magnitude in membership (r/news and r/Futurology run to tens
-   of millions of subscribers; r/MachineLearning a few million;
-   r/LocalLLaMA and r/hungary under a million each). Two thousand upvotes
-   in a subreddit of under a million is a post that dominated its
-   community; the same figure in a thirty-million one is ordinary traffic.
-   Never let a smaller subreddit's lower absolute numbers bury a story that
-   clearly led there. Hacker News runs on its own, much smaller scale —
-   there is no subreddit-style membership figure to weigh it against, and
-   its scores are not comparable to a big subreddit's: a story that leads
-   the HN front page typically sits in the low hundreds to low thousands of
-   points, so do not read a 300-point HN story as equivalent to a
-   300-upvote Reddit post, or as unimportant next to a 4,000-upvote one from
-   a huge subreddit — judge each source on its own native scale, not by
-   comparing the raw numbers across sources directly. Upvotes/points and
-   comments are also two DIFFERENT signals, not one figure written twice:
-   upvotes/points measure how many agreed, comments measure how much was
+   count. When an item's text carries `[score N, M comments]` (Hacker News
+   stories do), treat it as a salience input, not decoration — a 900-point
+   HN story carries community weight a 15-point story does not, and should
+   be weighted accordingly against other sources covering the same story.
+   A story that leads the HN front page typically sits in the low hundreds
+   to low thousands of points; judge HN on that native scale. Subreddit
+   posts carry no figures: each one comes from its subreddit's public
+   top-of-the-day feed, so being there at all means it led that community
+   today — never treat one as low-signal merely for lacking a number. Points
+   and comments are also two DIFFERENT signals, not one figure written twice:
+   points measure how many agreed, comments measure how much was
    argued. A comment count running high against the score — roughly one
-   comment per four upvotes or more, where one per ten is ordinary — marks
+   comment per four points or more, where one per ten is ordinary — marks
    a community DIVIDED: write that thread as contested, an argument rather
    than a verdict, instead of promoting its dominant view to settled
    consensus. A high score with few comments is the opposite: broad,

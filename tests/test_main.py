@@ -2894,7 +2894,8 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
     cfg = replace(
         _cfg(),
         reddit_enabled=True,
-        reddit_session_cookie="cookie-value",
+        reddit_request_interval_seconds=30,
+        reddit_max_wait_seconds=77,
         reddit_subreddits=("news", "hungary"),
         reddit_posts_per_sub=15,
         reddit_api_base="https://proxy.example.com",
@@ -2907,7 +2908,6 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
     captured = {}
 
     def fake_collect(
-        session_cookie,
         subreddits,
         posts_per_sub,
         *,
@@ -2915,14 +2915,17 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
         proxy_key,
         access_client_id,
         access_client_secret,
+        request_interval_seconds,
+        max_wait_seconds,
     ):
-        captured["session_cookie"] = session_cookie
         captured["subreddits"] = subreddits
         captured["posts_per_sub"] = posts_per_sub
         captured["api_base"] = api_base
         captured["proxy_key"] = proxy_key
         captured["access_client_id"] = access_client_id
         captured["access_client_secret"] = access_client_secret
+        captured["request_interval_seconds"] = request_interval_seconds
+        captured["max_wait_seconds"] = max_wait_seconds
         return expected
 
     monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_collect)
@@ -2931,13 +2934,14 @@ def test_run_reddit_enabled_delegates_to_collect_with_configured_params(monkeypa
 
     assert result is expected
     assert captured == {
-        "session_cookie": "cookie-value",
         "subreddits": ("news", "hungary"),
         "posts_per_sub": 15,
         "api_base": "https://proxy.example.com",
         "proxy_key": "proxy-key-123",
         "access_client_id": "access-id-123",
         "access_client_secret": "access-secret-123",
+        "request_interval_seconds": 30,
+        "max_wait_seconds": 77,
     }
 
 
@@ -2977,7 +2981,7 @@ def test_run_merges_reddit_items_into_commit_alongside_telegram(monkeypatch, tmp
         monkeypatch, CollectResult(items=[tg_item], cursor_updates={("telegram", "123"): "1"})
     )
 
-    def fake_reddit_collect(session_cookie, subreddits, posts_per_sub, **kwargs):
+    def fake_reddit_collect(subreddits, posts_per_sub, **kwargs):
         return CollectResult(items=[reddit_item])
 
     monkeypatch.setattr(main_mod.reddit_collector, "collect", fake_reddit_collect)

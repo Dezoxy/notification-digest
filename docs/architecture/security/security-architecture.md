@@ -19,8 +19,10 @@ Hacker News, RSS feeds, the Claude CLI, the Claude API (fallback), the News
 Site, and optionally an SMTP relay), and exits. Polymarket is
 reached through the owner's own Egress Proxy (a Cloudflare Worker) rather than
 directly ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
-Reddit is disabled in production since 2026-10-22; the decided path is a homelab
-proxy behind Cloudflare Access ([ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md), not built). The same service ran on a
+Reddit is disabled in production since 2026-10-22; its path is anonymous public
+feeds through a homelab proxy behind Cloudflare Access, with no cookie
+([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md),
+[ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md)). The same service ran on a
 homelab VM until 2026-10-08; that VM no longer runs it. See [trust-boundaries.md](trust-boundaries.md) for the
 boundary-by-boundary detail and the model in
 [`../model/containers.dsl`](../model/containers.dsl).
@@ -42,7 +44,7 @@ to what" below.
 | Digest Runner | Telegram | MTProto, `TG_SESSION` (Telethon `StringSession`) — the owner's own **personal account**, not a bot | Read access to the owner's own groups/channels; also used to send relay forwards |
 | Digest Runner | Telegram Bot API | `TELEGRAM_NOTIFY_BOT_TOKEN` | Send-only access to post the TL;DR digest and section links into the owner's chat/topics |
 | Digest Runner | X | `X_COOKIES_PATH` / `X_COOKIES` (owner's session cookie), via `twifork` (twikit fork) | Read access to the owner's own notifications timeline. Unofficial API; no sanctioned alternative exists at this tier ([C-03](../requirements/constraints.md)) |
-| Digest Runner | Reddit, through a proxy (disabled; homelab path decided, not built) | `REDDIT_SESSION_COOKIE` (owner's own logged-in session), sent on every request to the proxy, plus `REDDIT_PROXY_KEY` in an `x-proxy-key` header to authenticate to the proxy itself. Under [ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md) also `REDDIT_ACCESS_CLIENT_ID` and `REDDIT_ACCESS_CLIENT_SECRET` (the Cloudflare Access service token `digest-reddit`) in `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers | Read access to top-of-day posts in configured subreddits. Reddit formally declined the owner's official API application; the cookie session is the only remaining path. Reddit answers Azure egress with `403` since 2026-10-21 and logged-in sessions from Cloudflare egress since 2026-10-22, so the Worker of [ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md) failed and the collector is disabled. The planned homelab proxy forwards only the cookie, user-agent and accept headers, stores nothing and logs nothing carrying the cookie; Cloudflare Access admits only the service token. The cookie is still decrypted at Cloudflare's edge on the way to the Tunnel |
+| Digest Runner | Reddit public Atom feeds, through the homelab proxy (disabled until the collector change is released) | No Reddit credential. `REDDIT_PROXY_KEY` in an `x-proxy-key` header and the Cloudflare Access service token `digest-reddit` (`REDDIT_ACCESS_CLIENT_ID`, `REDDIT_ACCESS_CLIENT_SECRET`) in `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers authenticate to the proxy only | Read access to the top-of-day posts of configured subreddits, from feeds that are public and anonymous ([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md)). Reddit formally declined the owner's official API application and refuses logged-in sessions from Linux clients, so the earlier cookie route ([ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md)) is not used. The proxy exposes one RSS route, forwards no cookie, stores nothing; Cloudflare Access admits only the service token. The personal Reddit session no longer leaves the vault |
 | Digest Runner | Polymarket, through `polymarket-proxy` | `POLYMARKET_PROXY_KEY` in an `x-proxy-key` header | Read access to market prices over `/markets` only; no account credential is involved. polymarket.com is ISP-blocked in Hungary |
 | Digest Runner | Patreon | `PATREON_SESSION_COOKIE` (owner's own paid-tier session) | Read access to one campaign's paid-tier posts |
 | Digest Runner | Claude CLI | `CLAUDE_CODE_OAUTH_TOKEN`, forwarded to the `claude -p` subprocess | Summarizes each window on the owner's flat-fee subscription ([C-08](../requirements/constraints.md)) |
@@ -78,10 +80,11 @@ echoing its value.
 
 Secrets in play, by where they end up:
 
-- **Personal account sessions/cookies** (`TG_SESSION`, X/Reddit/Patreon
-  cookies): the sharpest secret class in this system — see "What is
-  deliberately absent" below. The Telegram session is a Key Vault secret; the
-  X cookie jar lives in the runtime Blob state instead (see below).
+- **Personal account sessions/cookies** (`TG_SESSION`, X/Patreon
+  cookies; Reddit's cookie is no longer used): the sharpest secret class in
+  this system — see "What is deliberately absent" below. The Telegram session
+  is a Key Vault secret; the X cookie jar lives in the runtime Blob state
+  instead (see below).
 - **The News Site's own secrets** (`SITE_TOKEN`, `INGEST_KEY`): set with
   `wrangler secret put`, never in `wrangler.jsonc` or source.
 - **The `claude -p` OAuth token, the SMTP password, the GHCR pull token**:
@@ -159,14 +162,14 @@ credentials. None of these are gaps waiting to be filled; each follows from
   key-rotation runbook (`workers/news-site/README.md`, "Key rotation") is the
   only rotation procedure that exists in writing.
 - **No MFA on the collector sessions**, because none of Telegram's MTProto
-  user sessions, X's cookie auth, Reddit's session cookie, or Patreon's
-  session cookie expose an MFA step to a long-lived, non-interactive
+  user sessions, X's cookie auth, or Patreon's session cookie expose an MFA
+  step to a long-lived, non-interactive
   session — this is a property of the accounts being used unofficially, not
   a control this system chose to skip.
 
 ### The sharpest risk: account-level compromise, not credential rotation
 
-Every collection secret in this system (`TG_SESSION`, the X/Reddit/Patreon
+Every collection secret in this system (`TG_SESSION`, the X/Patreon
 cookies) authenticates as the **owner's own personal account**
 ([C-02](../requirements/constraints.md)), not a service principal or a bot.
 Losing one of these secrets is an account takeover, not a service-credential
@@ -187,11 +190,11 @@ unlock is classified and where it ends up.
 
 - The Polymarket proxy endpoint is reachable from the internet with only a
   shared key in front of it ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
-  When Reddit returns, its session cookie again crosses the owner's Cloudflare
-  edge on every request, now behind Cloudflare Access plus the shared key
-  ([RISK-002](../risks/architecture-risks.md),
-  [ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md)).
-- The X, Reddit, and Patreon collectors all depend on an unofficial,
+  Reddit's anonymous feed requests also cross it, behind Cloudflare Access
+  plus the shared key; they carry no credential of the owner's
+  ([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md),
+  [RISK-002](../risks/architecture-risks.md)).
+- The X and Patreon collectors, and Reddit's anonymous feeds, all depend on an unofficial,
   ToS-violating access path the owner has explicitly accepted the risk of
   ([C-03](../requirements/constraints.md),
   [A-02](../requirements/assumptions.md),

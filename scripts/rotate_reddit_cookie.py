@@ -180,11 +180,16 @@ def describe_failure(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def _browser_check(cookie: str) -> None:
-    """Same request as `reddit._verify_session`, but with a browser User-Agent."""
+# The collector no longer uses a cookie (it reads anonymous Atom feeds), so the
+# logged-in check this script needs lives here, not in digest/collectors/reddit.py.
+_LEGACY_ME_URL = "https://old.reddit.com/api/me.json"
+
+
+def verify_session(cookie: str, user_agent: str = reddit._USER_AGENT) -> None:  # noqa: SLF001
+    """GET `/api/me.json` with the cookie; raise ValueError unless it names a user."""
     request = urllib.request.Request(
-        f"{reddit._BASE_URL}/api/me.json",  # noqa: SLF001
-        headers={"Cookie": f"reddit_session={cookie}", "User-Agent": BROWSER_USER_AGENT},
+        _LEGACY_ME_URL,
+        headers={"Cookie": f"reddit_session={cookie}", "User-Agent": user_agent},
     )
     with urllib.request.urlopen(
         request,
@@ -197,10 +202,15 @@ def _browser_check(cookie: str) -> None:
         raise ValueError("not logged in")
 
 
+def _browser_check(cookie: str) -> None:
+    """Same request as `verify_session`, but with a browser User-Agent."""
+    verify_session(cookie, BROWSER_USER_AGENT)
+
+
 def check_reddit(cookie: str) -> None:
-    """Verify with the collector's code path; on failure diagnose and raise MigrationError."""
+    """Verify with the collector's User-Agent; on failure diagnose and raise MigrationError."""
     try:
-        reddit._verify_session(cookie)  # noqa: SLF001
+        verify_session(cookie)
     except Exception as exc:
         collector_failure = describe_failure(exc)
     else:

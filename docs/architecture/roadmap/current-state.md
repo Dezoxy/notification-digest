@@ -60,11 +60,13 @@ entirely:
   a Cloudflare Worker outside this repository
   ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
   Reddit is **disabled** in production (`REDDIT_ENABLED=false`, 2026-10-22): its
-  Worker path worked for one run and then Reddit blocked logged-in sessions from
-  Cloudflare egress ([RISK-014](../risks/architecture-risks.md)). It returns when
-  the homelab proxy of
-  [ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md) is built; that is
-  decided, not built.
+  Worker path worked for one run and then Reddit refused logged-in sessions
+  ([RISK-014](../risks/architecture-risks.md)). The homelab route of
+  [ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md) is deployed, but
+  testing on 2026-10-23 showed the cause was the client fingerprint, not the
+  network. Reddit returns through anonymous public feeds over that proxy
+  ([ADR 12](../decisions/0012-collect-reddit-from-public-rss-feeds.md)); the
+  proxy side is deployed, the collector change is not yet released or enabled.
 - Patreon collects only in `patreon` mode, structurally excluded from the window sweep.
 - Positions and relay read from the same sources as the window collectors but
   claim their own items via a separate membership rule — they are not additional

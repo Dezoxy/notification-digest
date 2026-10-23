@@ -1,183 +1,118 @@
-"""Reddit collector: top-of-day posts from the owner's chosen subreddits, via a cookie session.
+"""Reddit collector: top-of-day posts from the owner's chosen subreddits, via anonymous Atom feeds.
 
 See CLAUDE.md and PLAN.md for the full plan. This module is synchronous
 (urllib), matching rss.py/polymarket.py -- the caller (digest/main.py) runs
 collectors sequentially, one at a time, so there is nothing else in flight
 to block on.
 
-Why a cookie session, not OAuth, not anonymous endpoints (live-verified)
+Why anonymous public Atom feeds, no cookie at all (live-verified 2026-10-23)
 ----------------------------------------------------------------------
-This collector previously authenticated via Reddit's OAuth app-only
-(`client_credentials`) grant. That path is now permanently dead: Reddit's
-Data Team formally REFUSED the owner's API access application (email dated
-2026-08-06 -- "not in compliance with Reddit's Responsible Builder Policy
-and/or lacks necessary details"), so no script-app client_id/secret this
-owner could obtain would ever be granted a token. The anonymous fallback --
-unauthenticated `.json`/`.rss` endpoints -- is also a dead end, and more
-thoroughly than mere throttling: live-verified from the production IP,
-anonymous `.json` comes back a HARD 403 regardless of request pacing, not a
-429 that gentler pacing could work around. `rss.py`'s per-host-paced RSS
-fallback (PR #33) is a genuinely different, degraded surface -- slower,
-fragile to markup changes, and carrying no score/comment-count signal at
-all -- and stays UNTOUCHED as this collector's safety net; nothing here
-changes that module.
+History: Reddit's Data Team refused the owner's OAuth API application
+(2026-08-06), so app-only OAuth is permanently dead. This collector then used
+the owner's logged-in `reddit_session` cookie against old.reddit.com's `.json`
+endpoints. That died too: Reddit now refuses that logged-in cookie from every
+Linux client (Azure, Cloudflare Workers, the homelab Mac mini -- container and
+host alike) while the same cookie still works from the owner's macOS laptop on
+the same public IP. Reddit fingerprints the client below the User-Agent. The
+owner decided not to imitate browsers, so there is no cookie, no login and no
+client spoofing in this module any more.
 
-The replacement is the owner's own logged-in Reddit session: the browser's
-long-lived `reddit_session` cookie, sent as a bare `Cookie` header to
-`https://old.reddit.com`'s `.json` endpoints. This mirrors the ToS-risk
-posture digest/collectors/x.py already takes for X/Twitter (cookie session,
-unofficial, owner accepts the risk) -- same posture, same back-off
-semantics on an auth failure (see `collect`'s docstring), applied to a
-different site.
-
-Why `old.reddit.com`, not `www.reddit.com` (live-verified)
-----------------------------------------------------------------------
-`old.reddit.com` is the surface that still accepts a bare `reddit_session`
-cookie as full authentication for its `.json` endpoints -- the legacy
-session model this cookie was issued under. `www.reddit.com`'s current
-frontend instead expects a short-lived `token_v2` JWT (refreshed
-client-side by the React app on every page load), which a single exported
-`reddit_session` cookie value cannot substitute for. `_BASE_URL` therefore
-points at `old.reddit.com`, deliberately, not the modern domain. It is the
-DEFAULT of `api_base`; production overrides it (next section).
+What is left is Reddit's ANONYMOUS public Atom feed per subreddit:
+`GET {api_base}/r/{sub}/top/.rss?t=day&limit={n}` answers 200
+`application/atom+xml`. Per entry: `id` (`t3_<base36>`), `title`, `link` (the
+comments page), `author/name` (`/u/<name>`), `category` (`r/<sub>`), `content`
+(escaped HTML, a few hundred characters) and `published`/`updated`. There is
+NO score and NO comment count, so the item text carries none (the summarizer
+loses that community-signal weight; accepted). `REDDIT_SESSION_COOKIE` is no
+longer read anywhere; `scripts/rotate_reddit_cookie.py` is obsolete for this
+collector.
 
 Proxy (REDDIT_API_BASE / REDDIT_PROXY_KEY / REDDIT_ACCESS_CLIENT_*)
 ----------------------------------------------------------------------
 Reddit answers Azure egress (AS8075) with `403 Blocked` (since 2026-10-21), so
-production never talks to old.reddit.com directly. The Cloudflare Worker
-`reddit-proxy` worked until 2026-10-22, when Reddit began answering LOGGED-IN
-requests from Cloudflare Workers egress with its HTML "blocked by network
-security" 403 (anonymous requests were unaffected, and the same cookie works
-from a residential IP). Reddit is disabled in production until the replacement
-is live (ADR 11): the owner's homelab proxy,
-`https://reddit-proxy.toomhorvath.com`, behind a Cloudflare Access app that
-admits only a service token. For it, the pair
+production does not talk to reddit.com directly: it goes through the owner's
+homelab proxy, `https://reddit-proxy.toomhorvath.com`, behind a Cloudflare
+Access app that admits only a service token. That proxy's only route is
+`GET /r/<sub>/top/.rss` with the query parameters `t` and `limit`. The pair
 `REDDIT_ACCESS_CLIENT_ID` / `REDDIT_ACCESS_CLIENT_SECRET` is sent as
-`CF-Access-Client-Id` / `CF-Access-Client-Secret`, only when both are set. The
-Worker stays a supported configuration: only `REDDIT_API_BASE` and the headers
-differ, and `REDDIT_PROXY_KEY` still adds `x-proxy-key` when set. All of these
-are secrets -- never logged, same rules as the cookie. The `reddit_session`
-cookie lives ONLY in the digest's own secret store and is sent per request; the
-proxies store nothing. The proxies strip `Location` from Reddit's own login
-redirect, so a 3xx with no `Location` means "not logged in".
+`CF-Access-Client-Id` / `CF-Access-Client-Secret`, only when both are set, and
+`REDDIT_PROXY_KEY` adds `x-proxy-key` when set. All of these are secrets --
+never logged. The proxy passes Reddit's `x-ratelimit-*` and `retry-after`
+headers through (numeric values only), which the pacing below relies on.
 
 Redirects are never followed (`_open`): behind Access a rejected or missing
 service token is a 302 to `<team>.cloudflareaccess.com`, which urllib would
-follow and misreport as "not logged in (non-JSON)". A 3xx surfaces as
-`HTTPError` instead, and `_describe_verify_failure` labels a 3xx by its
-`Location` host and a 403 by a class of its body (proxy key rejected, Cloudflare
-1010, Reddit network block), so the next failure is attributable from one log
-line. Only the label is logged, never header or body text.
+follow and misreport. A 3xx surfaces as `HTTPError` instead, and
+`_describe_failure` labels a 3xx by its `Location` host and a 403 by a class
+of its body (proxy key rejected, Cloudflare 1010, Reddit network block), so a
+failure is attributable from one log line. Only the label is logged, never
+header or body text.
 
-User-Agent (unproven for a cookie session, not a live-verified requirement)
+User-Agent
 ----------------------------------------------------------------------
-Reddit's API rules mandate a descriptive User-Agent for the OAuth API;
-whether `old.reddit.com`'s cookie-session surface prefers (or requires) a
-browser-like UA instead of a descriptive one is NOT yet live-verified one
-way or the other. `_USER_AGENT` keeps the same descriptive, stable string
-this module already used for OAuth -- the honest default until a live run
-proves otherwise, at which point this comment (and the constant) should be
-revisited.
+`_USER_AGENT` is the same descriptive, stable string this module always used.
+It is honest and is not an attempt to look like a browser.
 
-Failure semantics: session verify vs per-subreddit (mirrors telegram.py/x.py vs rss.py)
+Pacing: Reddit's anonymous budget is about one request per window
 ----------------------------------------------------------------------
-The session-verify call is the single point every subsequent request
-depends on -- if it fails, nothing else in this run can possibly succeed,
-so ANY failure of it sets `failed=True` for the whole run and returns
-immediately (no further network calls are made at all), the same posture
-telegram.py/x.py take toward their one chat/timeline (see rss.py's own
-module docstring for the contrast this mirrors).
+Every response carries `x-ratelimit-used`, `x-ratelimit-remaining` and
+`x-ratelimit-reset` (seconds until the window resets). Anonymous callers get
+roughly ONE request per window; a burst is a 429. So after every subreddit
+request except the last (`_wait_seconds`):
 
-Once a session is confirmed logged in, though, each subreddit is fetched
-independently and a single subreddit going private, banned, or renamed must
-not permanently trip the digest's failure banner every run thereafter --
-that is exactly rss.py's per-feed fault-tolerance rationale, reused here
-verbatim: one subreddit's fetch failure is logged and skipped, and
-`failed=True` is set on the overall result when EVERY configured subreddit
-failed (a total outage), OR when the run is aborted mid-way because the
-session died or Reddit started rate-limiting it (see the next section) --
-whichever comes first.
+- `x-ratelimit-remaining` < 1 and a numeric `x-ratelimit-reset`: wait
+  `reset + 2` seconds;
+- headers absent or unusable: wait `request_interval_seconds`
+  (REDDIT_REQUEST_INTERVAL_SECONDS, default 65);
+- `remaining` >= 1: no wait, the budget is not spent;
+- every wait is capped at `max_wait_seconds` (REDDIT_MAX_WAIT_SECONDS,
+  default 120), so a hostile or odd header cannot stall the job.
 
-Mid-run back-off: auth AND rate limiting (mirrors x.py's hard rule)
+Five subreddits therefore take about five minutes, which a 6-hourly job
+tolerates. The sleep is the module-level seam `_sleep` so tests never wait.
+
+Failure semantics (mirrors x.py's hard rule for a throttled/flagged account)
 ----------------------------------------------------------------------
-An HTTP 401/403 from a per-subreddit request, after the session verified
-logged-in moments earlier, means the session died DURING this run -- the
-owner logged out elsewhere, Reddit flagged/locked the account, or the
-cookie simply expired between the verify call and this request. This is
-exactly the scenario x.py's own docstring calls out for X: continuing to
-hammer a dead credential across the remaining subreddits is how an
-unofficial, cookie-based API gets an account flagged or locked harder, not
-just a wasted request. So a 401/403 here aborts the REST of this run
-immediately (`break`, not `continue`) -- no retry, no re-verify attempt;
-the next scheduled run (3h later) is the retry, mirroring x.py's own "next
-scheduled run is the retry" contract. Items already collected from earlier,
-successful subreddits in this same run are still returned and still
-committed (state upsert is idempotent, digest/state.py's
-`UNIQUE(source, source_id)` + `INSERT ... ON CONFLICT DO NOTHING`) -- only
-the REMAINING, not-yet-fetched subreddits are skipped. `result.failed` is
-set True in this case even though earlier subreddits may have succeeded: a
-dying session is the whole run's signal (something is wrong with the
-credential itself, not with one subreddit), regardless of partial success.
-
-An HTTP 429 gets the identical treatment, for a related but distinct
-reason: 429 is Reddit explicitly saying "slow down", and continuing to
-fetch the remaining subreddits after being told that is precisely how a
-throttled account becomes a flagged one -- the same escalation path the
-401/403 case guards against, just triggered by the server's own rate-limit
-signal instead of a dead credential. x.py takes the identical stance on its
-own rate-limit exception (`TooManyRequests`): `result.failed = True` and
-return, no retry. The accepted trade-off is plain: one throttled subreddit
-forfeits the whole window's reddit items, and that is the deliberate,
-safer side to err on for an account that can't be easily replaced. As with
-401/403, the next scheduled run (3h later) is the retry -- not this one.
+A 429, 401 or 403 on any subreddit is Reddit (or the proxy) telling us to back
+off: continuing into that signal is how an IP or account gets blocked harder.
+The REST of the run is aborted (`break`, never a retry; `retry-after` is only
+logged) and `result.failed` is set even if earlier subreddits succeeded. Items
+already collected are still returned and committed -- the state upsert is
+idempotent (`UNIQUE(source, source_id)` + `INSERT ... ON CONFLICT DO NOTHING`,
+digest/state.py). The next scheduled run is the retry. Any OTHER per-subreddit
+error (5xx, network, unparseable feed, a subreddit gone private or renamed) is
+logged and skipped, as rss.py does per feed; `failed=True` is also set when
+EVERY configured subreddit failed. There is no up-front session verify: with
+no session there is nothing shared to verify.
 
 No cursor axis; a lookback window instead (mirrors rss.py exactly)
 ----------------------------------------------------------------------
-`t=day` ("top of the last 24 hours") is Reddit's own ROLLING ranked window,
-re-computed fresh on every request -- not a monotonic timeline a cursor
-could meaningfully page through. A post's rank within that window can change
-between runs (new posts overtake it, votes shift), so there is no stable
-"since" pagination contract to track, exactly like rss.py's feeds have none
-(see that module's own docstring for the identical reasoning). Idempotency
-instead comes entirely from `UNIQUE(source, source_id)` +
-`INSERT ... ON CONFLICT DO NOTHING` (digest/state.py): re-fetching the same
-post across overlapping windows is a free no-op. `_LOOKBACK_HOURS` (24) is
-also applied client-side as a defensive filter on each post's own
-`created_utc`, matching `t=day`'s own window -- belt-and-braces against a
-`top` response that (rarely, but observed on other subreddits historically)
-includes something older than the window it claims to rank.
-
-Score/comments ride IN the item text, not a separate field
-----------------------------------------------------------------------
-`_build_item` folds `[score N, M comments]` directly into `Item.text` rather
-than adding new columns to the shared `Item`/`items` schema -- this is what
-lets the summarizer prompt (prompts/digest.md) weight a post by community
-signal (a 4000-upvote post carries real community weight; a 12-upvote one
-does not) with no changes to digest/state.py at all.
+`t=day` is Reddit's own ROLLING ranked window, re-computed on every request, so
+there is no stable "since" a cursor could page through. Idempotency comes from
+`UNIQUE(source, source_id)`: re-fetching the same post is a free no-op, which
+only works because `source_id` is the BARE post id (`1xcj1wm`) -- the feed's
+`t3_` prefix is stripped so ids match those the earlier JSON collector already
+stored and nothing is duplicated across the switch. `_LOOKBACK_HOURS` (24) is
+also applied client-side to each entry's `published` (falling back to
+`updated`) as a belt-and-braces check; an entry with no parseable timestamp is
+KEPT (fail open).
 
 `chat_title` is the reddit-specific provenance field
 ----------------------------------------------------------------------
-Every item's `chat_title` is `f"r/{subreddit}"` -- playing the same "which
-group/feed did this come from" role Telegram's `chat_title` and rss.py's
-feed-title play for their own sources. This exact `f"r/{subreddit}"` format
-is load-bearing, not cosmetic: prompts/digest.md's Hungary standing-section
-rule keys on `chat_title == "r/hungary"` verbatim.
+Every item's `chat_title` is `f"r/{subreddit}"` -- the same "which group/feed"
+role Telegram's `chat_title` and rss.py's feed title play. This exact format is
+load-bearing: prompts/digest.md's Hungary standing-section rule keys on
+`chat_title == "r/hungary"` verbatim.
 
-Stickied and NSFW posts are noise, not content
-----------------------------------------------------------------------
-A stickied post is a moderator announcement/rules post pinned to the top of
-the subreddit regardless of its actual age or relevance this run -- it is
-not "top of day" content in any meaningful sense, so it is skipped
-(`data.stickied`), counted at debug level, never fatal. `over_18` posts are
-excluded outright (skipped, counted at debug level) -- a personal news
-digest has no use for NSFW-flagged community content regardless of subject
-matter.
+The feed has no stickied/NSFW flags, so the old skips for those are gone.
 """
 
 from __future__ import annotations
 
-import json
+import calendar
+import html
 import logging
+import math
 import re
 import time
 import urllib.error
@@ -188,174 +123,163 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+import feedparser
+
 from digest.collectors.base import CollectResult
 from digest.state import Item
 
 logger = logging.getLogger(__name__)
 
 # Per-request urllib timeout, in seconds. Matches rss.py's/polymarket.py's own
-# constant of the same name/value -- a hung request (the session-verify call
-# or a subreddit listing) must not wedge the whole run.
+# constant of the same name/value -- a hung request must not wedge the run.
 _REQUEST_TIMEOUT_SECONDS = 15
 
-# Sent on every request (session verify AND every old.reddit.com call). See
-# module docstring's "User-Agent" section: unlike the OAuth API's documented
-# requirement, whether old.reddit.com's cookie-session surface prefers a
-# browser-like UA is unproven -- this descriptive, stable string is the
-# honest default pending a live-verification run.
+# Hard cap on the bytes read from one response. A real feed of 25 entries is
+# a few tens of KiB; this only stops a misbehaving upstream from filling memory.
+_MAX_FEED_BYTES = 2 * 1024 * 1024
+
+# Sent on every request. Descriptive and honest; see module docstring.
 _USER_AGENT = "linux:notification-digest:v1 (personal digest)"
 
-# old.reddit.com is the surface that accepts a bare `reddit_session` cookie
-# as full authentication for its `.json` endpoints -- see module docstring's
-# "Why old.reddit.com, not www.reddit.com" section. Default `api_base`;
-# production overrides it with the reddit-proxy Worker (module docstring's
-# "Proxy" section).
-_BASE_URL = "https://old.reddit.com"
+# Default `api_base`: Reddit's public Atom feeds live on www.reddit.com
+# (anonymous old.reddit.com answers 302). Production overrides it with the
+# homelab proxy (module docstring's "Proxy" section).
+_BASE_URL = "https://www.reddit.com"
 
-# Courtesy pacing between per-subreddit requests. Logged-in old.reddit.com's
-# own rate limits are undocumented/unproven for this cookie-session path
-# (unlike the now-dead OAuth grant's documented 100 req/min) -- 2s across a
-# handful of subreddits once every 6 hours is free insurance, and this
-# collector must err polite given the account-risk posture (module
-# docstring's "Auth back-off mid-run" section).
-_INTER_SUB_SLEEP_SECONDS = 2.0
+# Defaults for the pacing knobs (config.py owns the env-facing ones).
+_DEFAULT_REQUEST_INTERVAL_SECONDS = 65
+_DEFAULT_MAX_WAIT_SECONDS = 120
+
+# Added to `x-ratelimit-reset` so the next request lands just after the
+# window rolls over rather than on its edge.
+_RESET_MARGIN_SECONDS = 2
 
 # Matches Reddit's own `t=day` ranking window -- see module docstring's "No
-# cursor axis" section for why this replaces a cursor entirely rather than
-# supplementing one.
+# cursor axis" section.
 _LOOKBACK_HOURS = 24
 
-# Caps the selftext excerpt folded into Item.text (module docstring's
-# "Score/comments ride IN the item text" section). The title is kept in full
-# regardless -- only a self-post's (often much longer) body is truncated.
+# Caps the content excerpt folded into Item.text. The title is kept in full.
 _MAX_SELFTEXT_EXCERPT_CHARS = 500
 
+# The pacing sleep. Module-level so tests replace it and never actually wait.
+_sleep = time.sleep
+
+_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
+_POST_ID_RE = re.compile(r"[A-Za-z0-9]+")
+_COMMENTS_PATH_RE = re.compile(r"/r/[A-Za-z0-9_]+/comments/[A-Za-z0-9]+(?:/|$)")
+_REDDIT_HOSTS = frozenset({"www.reddit.com", "reddit.com"})
+_RETRY_AFTER_RE = re.compile(r"\d{1,6}")
 
 
 @dataclass(frozen=True)
 class _ParsedPost:
-    """One Reddit post's fields, extracted from one raw `Listing` child object.
+    """One Reddit post's fields, extracted from one Atom entry.
 
     Deliberately flat -- the only shape `collect`'s filtering and
-    `_build_item` consume from `_parse_post`. `stickied`/`over_18` are kept
-    here (not applied inside `_parse_post` itself) so `collect` can count
-    each skip reason separately at debug level, mirroring
-    polymarket.py's `_is_sports_market`/`_parse_binary_market` split between
-    "wrong category" and "malformed shape".
+    `_build_item` consume from `_parse_entry`. `published` is None when the
+    entry carried no parseable timestamp (the window check then fails open).
     """
 
     post_id: str
     title: str
     author: str | None
-    permalink: str
-    score: int
-    num_comments: int
-    selftext: str
-    created_utc: float
-    stickied: bool
-    over_18: bool
+    url: str
+    excerpt: str
+    published: float | None
 
 
 def _clean_text(raw: str) -> str:
-    """Collapse whitespace/newline runs in a Reddit title/selftext field.
+    """Strip HTML tags, unescape entities and collapse whitespace.
 
-    Reddit's fields are plain text/markdown, unlike rss.py's HTML feed
-    summaries -- no tag-stripping is needed here, just collapsing the
-    blank-line/whitespace runs a long selftext post commonly carries, purely
-    for prompt-budget hygiene (same rationale as rss.py's `_clean_summary`,
-    minus the HTML-specific steps that don't apply to this source).
+    Same approach as rss.py's `_clean_summary`: for prompt-budget hygiene, not
+    security (every item's `text` is treated as untrusted data downstream and
+    escaped again at render time).
     """
-    return _WHITESPACE_RE.sub(" ", raw).strip()
+    without_tags = _TAG_RE.sub(" ", raw)
+    return _WHITESPACE_RE.sub(" ", html.unescape(without_tags)).strip()
 
 
-def _parse_post(raw: Any) -> _ParsedPost | None:
-    """Parse one raw `Listing` child object into a `_ParsedPost`, or None.
+def _entry_timestamp(entry: Any) -> float | None:
+    """The entry's `published` (else `updated`) as a UTC epoch, or None."""
+    for attr in ("published_parsed", "updated_parsed"):
+        value = entry.get(attr)
+        if isinstance(value, time.struct_time):
+            return float(calendar.timegm(value))
+    return None
 
-    Returns None (never raises) for anything that isn't a well-formed post:
-    a non-dict entry, a missing/non-dict `data`, or a missing/blank
-    `id`/`title`/`permalink`/`created_utc`. Every check fails open into
-    `None` rather than propagating -- `collect`'s caller counts skips, it
-    never lets one malformed post abort the subreddit's whole batch (mirrors
-    polymarket.py's `_parse_binary_market` contract).
 
-    `score`/`num_comments` are defensively coalesced to 0 on anything
-    unparsable -- they are a display/salience signal in the item text
-    (module docstring), not something that should disqualify an otherwise
-    valid post.
+def _safe_url(link: Any, subreddit: str, post_id: str) -> str:
+    """The entry link if it is a Reddit comments page over https, else a built one.
+
+    This URL enters the email's link-provenance allowlist later
+    (digest/emailer.py), so anything that is not https on reddit.com with a
+    `/r/<sub>/comments/<id>` path is replaced by the URL built from the id.
     """
-    if not isinstance(raw, dict):
+    if isinstance(link, str):
+        parts = urlsplit(link)
+        if (
+            parts.scheme == "https"
+            and parts.netloc.lower() in _REDDIT_HOSTS
+            and _COMMENTS_PATH_RE.match(parts.path)
+        ):
+            return link
+    return f"https://www.reddit.com/r/{subreddit}/comments/{post_id}/"
+
+
+def _parse_entry(entry: Any, subreddit: str) -> _ParsedPost | None:
+    """Parse one feedparser entry into a `_ParsedPost`, or None.
+
+    Returns None (never raises) for an entry without a usable id or title;
+    `collect` counts skips and never lets one malformed entry abort the
+    subreddit (mirrors polymarket.py's `_parse_binary_market` contract).
+    """
+    raw_id = entry.get("id")
+    if not isinstance(raw_id, str):
         return None
-    data = raw.get("data")
-    if not isinstance(data, dict):
+    post_id = raw_id.strip().removeprefix("t3_")
+    if not _POST_ID_RE.fullmatch(post_id):
         return None
 
-    post_id = data.get("id")
-    if not isinstance(post_id, str) or not post_id:
+    title = entry.get("title")
+    title = _clean_text(title) if isinstance(title, str) else ""
+    if not title:
         return None
 
-    title = data.get("title")
-    if not isinstance(title, str) or not title:
-        return None
+    author = entry.get("author")
+    author = author.strip().removeprefix("/u/").strip() if isinstance(author, str) else ""
 
-    permalink = data.get("permalink")
-    if not isinstance(permalink, str) or not permalink:
-        return None
-
-    try:
-        created_utc = float(data.get("created_utc"))
-    except (TypeError, ValueError):
-        return None
-
-    author = data.get("author")
-    author = author if isinstance(author, str) and author else None
-
-    try:
-        score = int(data.get("score", 0))
-    except (TypeError, ValueError):
-        score = 0
-
-    try:
-        num_comments = int(data.get("num_comments", 0))
-    except (TypeError, ValueError):
-        num_comments = 0
-
-    selftext = data.get("selftext")
-    selftext = selftext if isinstance(selftext, str) else ""
+    content = entry.get("content")
+    raw_html = ""
+    if isinstance(content, list) and content and isinstance(content[0].get("value"), str):
+        raw_html = content[0]["value"]
+    elif isinstance(entry.get("summary"), str):
+        raw_html = entry["summary"]
 
     return _ParsedPost(
         post_id=post_id,
         title=title,
-        author=author,
-        permalink=permalink,
-        score=score,
-        num_comments=num_comments,
-        selftext=selftext,
-        created_utc=created_utc,
-        stickied=bool(data.get("stickied")),
-        over_18=bool(data.get("over_18")),
+        author=author or None,
+        url=_safe_url(entry.get("link"), subreddit, post_id),
+        excerpt=_clean_text(raw_html)[:_MAX_SELFTEXT_EXCERPT_CHARS],
+        published=_entry_timestamp(entry),
     )
 
 
 def _build_item(post: _ParsedPost, subreddit: str, fetched_at: str) -> Item:
     """Build the digest Item for one confirmed, in-window Reddit post.
 
-    See module docstring's "Score/comments ride IN the item text" and
-    "`chat_title` is the reddit-specific provenance field" sections for why
-    the text shape and the exact `f"r/{subreddit}"` chat_title format are
-    both load-bearing, not stylistic choices.
+    See module docstring's "`chat_title` is the reddit-specific provenance
+    field" section for why the exact `f"r/{subreddit}"` format is load-bearing.
     """
-    title = _clean_text(post.title)
-    selftext_excerpt = _clean_text(post.selftext)[:_MAX_SELFTEXT_EXCERPT_CHARS]
-    text = f"{title} [score {post.score}, {post.num_comments} comments] {selftext_excerpt}".strip()
     return Item(
         source="reddit",
         source_id=post.post_id,
         chat_id=None,
         chat_title=f"r/{subreddit}",
         author=post.author,
-        text=text,
-        url=f"https://www.reddit.com{post.permalink}",
+        text=f"{post.title} {post.excerpt}".strip(),
+        url=post.url,
         fetched_at=fetched_at,
     )
 
@@ -378,26 +302,18 @@ def _open(request: urllib.request.Request) -> Any:
     return _OPENER.open(request, timeout=_REQUEST_TIMEOUT_SECONDS)
 
 
-def _session_headers(
-    session_cookie: str,
+def _request_headers(
     proxy_key: str | None = None,
     access_client_id: str | None = None,
     access_client_secret: str | None = None,
 ) -> dict[str, str]:
-    """Build the Cookie + User-Agent (+ proxy/Access) headers every request sends.
+    """Build the User-Agent (+ proxy/Access) headers every request sends.
 
-    `x-proxy-key` is added only when `proxy_key` is set, and the Cloudflare
-    Access pair only when BOTH halves are set (module docstring's "Proxy"
-    section); all are secrets and are never logged, like the cookie.
-
-    `session_cookie` is stored and sent EXACTLY as exported from the
-    browser -- it may contain `%`-escapes, and those are sent verbatim,
-    never re-encoded (re-encoding an already-escaped value would double-
-    escape it and break the cookie). Never logged, directly or via any
-    exception message built around it -- callers only log an exception's
-    TYPE NAME (see `_verify_session`/`collect`).
+    Never a Cookie. `x-proxy-key` is added only when `proxy_key` is set, and
+    the Cloudflare Access pair only when BOTH halves are set; all are secrets
+    and are never logged.
     """
-    headers = {"Cookie": f"reddit_session={session_cookie}", "User-Agent": _USER_AGENT}
+    headers = {"User-Agent": _USER_AGENT}
     if proxy_key:
         headers["x-proxy-key"] = proxy_key
     if access_client_id and access_client_secret:
@@ -434,7 +350,7 @@ def _classify_redirect(exc: urllib.error.HTTPError) -> str:
     """Label a 3xx by the HOST of its `Location` header only; never the path or query."""
     location = exc.headers.get("Location") if exc.headers is not None else None
     if not location:
-        return "not logged in"
+        return "redirect without Location"
     host = (urlsplit(location).hostname or "").lower()
     if not host:
         return "relative redirect"
@@ -443,17 +359,15 @@ def _classify_redirect(exc: urllib.error.HTTPError) -> str:
     return f"redirect to {_REASON_UNSAFE_RE.sub('', host)[:_REASON_MAX_CHARS]}"
 
 
-def _describe_verify_failure(exc: Exception) -> str:
-    """Log-safe description of a `_verify_session` failure; never the cookie.
+def _describe_failure(exc: Exception) -> str:
+    """Log-safe description of a per-subreddit failure; never a secret.
 
     `HTTPError` -> status code + sanitized server reason phrase, so a 403
-    "Blocked" (IP/client rejected) is distinguishable from a 403 "Forbidden"
-    (session refused), a 429, or a 5xx; a 3xx adds a label from the `Location`
-    host and a 403 a label from its body (module docstring's "Proxy" section).
-    `ValueError` (incl. JSONDecodeError) -> Reddit answered 200 with an HTML
-    login page or `{}`. Anything else -> the type name only. Only fixed labels
-    and the sanitized host/reason are used: never the message, other headers,
-    body text or url.
+    "Blocked" is distinguishable from a 429 or a 5xx; a 3xx adds a label from
+    the `Location` host and a 403 a label from its body (module docstring's
+    "Proxy" section). `ValueError` -> the feed did not parse. Anything else ->
+    the type name only. Only fixed labels and the sanitized host/reason are
+    used: never the message, other headers, body text or url.
     """
     if isinstance(exc, urllib.error.HTTPError):
         reason = _REASON_UNSAFE_RE.sub("", str(exc.reason))[:_REASON_MAX_CHARS]
@@ -464,50 +378,45 @@ def _describe_verify_failure(exc: Exception) -> str:
             return f"{text} ({_classify_forbidden_body(exc)})"
         return text
     if isinstance(exc, ValueError):
-        return f"{type(exc).__name__} (not logged in or non-JSON response)"
+        return f"{type(exc).__name__} (unparseable feed)"
     return type(exc).__name__
 
 
-def _verify_session(
-    session_cookie: str,
-    *,
-    api_base: str = _BASE_URL,
-    proxy_key: str | None = None,
-    access_client_id: str | None = None,
-    access_client_secret: str | None = None,
-) -> str:
-    """Confirm the session cookie is logged in, returning the owner's own username.
+def _header_number(headers: Any, name: str) -> float | None:
+    """A response header as a finite, non-negative float, or None."""
+    if headers is None:
+        return None
+    raw = headers.get(name)
+    if raw is None:
+        return None
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
 
-    GETs `{api_base}/api/me.json` with `_session_headers`. A logged-in
-    session returns a JSON object with `data.name` (the account's username);
-    an anonymous or dead session returns `{}`. Raises `ValueError` when
-    `data.name` is missing or blank -- deliberately unguarded otherwise
-    (network errors, non-2xx status, non-JSON body all propagate) -- this
-    plays EXACTLY the structural role the old OAuth `_fetch_access_token`
-    played: the caller (`collect`) wraps this single call in the try/except
-    that sets `failed=True` for the whole run and returns immediately with
-    zero further network calls (module docstring's "Failure semantics").
 
-    `session_cookie` and the proxy/Access secrets are never logged by this
-    function, directly or via an exception message. The verified username IS
-    logged, but only at debug level -- it's the owner's own account name, not a
-    secret, but no need for info-level noise on every run.
+def _wait_seconds(headers: Any, request_interval_seconds: float, max_wait_seconds: float) -> float:
+    """How long to wait before the next subreddit request (module docstring's "Pacing").
+
+    `remaining` < 1 with a numeric `reset` -> `reset + 2`; `remaining` >= 1 ->
+    0; anything absent or unusable -> the configured interval. Always capped
+    at `max_wait_seconds`.
     """
-    url = f"{api_base}/api/me.json"
-    headers = _session_headers(session_cookie, proxy_key, access_client_id, access_client_secret)
-    request = urllib.request.Request(url, headers=headers)
-    with _open(request) as response:
-        raw_bytes = response.read()
-    data = json.loads(raw_bytes)
-    name = data.get("data", {}).get("name") if isinstance(data, dict) else None
-    if not isinstance(name, str) or not name:
-        raise ValueError("reddit session cookie is not logged in")
-    logger.debug("reddit: session verified as u/%s", name)
-    return name
+    remaining = _header_number(headers, "x-ratelimit-remaining")
+    reset = _header_number(headers, "x-ratelimit-reset")
+    if remaining is None:
+        wait = request_interval_seconds
+    elif remaining >= 1:
+        wait = 0.0
+    elif reset is None:
+        wait = request_interval_seconds
+    else:
+        wait = reset + _RESET_MARGIN_SECONDS
+    return min(wait, max_wait_seconds)
 
 
-def _fetch_subreddit_posts(
-    session_cookie: str,
+def _fetch_subreddit_feed(
     subreddit: str,
     posts_per_sub: int,
     *,
@@ -515,36 +424,36 @@ def _fetch_subreddit_posts(
     proxy_key: str | None = None,
     access_client_id: str | None = None,
     access_client_secret: str | None = None,
-) -> list[Any]:
-    """One GET to `{api_base}/r/{subreddit}/top`, returning the raw `Listing` children.
+) -> tuple[list[Any], Any]:
+    """One GET to `{api_base}/r/{subreddit}/top/.rss`, returning (entries, response headers).
 
-    `t=day` + `limit={posts_per_sub}` + `raw_json=1` -- see module
-    docstring's "No cursor axis" section for why `t=day` (not a cursor) is
-    the right idempotency model here, and CLAUDE.md/the feature spec for why
-    `raw_json=1` (Reddit otherwise HTML-entity-escapes text fields).
+    `t=day` + `limit={posts_per_sub}` -- the only two query parameters the
+    homelab proxy accepts (module docstring's "No cursor axis" section for
+    why `t=day`). The response is read up to `_MAX_FEED_BYTES` and parsed with
+    feedparser, as rss.py does.
 
-    Raises on any failure (network error, non-2xx status, non-JSON body, a
-    body missing `data.children` as a list) -- deliberately unguarded here,
-    matching `_verify_session`: the caller (`collect`) wraps this call in
-    the try/except that counts this ONE subreddit as failed, with a special
-    case for `urllib.error.HTTPError` 401/403/429 (module docstring's
-    "Mid-run back-off" section -- a single subreddit's fetch failing on a
-    NON-auth, non-rate-limit error is routine, not the whole run's signal).
+    Raises on any failure (network error, non-2xx status, oversized or
+    unparseable body) -- deliberately unguarded: the caller (`collect`) wraps
+    this in the try/except that counts this ONE subreddit as failed, with a
+    special case for `urllib.error.HTTPError` 401/403/429. A feedparser `bozo`
+    parse with zero entries is a failure; `bozo` with entries proceeds
+    (feedparser's tolerance working as intended, same as rss.py).
     """
-    url = f"{api_base}/r/{subreddit}/top.json?t=day&limit={posts_per_sub}&raw_json=1"
-    headers = _session_headers(session_cookie, proxy_key, access_client_id, access_client_secret)
+    url = f"{api_base}/r/{subreddit}/top/.rss?t=day&limit={posts_per_sub}"
+    headers = _request_headers(proxy_key, access_client_id, access_client_secret)
     request = urllib.request.Request(url, headers=headers)
     with _open(request) as response:
-        raw_bytes = response.read()
-    data = json.loads(raw_bytes)
-    children = data.get("data", {}).get("children") if isinstance(data, dict) else None
-    if not isinstance(children, list):
-        raise ValueError(f"reddit /r/{subreddit}/top response missing data.children")
-    return children
+        raw_bytes = response.read(_MAX_FEED_BYTES + 1)
+        response_headers = getattr(response, "headers", None)
+    if len(raw_bytes) > _MAX_FEED_BYTES:
+        raise ValueError("reddit feed response too large")
+    parsed = feedparser.parse(raw_bytes)
+    if parsed.bozo and not parsed.entries:
+        raise ValueError("reddit feed did not parse to any entries")
+    return list(parsed.entries), response_headers
 
 
 def collect(
-    session_cookie: str,
     subreddits: Sequence[str],
     posts_per_sub: int,
     *,
@@ -552,96 +461,55 @@ def collect(
     proxy_key: str | None = None,
     access_client_id: str | None = None,
     access_client_secret: str | None = None,
+    request_interval_seconds: float = _DEFAULT_REQUEST_INTERVAL_SECONDS,
+    max_wait_seconds: float = _DEFAULT_MAX_WAIT_SECONDS,
 ) -> CollectResult:
-    """Fetch today's top posts from every configured subreddit.
+    """Fetch today's top posts from every configured subreddit, anonymously.
 
-    `api_base` / `proxy_key` / `access_client_*` select a reddit proxy
-    (module docstring's "Proxy" section); the defaults talk to old.reddit.com
-    directly. Redirects are never followed; through a proxy, a 3xx without
-    `Location` on the verify call means "not logged in". None of the secrets
-    is ever logged.
+    `api_base` / `proxy_key` / `access_client_*` select the proxy (module
+    docstring's "Proxy" section); the defaults talk to www.reddit.com directly.
+    Redirects are never followed. No secret is ever logged, and no Cookie is
+    ever sent.
 
     Empty `subreddits` -> a fresh, unfailed `CollectResult()` with no network
-    calls at all (not even the session verify) -- mirrors rss.py's own
-    `collect(feed_urls=())` no-op, and covers the same "collector wired up
-    but nothing configured yet" shape digest/config.py's validation should
-    already prevent once `REDDIT_ENABLED=true`, kept here anyway so this
-    function's own contract stays total.
+    calls at all, mirroring rss.py's `collect(feed_urls=())` no-op.
 
-    One session verify (`_verify_session`) up front. ANY failure of it sets
-    `failed=True` and returns immediately with no items -- see module
-    docstring's "Failure semantics": every subsequent request depends on a
-    confirmed logged-in session, so its failure is the whole run's signal,
-    exactly like telegram.py's single session or x.py's single timeline.
-    What is logged: for an `HTTPError`, its status code plus Reddit's reason
-    phrase (e.g. "Blocked" vs "Forbidden"), sanitized to `[A-Za-z0-9 ._-]`
-    and truncated; for anything else, only the exception's TYPE NAME. Never
-    the cookie or any exception message that might embed it.
+    Each subreddit is fetched (`_fetch_subreddit_feed`) independently, wrapped
+    in its own try/except. HTTP 401/403/429 abort the REST of the run and set
+    `failed=True` (module docstring's "Failure semantics"); no retry, and
+    `retry-after` is only logged. Any other exception is logged as a WARNING
+    (the subreddit name is owner config, not a secret) and skipped. Logged
+    failures go through `_describe_failure`: status code and sanitized reason,
+    or the exception's type name -- never a message that might embed a secret.
+    `failed=True` is also set when subreddits were configured and EVERY one
+    failed.
 
-    Each subreddit is then fetched (`_fetch_subreddit_posts`) independently,
-    wrapped in its own try/except. `urllib.error.HTTPError` with
-    `exc.code in (401, 403)` is handled separately from every other
-    exception: it means the session died MID-RUN (module docstring's "Mid-run
-    back-off" section) -- a single WARNING is logged, `result.failed` is set
-    True, and the loop `break`s immediately, never touching the remaining
-    subreddits. `exc.code == 429` is handled the same way but logged with its
-    own distinct WARNING message: it means Reddit is actively rate-limiting
-    this session, and continuing to fetch the remaining subreddits into that
-    signal is how a throttled account becomes a flagged one (module
-    docstring's "Mid-run back-off" section) -- same abort-the-run action as
-    401/403, kept as a separate `if` clause (not merged) so the owner
-    debugging a failed run can tell which of the two happened. Any OTHER
-    exception per subreddit (a transient error, the subreddit going
-    private/banned/renamed) is logged as a WARNING (the subreddit name is
-    owner config, not a secret) and skipped; the rest proceed normally.
-    `failed=True` is otherwise set on the result only when subreddits were
-    configured and EVERY single one of them failed -- a total outage --
-    mirroring rss.py's own per-feed fault-tolerance contract.
+    After every subreddit request except the last, `_sleep` waits
+    `_wait_seconds` (module docstring's "Pacing"), including after a skipped
+    failure, whose error response carries the same headers.
 
-    A small fixed pause (`_INTER_SUB_SLEEP_SECONDS`) is taken BEFORE each
-    subreddit request except the first -- pure courtesy pacing (module
-    docstring), not a rate-limit necessity.
+    Entries are parsed (`_parse_entry`; a malformed one is skipped, never
+    fatal) and any whose `published` falls outside `_LOOKBACK_HOURS` is
+    dropped; a missing timestamp is kept. Survivors, at most `posts_per_sub`
+    per subreddit, become Items via `_build_item`.
 
-    Each raw post is parsed (`_parse_post`; a malformed entry is skipped,
-    never fatal) and then filtered: `stickied` posts and `over_18` posts are
-    each skipped and counted at debug level (module docstring's "Stickied
-    and NSFW posts are noise" section), and any post whose own `created_utc`
-    falls outside `_LOOKBACK_HOURS` is silently dropped (a defensive
-    re-check of Reddit's own `t=day` window, see module docstring's "No
-    cursor axis" section). Survivors become Items via `_build_item`.
-
-    `cursor_updates` is always `{}` (via the reused `CollectResult` -- see
-    module docstring for why this collector has no cursor axis at all).
+    `cursor_updates` is always `{}` (no cursor axis; see module docstring).
     """
     result = CollectResult()
 
     if not subreddits:
         return result
 
-    try:
-        _verify_session(
-            session_cookie,
-            api_base=api_base,
-            proxy_key=proxy_key,
-            access_client_id=access_client_id,
-            access_client_secret=access_client_secret,
-        )
-    except Exception as exc:
-        logger.warning("reddit session verify failed: %s", _describe_verify_failure(exc))
-        return CollectResult(failed=True)
-
     fetched_at = datetime.now(UTC).isoformat()
     cutoff = datetime.now(UTC).timestamp() - _LOOKBACK_HOURS * 3600
 
     succeeded = 0
     skipped = 0
+    last_index = len(subreddits) - 1
     for index, subreddit in enumerate(subreddits):
-        if index > 0:
-            time.sleep(_INTER_SUB_SLEEP_SECONDS)
-
+        response_headers: Any = None
         try:
-            children = _fetch_subreddit_posts(
-                session_cookie,
+            entries, response_headers = _fetch_subreddit_feed(
                 subreddit,
                 posts_per_sub,
                 api_base=api_base,
@@ -650,48 +518,46 @@ def collect(
                 access_client_secret=access_client_secret,
             )
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                logger.warning(
-                    "reddit session rejected mid-run (HTTP %d) at r/%s; "
-                    "aborting remaining subreddits",
-                    exc.code,
-                    subreddit,
+            if exc.code in (401, 403, 429):
+                retry_after = exc.headers.get("retry-after") if exc.headers is not None else None
+                retry_after = retry_after.strip() if isinstance(retry_after, str) else ""
+                extra = (
+                    f"; retry-after {retry_after}s"
+                    if _RETRY_AFTER_RE.fullmatch(retry_after)
+                    else ""
                 )
-                result.failed = True
-                break
-            if exc.code == 429:
                 logger.warning(
-                    "reddit rate limited (HTTP 429) at r/%s; aborting remaining subreddits",
+                    "reddit told us to back off at r/%s (%s)%s; aborting remaining subreddits",
                     subreddit,
+                    _describe_failure(exc),
+                    extra,
                 )
                 result.failed = True
                 break
             logger.warning(
-                "reddit subreddit fetch failed: r/%s (%s)", subreddit, type(exc).__name__
+                "reddit subreddit fetch failed: r/%s (%s)", subreddit, _describe_failure(exc)
             )
-            continue
+            response_headers = exc.headers
         except Exception as exc:
             logger.warning(
-                "reddit subreddit fetch failed: r/%s (%s)", subreddit, type(exc).__name__
+                "reddit subreddit fetch failed: r/%s (%s)", subreddit, _describe_failure(exc)
             )
-            continue
+        else:
+            succeeded += 1
+            for entry in entries[:posts_per_sub]:
+                post = _parse_entry(entry, subreddit)
+                if post is None:
+                    skipped += 1
+                    continue
+                if post.published is not None and post.published < cutoff:
+                    skipped += 1
+                    continue
+                result.items.append(_build_item(post, subreddit, fetched_at))
 
-        succeeded += 1
-        for raw in children:
-            post = _parse_post(raw)
-            if post is None:
-                skipped += 1
-                continue
-            if post.stickied:
-                logger.debug("reddit: skipped stickied post in r/%s", subreddit)
-                continue
-            if post.over_18:
-                logger.debug("reddit: skipped over_18 post in r/%s", subreddit)
-                continue
-            if post.created_utc < cutoff:
-                skipped += 1
-                continue
-            result.items.append(_build_item(post, subreddit, fetched_at))
+        if index < last_index:
+            wait = _wait_seconds(response_headers, request_interval_seconds, max_wait_seconds)
+            if wait > 0:
+                _sleep(wait)
 
     if skipped:
         logger.debug("reddit: skipped %d malformed/stale posts", skipped)

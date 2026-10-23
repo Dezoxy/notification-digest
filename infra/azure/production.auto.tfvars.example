@@ -73,7 +73,6 @@ secret_names = {
   SMTP_USER = "digest-smtp-user"
   SMTP_PASSWORD = "digest-smtp-password"
   CLAUDE_CODE_OAUTH_TOKEN = "digest-claude-oauth-token"
-  REDDIT_SESSION_COOKIE = "digest-reddit-session"
   REDDIT_PROXY_KEY = "digest-reddit-proxy-key"
   REDDIT_ACCESS_CLIENT_ID = "digest-reddit-access-client-id"
   REDDIT_ACCESS_CLIENT_SECRET = "digest-reddit-access-client-secret"

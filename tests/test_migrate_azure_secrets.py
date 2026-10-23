@@ -219,7 +219,9 @@ def test_real_manifest_exact_runtime_scope_excludes_unused_cookie_seed():
     assert "digest-notify-telegram-bot-token" not in names
     assert "digest-notify-telegram-chat-id" not in names
     example = (SCRIPT.parents[1] / "infra/azure/production.auto.tfvars.example").read_text()
-    for name in names:
+    # The Reddit session cookie was migrated at cutover but the collector no
+    # longer reads it (anonymous feeds), so the example drops it from secret_names.
+    for name in names - {"digest-reddit-session"}:
         assert name in example
 
 

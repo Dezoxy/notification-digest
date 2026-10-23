@@ -146,7 +146,7 @@ notification-digest/
 │       ├── x.py                  # twifork (twikit fork) collector: notifications, X_ENABLED-gated
 │       ├── rss.py                # RSS/Atom "news" feed collector, no cursor axis
 │       ├── polymarket.py         # Polymarket swing-detection collector, own polymarket_probs state
-│       ├── reddit.py              # Reddit top-of-day collector, cookie session
+│       ├── reddit.py              # Reddit top-of-day collector, anonymous Atom feeds
 │       ├── hackernews.py         # Hacker News front page via the public Algolia API, no auth
 │       └── patreon.py            # paid-tier posts of one campaign, cookie session; patreon mode only
 ├── prompts/
@@ -160,7 +160,7 @@ notification-digest/
 │   └── translate-hu.md           # Hungarian translation prompt template
 ├── scripts/
 │   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
-│   ├── rotate_reddit_cookie.py    # interactive Reddit cookie check + scoped-grant Key Vault rotation (--proxy-key: reddit-proxy key)
+│   ├── rotate_reddit_cookie.py    # OBSOLETE for the collector (no cookie any more); interactive cookie check + Key Vault rotation (--proxy-key: reddit-proxy key)
 │   ├── azure_release_guard.py     # image-bump plan check and idle wait for the auto-apply job
 │   ├── next_release_version.py    # next patch tag from `git tag --list`, for auto-release
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
@@ -198,7 +198,7 @@ notification-digest/
 │   ├── test_positions.py          # membership partition, NO-SIGNAL path, run_positions (real SQLite)
 │   ├── test_relay.py              # album-safe chunking, per-chunk cursor, FloodWait/restricted paths, run_relay (fake Telethon)
 │   ├── test_publish.py            # site/Telegram channel HTTP calls (mocked urllib)
-│   ├── test_reddit_collector.py   # session verify, per-subreddit fetch, back-off (mocked urllib)
+│   ├── test_reddit_collector.py   # Atom parsing, pacing, back-off (mocked urllib)
 │   ├── test_rss_collector.py      # lookback window, per-feed fault tolerance (mocked urllib)
 │   ├── test_state.py              # SQLite idempotency, schema migrations, prunes
 │   ├── test_summarize.py          # prompt build, validate_output, link allowlist (mocked claude CLI)
@@ -463,12 +463,13 @@ Every var below is read in `config.py`'s `Config.from_env`, except `CLAUDE_CONFI
 | `POLYMARKET_TOP_N` | collectors/polymarket.py | markets reported after filtering, 1–100 (default `30`) |
 | `POLYMARKET_SWING_THRESHOLD` | collectors/polymarket.py | absolute probability-point swing that triggers a report, exclusive (0,1) (default `0.15`) |
 | `REDDIT_ENABLED` | main.py, collectors/reddit.py | master switch for the Reddit collector (default `false`) |
-| `REDDIT_SESSION_COOKIE` | collectors/reddit.py | owner's logged-in `reddit_session` cookie value, required when enabled (secret) |
-| `REDDIT_API_BASE` | collectors/reddit.py | Reddit base URL (default `https://old.reddit.com`; production is disabled pending the homelab proxy `https://reddit-proxy.toomhorvath.com` behind Cloudflare Access, ADR 11 — Reddit blocks Azure egress and, since 2026-10-22, logged-in requests from Cloudflare Workers; the `reddit-proxy` Worker remains supported) |
+| `REDDIT_API_BASE` | collectors/reddit.py | Reddit base URL (default `https://www.reddit.com`; production is disabled until the homelab proxy `https://reddit-proxy.toomhorvath.com` behind Cloudflare Access is live, ADR 11) |
 | `REDDIT_PROXY_KEY` | collectors/reddit.py | optional `x-proxy-key` header for the reddit-proxy Worker (secret) |
 | `REDDIT_ACCESS_CLIENT_ID` / `REDDIT_ACCESS_CLIENT_SECRET` | collectors/reddit.py | optional Cloudflare Access service token (`CF-Access-Client-Id` / `-Secret` headers) for the homelab proxy; both or neither (secret) |
 | `REDDIT_SUBREDDITS` | collectors/reddit.py | comma-separated subreddit names, no `r/` prefix, required when enabled |
 | `REDDIT_POSTS_PER_SUB` | collectors/reddit.py | top-of-day posts requested per subreddit, 1–25 (default `10`) |
+| `REDDIT_REQUEST_INTERVAL_SECONDS` | collectors/reddit.py | wait between subreddits when rate-limit headers are absent, 1–600 (default `65`) |
+| `REDDIT_MAX_WAIT_SECONDS` | collectors/reddit.py | cap on every wait between subreddits, 1–900 (default `120`) |
 | `EMAIL_ENABLED` | deliver.py | master switch for the email channel (default `true`) |
 | `SITE_PUBLISH_URL` | deliver.py, publish.py | site ingest Worker base URL; unset = site channel disabled |
 | `SITE_INGEST_KEY` | publish.py | `x-ingest-key` header, required when `SITE_PUBLISH_URL` is set (secret) |
@@ -499,7 +500,7 @@ Synchronous urllib collector, enabled via `POLYMARKET_ENABLED` (an explicit flag
 
 ### 4.10 `collectors/reddit.py`
 
-Synchronous urllib collector, enabled via `REDDIT_ENABLED`. Authenticates with the owner's own logged-in `reddit_session` browser cookie (`REDDIT_SESSION_COOKIE`) against `old.reddit.com`'s `.json` endpoints — Reddit's Data Team formally refused this owner's OAuth API application, and anonymous `.json` access comes back a hard 403 regardless of pacing, so a cookie session (the same ToS-risk posture `collectors/x.py` already takes) is what remains. Fetches `REDDIT_POSTS_PER_SUB` top-of-day posts from each of `REDDIT_SUBREDDITS`. No cursor axis — idempotency is `UNIQUE(source, source_id)` alone, exactly like `rss.py`'s news source. The session-verify call gates the whole run (any failure sets `failed=True` and stops before any subreddit is fetched); once verified, each subreddit is fetched independently and a single subreddit failing is logged and skipped, but a 401/403/429 partway through aborts the rest of the run immediately (no retry, no re-verify — the next scheduled run is the retry), mirroring `x.py`'s own back-off posture for an unofficial, cookie-based API. Full rationale in the module's own docstring. Requests go to `REDDIT_API_BASE` (default `old.reddit.com`; production is disabled pending the homelab proxy `https://reddit-proxy.toomhorvath.com` behind Cloudflare Access per the ADR 11, because Reddit answers Azure egress with `403 Blocked` and, since 2026-10-22, logged-in Cloudflare Workers requests with a network-security 403), with `x-proxy-key` when `REDDIT_PROXY_KEY` is set and the Access service-token headers when `REDDIT_ACCESS_CLIENT_ID`/`_SECRET` are set. Redirects are never followed; a 3xx with no `Location` means "not logged in", and 3xx/403 failures are logged with a classification label only.
+Synchronous urllib collector, enabled via `REDDIT_ENABLED`. Reads Reddit's ANONYMOUS public Atom feeds (`GET /r/<sub>/top/.rss?t=day&limit=N`, parsed with `feedparser`) — no cookie, no login. The earlier logged-in `reddit_session` cookie path died on 2026-10-23: Reddit refuses that cookie from every Linux client while it still works from the owner's macOS laptop (client fingerprinting below the User-Agent), and the owner chose not to imitate browsers. The feed has no score or comment count, so `Item.text` is the title plus a plain-text excerpt of the post content. `source_id` is the entry id with its `t3_` prefix stripped, matching the bare ids the earlier JSON collector stored. No cursor axis — idempotency is `UNIQUE(source, source_id)` alone, exactly like `rss.py`'s news source, plus a defensive 24h check on `published` that fails open. Anonymous access allows roughly one request per rate-limit window, so subreddits are fetched one at a time and the collector waits after each (except the last): `x-ratelimit-reset + 2` s when `x-ratelimit-remaining` < 1, `REDDIT_REQUEST_INTERVAL_SECONDS` when the headers are absent, always capped at `REDDIT_MAX_WAIT_SECONDS`. A 401/403/429 on any subreddit aborts the rest of the run and sets `failed=True` (no retry — the next scheduled run is the retry, mirroring `x.py`'s back-off posture); other per-subreddit errors are logged and skipped. Full rationale in the module's own docstring. Requests go to `REDDIT_API_BASE` (default `www.reddit.com`; production is disabled until the homelab proxy `https://reddit-proxy.toomhorvath.com` behind Cloudflare Access is live per ADR 11, because Reddit answers Azure egress with `403 Blocked`), with `x-proxy-key` when `REDDIT_PROXY_KEY` is set and the Access service-token headers when `REDDIT_ACCESS_CLIENT_ID`/`_SECRET` are set. Redirects are never followed, and 3xx/403 failures are logged with a classification label only. `scripts/rotate_reddit_cookie.py` is obsolete for the collector.
 
 ### 4.11 `digest/daily.py`
 

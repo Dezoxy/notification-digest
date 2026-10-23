@@ -359,7 +359,7 @@ def test_reddit_proxy_defaults_when_unset(monkeypatch):
 
     config = Config.from_env()
 
-    assert config.reddit_api_base == "https://old.reddit.com"
+    assert config.reddit_api_base == "https://www.reddit.com"
     assert config.reddit_proxy_key is None
 
 
@@ -555,7 +555,6 @@ def test_reddit_defaults_when_unset(monkeypatch):
     _set_base_env(monkeypatch)
     for name in (
         "REDDIT_ENABLED",
-        "REDDIT_SESSION_COOKIE",
         "REDDIT_SUBREDDITS",
         "REDDIT_POSTS_PER_SUB",
     ):
@@ -564,25 +563,37 @@ def test_reddit_defaults_when_unset(monkeypatch):
     config = Config.from_env()
 
     assert config.reddit_enabled is False
-    assert config.reddit_session_cookie is None
+    assert not hasattr(config, "reddit_session_cookie")
+    assert config.reddit_request_interval_seconds == 65
+    assert config.reddit_max_wait_seconds == 120
     assert config.reddit_subreddits == ()
     assert config.reddit_posts_per_sub == 10
 
 
-def test_reddit_enabled_without_session_cookie_raises_config_error(monkeypatch):
+def test_reddit_enabled_does_not_require_session_cookie(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
     monkeypatch.delenv("REDDIT_SESSION_COOKIE", raising=False)
     monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
 
-    with pytest.raises(ConfigError, match="REDDIT_SESSION_COOKIE"):
-        Config.from_env()
+    assert Config.from_env().reddit_subreddits == ("news",)
+
+
+def test_reddit_stale_session_cookie_env_var_is_ignored(monkeypatch):
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("REDDIT_ENABLED", "true")
+    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "leftover-cookie-value")
+    monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
+
+    config = Config.from_env()
+
+    assert "leftover-cookie-value" not in repr(config)
+    assert not hasattr(config, "reddit_session_cookie")
 
 
 def test_reddit_enabled_without_subreddits_raises_config_error(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
 
     with pytest.raises(ConfigError, match="REDDIT_SUBREDDITS"):
@@ -592,13 +603,11 @@ def test_reddit_enabled_without_subreddits_raises_config_error(monkeypatch):
 def test_reddit_enabled_with_valid_config_is_parsed(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", "Futurology, LocalLLaMA,hungary")
 
     config = Config.from_env()
 
     assert config.reddit_enabled is True
-    assert config.reddit_session_cookie == "cookie-value"
     assert config.reddit_subreddits == ("Futurology", "LocalLLaMA", "hungary")
 
 
@@ -606,7 +615,6 @@ def test_reddit_enabled_with_valid_config_is_parsed(monkeypatch):
 def test_reddit_subreddits_invalid_token_raises_config_error(monkeypatch, value):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", f"news,{value}")
 
     with pytest.raises(ConfigError, match="REDDIT_SUBREDDITS"):
@@ -616,23 +624,11 @@ def test_reddit_subreddits_invalid_token_raises_config_error(monkeypatch, value)
 def test_reddit_subreddits_blank_entries_are_dropped_not_errors(monkeypatch):
     _set_base_env(monkeypatch)
     monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
     monkeypatch.setenv("REDDIT_SUBREDDITS", "news,,")
 
     config = Config.from_env()
 
     assert config.reddit_subreddits == ("news",)
-
-
-def test_reddit_session_cookie_excluded_from_repr(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "super-secret-cookie-value")
-    monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
-
-    config = Config.from_env()
-
-    assert "super-secret-cookie-value" not in repr(config)
 
 
 def test_reddit_posts_per_sub_custom_value_is_used(monkeypatch):
@@ -1566,3 +1562,25 @@ def test_fallback_credentials_not_in_claude_subprocess_env_allowlist(monkeypatch
         "IDENTITY_HEADER",
     ):
         assert name not in env
+
+
+@pytest.mark.parametrize(
+    ("name", "attr", "default", "low", "high"),
+    [
+        ("REDDIT_REQUEST_INTERVAL_SECONDS", "reddit_request_interval_seconds", 65, 1, 600),
+        ("REDDIT_MAX_WAIT_SECONDS", "reddit_max_wait_seconds", 120, 1, 900),
+    ],
+)
+def test_reddit_pacing_knobs_default_bounds_and_range(monkeypatch, name, attr, default, low, high):
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv(name, raising=False)
+    assert getattr(Config.from_env(), attr) == default
+
+    for ok in (low, high):
+        monkeypatch.setenv(name, str(ok))
+        assert getattr(Config.from_env(), attr) == ok
+
+    for bad in (str(low - 1), str(high + 1), "abc"):
+        monkeypatch.setenv(name, bad)
+        with pytest.raises(ConfigError, match=name):
+            Config.from_env()

@@ -31,10 +31,11 @@ the question it answers. They have their own view.
 Polymarket is reached through the owner's own Cloudflare Worker because
 the direct path is blocked
 ([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
-Reddit is disabled in production since 2026-10-22: its Worker path was blocked
-as well, and the decided replacement, a homelab proxy behind Cloudflare Access,
-is not built yet
-([ADR 11](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)):
+Reddit is disabled in production since 2026-10-22: Reddit stopped serving the
+logged-in Worker path. It returns through Reddit's anonymous public feeds, read
+over a proxy on the owner's homelab behind Cloudflare Access, with no cookie
+([ADR 12](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0012-collect-reddit-from-public-rss-feeds.md),
+[ADR 11](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)):
 
 ![Sources view: the accounts and feeds one run collects from](embed:Sources)
 

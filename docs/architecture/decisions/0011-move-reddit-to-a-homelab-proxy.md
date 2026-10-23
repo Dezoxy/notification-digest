@@ -4,7 +4,11 @@ Date: 2026-10-22
 
 ## Status
 
-Accepted
+Accepted for the proxy and Access interface; the logged-in cookie route is
+superseded by
+[12. Collect Reddit from public RSS feeds through the homelab proxy](0012-collect-reddit-from-public-rss-feeds.md).
+The homelab proxy, the Cloudflare Access application, the service token
+`digest-reddit` and the `x-proxy-key` header decided here are reused by ADR 12.
 
 Supersedes the Reddit part of
 [10. Route blocked collectors through egress proxies on Cloudflare Workers](0010-route-blocked-collectors-through-egress-proxies.md):
@@ -15,6 +19,41 @@ Decided on 2026-10-22; **not built**. Until it is, Reddit collection is disabled
 in production (`REDDIT_ENABLED=false`). The Structurizr model still draws the
 Reddit path as the Worker; it is updated at cutover, when the path actually
 changes.
+
+### Amendment, 2026-10-23: the cause was misidentified
+
+The text below is the original decision and is left as written. It was built and
+deployed afterwards (tunnel route, Access application and token, the Mac mini
+`reddit-proxy` service, release 0.29.10 with the Access-header support), and
+testing it showed that its premise was wrong. The "not built" line above is
+stale; Reddit stayed disabled throughout.
+
+Tests on 2026-10-23, all with the owner's freshly copied logged-in cookie
+against `/api/me.json`:
+
+| Test | Result |
+|---|---|
+| Through Access, the tunnel and the Mac mini proxy (container) | 403 |
+| Straight to the proxy container on the LAN, no Cloudflare | 403 |
+| curl in another container on the same Docker network, direct to Reddit | 403 |
+| curl on the Mac mini host (Linux, OpenSSL 3.5.5), IPv4, direct | 403 |
+| curl on the owner's macOS laptop, IPv4 and IPv6, direct | 200 logged in |
+| Python urllib (the collector's own verify code) on the laptop, IPv4 and default | logged in |
+| The proxy script itself run on the laptop | 200 logged in |
+| Without a cookie, same chain | 302 (normal anonymous answer) |
+
+The laptop and the Mac mini share the same public IPv4 address and resolve the
+same Reddit edge addresses. The block is therefore not about the IP and not about
+Cloudflare. Reddit identifies the client below the User-Agent (the TLS and
+operating-system network fingerprint) and refuses logged-in sessions from these
+Linux clients: every Linux source failed (Azure, Workers, Mac mini) and every
+macOS source worked. The "Why it should work" reasoning, the Context claim that
+Cloudflare egress is blocked, and the 12:00-versus-18:00 timing on 2026-10-22
+are better read as this filtering rolling out. The residential IP does not help.
+
+The owner chose not to imitate browser fingerprints. Reddit is instead collected
+from its anonymous public feeds with no cookie, through the proxy and Access
+interface decided here: see ADR 12.
 
 ## Context
 

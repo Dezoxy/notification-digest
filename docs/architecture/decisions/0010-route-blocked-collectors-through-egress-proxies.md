@@ -22,7 +22,9 @@ security" page (HTTP 403), while anonymous requests from the same network were
 answered normally. [RISK-014](../risks/architecture-risks.md), which this record
 named, had occurred. Reddit was disabled in production
 (`REDDIT_ENABLED=false`, about 19:30 UTC) and moves to this record's option 2,
-built on the homelab; see ADR 11 for the evidence and the interface. The
+built on the homelab; see ADR 11 for the evidence and the interface. ADR 11's
+own amendment of 2026-10-23 corrects the cause: the block was on the client
+fingerprint, not on Cloudflare egress, and ADR 12 collects Reddit anonymously. The
 Polymarket Worker is unaffected and this record stays in force for it. The
 "unverified end to end" consequence below no longer applies: the path was
 observed and failed.

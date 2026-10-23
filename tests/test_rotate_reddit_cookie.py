@@ -114,7 +114,7 @@ def flow(monkeypatch):
     FakeVault.versions_error = None
     monkeypatch.setattr(rotate, "az", fake_az)
     monkeypatch.setattr(rotate, "VaultClient", FakeVault)
-    monkeypatch.setattr(rotate.reddit, "_verify_session", lambda cookie: "someone")
+    monkeypatch.setattr(rotate, "verify_session", lambda cookie: "someone")
     monkeypatch.setattr(rotate.getpass, "getpass", lambda prompt: f"reddit_session={COOKIE}\n")
     return calls
 
@@ -152,7 +152,7 @@ def test_main_does_not_touch_azure_when_reddit_rejects_cookie(flow, monkeypatch,
     def browser_reject(cookie):
         raise ValueError("no name")
 
-    monkeypatch.setattr(rotate.reddit, "_verify_session", reject)
+    monkeypatch.setattr(rotate, "verify_session", reject)
     monkeypatch.setattr(rotate, "_browser_check", browser_reject)
     assert rotate.main(["--vault", "example-vault"]) == 1
     assert flow == []
@@ -165,7 +165,7 @@ def test_main_stops_before_azure_when_only_the_user_agent_is_rejected(flow, monk
     def reject(cookie):
         raise urllib.error.HTTPError("https://example.invalid", 403, "Forbidden", {}, None)
 
-    monkeypatch.setattr(rotate.reddit, "_verify_session", reject)
+    monkeypatch.setattr(rotate, "verify_session", reject)
     monkeypatch.setattr(rotate, "_browser_check", lambda cookie: None)
     assert rotate.main(["--vault", "example-vault"]) == 1
     assert flow == []
