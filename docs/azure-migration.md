@@ -837,7 +837,7 @@ collectors, publication and cloud-only export/restore into a separate namespace.
 
 Record cloud execution IDs, image/configuration pins and status-only evidence
 for **every enabled collector and publication lane**: Telegram/relay, X, RSS,
-Reddit, Hacker News, Polymarket, Patreon and positions as configured. Verify
+Hacker News, Polymarket, Patreon and positions as configured. Verify
 subscription Claude calls, HU translation, daily web verification, configured
 Claude API fallback authentication (the federation smoke test, and a real
 fallback if one has occurred), Telegram notifications, site ingest and
@@ -917,74 +917,31 @@ and cursor state. Remove the temporary role, verify lost access and erase the
 private input after successful validation. Patreon/OAuth rotations follow
 the same dedicated-vault procedure using their exact manifest names/tags.
 
-Reddit has its own helper: `uv run python scripts/rotate_reddit_cookie.py
---vault YOUR_DIGEST_VAULT`. It reads the `reddit_session` cookie from a hidden
-prompt (no private file), checks it against Reddit with the collector's own
-code path and, if that fails, once more with a browser User-Agent, so a
-rejected cookie and a rejected User-Agent are told apart before Azure is
-touched. It then grants Secrets Officer on that one secret, writes a new version
-with the current tags and validity preserved, reads it back, and revokes only
-the assignment it created. It skips pause/drain on purpose: the Reddit collector
-has no cursor or state, so a run that overlaps the rotation can at worst fail
-Reddit once. Verify by checking the next window run's `run_summary` for
-`"reddit": "ok"`.
+#### Reddit retired
 
-Since 2026-10-21 Reddit answers Azure egress with `403 Blocked`. The
-`reddit-proxy` Cloudflare Worker (`REDDIT_API_BASE`, shared key `REDDIT_PROXY_KEY`,
-secret `digest-reddit-proxy-key`) carried Reddit from 2026-10-22 09:00 UTC, but
-from the 18:00 UTC run Reddit also blocked logged-in sessions arriving from
-Cloudflare egress ([RISK-014](architecture/risks/architecture-risks.md)).
-Reddit is therefore **disabled** in production (`REDDIT_ENABLED=false` in
-`AZURE_TERRAFORM_VARS_JSON`, applied through the azure-deploy plan and apply) and
-absent from digests. Do not rotate or probe the Worker's key to bring it back:
-the key, the cookie and the User-Agent were shown not to be the cause. Reddit
-returns on a homelab proxy behind Cloudflare Access
-([ADR 11](architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)); that
-path is decided and not built, so the steps below are the plan, not a procedure
-to run today.
+Reddit was retired as a source on 2026-10-23
+([ADR 12](architecture/decisions/0012-retire-reddit-collection.md)). There is no
+Reddit credential, proxy or schedule input left to rotate or operate. Do not
+re-enable it by restoring a cookie or a proxy.
 
-The verify-failure log line names the cause: 403 is classified as proxy rejected
-the key (`{"error":"forbidden"}`), Cloudflare 1010 block, Reddit network block
-("blocked by network security") or unclassified, and 3xx as an Access login
-redirect or a session that is not logged in. Redirects are not followed.
+Teardown, in order, after the code-removal change has merged and been released:
 
-Cutover to the homelab proxy, in order:
+1. Through the azure-deploy plan and apply, remove every `REDDIT_*` key from
+   production `app_env` (`REDDIT_ENABLED`, `REDDIT_API_BASE` and the rest) and
+   the Reddit entries from `secret_names`. Confirm the plan changes only those
+   settings on the jobs.
+2. Delete the digest Key Vault secrets `digest-reddit-session`,
+   `digest-reddit-proxy-key`, `digest-reddit-access-client-id` and
+   `digest-reddit-access-client-secret`. Delete `edge-reddit-proxy-key` in the
+   homelab vault.
+3. Delete the `reddit-proxy` Cloudflare Worker with `wrangler delete` (code is
+   removed from `toom-edge`).
+4. In Cloudflare: remove the `reddit-proxy` tunnel route, its dedicated Access
+   application and the `digest-reddit` service token. The `reddit-proxy` Compose
+   service in `toom-macmini-homelab` is removed in that repository.
 
-1. Build and deploy the `reddit-proxy` Compose service on the Mac mini
-   (`toom-macmini-homelab`) and the `toom-edge` changes: the Tunnel route for
-   `reddit-proxy.toomhorvath.com`, a dedicated Access application for that
-   hostname (not the `*.toomhorvath.com` wildcard) whose only policy is Service
-   Auth for the service token `digest-reddit`.
-2. Store the token in the digest Key Vault as `digest-reddit-access-client-id`
-   and `digest-reddit-access-client-secret` (both or neither), keep
-   `digest-reddit-proxy-key` as the `x-proxy-key` value the new service checks,
-   and verify with a manual `curl` that sends the `CF-Access-Client-Id`,
-   `CF-Access-Client-Secret` and `x-proxy-key` headers and no cookie to
-   `https://reddit-proxy.toomhorvath.com/api/me.json`: expect HTTP 302 with no
-   `Location` (Access admitted the token, the service accepted the key, and
-   Reddit saw an anonymous request). A request without the token must be
-   refused by Access. The `--proxy-url` check of `scripts/rotate_reddit_cookie.py`
-   sends only the key, so it needs the Access headers before it can be used
-   against the new hostname.
-3. Set `REDDIT_API_BASE=https://reddit-proxy.toomhorvath.com`, add the two
-   secret names, and set `REDDIT_ENABLED=true` through the azure-deploy plan and
-   apply. Verify the next window run's `run_summary` for `"reddit": "ok"`.
-4. Update the Structurizr model (Egress Proxies) to the new path.
-5. Retire the `reddit-proxy` Worker in `toom-edge`.
-
-Once live, rotate the Access service token (`digest-reddit`) in Cloudflare and
-the two vault secrets together; the shared key rotation is unchanged
-(`openssl rand -hex 32 > KEYFILE; chmod 600 KEYFILE`, set the same value on the
-service, then `uv run python scripts/rotate_reddit_cookie.py --vault
-YOUR_DIGEST_VAULT --proxy-key --key-file KEYFILE [--proxy-url URL]`). The key
-comes from the private file (a symlink or any group/other permission is
-refused), never from a prompt or argument, and the Reddit cookie check is
-skipped. With `--proxy-url` the script first sends one key-only request and
-stops before touching Azure on HTTP 403. On first use it creates the secret
-(tags `envvar=REDDIT_PROXY_KEY`, `folder=digest`); because a secret that does
-not exist yet cannot be an RBAC scope, this mode grants the temporary Secrets
-Officer role on the vault instead of the secret and still revokes only the
-assignment it created. Delete the key file afterwards.
+Items already collected with source `reddit` stay in the state database and on the
+published site; nothing deletes them.
 
 ### Rotate the cloud X cookie jar
 

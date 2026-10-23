@@ -47,24 +47,21 @@ expressions are in `infra/azure/main.tf` and are summarized in
 
 ### What's collecting
 
-Seven collectors exist; five run inside the six-hourly window sweep, one runs
-only in its own dedicated mode, and one (Patreon) is excluded from the sweep
-entirely:
+Six collectors exist; five run inside the six-hourly window sweep and one
+(Patreon) is excluded from the sweep entirely:
 
 - Window sweep: Telegram, X (`X_ENABLED`), RSS/Atom (`NEWS_FEEDS`), Polymarket
-  (`POLYMARKET_ENABLED`), Reddit (`REDDIT_ENABLED`), Hacker News
+  (`POLYMARKET_ENABLED`), Hacker News
   (`HACKERNEWS_ENABLED`) — each isolated per
   [P-05](../principles/architecture-principles.md), so one failing never
   suppresses the others.
 - Polymarket is reached through the owner's Egress Proxy (`POLYMARKET_API_BASE`),
   a Cloudflare Worker outside this repository
   ([ADR 10](../decisions/0010-route-blocked-collectors-through-egress-proxies.md)).
-  Reddit is **disabled** in production (`REDDIT_ENABLED=false`, 2026-10-22): its
-  Worker path worked for one run and then Reddit blocked logged-in sessions from
-  Cloudflare egress ([RISK-014](../risks/architecture-risks.md)). It returns when
-  the homelab proxy of
-  [ADR 11](../decisions/0011-move-reddit-to-a-homelab-proxy.md) is built; that is
-  decided, not built.
+  Reddit was **retired** on 2026-10-23 ([ADR 12](../decisions/0012-retire-reddit-collection.md)): it had been disabled
+  in production since 2026-10-22, Reddit refuses logged-in sessions from Linux
+  clients and ends its RSS feeds on 2026-11-13 ([RISK-014](../risks/architecture-risks.md),
+  closed). Code removal and the operator teardown follow the ADR.
 - Patreon collects only in `patreon` mode, structurally excluded from the window sweep.
 - Positions and relay read from the same sources as the window collectors but
   claim their own items via a separate membership rule — they are not additional

@@ -29,82 +29,72 @@ string), `title`, `url` (a string, or ABSENT/null for a text-only post --
 seconds). `_parse_hit` treats every field defensively (never raises) --
 `objectID`/`title`/`created_at_i` are required (a hit missing any of them is
 discarded as unparseable), `url`/`author` are optional, `points`/
-`num_comments` default to 0 on anything unparsable, mirroring
-digest/collectors/reddit.py's `_parse_post` contract for the exact same
-reasons: a malformed field should never disqualify an otherwise-good hit,
-and a missing salience number is display-only, not something that should
-throw away real content.
+`num_comments` default to 0 on anything unparsable: a malformed field
+should never disqualify an otherwise-good hit, and a missing salience
+number is display-only, not something that should throw away real content.
 
-Discussion-page URL, not the article URL (deliberate, matches reddit.py)
-----------------------------------------------------------------------
+Discussion-page URL, not the article URL (deliberate)
+----------------------------------------------------
 `Item.url` is always the HN discussion page
 (`f"https://news.ycombinator.com/item?id={objectID}"`), never the story's
 own `url` field. Two reasons: the discussion page links out to the article
 itself (nothing is lost) AND carries the community thread the digest's
-"[score N, M comments]" salience convention is about -- exactly the value
-digest/collectors/reddit.py's own `permalink`-based URL provides for a
-Reddit post, not the linked article. It is also the STABLE link: an
+"[score N, M comments]" salience convention is about. It is also the STABLE link: an
 external article URL can rot (paywalled, deleted, moved) while
 `news.ycombinator.com/item?id=...` never does. The article URL, when
 present, is instead folded INTO `Item.text` (see `_build_item`) so the
 summarizer prompt still knows what the story is actually about -- an
 Ask/Show-HN text post simply omits that line, since it never had one.
 
-Score/comments ride IN the item text, not a separate field (matches reddit.py)
+Score/comments ride IN the item text, not a separate field
 ----------------------------------------------------------------------
 `_build_item` folds `[score N, M comments]` directly into `Item.text`
-rather than adding new columns to the shared `Item`/`items` schema -- the
-identical convention digest/collectors/reddit.py's own module docstring
-documents ("Score/comments ride IN the item text") for the identical
-reason: it lets the summarizer prompt (prompts/digest.md) weight a story by
-community signal with no changes to digest/state.py at all. Unlike
-reddit.py's inline `"{title} [score N, M comments] {selftext}"` (a subreddit
-post commonly carries a body worth reading alongside the number), an HN
-front-page hit has no body text of its own to append -- so the shape here is
-`title`, then (when present) an explicit `links to: <url>` line, then the
-bracketed salience marker, each separated by a blank line for the
-summarizer's own readability, rather than reddit.py's single-space inline
-run-on.
+rather than adding new columns to the shared `Item`/`items` schema: it lets
+the summarizer prompt (prompts/digest.md) weight a story by community signal
+with no changes to digest/state.py at all. An HN front-page hit has no
+body text of its own to append -- so the shape here is `title`, then (when
+present) an explicit `links to: <url>` line, then the bracketed salience
+marker, each separated by a blank line for the summarizer's own
+readability.
 
 `chat_title` is the hackernews-specific provenance field
 ----------------------------------------------------------------------
 Every item's `chat_title` is the fixed literal `"Hacker News"` -- playing
-the same "which group/feed did this come from" role Telegram's `chat_title`,
-rss.py's feed-title, and reddit.py's `f"r/{subreddit}"` each play for their
-own sources (prompts/digest.md's "News interest filter" section recognizes
-an HN item by this exact value, alongside `source == "hackernews"`).
+the same "which group/feed did this come from" role Telegram's `chat_title`
+and rss.py's feed-title each play for their own sources
+(prompts/digest.md's "News interest filter" section recognizes an HN item
+by this exact value, alongside `source == "hackernews"`).
 
-No cursor axis; a lookback window instead (mirrors reddit.py/rss.py exactly)
-----------------------------------------------------------------------
+No cursor axis; a lookback window instead (mirrors rss.py)
+----------------------------------------------------------
 The Algolia front-page index is a ROLLING view of "whatever HN's own ranking
 currently has on the front page", re-computed fresh on every request -- not
 a monotonic timeline a cursor could meaningfully page through (a story's
 rank, or presence at all, can change between runs as votes/flags shift), so
 there is no stable "since" pagination contract to track, exactly like
-rss.py's feeds and reddit.py's `t=day` ranking have none (see either
-module's own docstring for the identical reasoning). Idempotency instead
+rss.py's feeds have none (see its module docstring for the identical
+reasoning). Idempotency instead
 comes entirely from `UNIQUE(source, source_id)` +
 `INSERT ... ON CONFLICT DO NOTHING` (digest/state.py): re-fetching the same
 story across overlapping runs is a free no-op. `_LOOKBACK_HOURS` (24) is
 applied client-side as a defensive filter on each hit's own `created_at_i`
 -- belt-and-braces against the front-page index returning something older
-than a genuinely fresh run should still be reporting (the same posture
-reddit.py's own `_LOOKBACK_HOURS` takes against `t=day`, and the same value,
-for consistency across the digest's no-cursor collectors).
+than a genuinely fresh run should still be reporting (the same value as
+rss.py's `_LOOKBACK_HOURS`, for consistency across the digest's no-cursor
+collectors).
 
 Failure semantics -- one request, one signal (mirrors polymarket.py)
 ----------------------------------------------------------------------
 There is exactly one request per run (`_fetch_front_page`) -- unlike
-rss.py's/reddit.py's per-feed/per-subreddit list, there is no "one of many"
-to be fault-tolerant about. ANY failure of that single request (network
+rss.py's per-feed list, there is no "one of many" to be fault-tolerant
+about. ANY failure of that single request (network
 error, non-2xx status, non-JSON body, a body missing a `hits` array) sets
 `result.failed = True` and returns immediately with no items -- the same
 posture polymarket.py's own single `{base}/markets` request takes (see that
 module's own docstring, "Failure semantics"), and the same "no retry loop,
 next scheduled run is the retry" contract. Each individual hit is still
-parsed defensively and skipped (never fatal) on its own malformed shape --
-mirroring reddit.py's `_parse_post` per-post defensiveness -- because a
-single bad hit inside an otherwise-successful response is routine, not a
+parsed defensively and skipped (never fatal) on its own malformed shape,
+because a single bad hit inside an otherwise-successful response is routine, not a
 sign the whole request failed.
 """
 
@@ -142,10 +132,9 @@ _USER_AGENT = "digest-hackernews/1.0"
 
 # Matches the front-page index's own "currently on the front page" scope --
 # see module docstring's "No cursor axis" section for why this replaces a
-# cursor entirely rather than supplementing one. Same value as reddit.py's
+# cursor entirely rather than supplementing one. Same value as rss.py's
 # own _LOOKBACK_HOURS, for consistency across this digest's no-cursor
-# collectors, though the two exist for unrelated underlying reasons (HN's
-# front-page churn vs Reddit's `t=day` window).
+# collectors.
 _LOOKBACK_HOURS = 24
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -176,9 +165,8 @@ def _clean_title(raw: str) -> str:
 
     HN titles are plain text (no HTML, unlike rss.py's feed summaries), so
     this is purely defensive -- cheap insurance against a stray embedded
-    newline/tab, mirroring reddit.py's own `_clean_text` rationale (prompt-
-    budget hygiene), applied here to a field that essentially never needs it
-    in practice.
+    newline/tab (prompt-budget hygiene), applied to a field that
+    essentially never needs it in practice.
     """
     return _WHITESPACE_RE.sub(" ", raw).strip()
 
@@ -192,8 +180,7 @@ def _parse_hit(raw: Any) -> _ParsedHit | None:
     see module docstring's "No cursor axis" section; a hit this module can't
     date can't be windowed, so it can't be trusted at all). Every check
     fails open into `None` rather than propagating -- `collect`'s caller
-    counts skips, it never lets one malformed hit abort the whole run
-    (mirrors reddit.py's `_parse_post` contract).
+    counts skips, it never lets one malformed hit abort the whole run.
 
     `points`/`num_comments` are defensively coalesced to 0 on anything
     unparsable -- they are a display/salience signal in the item text

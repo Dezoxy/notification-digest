@@ -349,91 +349,6 @@ def test_positions_tg_channels_prefixed_entry_raises_config_error(monkeypatch):
         Config.from_env()
 
 
-# --- REDDIT_API_BASE / REDDIT_PROXY_KEY ---
-
-
-def test_reddit_proxy_defaults_when_unset(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.delenv("REDDIT_API_BASE", raising=False)
-    monkeypatch.delenv("REDDIT_PROXY_KEY", raising=False)
-
-    config = Config.from_env()
-
-    assert config.reddit_api_base == "https://old.reddit.com"
-    assert config.reddit_proxy_key is None
-
-
-def test_reddit_api_base_custom_value_strips_trailing_slash(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_API_BASE", "https://reddit-proxy.example.workers.dev/")
-
-    config = Config.from_env()
-
-    assert config.reddit_api_base == "https://reddit-proxy.example.workers.dev"
-
-
-def test_reddit_api_base_non_http_raises_config_error(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_API_BASE", "ftp://proxy.example.com")
-
-    with pytest.raises(ConfigError, match="REDDIT_API_BASE"):
-        Config.from_env()
-
-
-def test_reddit_proxy_key_is_used_and_hidden_from_repr(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_PROXY_KEY", "super-secret-reddit-key")
-
-    config = Config.from_env()
-
-    assert config.reddit_proxy_key == "super-secret-reddit-key"
-    assert "super-secret-reddit-key" not in repr(config)
-
-
-def test_reddit_proxy_key_blank_counts_as_unset(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_PROXY_KEY", "   ")
-
-    assert Config.from_env().reddit_proxy_key is None
-
-
-def test_reddit_access_token_defaults_to_none_and_is_hidden_from_repr(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_ID", raising=False)
-    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_SECRET", raising=False)
-    config = Config.from_env()
-    assert config.reddit_access_client_id is None
-    assert config.reddit_access_client_secret is None
-
-    monkeypatch.setenv("REDDIT_ACCESS_CLIENT_ID", "fake-access-id.access")
-    monkeypatch.setenv("REDDIT_ACCESS_CLIENT_SECRET", "fake-access-secret")
-    config = Config.from_env()
-    assert config.reddit_access_client_id == "fake-access-id.access"
-    assert config.reddit_access_client_secret == "fake-access-secret"
-    assert "fake-access-id" not in repr(config)
-    assert "fake-access-secret" not in repr(config)
-
-
-@pytest.mark.parametrize(
-    ("present", "missing"),
-    [
-        ("REDDIT_ACCESS_CLIENT_ID", "REDDIT_ACCESS_CLIENT_SECRET"),
-        ("REDDIT_ACCESS_CLIENT_SECRET", "REDDIT_ACCESS_CLIENT_ID"),
-    ],
-)
-def test_reddit_access_token_partial_pair_raises_naming_the_missing_one(
-    monkeypatch, present, missing
-):
-    _set_base_env(monkeypatch)
-    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_ID", raising=False)
-    monkeypatch.delenv("REDDIT_ACCESS_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv(present, "fake-value-123")
-
-    with pytest.raises(ConfigError, match=missing) as excinfo:
-        Config.from_env()
-    assert "fake-value-123" not in str(excinfo.value)
-
-
 # --- POLYMARKET_ENABLED / POLYMARKET_API_BASE / POLYMARKET_PROXY_KEY /
 #     POLYMARKET_TOP_N / POLYMARKET_SWING_THRESHOLD ---
 
@@ -547,119 +462,20 @@ def test_polymarket_swing_threshold_out_of_range_raises_config_error(monkeypatch
         Config.from_env()
 
 
-# --- REDDIT_ENABLED / REDDIT_SESSION_COOKIE /
-#     REDDIT_SUBREDDITS / REDDIT_POSTS_PER_SUB ---
+# --- retired Reddit collector ---
 
 
-def test_reddit_defaults_when_unset(monkeypatch):
+def test_leftover_reddit_env_vars_are_ignored(monkeypatch):
+    # Production may still inject REDDIT_* until the operator drops them from
+    # app_env/secret_names; nothing reads them, so they must not break startup.
     _set_base_env(monkeypatch)
-    for name in (
-        "REDDIT_ENABLED",
-        "REDDIT_SESSION_COOKIE",
-        "REDDIT_SUBREDDITS",
-        "REDDIT_POSTS_PER_SUB",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("REDDIT_ENABLED", "true")
+    monkeypatch.setenv("REDDIT_SUBREDDITS", "not valid, r/x")
+    monkeypatch.setenv("REDDIT_ACCESS_CLIENT_ID", "only-one-half")
 
     config = Config.from_env()
 
-    assert config.reddit_enabled is False
-    assert config.reddit_session_cookie is None
-    assert config.reddit_subreddits == ()
-    assert config.reddit_posts_per_sub == 10
-
-
-def test_reddit_enabled_without_session_cookie_raises_config_error(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.delenv("REDDIT_SESSION_COOKIE", raising=False)
-    monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
-
-    with pytest.raises(ConfigError, match="REDDIT_SESSION_COOKIE"):
-        Config.from_env()
-
-
-def test_reddit_enabled_without_subreddits_raises_config_error(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
-    monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
-
-    with pytest.raises(ConfigError, match="REDDIT_SUBREDDITS"):
-        Config.from_env()
-
-
-def test_reddit_enabled_with_valid_config_is_parsed(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
-    monkeypatch.setenv("REDDIT_SUBREDDITS", "Futurology, LocalLLaMA,hungary")
-
-    config = Config.from_env()
-
-    assert config.reddit_enabled is True
-    assert config.reddit_session_cookie == "cookie-value"
-    assert config.reddit_subreddits == ("Futurology", "LocalLLaMA", "hungary")
-
-
-@pytest.mark.parametrize("value", ["r/hungary", "hun gary", "hungary!"])
-def test_reddit_subreddits_invalid_token_raises_config_error(monkeypatch, value):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
-    monkeypatch.setenv("REDDIT_SUBREDDITS", f"news,{value}")
-
-    with pytest.raises(ConfigError, match="REDDIT_SUBREDDITS"):
-        Config.from_env()
-
-
-def test_reddit_subreddits_blank_entries_are_dropped_not_errors(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "cookie-value")
-    monkeypatch.setenv("REDDIT_SUBREDDITS", "news,,")
-
-    config = Config.from_env()
-
-    assert config.reddit_subreddits == ("news",)
-
-
-def test_reddit_session_cookie_excluded_from_repr(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_ENABLED", "true")
-    monkeypatch.setenv("REDDIT_SESSION_COOKIE", "super-secret-cookie-value")
-    monkeypatch.setenv("REDDIT_SUBREDDITS", "news")
-
-    config = Config.from_env()
-
-    assert "super-secret-cookie-value" not in repr(config)
-
-
-def test_reddit_posts_per_sub_custom_value_is_used(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_POSTS_PER_SUB", "15")
-
-    config = Config.from_env()
-
-    assert config.reddit_posts_per_sub == 15
-
-
-@pytest.mark.parametrize("value", ["0", "26", "not-a-number"])
-def test_reddit_posts_per_sub_out_of_range_raises_config_error(monkeypatch, value):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_POSTS_PER_SUB", value)
-
-    with pytest.raises(ConfigError, match="REDDIT_POSTS_PER_SUB"):
-        Config.from_env()
-
-
-def test_reddit_posts_per_sub_boundary_values_are_accepted(monkeypatch):
-    _set_base_env(monkeypatch)
-    monkeypatch.setenv("REDDIT_POSTS_PER_SUB", "1")
-    assert Config.from_env().reddit_posts_per_sub == 1
-
-    monkeypatch.setenv("REDDIT_POSTS_PER_SUB", "25")
-    assert Config.from_env().reddit_posts_per_sub == 25
+    assert not any(name.startswith("reddit_") for name in vars(config))
 
 
 # --- HACKERNEWS_ENABLED / HACKERNEWS_TOP_N ---

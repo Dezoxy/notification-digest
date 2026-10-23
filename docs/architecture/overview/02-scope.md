@@ -20,9 +20,9 @@
 |---|---|
 | The Azure subscription, tenant and identity provider the jobs run under | Microsoft Azure and Microsoft Entra ID; the resources inside them are in scope |
 | The retired homelab VM, the Proxmox node and the home network | The separate `homelab` repository. The VM ran production until 2026-10-08 and no longer runs the digest |
-| Anything that happens inside a source platform | Telegram, X, Reddit, Patreon, Polymarket, Hacker News and the feed publishers |
+| Anything that happens inside a source platform | Telegram, X, Patreon, Polymarket, Hacker News and the feed publishers |
 | Model behaviour and pricing | The model provider (Anthropic) |
-| The Cloudflare Worker that relays Polymarket requests (`polymarket-proxy`), the retiring `reddit-proxy` Worker, and the planned Reddit proxy on the Mac mini homelab with its Cloudflare Access application | The owner's `toom-edge` and `toom-macmini-homelab` repositories, deployed outside this repository's Terraform; the digest's dependence on them is in scope ([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md), [ADR 11](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)) |
+| The Cloudflare Worker that relays Polymarket requests (`polymarket-proxy`) | The owner's `toom-edge` repository, deployed outside this repository's Terraform; the digest's dependence on it is in scope ([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md)). The Reddit proxies in `toom-edge` and `toom-macmini-homelab` are removed ([ADR 12](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0012-retire-reddit-collection.md)) |
 | The content itself | Third parties wrote it; this system summarizes and links to it ([C-04](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/requirements/constraints.md)) |
 
 ### Deliberately not built

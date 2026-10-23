@@ -19,12 +19,12 @@ notificationDigest = softwareSystem "Notification Digest" "Collects the owner's 
 }
 
 // ── Collection (runner pulls; every source is outbound from the job) ─────────
-// Reddit and Polymarket are reached only through the egress proxies (ADR 10);
+// Polymarket is reached only through the egress proxy (ADR 10);
 // the proxy-to-source arrows are in people-systems.dsl.
 notificationDigest.runner -> telegram "Fetches new messages from the owner's groups from" "MTProto, user session" "Layer Run"
 notificationDigest.runner -> x "Fetches the notifications timeline from" "HTTPS, cookie session" "Layer Run"
 notificationDigest.runner -> patreon "Fetches paid-tier posts from" "HTTPS, cookie session" "Layer Run"
-notificationDigest.runner -> egressProxies "Fetches Reddit posts and Polymarket market prices through" "HTTPS, shared-key header" "Layer Run"
+notificationDigest.runner -> egressProxies "Fetches Polymarket market prices through" "HTTPS, shared-key header" "Layer Run"
 notificationDigest.runner -> hackerNews "Fetches the front page from" "HTTPS/JSON" "Layer Run"
 notificationDigest.runner -> newsFeeds "Fetches feed entries from" "HTTPS, RSS/Atom" "Layer Run"
 

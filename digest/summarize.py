@@ -235,12 +235,13 @@ def build_prompt(
 # lanes in their existing ratio -- news 55->64, telegram 50->58, x 50->58,
 # reddit 35->40 -- leaving "hackernews" and the deliberately-small
 # "polymarket" lane untouched, exactly as the earlier rebalance left
-# "polymarket" alone.
+# "polymarket" alone. The "reddit" lane has since been retired with its
+# collector; its 40 slots went to the same three general lanes in their
+# existing ratio -- news 64->78, telegram 58->71, x 58->71.
 _SOURCE_QUOTAS: dict[str, int] = {
-    "news": 64,
-    "telegram": 58,
-    "x": 58,
-    "reddit": 40,
+    "news": 78,
+    "telegram": 71,
+    "x": 71,
     "hackernews": 20,
     "polymarket": 10,
 }
@@ -499,10 +500,10 @@ def select_balanced_items_for_prompt(
     allocate_by_source balances lanes by quota, while select_items_for_prompt
     shrinks to the byte cap by keeping the longest fitting PREFIX of the
     fetched_at-ordered list. Because collectors batch-stamp fetched_at in
-    run order (telegram, x, news, polymarket, reddit -- digest/main.py's
+    run order (telegram, x, news, polymarket, hackernews -- digest/main.py's
     `_run`), that prefix cut always discards the LAST collectors first: the
     exact windows fat enough to trip the byte cap were the ones where the
-    quota's balance got chopped from the reddit/news end. This function
+    quota's balance got chopped from the hackernews/news end. This function
     closes that gap by shrinking the ALLOCATION BUDGET instead of the list's
     tail: when the allocated batch doesn't fit, it re-allocates at a smaller
     budget (proportionally scaled quotas -- see allocate_by_source), so

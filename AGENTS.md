@@ -4,7 +4,7 @@ Personal notification-digest service. Every 6 hours it collects new items from
 the owner's own Telegram groups (Telethon, MTProto user session) and own
 X/Twitter notifications (twifork — a maintained twikit fork that still imports
 as `twikit` — cookie session, unofficial API, ToS risk accepted by the owner),
-plus RSS/Reddit/Polymarket/Hacker News collectors, tracks state in SQLite,
+plus RSS/Polymarket/Hacker News collectors, tracks state in SQLite,
 summarizes new items with the Claude CLI headless (`claude -p`, falling back to
 Claude API models over workload identity federation when that call fails), and
 delivers a structured digest with deep links. Two lanes run outside that cascade on their

@@ -55,7 +55,7 @@ Architecture**, later in this document, for the exact mechanisms.
 
 ### The decisions already made
 
-Ten ADRs, each accepted, each naming its trade-off:
+Twelve ADRs, each naming its trade-off:
 
 - **ADR 1** pins the X client exactly, trading automation for an audited bump.
 - **ADR 2** falls back across models on refusal, trading a cost cap for uptime.
@@ -75,10 +75,17 @@ Ten ADRs, each accepted, each naming its trade-off:
   identity federation.
 - **ADR 10** routes Polymarket, which ISPs in Hungary block, through the
   owner's own Cloudflare Worker. Its Reddit part failed on 2026-10-22, when
-  Reddit blocked logged-in sessions from Cloudflare's network.
-- **ADR 11** moves Reddit to a proxy on the owner's Mac mini homelab behind
-  Cloudflare Access, trading a homelab dependency for a residential IP. Decided,
-  not built; Reddit is disabled in production until then.
+  Reddit stopped serving logged-in sessions through it, and is superseded by
+  ADR 12.
+- **ADR 11** moved Reddit to a proxy on the owner's Mac mini homelab behind
+  Cloudflare Access, on the premise that a residential IP would fix it. That
+  premise was disproved on 2026-10-23 (an amendment records the evidence): Reddit
+  refuses logged-in sessions from Linux clients by their network fingerprint.
+  Superseded by ADR 12.
+- **ADR 12** retires Reddit as a source (2026-10-23): imitating a browser is
+  evasion, anonymous RSS ends on 2026-11-13, a third-party scraping API is
+  opaque, and the owner's coverage comes from other sources. The collector, its
+  configuration, both proxies and their credentials are removed.
 
 ### The contracts you do not control
 
@@ -87,17 +94,15 @@ Ten ADRs, each accepted, each naming its trade-off:
 Every collection source and model provider is a contract with a system this
 repository does not own; several are unofficial or ToS-violating access the
 owner has accepted the risk of (C-03). Telegram's MTProto contract is stable
-as a protocol; X, Reddit and Patreon are all low-stability and can break
-without notice — upstream `twikit`, the base of the `twifork` client this
-system depends on, already broke completely once against an X webpack
-change. That is why `twifork` is pinned to an **exact version**, not the
-`>=` range every other dependency uses, and every bump is gated behind
-Renovate's Dependency Dashboard with a mandatory hand audit before it can be
-trusted (ADR 1). Polymarket is reached through the owner's own
-Cloudflare Worker, not directly (ADR 10); Reddit is disabled until its homelab
-proxy exists (ADR 11). See **Integration Architecture**,
-later in this document, for every source, provider and delivery contract in one
-table.
+as a protocol; X and Patreon are low-stability and can break without notice —
+upstream `twikit`, the base of the `twifork` client this system depends on,
+already broke completely once against an X webpack change. That is why `twifork`
+is pinned to an **exact version**, not the `>=` range every other dependency
+uses, and every bump is gated behind Renovate's Dependency Dashboard with a
+mandatory hand audit before it can be trusted (ADR 1). Polymarket is reached
+through the owner's own Cloudflare Worker, not directly (ADR 10). Reddit was
+retired (ADR 12). See **Integration Architecture**, later in this document, for
+every source, provider and delivery contract in one table.
 
 ### What is already known to be wrong, and what a change must satisfy
 

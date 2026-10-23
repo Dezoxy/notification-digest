@@ -30,31 +30,31 @@ this document
 ![Sources view: the accounts and feeds one run collects from](embed:Sources)
 
 Every collection credential authenticates as the **owner's own personal
-account** — Telegram's `TG_SESSION`, and cookie sessions for X, Reddit and
-Patreon (C-02). Losing one of these secrets is an **account takeover**, not a
+account** — Telegram's `TG_SESSION`, and cookie sessions for X and Patreon
+(C-02). Losing one of these secrets is an **account takeover**, not a
 service-credential rotation: there is no key to reissue, only whatever the
 account itself can do — reading the owner's DMs, or, for Patreon, spending
 against a paid subscription (RISK-002). The Telegram session is a secret in
 the digest Key Vault; the X cookies live in the runtime state in Blob Storage.
-None carries MFA, a property of the accounts being used unofficially. X,
-Reddit and Patreon all sit on this same
-unofficial, ToS-risk access with no sanctioned fallback if the platform
-revokes it (RISK-003, RISK-007): Reddit's session exists because Reddit's Data
-Team refused the owner's official API application, and Patreon's is a paid
-subscription, so an adverse action there costs money, not just access.
-Reddit blocks Azure's network, and on 2026-10-22 it also blocked logged-in
-sessions from Cloudflare's, so the Worker the cookie briefly passed through
-([ADR 10](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0010-route-blocked-collectors-through-egress-proxies.md)) stopped working. Reddit collection has been disabled in
-production since about 19:30 UTC that day. The decided replacement is a proxy on
-the owner's Mac mini homelab behind Cloudflare Access, which makes Reddit depend
-on the homelab; it is not built yet ([ADR 11](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0011-move-reddit-to-a-homelab-proxy.md)).
+None carries MFA, a property of the accounts being used unofficially. X and
+Patreon sit on this same unofficial, ToS-risk access with no sanctioned
+fallback if the platform revokes it (RISK-003, RISK-007), and Patreon's is a
+paid subscription, so an adverse action there costs money, not just access.
+Reddit was retired on 2026-10-23, which removes the one source whose access
+kept breaking and its personal credential with it. Its Data Team refused the
+owner's official API application; from 2026-10-21 it refused logged-in sessions
+arriving from Linux clients, whatever the network; and it ends its RSS feeds on
+2026-11-13 with no replacement for feed readers. The owner chose not to imitate
+a browser to get around that, and the coverage of those subreddits already comes
+from news RSS, Hacker News and X, so nothing replaces it
+([ADR 12](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0012-retire-reddit-collection.md)).
 RISK-007 is **not** marked accepted — the risk register calls it an open gap,
 because CLAUDE.md's hard rules name only the X collector explicitly, not
-Reddit or Patreon.
+Patreon.
 
 ### Whose data this is, and where it goes
 
-Collected item text — Telegram messages, X notifications, Reddit and Patreon
+Collected item text — Telegram messages, X notifications and Patreon
 posts — is written by people other than the owner (C-04). It is classified as
 confidential third-party personal data, retained for 90 days after its digest
 delivers (14 if never summarized), and never republished verbatim: the public

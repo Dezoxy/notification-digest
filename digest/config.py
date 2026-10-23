@@ -99,15 +99,6 @@ _CLAUDE_EFFORT_CHOICES = ("low", "medium", "high", "xhigh", "max")
 # alone.
 _HEADER_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-# Reddit subreddit name validation (REDDIT_SUBREDDITS) -- names are given
-# WITHOUT the "r/" prefix (e.g. "Futurology", not "r/Futurology"), matching
-# Reddit's own subreddit name charset (letters, digits, underscore). These
-# values are interpolated directly into a request path by
-# digest/collectors/reddit.py (f"{base}/r/{subreddit}/top?..."), so this is
-# validated at startup rather than surfacing as an opaque 404/malformed
-# request deep inside a scheduled run.
-_SUBREDDIT_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
 
 @dataclass(frozen=True)
 class Config:
@@ -460,47 +451,6 @@ class Config:
     # INFO log rather than a ConfigError -- a single-topic deployment is a
     # completely valid configuration, not a misconfiguration.
     telegram_relay_thread_id: int | None = None
-    # Reddit collector (digest/collectors/reddit.py). Like x_enabled/
-    # polymarket_enabled, this is an explicit on/off flag rather than an
-    # empty-means-disabled sentinel -- REDDIT_SUBREDDITS has no natural
-    # "unconfigured" shape distinct from "the owner hasn't finished setting
-    # Reddit up yet" the way an empty NEWS_FEEDS tuple naturally does, so an
-    # explicit flag is the only unambiguous way to represent "collector
-    # present but off" (same rationale as polymarket_enabled's own comment).
-    reddit_enabled: bool = False
-    # SECRET (repr=False): the owner's own logged-in Reddit `reddit_session`
-    # browser cookie, sent verbatim as a Cookie header by
-    # digest/collectors/reddit.py to old.reddit.com's .json endpoints (see
-    # that module's docstring for why -- Reddit's Data Team formally refused
-    # this owner's OAuth API application, so app-only OAuth is permanently
-    # dead) -- never logged. Required (ConfigError via _require_str) when
-    # reddit_enabled is True.
-    reddit_session_cookie: str | None = field(default=None, repr=False)
-    # Base URL digest/collectors/reddit.py sends its requests to. Azure's
-    # egress (AS8075) is answered with `403 Blocked` by Reddit since
-    # 2026-10-21, so in production this points at the owner's `reddit-proxy`
-    # Cloudflare Worker; the default is the real old.reddit.com (what a
-    # homelab/operator machine uses directly). Mirrors polymarket_api_base.
-    reddit_api_base: str = "https://old.reddit.com"
-    # SECRET: authenticates to the owner's reddit-proxy Worker via the
-    # `x-proxy-key` header -- never logged. Optional (unset when talking to
-    # old.reddit.com directly). repr=False like polymarket_proxy_key.
-    reddit_proxy_key: str | None = field(default=None, repr=False)
-    # SECRETS: Cloudflare Access service token for the homelab reddit proxy,
-    # sent as `CF-Access-Client-Id` / `CF-Access-Client-Secret` -- never
-    # logged. Both or neither (a lone half is a ConfigError).
-    reddit_access_client_id: str | None = field(default=None, repr=False)
-    reddit_access_client_secret: str | None = field(default=None, repr=False)
-    # Comma-separated subreddit names WITHOUT the "r/" prefix (e.g.
-    # "Futurology,LocalLLaMA,MachineLearning,news,hungary"). Required,
-    # non-empty, when reddit_enabled is True -- there is no sane default
-    # subreddit list the way POLYMARKET_API_BASE has a sane default base URL.
-    reddit_subreddits: tuple[str, ...] = ()
-    # How many top-of-day posts digest/collectors/reddit.py requests per
-    # subreddit per run. 10 is a reasonable default for a personal digest;
-    # bounded to [1, 25] for the same "catch a typo/misconfiguration at
-    # startup, not deep inside a scheduled run" reason as POLYMARKET_TOP_N.
-    reddit_posts_per_sub: int = 10
     # Stable-arc-keys feature (app side): whether the site's ingest validator
     # has ALREADY been updated to accept an optional "key" field on each
     # `topics` entry. Verified 2026-08-10 by reading cloudflare-terraform/
@@ -625,7 +575,7 @@ class Config:
     # supplies the hard process limit.
     fallback_timeout_seconds: int = 180
     # Hacker News collector (digest/collectors/hackernews.py). Like
-    # x_enabled/polymarket_enabled/reddit_enabled, this is an explicit on/off
+    # x_enabled/polymarket_enabled, this is an explicit on/off
     # flag rather than an empty-means-disabled sentinel -- unlike news_feeds,
     # there is no accompanying required value with a natural "unconfigured"
     # empty shape (the collector needs nothing beyond the public Algolia API
@@ -637,7 +587,7 @@ class Config:
     # per run (Algolia's own `hitsPerPage` query parameter). 15 is a
     # reasonable default for a personal digest; bounded to [1, 30] for the
     # same "catch a typo/misconfiguration at startup, not deep inside a
-    # scheduled run" reason as POLYMARKET_TOP_N/REDDIT_POSTS_PER_SUB.
+    # scheduled run" reason as POLYMARKET_TOP_N.
     hackernews_top_n: int = 15
 
     @classmethod
@@ -708,27 +658,6 @@ class Config:
         polymarket_swing_threshold = _optional_float_exclusive_range(
             "POLYMARKET_SWING_THRESHOLD", default=0.15, minimum=0.0, maximum=1.0
         )
-
-        reddit_enabled = _parse_bool(os.environ.get("REDDIT_ENABLED", "false"))
-        reddit_session_cookie: str | None = None
-        reddit_subreddits: tuple[str, ...] = ()
-        reddit_api_base = _optional_url("REDDIT_API_BASE", default="https://old.reddit.com")
-        reddit_proxy_key = _optional_secret("REDDIT_PROXY_KEY")
-        reddit_access_client_id = _optional_secret("REDDIT_ACCESS_CLIENT_ID")
-        reddit_access_client_secret = _optional_secret("REDDIT_ACCESS_CLIENT_SECRET")
-        if bool(reddit_access_client_id) != bool(reddit_access_client_secret):
-            missing = (
-                "REDDIT_ACCESS_CLIENT_SECRET"
-                if reddit_access_client_id
-                else "REDDIT_ACCESS_CLIENT_ID"
-            )
-            raise ConfigError(f"Reddit Access service token needs both halves; missing {missing}")
-        reddit_posts_per_sub = _optional_int_in_range(
-            "REDDIT_POSTS_PER_SUB", default=10, minimum=1, maximum=25
-        )
-        if reddit_enabled:
-            reddit_session_cookie = _require_str("REDDIT_SESSION_COOKIE")
-            reddit_subreddits = _require_subreddit_tuple("REDDIT_SUBREDDITS")
 
         hackernews_enabled = _parse_bool(os.environ.get("HACKERNEWS_ENABLED", "false"))
         hackernews_top_n = _optional_int_in_range(
@@ -862,14 +791,6 @@ class Config:
             polymarket_proxy_key=polymarket_proxy_key,
             polymarket_top_n=polymarket_top_n,
             polymarket_swing_threshold=polymarket_swing_threshold,
-            reddit_enabled=reddit_enabled,
-            reddit_session_cookie=reddit_session_cookie,
-            reddit_api_base=reddit_api_base,
-            reddit_proxy_key=reddit_proxy_key,
-            reddit_access_client_id=reddit_access_client_id,
-            reddit_access_client_secret=reddit_access_client_secret,
-            reddit_subreddits=reddit_subreddits,
-            reddit_posts_per_sub=reddit_posts_per_sub,
             hackernews_enabled=hackernews_enabled,
             hackernews_top_n=hackernews_top_n,
             arc_keys_site_enabled=arc_keys_site_enabled,
@@ -943,32 +864,6 @@ def _require_int_tuple(name: str) -> tuple[int, ...]:
         return tuple(int(p) for p in parts)
     except ValueError as exc:
         raise ConfigError(f"{name} must be a comma-separated list of integers") from exc
-
-
-def _require_subreddit_tuple(name: str) -> tuple[str, ...]:
-    """Require a comma-separated list of bare subreddit names (no "r/" prefix).
-
-    Used for REDDIT_SUBREDDITS when REDDIT_ENABLED=true -- there is no sane
-    default subreddit list, so an empty/unset value is a ConfigError here,
-    not a "collector disabled" sentinel (that role belongs to
-    REDDIT_ENABLED itself, mirroring polymarket_enabled's explicit-flag
-    shape rather than NEWS_FEEDS' empty-means-disabled one). Each entry must
-    match `_SUBREDDIT_NAME_RE` -- see that constant's own comment for why:
-    these values are interpolated directly into a request path by
-    digest/collectors/reddit.py, so a stray "r/" prefix, slash, or space
-    would otherwise surface as an opaque request failure deep inside a
-    scheduled run instead of a clear startup error.
-    """
-    raw = _require_str(name)
-    parts = tuple(p.strip() for p in raw.split(",") if p.strip())
-    if not parts:
-        raise ConfigError(f"{name} must contain at least one subreddit name")
-    for part in parts:
-        if not _SUBREDDIT_NAME_RE.fullmatch(part):
-            raise ConfigError(
-                f"{name} entries must match ^[A-Za-z0-9_]+$ (no 'r/' prefix, no spaces)"
-            )
-    return parts
 
 
 def _parse_bool(raw: str) -> bool:
@@ -1316,9 +1211,8 @@ def _optional_keyword_tuple(name: str) -> tuple[str, ...]:
 def _optional_url(name: str, *, default: str) -> str:
     """Read an optional http(s) URL env var, falling back to `default`, trailing slash stripped.
 
-    Used for POLYMARKET_API_BASE and REDDIT_API_BASE, which
-    digest/collectors/polymarket.py and digest/collectors/reddit.py
-    interpolate directly into a request URL as f"{base}/markets?...". A
+    Used for POLYMARKET_API_BASE, which digest/collectors/polymarket.py
+    interpolates directly into a request URL as f"{base}/markets?...". A
     typo'd or non-URL value there would surface as an opaque request
     failure deep inside a scheduled run instead of a clear startup error --
     validating the scheme here catches that early, mirroring
@@ -1339,10 +1233,8 @@ def _optional_url(name: str, *, default: str) -> str:
 def _optional_secret(name: str) -> str | None:
     """Read an optional secret env var, defaulting to None. Blank counts as unset.
 
-    Used for POLYMARKET_PROXY_KEY, REDDIT_PROXY_KEY and
-    REDDIT_ACCESS_CLIENT_ID/_SECRET -- opaque header values the collectors
-    send to the owner's own proxies (digest/collectors/polymarket.py,
-    digest/collectors/reddit.py). Unlike every other _optional_*
+    Used for POLYMARKET_PROXY_KEY -- an opaque header value the collector
+    sends to the owner's own proxy (digest/collectors/polymarket.py). Unlike every other _optional_*
     helper in this module there is no format to validate (it's an arbitrary
     bearer-style string) and, being a secret, its value must never be
     echoed in any ConfigError -- there is also no failure mode for a plain

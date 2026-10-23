@@ -2,8 +2,7 @@
 
 `urllib.request.urlopen` is monkeypatched to a fake that resolves the single
 front-page request to pre-built JSON bytes or an exception to raise,
-mirroring tests/test_polymarket_collector.py's and tests/test_reddit_
-collector.py's mocking discipline.
+mirroring tests/test_polymarket_collector.py's mocking discipline.
 """
 
 from __future__ import annotations

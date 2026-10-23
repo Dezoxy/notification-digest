@@ -4,7 +4,7 @@
 // runtime scenario, 12 boxes/8 arrows for deployment. The register in
 // ../README.md records each view's question, omissions and update trigger.
 //
-// The seven collection sources are the reason this is not one context view:
+// The six collection sources are the reason this is not one context view:
 // including them all blows the overview budget, so "Context" answers the
 // delivery question and "Sources" answers the collection question.
 
@@ -20,17 +20,17 @@ systemContext notificationDigest "Context" "Who reads the digest, what writes it
 }
 
 systemContext notificationDigest "Sources" "Which accounts and feeds does a run collect from?" {
-    include notificationDigest telegram x reddit patreon polymarket egressProxies hackerNews newsFeeds
+    include notificationDigest telegram x patreon polymarket egressProxies hackerNews newsFeeds
     autoLayout tb
 }
 
-// Collection sources other than Telegram, and the egress proxies that stand
-// between the runner and two of them, are the Sources view's question; left
+// Collection sources other than Telegram, and the egress proxy that stands
+// between the runner and one of them, are the Sources view's question; left
 // in, their arrows crossed the state and site boxes in every automatic
 // layout. SMTP is excluded because it is disabled in production.
 container notificationDigest "Containers" "What are the building blocks, and which side of the trust boundary is each on?" {
     include *
-    exclude x reddit patreon polymarket egressProxies hackerNews newsFeeds smtpRelay
+    exclude x patreon polymarket egressProxies hackerNews newsFeeds smtpRelay
     exclude githubActions imageRegistry keyVault
     exclude anthropic entra
     autoLayout tb 300 150
