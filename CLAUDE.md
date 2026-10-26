@@ -106,7 +106,9 @@ true at the multi-channel cutover.
   path-filtered) and are the required status checks; they are added to the
   ruleset after these workflows reached main.
 - Dependency bumps arrive as Renovate PRs (`renovate.json`), one at a time,
-  weekday mornings. The /docs-sync and /pr-summary rules below are written
+  weekday mornings. The Azure image pin is the exception: it opens at any
+  time, regardless of other open Renovate PRs, and automerges (its merge is
+  the deploy). The /docs-sync and /pr-summary rules below are written
   for PRs a session drives and do not apply to them -- a bot cannot run
   either. Review the diff, let CI verify it, merge.
 - `twifork` is the standing exception: it is tracked, but gated behind the

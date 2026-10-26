@@ -43,7 +43,7 @@
       ]
     },
     {
-      "description": "The Azure image pin automerges at any time, because merging it IS the deploy: the push to main triggers azure-deploy, which plans and then applies through the release-apply job only when scripts/azure_release_guard.py accepts the plan. The guard accepts nothing but an in-place update of all nine jobs whose sole difference is the container image, identical across jobs, equal to this pin and an exact release tag or digest, with nothing unknown until apply, and then waits until no job is running or about to fire. A plan with any other change, or a partial bump, is refused and the run fails: use the manual plan/apply path. CI must pass before Renovate merges. Schedule activation is not part of this; it stays an explicit variable change. Remove this rule to go back to merging pin PRs by hand (a merged pin still deploys).",
+      "description": "The Azure image pin automerges at any time, because merging it IS the deploy: the push to main triggers azure-deploy, which plans and then applies through the release-apply job only when scripts/azure_release_guard.py accepts the plan. The guard accepts nothing but an in-place update of all nine jobs whose sole difference is the container image, identical across jobs, equal to this pin and an exact release tag or digest, with nothing unknown until apply, and then waits until no job is running or about to fire. A plan with any other change, or a partial bump, is refused and the run fails: use the manual plan/apply path. CI must pass before Renovate merges. Schedule activation is not part of this; it stays an explicit variable change. The pin is also exempt from the repo-wide PR limits, so a release deploys even while other Renovate PRs are open: prConcurrentLimit 1 counts every open Renovate PR, and before this the pin PR waited behind any of them -- four deploys in a row were opened by hand while the python 3.15 PR sat unmerged. Renovate checks each branch against its own limit, with 0 meaning unlimited, and branchConcurrentLimit inherits prConcurrentLimit when unset, so prConcurrentLimit 0 frees both the branch and the PR; prHourlyLimit 0 keeps the default of two PRs an hour from deferring it either. Every other update still opens one at a time. Remove this rule to go back to merging pin PRs by hand (a merged pin still deploys).",
       "matchFileNames": [
         "infra/azure/image.auto.tfvars.json"
       ],
@@ -53,7 +53,19 @@
       "automerge": true,
       "schedule": [
         "at any time"
-      ]
+      ],
+      "prConcurrentLimit": 0,
+      "prHourlyLimit": 0
+    },
+    {
+      "description": "Hold the python base image below 3.15. twifork 2.4.0 vendors js2py, which reads code.co_lnotab, and Python 3.15 removed that attribute, so `import twikit` crashes on 3.15 and the X collector cannot load. Without this rule Renovate keeps the 3.15 PR open indefinitely, and under prConcurrentLimit 1 that PR blocks every other update. Remove this rule once a twifork release no longer needs co_lnotab (check it through the dashboard-gated twifork bump), and move the setup-python '3.14' pins in the workflows at the same time.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
     },
     {
       "description": "Group workflow action bumps. The actions in release.yml (checkout, login, metadata, build-push) move together and a split would mean several near-identical PRs against one file. Matches the homelab repo's own grouping of .github/workflows/**.",
