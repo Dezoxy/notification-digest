@@ -41,6 +41,7 @@ not mean to.
 | `fixtures.mjs` | The dataset. Its header lists every render branch it keeps alive. |
 | `fixtures.sql` | The same rows for a real local D1 (browser-based checks). |
 | `render.test.mjs` | The invariant suite. |
+| `design-system.test.mjs` | The design-system export (`scripts/design-system.mjs`): builds against the real `css.js` and fails when a palette variable has no usage note. |
 | `golden.mjs` | Golden renderer/checker (`--update` / `--check` / `--bundle`). |
 | `golden/*.html` | Committed expected output (~1.2MB). |
 | `tools/css-matrix.html` | Computed-style regression matrix for CSS refactors. |
