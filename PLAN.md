@@ -220,6 +220,7 @@ notification-digest/
 │       ├── src/                   # config/auth/http/dates/strings/hrefs/css/client/
 │       │                          #   chrome/sections/ingest/handlers/render-* modules
 │       ├── test/                  # node --test invariants + byte-golden pages
+│       ├── scripts/               # operator tools: send-test-push, design-system export
 │       ├── schema.sql, migrations/ # D1 schema (separate from digest/state.py's SQLite)
 │       └── wrangler.jsonc         # deploy config; `wrangler deploy` from this dir
 ├── infra/azure/                   # app-owned resources; separate bootstrapped Azure Blob backend

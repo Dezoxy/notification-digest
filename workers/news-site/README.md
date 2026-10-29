@@ -77,6 +77,31 @@ See `test/README.md` for the fixture/branch contract and the verification
 recipes (bundled-artifact check, the CSS computed-style matrix, driving the
 real router in a browser).
 
+## Design system
+
+`scripts/design-system.mjs` turns this Worker's own look into the file set of a
+design-system artifact on claude.ai: the palette (light and dark), type styles,
+spacing, radii and shadows as tokens, the logos and icon, and one preview card
+plus README per UI component, all rendered on the site's real stylesheet
+(`components/bundle.css` is `src/css.js` minus its palette blocks).
+
+```bash
+npm run design-system                 # writes $TMPDIR/digest-news-design-system/project
+npm run design-system -- /some/dir    # or to /some/dir/project
+```
+
+It prints the output path, a light/dark contrast table and the component list.
+The palette is parsed from `css.js`, not copied, and that parse is a drift
+guard: a new custom property in the palette blocks fails `npm test` (via
+`test/design-system.test.mjs`) until it has a usage note in the script. Type
+styles, the other spacing and radius tokens, the two literal shadows and the
+component markup are curated by hand in the script and are not checked.
+
+The script only writes files. Publishing is done afterwards from Claude Code:
+merge the artifact's existing `design-system.json` rather than overwriting it
+(it holds the asset records), and upload the logo and icon images as artifact
+assets, not project files.
+
 ## Trust model: capability links, not login
 
 There is **no login form and no Cloudflare Access** in front of this site —
