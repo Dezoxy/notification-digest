@@ -85,14 +85,16 @@ collectors).
 
 Failure semantics -- one request, one signal (mirrors polymarket.py)
 ----------------------------------------------------------------------
-There is exactly one request per run (`_fetch_front_page`) -- unlike
-rss.py's per-feed list, there is no "one of many" to be fault-tolerant
-about. ANY failure of that single request (network
-error, non-2xx status, non-JSON body, a body missing a `hits` array) sets
-`result.failed = True` and returns immediately with no items -- the same
-posture polymarket.py's own single `{base}/markets` request takes (see that
-module's own docstring, "Failure semantics"), and the same "no retry loop,
-next scheduled run is the retry" contract. Each individual hit is still
+There is one request per run (`_fetch_front_page`), plus at most one retry
+after a TRANSIENT failure (timeout, connection error, HTTP 5xx), made after a
+3 s pause (`_RETRY_DELAY_SECONDS`) -- unlike rss.py's per-feed list, there is
+no "one of many" to be fault-tolerant about. Non-transient failures (HTTP
+4xx, non-JSON body, a body missing a `hits` array) fail immediately with no
+retry. Any failure that survives that policy sets `result.failed = True` and
+returns immediately with no items -- the same posture polymarket.py's own
+single `{base}/markets` request takes (see that module's own docstring,
+"Failure semantics"). Still no retry loop: the next scheduled run is the
+retry for anything beyond that second attempt. Each individual hit is still
 parsed defensively and skipped (never fatal) on its own malformed shape,
 because a single bad hit inside an otherwise-successful response is routine, not a
 sign the whole request failed.
@@ -103,6 +105,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -118,6 +122,10 @@ logger = logging.getLogger(__name__)
 # run, it just means this collector contributes nothing (and the run is
 # marked failed, see module docstring's "Failure semantics") this time.
 _REQUEST_TIMEOUT_SECONDS = 15
+
+# Pause before the single retry after a transient failure. One extra GET, and
+# only after a stall: worst case is ~15 + 3 + 15 s against a ~5-minute run.
+_RETRY_DELAY_SECONDS = 3
 
 # Algolia's public HN Search index. No auth, no API key -- see module
 # docstring's "Why Algolia" section.
@@ -283,6 +291,45 @@ def _fetch_front_page(top_n: int) -> list[Any]:
     return hits
 
 
+def _is_transient(exc: Exception) -> bool:
+    """True for failures worth one retry: timeout, connection error, HTTP 5xx.
+
+    `HTTPError` subclasses `URLError`, so it is checked first: a 4xx is a
+    definite answer from the server and is never retried.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    return isinstance(exc, (TimeoutError, urllib.error.URLError))
+
+
+def _fetch_front_page_with_retry(top_n: int) -> list[Any]:
+    """`_fetch_front_page`, retried once after a transient failure.
+
+    Since 2026-11-03 the single Algolia request intermittently hits the full
+    `_REQUEST_TIMEOUT_SECONDS` from Azure egress (TimeoutError), failing the
+    whole run and firing the Sev2 `notification-digest-failures` alert even
+    though the digest was delivered. The same request from elsewhere answers
+    in under half a second, so this is a transient stall, not a block.
+
+    A transient failure (see `_is_transient`) is logged by type name only,
+    followed by a `_RETRY_DELAY_SECONDS` pause and exactly one more attempt.
+    Non-transient failures are re-raised immediately. Raises whatever the
+    final attempt raised; `collect` still owns the `failed=True` mapping.
+    """
+    try:
+        return _fetch_front_page(top_n)
+    except Exception as exc:
+        if not _is_transient(exc):
+            raise
+        logger.warning(
+            "hackernews fetch failed: %s, retrying once in %ss",
+            type(exc).__name__,
+            _RETRY_DELAY_SECONDS,
+        )
+    time.sleep(_RETRY_DELAY_SECONDS)
+    return _fetch_front_page(top_n)
+
+
 def collect(top_n: int) -> CollectResult:
     """Fetch the current HN front page (up to `top_n` stories) within the lookback window.
 
@@ -307,7 +354,7 @@ def collect(top_n: int) -> CollectResult:
     cutoff = datetime.now(UTC).timestamp() - _LOOKBACK_HOURS * 3600
 
     try:
-        raw_hits = _fetch_front_page(top_n)
+        raw_hits = _fetch_front_page_with_retry(top_n)
     except Exception as exc:
         logger.warning("hackernews fetch failed: %s", type(exc).__name__)
         return CollectResult(failed=True)

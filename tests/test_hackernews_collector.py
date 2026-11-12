@@ -31,6 +31,36 @@ class _FakeResponse:
         return self._data
 
 
+@pytest.fixture(autouse=True)
+def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record time.sleep calls so the retry pause never actually sleeps."""
+    recorded: list[float] = []
+    monkeypatch.setattr(hn_module.time, "sleep", recorded.append)
+    return recorded
+
+
+def _patch_urlopen_sequence(
+    monkeypatch: pytest.MonkeyPatch, outcomes: list[bytes | Exception]
+) -> list[object]:
+    """Fake urlopen returning/raising `outcomes` in order; returns the call log."""
+    calls: list[object] = []
+    remaining = list(outcomes)
+
+    def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
+        calls.append(request)
+        outcome = remaining.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return _FakeResponse(outcome)
+
+    monkeypatch.setattr(hn_module.urllib.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(_expected_url(), code, "err", None, None)  # type: ignore[arg-type]
+
+
 def _patch_urlopen(monkeypatch: pytest.MonkeyPatch, outcome: bytes | Exception) -> None:
     def fake_urlopen(request: object, timeout: float | None = None) -> _FakeResponse:
         if isinstance(outcome, Exception):
@@ -147,6 +177,94 @@ def test_successful_empty_hits_is_not_a_failure(monkeypatch: pytest.MonkeyPatch)
 
     assert result.failed is False
     assert result.items == []
+
+
+# --- retry policy: one retry after a transient failure ---
+
+
+def test_timeout_then_success_retries_once(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    calls = _patch_urlopen_sequence(
+        monkeypatch, [TimeoutError("timed out"), _hits_response([_hit(object_id="a1")])]
+    )
+
+    result = collect(15)
+
+    assert result.failed is False
+    assert [item.source_id for item in result.items] == ["a1"]
+    assert sleeps == [3]
+    assert len(calls) == 2
+
+
+def test_timeout_twice_marks_result_failed(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    calls = _patch_urlopen_sequence(monkeypatch, [TimeoutError("t1"), TimeoutError("t2")])
+
+    result = collect(15)
+
+    assert result.failed is True
+    assert result.items == []
+    assert len(calls) == 2
+    assert sleeps == [3]
+
+
+def test_url_error_then_success_is_retried(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    calls = _patch_urlopen_sequence(
+        monkeypatch,
+        [urllib.error.URLError("connection reset"), _hits_response([_hit(object_id="b1")])],
+    )
+
+    result = collect(15)
+
+    assert result.failed is False
+    assert [item.source_id for item in result.items] == ["b1"]
+    assert len(calls) == 2
+    assert sleeps == [3]
+
+
+def test_http_503_then_success_is_retried(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    calls = _patch_urlopen_sequence(
+        monkeypatch, [_http_error(503), _hits_response([_hit(object_id="c1")])]
+    )
+
+    result = collect(15)
+
+    assert result.failed is False
+    assert [item.source_id for item in result.items] == ["c1"]
+    assert len(calls) == 2
+    assert sleeps == [3]
+
+
+def test_http_404_fails_immediately_without_retry(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    calls = _patch_urlopen_sequence(monkeypatch, [_http_error(404)])
+
+    result = collect(15)
+
+    assert result.failed is True
+    assert result.items == []
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_non_json_body_fails_immediately_without_retry(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    calls = _patch_urlopen_sequence(monkeypatch, [b"not json"])
+
+    result = collect(15)
+
+    assert result.failed is True
+    assert result.items == []
+    assert len(calls) == 1
+    assert sleeps == []
 
 
 # --- item mapping ---
