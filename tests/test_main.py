@@ -2988,7 +2988,68 @@ def test_run_hackernews_collector_failure_surfaces_in_failed_sources(monkeypatch
     ok = asyncio.run(main_mod._run(cfg))
 
     assert captured["failed_sources"] == ["hackernews"]
+    # Supplementary source: banner still shown, but the run is not failed.
+    assert ok is True
+
+
+def _run_with_failed_collectors(monkeypatch, tmp_path, *, tg_failed, hn_failed, pm_failed=False):
+    cfg = replace(
+        _cfg(),
+        state_db_path=str(tmp_path / "state.db"),
+        hackernews_enabled=True,
+        polymarket_enabled=True,
+    )
+    _patch_telegram_client(monkeypatch, CollectResult(failed=tg_failed))
+    monkeypatch.setattr(
+        main_mod.hackernews_collector, "collect", lambda *a, **k: CollectResult(failed=hn_failed)
+    )
+    monkeypatch.setattr(
+        main_mod.polymarket_collector,
+        "collect",
+        lambda *a, **k: PolymarketCollectResult(failed=pm_failed),
+    )
+    captured = {"stages": []}
+
+    def fake_deliver(conn, cfg, failed_sources, hidden=frozenset()):
+        captured["failed_sources"] = failed_sources
+        return True
+
+    monkeypatch.setattr(main_mod, "_deliver", fake_deliver)
+    monkeypatch.setattr(main_mod.cloud_context, "report_failure", captured["stages"].append)
+    ok = asyncio.run(main_mod._run(cfg))
+    return ok, captured
+
+
+def test_run_hackernews_only_failure_does_not_fail_run_or_report_failure(monkeypatch, tmp_path):
+    ok, captured = _run_with_failed_collectors(
+        monkeypatch, tmp_path, tg_failed=False, hn_failed=True
+    )
+
+    assert ok is True
+    assert captured["stages"] == []
+    assert captured["failed_sources"] == ["hackernews"]
+
+
+def test_run_hackernews_plus_telegram_failure_fails_run_and_reports_collection(
+    monkeypatch, tmp_path
+):
+    ok, captured = _run_with_failed_collectors(
+        monkeypatch, tmp_path, tg_failed=True, hn_failed=True
+    )
+
     assert ok is False
+    assert captured["stages"] == ["collection"]
+    assert captured["failed_sources"] == ["telegram", "hackernews"]
+
+
+def test_run_polymarket_only_failure_still_fails_run_and_reports_collection(monkeypatch, tmp_path):
+    ok, captured = _run_with_failed_collectors(
+        monkeypatch, tmp_path, tg_failed=False, hn_failed=False, pm_failed=True
+    )
+
+    assert ok is False
+    assert captured["stages"] == ["collection"]
+    assert captured["failed_sources"] == ["polymarket"]
 
 
 # --- _telegram_thread_id_for_kind / kind-aware Telegram thread selection

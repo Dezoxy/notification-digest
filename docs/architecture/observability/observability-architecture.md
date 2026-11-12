@@ -21,7 +21,7 @@ design and does not copy the queries or thresholds.
 
 | Signal | Mechanism | Where it goes |
 |---|---|---|
-| Exit code | `sys.exit(0)` success, `sys.exit(1)` a collector or delivery leg failed, `sys.exit(2)` a configuration error before any work started (`digest/main.py`) | The Container Apps job execution that ran the container records it as that execution's result. The wrapper `digest/cloud_run.py` adds its own line per execution: `cloud_job event=success`, `failure`, `skipped`, `already_completed` or `not_due` |
+| Exit code | `sys.exit(0)` success, `sys.exit(1)` a collector (other than supplementary Hacker News) or delivery leg failed, `sys.exit(2)` a configuration error before any work started (`digest/main.py`) | The Container Apps job execution that ran the container records it as that execution's result. The wrapper `digest/cloud_run.py` adds its own line per execution: `cloud_job event=success`, `failure`, `skipped`, `already_completed` or `not_due` |
 | Human-readable logs | Python `logging`, `basicConfig(level=INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stdout)` (`digest/main.py`) | Container stdout and stderr, collected by the Container Apps environment into one Log Analytics workspace (console and system logs) |
 | `run_summary` (one JSON line per run) | `logger.info("run_summary %s", json.dumps({...}))`, emitted from every run mode (window, daily, weekly, patreon, positions) | Same path. Fields include mode, per-collector or per-source-digest status, item counts, and whether delivery succeeded |
 | `digest_delivery` (one JSON line per digest handled) | `digest/deliver.py`, logged once per digest with a per-channel (`email`/`site`/`telegram`) outcome | Same path |
@@ -42,12 +42,14 @@ have not been reworded, and nothing in the code depends on the log backend.
 
 The application's own code is explicit that the exit code is meant to be the
 *only* signal an alert acts on: `digest/main.py`'s docstrings state outright
-that "ANY collector failure must surface as a non-zero exit" even on a run that
-delivers nothing at all, and every `run_summary`/`digest_delivery` line is
-described in the same comments as being for the log backend, "not the alert
-signal itself." That design assumption survived the move: the Azure `failures`
-alert keys off the wrapper's `cloud_job event=failure` line and a "cloud
-delivery uncertain" line, which a failed run produces, plus platform errors.
+that "ANY non-supplementary collector failure must surface as a non-zero exit"
+even on a run that delivers nothing at all (Hacker News is supplementary: its
+failure shows the banner and `run_summary` but does not fail the run), and every
+`run_summary`/`digest_delivery` line is described in the same comments as being
+for the log backend, "not the alert signal itself." That design assumption
+survived the move: the Azure `failures` alert keys off the wrapper's `cloud_job
+event=failure` line and a "cloud delivery uncertain" line, which a failed run
+produces, plus platform errors.
 
 ### Alerts and budget
 
