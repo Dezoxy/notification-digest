@@ -128,11 +128,12 @@ true at the multi-channel cutover.
   its twin, the worker's READMEs and file header — and fix those docs in the
   same branch, with the proof in the PR body. A PR that changes paths,
   commands, or behavior without the matching doc adjustment is incomplete.
-- After opening or updating a PR, wait for the Codex review, then run
-  `uv run python scripts/fetch-pr-review-threads.py <pr>` (ported from secmes;
-  defaults to unresolved, actionable, Codex-only threads) and address every
-  finding it reports — fix or explicitly rebut, never ignore. Only Codex
-  findings gate PRs; other reviewers' threads are informational.
+- There is no automated code reviewer: the Codex review integration stopped
+  reviewing this repository and the gate was dropped on 2026-11-12. The
+  required status checks are the gate; do not wait for a review that will
+  not come. If a person leaves review threads, list them with
+  `uv run python scripts/fetch-pr-review-threads.py <pr> --all-authors` and
+  fix or explicitly rebut each one.
 - After merging a PR, `/pr-summary <n>` (or
   `uv run python scripts/pr_summary.py <n>`) produces the post-merge run-over
   summary. Nothing writes `docs/pr-summaries/` automatically any more: the CI
