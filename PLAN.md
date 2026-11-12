@@ -145,7 +145,7 @@ notification-digest/
 │       ├── x.py                  # twifork (twikit fork) collector: notifications, X_ENABLED-gated
 │       ├── rss.py                # RSS/Atom "news" feed collector, no cursor axis
 │       ├── polymarket.py         # Polymarket swing-detection collector, own polymarket_probs state
-│       ├── hackernews.py         # Hacker News front page via the public Algolia API, no auth
+│       ├── hackernews.py         # Hacker News front page via Algolia, official Firebase API as fallback, no auth
 │       └── patreon.py            # paid-tier posts of one campaign, cookie session; patreon mode only
 ├── prompts/
 │   ├── digest.md                 # window-digest prompt template (BRIEFING output contract, §5)
@@ -541,7 +541,7 @@ Story-arc background primers (§11.6, "context mode", `CONTEXT_ENABLED`) — wha
 
 ### 4.20 `collectors/hackernews.py`
 
-Front-page stories via the public Algolia HN Search API (`hn.algolia.com`, `tags=front_page`) — no auth, no API key, ONE request per run (plus at most one retry, after a 3 s pause, on a timeout, connection error or HTTP 5xx) for up to `HACKERNEWS_TOP_N` (default 15, range 1–30) stories. Algolia rather than HN's own Firebase API deliberately: Firebase returns the front page as a bare list of ids, needing one follow-up request per story to reconstruct what Algolia already returns in a single hit. Synchronous urllib, matching `rss.py`/`polymarket.py`. No cursor axis — the front page is a rolling, re-ranked view with no monotonic "since" contract, exactly like RSS feeds; idempotency comes entirely from `items`' `UNIQUE(source, source_id)`. `_parse_hit` is defensive and never raises: id/title/timestamp are required, `url`/`author` optional (a text-only "Ask HN" has no url), scores default to 0.
+Front-page stories via the public Algolia HN Search API (`hn.algolia.com`, `tags=front_page`) — no auth, no API key, ONE request per run (plus at most one retry, after a 3 s pause, on a timeout, connection error or HTTP 5xx) for up to `HACKERNEWS_TOP_N` (default 15, range 1–30) stories. Algolia is the primary deliberately: HN's own Firebase API returns the front page as a bare list of ids, needing one follow-up request per story to reconstruct what Algolia already returns in a single hit. Firebase (`hacker-news.firebaseio.com/v0`, the official source and an independent host) is the fallback: when Algolia still fails after its retry (from Azure it intermittently stalls for the full 15 s), `topstories.json` plus one `item/<id>.json` per story (1 + top_n sequential requests) are fetched instead and mapped onto the Algolia hit shape, so a story is the same Item (same `source_id`, deduped by `UNIQUE(source, source_id)`) whichever API served it. A transient item failure stops the item loop (Firebase itself is stalling); other bad items are skipped; the run fails only if both sources fail. Synchronous urllib, matching `rss.py`/`polymarket.py`. No cursor axis — the front page is a rolling, re-ranked view with no monotonic "since" contract, exactly like RSS feeds; idempotency comes entirely from `items`' `UNIQUE(source, source_id)`. `_parse_hit` is defensive and never raises: id/title/timestamp are required, `url`/`author` optional (a text-only "Ask HN" has no url), scores default to 0.
 
 ### 4.21 `collectors/patreon.py`
 
