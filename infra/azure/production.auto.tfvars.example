@@ -29,7 +29,7 @@ app_env = {
   CLAUDE_CONFIG_DIR = "/tmp/claude-home"
   DISABLE_AUTOUPDATER = "1"
   X_ENABLED = "true"
-  NEWS_FEEDS = "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml,https://arstechnica.com/ai/feed/,https://techcrunch.com/category/artificial-intelligence/feed/,https://spectrum.ieee.org/feeds/topic/robotics.rss,https://the-decoder.com/feed/,https://simonwillison.net/atom/everything/,https://www.therobotreport.com/feed/,https://importai.substack.com/feed,https://feeds.bbci.co.uk/news/world/rss.xml,https://www.aljazeera.com/xml/rss/all.xml,https://feedx.net/rss/ap.xml,https://www.politico.eu/feed/,https://telex.hu/rss,https://www.portfolio.hu/rss/all.xml,https://www.ft.com/world?format=rss"
+  NEWS_FEEDS = "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml,https://arstechnica.com/ai/feed/,https://techcrunch.com/category/artificial-intelligence/feed/,https://spectrum.ieee.org/feeds/topic/robotics.rss,https://the-decoder.com/feed/,https://simonwillison.net/atom/everything/,https://www.therobotreport.com/feed/,https://jack-clark.net/feed/,https://feeds.bbci.co.uk/news/world/rss.xml,https://www.aljazeera.com/xml/rss/all.xml,https://feedx.net/rss/ap.xml,https://www.politico.eu/feed/,https://telex.hu/rss,https://www.portfolio.hu/rss/all.xml,https://www.ft.com/world?format=rss"
   POSITIONS_TG_CHANNELS = "ASI_Alliance,fetchunofficial,AGIPriceTalks"
   POSITIONS_X_ACCOUNTS = "ASI_Alliance,Fetch_ai,SingularityNET,CUDOS_,HMsheikh4,ASI_Researchers"
   POSITIONS_KEYWORDS = "$FET,$ASI,Fetch.ai,SingularityNET,Artificial Superintelligence Alliance,ASI:One,ASI:Cloud,Ocean Protocol,CUDOS"
