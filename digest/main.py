@@ -209,6 +209,12 @@ logger = logging.getLogger(__name__)
 # distinct condition, not a collector failure.
 _VERIFY_UNAVAILABLE_BANNER = "⚠ verification unavailable this run\n\n"
 
+# Collectors whose failure is shown (in-digest banner, `run_summary`) but does
+# NOT fail the run or trip the failure alert: supplementary sources that are a
+# single unauthenticated request, so an intermittent miss is noise, not an
+# outage. Adding a source here is the decision to stop paging on it.
+_SUPPLEMENTARY_SOURCES = frozenset({"hackernews"})
+
 # Bounds how many unsummarized items a single Claude call is given. Each
 # allowlisted chat can contribute up to 500 messages per run, and a failed
 # summarize call carries the backlog forward plus new items on top -- with
@@ -423,9 +429,10 @@ def _deliver(
     Returns True iff every enabled channel of every digest handled this run
     (pending and freshly created alike) succeeded. Deliberately does NOT
     factor in whether `failed_sources` is non-empty -- the caller combines
-    this with the collectors' own failure flags, because ANY collector
-    failure must surface as a non-zero exit (the sole signal for the Loki
-    alert on digest.service) even on a run that delivers nothing at all.
+    this with the collectors' own failure flags, because ANY non-
+    supplementary collector failure (see `_SUPPLEMENTARY_SOURCES`) must
+    surface as a non-zero exit (the sole alert signal) even on a run that
+    delivers nothing at all.
 
     `telegram_state` (a single `TelegramRunState`, see its docstring) is
     created once here and threaded through both `deliver_pending` and the
@@ -916,7 +923,10 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
             if failed
         ]
 
-        if failed_sources:
+        # The banner (via _deliver) covers every failed source; only the
+        # non-supplementary ones fail the run / report a collection failure.
+        alerting_sources = [s for s in failed_sources if s not in _SUPPLEMENTARY_SOURCES]
+        if alerting_sources:
             cloud_context.report_failure("collection")
         delivered = _deliver(conn, cfg, failed_sources, hidden)
 
@@ -937,7 +947,7 @@ async def _run(cfg: Config, hidden: frozenset[str] = frozenset()) -> bool:
         if stale_pruned:
             logger.info("pruned %d stale unsummarized items", stale_pruned)
 
-        ok = delivered and not failed_sources
+        ok = delivered and not alerting_sources
 
         # Exit code stays the sole alert trigger (see main()'s sys.exit(0 if
         # ok else 1)); this line exists purely so a Loki query can see WHICH
