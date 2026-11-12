@@ -20,7 +20,7 @@ polymarket = softwareSystem "Polymarket" "Publishes prediction-market prices use
 // between the runner and Polymarket because the direct path is blocked (ADR 10).
 // Reddit was retired (ADR 12) and took its proxy with it.
 egressProxies = softwareSystem "Egress Proxies" "The owner's authenticated Cloudflare Worker (polymarket-proxy) that relays a fixed set of collector requests from Cloudflare's network where the direct path is blocked." "External"
-hackerNews = softwareSystem "Hacker News" "Publishes the front page through the public Algolia API." "External"
+hackerNews = softwareSystem "Hacker News" "Publishes the front page through the public Algolia API, with the official Firebase API as fallback." "External"
 newsFeeds = softwareSystem "News Feeds" "Third-party RSS and Atom feeds followed for general news." "External"
 
 // ── Summarization ────────────────────────────────────────────────────────────
