@@ -789,6 +789,15 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   toggle, text size, ledger density, and a Sans | Serif body-font toggle; a Front
   Page print-poster stylesheet; an About page for anyone the capability link gets
   shared with.
+- **Deployed app version** — the settings panel's About row carries a muted
+  `v0.29.21` label at its right edge (About stays at the left). The source is
+  `provenance.app_version` (a plain `X.Y.Z` string) on the NEWEST digest that has
+  one; the digest app stamps it from the release version baked into its image, so
+  the label lags a deploy until the next digest is ingested. No schema or ingest
+  change: `provenance` is stored as raw JSON and unknown keys are tolerated, and
+  `latestAppVersion` (`src/handlers.js`) reads it with `json_extract`. A value that
+  is not strictly `X.Y.Z`, a D1 error, or no digest carrying one all hide the label
+  (the row then renders exactly as before) — it can never fail a page.
 
 The execution contract from roadmaps 1–4 still holds, with one clarified term:
 a single DEPLOYED script — the source is split across `worker.js` (entry:

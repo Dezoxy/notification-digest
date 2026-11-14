@@ -36,6 +36,27 @@ import { handleIngest } from "./ingest.js";
 export const DIGEST_LIST_COLUMNS =
   "id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources";
 
+// Deployed digest-app version for the settings panel's About row. The app
+// stamps `provenance.app_version` ("X.Y.Z", from the image's baked release
+// version) on each ingest; the site shows the NEWEST digest's value, so it
+// lags a deploy until the next digest lands. Never throws and never fails a
+// page: a D1 error, no digest carrying a version, or a value that is not a
+// plain X.Y.Z (the column is raw app-supplied JSON) all yield null, and the
+// panel simply renders without the label. Handlers start this EARLY and
+// await the promise at render time so it overlaps their other queries.
+const APP_VERSION_RE = /^\d+\.\d+\.\d+$/;
+export async function latestAppVersion(env) {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT json_extract(provenance, '$.app_version') AS v FROM digests WHERE json_extract(provenance, '$.app_version') IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+    ).first();
+    const v = row?.v;
+    return typeof v === "string" && APP_VERSION_RE.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleIndexPage(env, token, url, lang, view, weekParam) {
   if (!(await tokenMatches(env, token))) return notFound();
 
@@ -48,6 +69,7 @@ export async function handleIndexPage(env, token, url, lang, view, weekParam) {
   // silently ignoring the segment or rendering something misleading for a
   // URL that has no real page behind it.
   if (view !== "all" && weekParam) return notFound();
+  const appVersionP = latestAppVersion(env);
 
   // The week actually being rendered: the URL's w/ segment if present,
   // otherwise the current Budapest-local ISO week. NOTE: this step (roadmap
@@ -184,6 +206,7 @@ export async function handleIndexPage(env, token, url, lang, view, weekParam) {
       nowArcs,
       nowMs,
       showCatchup,
+      await appVersionP,
     ),
   );
 }
@@ -223,6 +246,7 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
 
   const id = Number(idParam);
   if (!Number.isInteger(id) || id <= 0) return notFound();
+  const appVersionP = latestAppVersion(env);
 
   // provenance (model-provenance byline, ingest v5) rides along here, not
   // in DIGEST_LIST_COLUMNS above — same "digest PAGE only" carve-out that
@@ -350,7 +374,18 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
   const deltas = parseDeltas(digest.deltas);
 
   return htmlResponse(
-    renderDigestPage(digest, older, newer, token, url.hostname, lang, view, topicArcs, deltas),
+    renderDigestPage(
+      digest,
+      older,
+      newer,
+      token,
+      url.hostname,
+      lang,
+      view,
+      topicArcs,
+      deltas,
+      await appVersionP,
+    ),
   );
 }
 
@@ -370,6 +405,8 @@ export async function handleSearchPage(env, token, url, lang) {
   // to see full-archive hits. The standalone route above (no fragment=1)
   // stays exactly as before: full page, no-JS form, deep-linkable.
   const isFragment = url.searchParams.get("fragment") === "1";
+  // Fragments render no panel, so they skip the version query entirely.
+  const appVersionP = isFragment ? Promise.resolve(null) : latestAppVersion(env);
 
   // Empty query: with fragment=1 there's nothing to show — the ledger's own
   // empty-filtered message already speaks, so an empty body is correct, not
@@ -379,7 +416,7 @@ export async function handleSearchPage(env, token, url, lang) {
   // see there).
   if (q === "") {
     if (isFragment) return htmlResponse("");
-    return htmlResponse(renderSearchPage(null, q, token, url.hostname, lang));
+    return htmlResponse(renderSearchPage(null, q, token, url.hostname, lang, await appVersionP));
   }
 
   const matchQuery = buildFtsMatch(q);
@@ -419,18 +456,18 @@ export async function handleSearchPage(env, token, url, lang) {
 
   if (isFragment) return htmlResponse(renderSearchFragment(results, token, lang));
 
-  return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang));
+  return htmlResponse(renderSearchPage(results, q, token, url.hostname, lang, await appVersionP));
 }
 
 // About page: a short static page explaining what the site is, for the
 // friends the owner shares a capability link with — same token gate/404
 // contract as every other route (see the file-header comment), no D1 query
-// at all beyond that check. `url` is only used for the hostname (renderer
-// signature parity with the other simple pages, e.g. renderSearchPage), same
-// as handleSearchPage/handleArcPage.
+// beyond that check and the settings panel's version lookup. `url` is only
+// used for the hostname (renderer signature parity with the other simple
+// pages, e.g. renderSearchPage), same as handleSearchPage/handleArcPage.
 export async function handleAboutPage(env, token, url, lang) {
   if (!(await tokenMatches(env, token))) return notFound();
-  return htmlResponse(renderAboutPage(token, url.hostname, lang));
+  return htmlResponse(renderAboutPage(token, url.hostname, lang, await latestAppVersion(env)));
 }
 
 // Arc page (§11.1 PR A): reconstructs the full appearance chain for one arc
@@ -442,6 +479,7 @@ export async function handleAboutPage(env, token, url, lang) {
 // slug or a key is independently validated to at ingest time.
 export async function handleArcPage(env, token, identity, url, lang) {
   if (!(await tokenMatches(env, token))) return notFound();
+  const appVersionP = latestAppVersion(env);
 
   // json_each cross-joins each digest's `topics` JSON array; the WHERE
   // clause (topics IS NOT NULL, then ARC_IDENTITY_SQL matching the route's
@@ -558,7 +596,16 @@ export async function handleArcPage(env, token, identity, url, lang) {
   });
 
   return htmlResponse(
-    renderArcPage(identity, appearances, token, url.hostname, lang, Date.now(), contextMd),
+    renderArcPage(
+      identity,
+      appearances,
+      token,
+      url.hostname,
+      lang,
+      Date.now(),
+      contextMd,
+      await appVersionP,
+    ),
   );
 }
 

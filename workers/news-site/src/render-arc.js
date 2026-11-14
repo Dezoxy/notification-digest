@@ -72,7 +72,16 @@ export function renderArcAppearance(row, token, lang) {
 // be a key instead of a slug. `contextMd` (§11.6 context mode) is this arc's
 // primer text from arc_context, or null when it has none — see
 // renderArcContext for how it renders (or doesn't).
-export function renderArcPage(identity, appearances, token, host, lang, nowMs, contextMd) {
+export function renderArcPage(
+  identity,
+  appearances,
+  token,
+  host,
+  lang,
+  nowMs,
+  contextMd,
+  appVersion = null,
+) {
   const strings = STRINGS[lang];
   const first = appearances[0];
   const latest = appearances[appearances.length - 1];
@@ -156,7 +165,7 @@ ${timelineHtml}`;
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "arc", identity, null, true),
+    renderSwitchers(token, lang, "all", "arc", identity, null, true, appVersion),
     body,
     title,
   );

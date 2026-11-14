@@ -724,6 +724,7 @@ export function renderIndexPage(
   nowArcs = [],
   nowMs = null,
   showCatchup = false,
+  appVersion = null,
 ) {
   const strings = STRINGS[lang];
   const emptyMessage =
@@ -866,7 +867,16 @@ export function renderIndexPage(
     token,
     lang,
     view,
-    renderSwitchers(token, lang, view, "index", undefined, isCurrent ? null : weekInfo, true),
+    renderSwitchers(
+      token,
+      lang,
+      view,
+      "index",
+      undefined,
+      isCurrent ? null : weekInfo,
+      true,
+      appVersion,
+    ),
     `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     null,
     prefetchHref,

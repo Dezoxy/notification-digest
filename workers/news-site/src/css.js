@@ -408,6 +408,9 @@ export const CSS = `
     font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--faint);
   }
+  /* Version label (bottom-right of the About row): a .settingslabel, but the
+     version is "v0.29.21", which uppercase would turn into "V0.29.21". */
+  .appversion { text-transform: none; }
 
   /* Settings bubble open/close animation (owner-requested). details/summary
      has no transition of its own to hook, so this is a fresh keyframe pair

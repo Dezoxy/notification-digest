@@ -184,7 +184,18 @@ export function renderArcContext(contextMd, strings) {
   return `<details class="arccontext"><summary>${esc(strings.arcContextLabel)}</summary><div class="arccontextbody">${paragraphs}</div></details>\n`;
 }
 
-export function renderDigestPage(digest, older, newer, token, host, lang, view, topicArcs, deltas) {
+export function renderDigestPage(
+  digest,
+  older,
+  newer,
+  token,
+  host,
+  lang,
+  view,
+  topicArcs,
+  deltas,
+  appVersion = null,
+) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
   // "digest" itself stays an untranslated literal (see the STRINGS comment
@@ -362,7 +373,7 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     // carries the same search bubble as the index; its client-side filter
     // input stays hidden here (the filter IIFE bails without a ledger
     // section), so the bubble offers just the archive search link.
-    renderSwitchers(token, lang, view, "digest", digest.id, null, true),
+    renderSwitchers(token, lang, view, "digest", digest.id, null, true, appVersion),
     body,
     pageTitle,
     null,

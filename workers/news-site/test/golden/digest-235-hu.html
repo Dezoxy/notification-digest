@@ -433,6 +433,9 @@
     font-family: var(--font-data); font-size: 0.7em; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--faint);
   }
+  /* Version label (bottom-right of the About row): a .settingslabel, but the
+     version is "v0.29.21", which uppercase would turn into "V0.29.21". */
+  .appversion { text-transform: none; }
 
   /* Settings bubble open/close animation (owner-requested). details/summary
      has no transition of its own to hook, so this is a fresh keyframe pair
@@ -1964,7 +1967,7 @@
     data-failed="Nem sikerült bekapcsolni"
     data-lang="hu"
     data-base="/t/goldentesttoken/"
-  ><span class="settingslabel">Értesítések</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div><div class="settingsrow"><a href="/t/goldentesttoken/hu/about">Névjegy</a></div></div></details>
+  ><span class="settingslabel">Értesítések</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div><div class="settingsrow"><a href="/t/goldentesttoken/hu/about">Névjegy</a><span class="settingslabel appversion" title="Telepített digest-verzió">v0.29.21</span></div></div></details>
     </div>
   </header>
   <span class="paletteconfig" hidden
