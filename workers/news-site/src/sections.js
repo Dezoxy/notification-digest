@@ -113,6 +113,36 @@ export function addCiteTitles(html) {
   });
 }
 
+const SOURCE_NAMES = new Map([
+  ["bbc.co.uk", "BBC"],
+  ["bbc.com", "BBC"],
+  ["t.me", "Telegram"],
+]);
+
+// Reuse the sanitized href byte-for-byte so query strings keep their HTML
+// escaping. The allowlist below matches the publisher's numbered markers.
+function renderStorySources(chunk, strings) {
+  const links = [];
+  for (const [, href, marker] of chunk.matchAll(
+    /<a class="cite" href="([^"]*)"[^>]*>([⁰¹²³⁴⁵⁶⁷⁸⁹]+)<\/a>/g,
+  )) {
+    try {
+      const url = new URL(href);
+      if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+      const host = url.hostname.replace(/^www\./, "");
+      const label = SOURCE_NAMES.get(host) ?? host;
+      links.push(
+        `<li><a href="${href}" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">${marker}</span> <span>${esc(label)}</span></a></li>`,
+      );
+    } catch {
+      // Leave unusual citations usable inline without inventing a destination.
+    }
+  }
+  return links.length
+    ? `<div class="storysources"><span>${esc(strings.storySources)}</span><ul role="list" aria-label="${esc(strings.storySources)}">${links.join("")}</ul></div>`
+    : "";
+}
+
 const FOLD_BLOCK_TAGS = ["p", "ul", "ol", "div", "blockquote", "table"];
 
 // True when every block tag opens and closes equally often in `segment`.
@@ -189,7 +219,7 @@ export function foldSections(html, sectionCount, strings) {
       (cites
         ? `<span class="seccount">${esc((cites === 1 ? strings.sourceCountOne : strings.sourceCount).replace("{n}", String(cites)))}</span>`
         : "") +
-      `</summary><div class="secbody">${chunks[i]}</div></details>`
+      `</summary><div class="secbody">${chunks[i]}${renderStorySources(chunks[i], strings)}</div></details>`
     );
   });
   return `${pre}${secs.join("\n")}${tail}`;

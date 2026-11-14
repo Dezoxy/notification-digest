@@ -846,13 +846,12 @@ Source: \`render-index.js\`; styles \`.hero\`, \`.herotitle\`, \`.herochip\`, \`
 <header class="hero hero-digest">
   <span class="herochip">Digest · Tue 25 Aug · 16:00 CEST · 12 items · 3 sections</span>
   <h1 class="herotitle">Markets slid for a second day while the EU package landed.</h1>
-  <p class="herosub">Equities extended losses into the close.</p>
 </header>`),
     `# DigestHero
 
-The top of a digest page: the back and older/newer links, then a centred hero with a chip (kind, date, time, counts), the derived headline as the page's h1, and a subline.
+The top of a digest page has back and older/newer links, a centred metadata chip (kind, date, time, counts), and a headline.
 
-**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`span.herochip\`, \`h1.herotitle\` and an optional \`p.herosub\`. The headline and subline are derived from the TL;DR.
+**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`span.herochip\`, \`h1.herotitle\`. The headline is derived from the TL;DR.
 
 - Do repeat \`nav.digestnav.digestnav-bottom\` after the colophon.
 - Do omit the older or newer link at either end instead of showing a disabled one.
@@ -1035,13 +1034,13 @@ Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`,
     "Article",
     170,
     stage(
-      `<div class="tocrow"><nav class="toc"><a href="#s1" title="Markets slide continues"><span class="tocnum">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2" title="EU agrees new package"><span class="tocnum">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3" title="Chip export rules tighten"><span class="tocnum">03</span><span class="toctitle">Chip export rules tighten</span></a></nav><button type="button" class="expandall">Expand all</button></div>`,
+      `<div class="tocrow"><details class="tocpicker" open><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details><button type="button" class="expandall">Expand all</button></div>`,
     ),
     `# Toc
 
-The section index above a digest: one pill per section with its two-digit number, and an Expand all / Collapse all button. On phones it is one scrolling row with a fading edge and a sticky button; from 700px the pills wrap.
+The section index uses a native disclosure with full section titles and an Expand all / Collapse all button. It precedes the complete summary so it remains accessible even when the summary is long.
 
-**Provide** \`div.tocrow\` holding \`nav.toc\` (one \`a\` per section with the full title in \`title\`: a \`span.tocnum\` and a \`span.toctitle\`, linking to \`#sN\`) and, beside the nav, \`button.expandall\` carrying \`data-expand\` / \`data-collapse\` labels, rendered \`hidden\`; the client reveals it.
+**Provide** \`div.tocrow\` holding \`details.tocpicker\`, its summary and \`nav.toc\` with numbered \`#sN\` links. The sibling \`button.expandall\` carries \`data-expand\` / \`data-collapse\` labels and is rendered \`hidden\`; the client reveals it.
 
 - Do generate it from the sections; never write it by hand.
 - Don't include the attention callout's heading.
@@ -1058,6 +1057,7 @@ Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.to
   <details class="sec" open><summary class="sechead"><h2 id="s1">Markets slide continues</h2><span class="seccount">2 sources</span></summary><div class="secbody">
     <a class="secarc" href="#">story so far ×2</a>
     <p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#" title="reuters.com">1</a></p>
+    <div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="#"><span class="sourcenum">¹</span> <span>reuters.com</span></a></li></ul></div>
   </div></details>
   <details class="sec"><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody"><p>The council signed off overnight.</p></div></details>
 </article>`),
@@ -1065,7 +1065,7 @@ Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.to
 
 One story in a digest, a native \`details\` card: a heading with a two-line preview and a source count when closed, a chevron, and the \`body\`-coloured article text when open. The first section ships open.
 
-**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` chips.
+**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` chips and a \`div.storysources\` list of destination hostnames.
 
 - Do keep it a native \`details\`: it works without JavaScript, and print forces every section open.
 - Do bold the figure that matters; \`strong\` snaps to \`strong\` ink against \`body\`.
@@ -1099,14 +1099,14 @@ Source: \`sections.js\`; styles \`.cite\`, \`mark\`.
     "ThreadPills",
     "Article",
     250,
-    stage(`<nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues <span class="pillcount">×2 this week</span></a><a class="threadpill" href="#">Chip export rules <span class="pillcount">×3 this week</span></a></nav>
+    stage(`<details class="storythreads" open><summary>Story threads · 2</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues <span class="pillcount">×2 this week</span></a><a class="threadpill" href="#">Chip export rules <span class="pillcount">×3 this week</span></a></nav></details>
 <div class="archivelabel" style="margin-top:24px">What changed</div>
 <nav class="deltas" aria-label="What changed"><a class="delta" href="#"><span class="deltalabel">Markets slide continues</span><p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p></a></nav>`),
     `# ThreadPills
 
-Story threads ("arcs") on a digest: tinted pills naming each thread with its weekly count, and a "What changed" list showing a previous → current value.
+The related-reading controls after a digest article pair recurring story threads with a "What changed" list when a previous and current value are available.
 
-**Provide** \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the same pills sit in the hero.
+**Provide** a \`details.storythreads\` disclosure containing \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the same pills sit in the hero.
 
 - Do show a delta only when both values are known.
 - Don't colour deltas red or green; the previous value is \`muted\`, the current one \`strong\`.

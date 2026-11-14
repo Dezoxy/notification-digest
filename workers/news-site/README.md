@@ -15,6 +15,13 @@ Live at: `https://news.toomhorvath.com/t/<SITE_TOKEN>/` and
 D1 database via Cloudflare Workers Custom Domains — see `news_site.tf` at the
 repo root).
 
+Digest pages show a native section picker before the complete summary. Related
+story threads are available after the article when relevant. Each expanded
+story gives its numbered citations a separate source list with larger links
+and readable labels. The inline citation markers remain links. The picker and
+story disclosures work without JavaScript. Expand all is available when
+JavaScript is enabled.
+
 ## Source layout
 
 One deployed script, several source files, plus a small `public/` directory

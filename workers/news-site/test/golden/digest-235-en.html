@@ -628,41 +628,37 @@
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Section index: pills in .toc, "Expand all" beside it in .tocrow. The button
-     is a SIBLING of the scroller, not a sticky child: a sticky button inside
-     the scrolling row sat on top of the pills passing under it. */
-  .tocrow { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-4); }
-  .toc {
-    display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0;
-    margin: 0; padding: 4px; scroll-padding-inline: 4px;
-    overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity;
-  }
-  .toc::-webkit-scrollbar { display: none; }
-  .toc a {
-    display: inline-flex; align-items: center; gap: 8px; flex: none; scroll-snap-align: start;
-    max-width: min(72vw, 320px, 100%);
-    min-height: 40px; padding: 0 16px;
+  /* Native section picker remains usable without JavaScript. */
+  .tocrow { display: flex; align-items: flex-start; gap: var(--sp-2); }
+  .tocpicker { flex: 1; min-width: 0; }
+  .tocpicker > summary, .storythreads > summary {
+    display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
-    background: var(--panel); color: var(--text); font-size: var(--fs-ui); text-decoration: none; white-space: nowrap;
+    background: var(--panel); cursor: pointer; font-size: var(--fs-ui); font-weight: 600;
   }
-  .toc a:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+  .tocpicker > summary::after, .storythreads > summary::after { content: "+"; margin-left: auto; }
+  .tocpicker[open] > summary::after, .storythreads[open] > summary::after { content: "−"; }
+  .toc { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; }
+  .toc a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 16px; border-radius: var(--r-in); color: var(--text); text-decoration: none; }
+  .toc a:hover { background: var(--accent-soft); }
   .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
-  /* One long title must not fill the row (the 100% cap keeps a lone pill inside the scroller instead of clipped at its edge): it ellipsises, the number stays. */
-  .toctitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toctitle { overflow-wrap: anywhere; }
   .expandall {
-    flex: none; min-height: 40px; padding: 0 16px;
+    flex: none; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border-strong); border-radius: var(--r-pill);
     background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
   }
   .expandall:hover { border-color: var(--accent); }
-  /* From tablet width up the pills WRAP instead of scrolling: there is room.
-     The button stays at the end of the row, level with the first line of
-     pills. The width cap is a phone thing. */
-  @media (min-width: 700px) {
-    .tocrow { align-items: flex-start; }
-    .toc { flex-wrap: wrap; overflow: visible; }
-    .toc a { max-width: none; }
+  .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
+  .storysources { margin-top: var(--sp-4); font-size: var(--fs-meta); color: var(--muted); }
+  .storysources ul { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+  .storysources li { margin: 0; min-width: 0; }
+  .storysources a {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; padding: 0 12px;
+    border: 1px solid var(--border); border-radius: var(--r-pill); text-decoration: none; overflow-wrap: anywhere;
   }
+  .storysources a:hover { background: var(--accent-soft); }
+  .sourcenum { font-weight: 600; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -891,6 +887,8 @@
       animation: rise var(--dur-enter) var(--ease-out) both;
     }
     @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+    html.enter .layout > .hero, html.enter .maincol > .digest { animation-name: rise-visible; }
+    @keyframes rise-visible { from { transform: translateY(14px); } }
     html.enter :is(.hero, .maincol > :nth-child(1), .ledger > :nth-child(1), .side > :nth-child(1)) { animation-delay: 60ms; }
     html.enter :is(.maincol > :nth-child(2), .ledger > :nth-child(2), .side > :nth-child(2)) { animation-delay: 120ms; }
     html.enter :is(.maincol > :nth-child(3), .ledger > :nth-child(3)) { animation-delay: 180ms; }
@@ -1007,6 +1005,8 @@
 
     .hero { padding: 36px 0 28px; }
     header.hero { padding: var(--sp-5) 0 var(--sp-4); }
+    header.hero-digest { padding: var(--sp-2) 0; }
+    .hero-digest .herotitle { margin: 4px auto 0; font-size: 28px; }
     .herosub, .hero .herosub.excerpt { font-size: calc(17px * var(--read-scale)); }
     .entry { padding: var(--sp-4); }
     .tldr, .attention, .aboutcard { padding: 18px var(--sp-4); }
@@ -1065,7 +1065,7 @@
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .toc, .expandall, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .storythreads, .storysources, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
@@ -1123,18 +1123,12 @@
 <header class="hero hero-digest">
   <span class="herochip">Tue 25 Aug · 16:00 CEST · 12 items · 3 sections</span>
   <h1 class="herotitle">Markets slid for a second day while the EU package landed.</h1>
-  
-  <nav class="heropills" aria-label="Story threads"><a class="threadpill" href="/t/goldentesttoken/a/markets-slide">Markets slide continues <span class="pillcount">×2 this week</span></a></nav>
 </header>
-    <div class="maincol"><div class="archivelabel">What changed</div><nav class="deltas" aria-label="What changed"><a class="delta" href="/t/goldentesttoken/a/markets-slide-continues">
-    <span class="deltalabel">Markets slide continues</span>
-    <p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p>
-  </a></nav>
-<div class="tocrow"><nav class="toc" aria-label="Sections"><a href="#s1" title="Markets slide continues"><span class="tocnum">01</span><span class="toctitle">Markets slide continues</span></a>
-<a href="#s2" title="EU agrees new package"><span class="tocnum">02</span><span class="toctitle">EU agrees new package</span></a>
-<a href="#s3" title="Chip export rules tighten"><span class="tocnum">03</span><span class="toctitle">Chip export rules tighten</span></a></nav>
+    <div class="maincol"><article class="digest">
+<div class="tocrow"><details class="tocpicker"><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a>
+<a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a>
+<a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details>
 <button type="button" class="expandall" hidden data-expand="Expand all" data-collapse="Collapse all">Expand all</button></div>
-<article class="digest">
 <p class="banner">⚠ polymarket collection failed this run</p>
 <div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
 <div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The reform deadline falls on Friday, so check the filing window before then<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer" title="example.com">¹</a>.</p></div>
@@ -1146,15 +1140,20 @@
 <li>Bond yields eased as investors sought safety.</li>
 <li>Currency desks reported the widest spreads this month.</li>
 </ul>
-</div></details>
+<div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="https://example.com/liquidity-note" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">²</span> <span>example.com</span></a></li></ul></div></div></details>
 <details class="sec"><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview" aria-hidden="true">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody">
 <p>The council signed off <span>overnight</span>, with disbursement gated on reforms.</p>
 <p>Several members asked for a review clause. The council statement sets a first checkpoint in the spring<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer" title="example.com">³</a>.</p>
-</div></details>
+<div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="https://example.com/council-statement" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">³</span> <span>example.com</span></a></li></ul></div></div></details>
 <details class="sec"><summary class="sechead"><h2 id="s3">Chip export rules tighten</h2><span class="secpreview" aria-hidden="true">New licensing requirements take effect next quarter.</span><span class="seccount">1 source</span></summary><div class="secbody">
 <p>New licensing requirements take effect next quarter.</p>
-<p>Exporters have ninety days to file. The ministry notice lists the affected product classes<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer" title="example.com">⁴</a>.</p></div></details>
+<p>Exporters have ninety days to file. The ministry notice lists the affected product classes<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer" title="example.com">⁴</a>.</p><div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="https://example.com/export-rules" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">⁴</span> <span>example.com</span></a></li></ul></div></div></details>
 <p class="foot"><em>From 12 items; 5 informed this briefing, while 4 were chatter.</em></p>
+<details class="storythreads"><summary>Story threads · 1</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="/t/goldentesttoken/a/markets-slide">Markets slide continues <span class="pillcount">×2 this week</span></a></nav></details><div class="archivelabel">What changed</div><nav class="deltas" aria-label="What changed"><a class="delta" href="/t/goldentesttoken/a/markets-slide-continues">
+    <span class="deltalabel">Markets slide continues</span>
+    <p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p>
+  </a></nav>
+
 </article>
 <details class="colophon"><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div></details><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/">← All digests</a>
 <span class="spacer"></span>

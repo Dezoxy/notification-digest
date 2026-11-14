@@ -566,6 +566,7 @@ console.log("\nbehaviour checks");
 
     // TOC click opens a folded section.
     await page.evaluate(() => document.querySelectorAll("details.sec").forEach((d) => (d.open = false)));
+    await page.click(".tocpicker > summary");
     await page.click('.toc a[href="#s3"]');
     await page.waitForTimeout(200);
     check("TOC #s3 click opens section 3", await page.evaluate(() => document.querySelector("h2#s3").closest("details.sec").open));
