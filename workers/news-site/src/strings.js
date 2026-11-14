@@ -86,6 +86,7 @@ export const STRINGS = {
     // Summary of the collapsed colophon disclosure wrapping the two rows
     // above (source key + provenance) — see colophonHtml in renderDigestPage.
     colophonLabel: "How this was made",
+    runWarning: "Run warnings",
     // Search (roadmap 4 step 7). searchResults is a placeholder template
     // ({n} = result count), same convention as weekLabel above.
     searchLabel: "Search the archive",
@@ -338,6 +339,7 @@ export const STRINGS = {
     // Owner: please review
     provenanceTranslateLabel: "Fordította",
     colophonLabel: "Hogyan készült",
+    runWarning: "Futtatási figyelmeztetések",
     // Search (roadmap 4 step 7) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
     searchLabel: "Keresés az archívumban",

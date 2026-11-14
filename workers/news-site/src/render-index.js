@@ -154,6 +154,16 @@ export const SOURCE_COLORS = {
 
 export const SOURCE_COLOR_FALLBACK = "#9aa0ab";
 
+export function parseFailedSources(failedSourcesJson) {
+  if (!failedSourcesJson) return null;
+  try {
+    const names = JSON.parse(failedSourcesJson);
+    return Array.isArray(names) && names.length > 0 ? names : null;
+  } catch {
+    return null;
+  }
+}
+
 // Degraded-run badge (roadmap 2 step 8): shown when failed_sources parses to
 // a non-empty array — fail-safe JSON.parse contract (unparseable or
 // wrong-shaped -> treated as absent, never thrown), same posture
@@ -168,14 +178,8 @@ export const SOURCE_COLOR_FALLBACK = "#9aa0ab";
 // untranslated in the title, same as source_counts' names in
 // renderSourceKey.
 export function renderDegradedBadge(failedSourcesJson, strings) {
-  if (!failedSourcesJson) return "";
-  let names;
-  try {
-    names = JSON.parse(failedSourcesJson);
-  } catch {
-    return "";
-  }
-  if (!Array.isArray(names) || names.length === 0) return "";
+  const names = parseFailedSources(failedSourcesJson);
+  if (!names) return "";
   const title = names.join(", ");
   return `<span class="flag flag-degraded" title="${esc(title)}">⚠ ${esc(strings.degraded)}</span>`;
 }
@@ -200,15 +204,7 @@ export function renderSourceKey(sourceCountsJson, failedSourcesJson, strings) {
       // unparseable -> treat as absent
     }
   }
-  let failed = null;
-  if (failedSourcesJson) {
-    try {
-      const parsed = JSON.parse(failedSourcesJson);
-      if (Array.isArray(parsed) && parsed.length > 0) failed = parsed;
-    } catch {
-      // unparseable -> treat as absent
-    }
-  }
+  const failed = parseFailedSources(failedSourcesJson);
 
   // Descending by count — reads as a ranked list, highest-volume source first.
   const countEntries = counts

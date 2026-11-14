@@ -712,6 +712,9 @@ export const CSS = `
   /* Colophon: record-keeping, collapsed by default, deliberately quiet. */
   .colophon { margin-top: var(--sp-5); padding-top: var(--sp-2); border-top: 1px solid var(--border); }
   .colophon summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: var(--fs-meta); color: var(--muted); }
+  .colophon-warning { color: var(--daily); font-weight: 700; margin-left: 6px; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .colophonbody .banner { margin-bottom: var(--sp-2); }
   .colophon summary:hover { color: var(--strong); }
   .colophonbody { padding: var(--sp-2) 0 var(--sp-3); }
   .sourcekey { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: var(--fs-meta); color: var(--muted); }
