@@ -1039,6 +1039,7 @@ Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`,
     `# Toc
 
 The section index starts as an open disclosure with full section titles and a Collapse all button for the stories. It sits before the complete summary.
+On phones, the list uses 13px text and can extend below both controls. Each link has a minimum height of 44px.
 
 **Provide** \`div.tocrow\` holding \`details.tocpicker\`, its summary and \`nav.toc\` with numbered \`#sN\` links. The sibling \`button.expandall\` carries \`data-expand\` / \`data-collapse\` labels and is rendered \`hidden\`; the client reveals it.
 
