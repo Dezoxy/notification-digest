@@ -208,26 +208,15 @@ export function renderDigestPage(
       : digest.kind === "weekly"
         ? strings.weeklyBrief
         : "digest";
-  // The chip carries edition metadata, including the day for screenshots.
-  const chip = [
-    digest.kind === "daily" || digest.kind === "weekly" ? kindLabel : null,
-    formatShortDate(date, strings.locale),
-    `${formatTime(date, strings.locale)} ${tzAbbr(date)}`,
-    `${digest.item_count} ${strings.itemsWord}`,
-    `${digest.section_count} ${strings.sectionsWord}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   // The headline comes from the stored TL;DR. The article keeps the full
   // summary and any formatting supplied by the publisher.
   // HU page: the translated TL;DR when the app sent one, same choice the
   // body makes (a HU page that fell back to the English body keeps English).
   const tldrText = lang === "hu" && digest.tldr_hu ? digest.tldr_hu : digest.tldr;
   const headline = deriveHeadline(tldrText);
-  // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
-  // browser tab/history width is tight, and the token never appears here.
-  // pageChrome esc()s the whole composed string before inserting it.
-  const pageTitle = `${kindLabel} #${digest.id} · ${formatShortDate(date, strings.locale)} ${formatTime(date, strings.locale)}`;
+  const shortDate = formatShortDate(date, strings.locale);
+  const time = formatTime(date, strings.locale);
+  const pageTitle = `${kindLabel} #${digest.id} · ${shortDate} ${time}`;
 
   const navLinks = [
     `<a href="${indexHref(token, lang, view)}">${esc(strings.allDigests)}</a>`,
@@ -363,7 +352,7 @@ export function renderDigestPage(
   // the order of its callouts; related reading follows the article.
   const heroHtml = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <header class="hero hero-digest">
-  <span class="herochip">${esc(chip)}</span>
+  <p class="digest-dateline">${esc(kindLabel)} · <time datetime="${date.toISOString()}"><span class="digest-dateline-date">${esc(shortDate)} · </span>${esc(time)} ${esc(tzAbbr(date))}</time></p>
   <h1 class="herotitle">${esc(headline)}</h1>
 </header>`;
   const body = `<article class="digest">
@@ -393,8 +382,7 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     // The bar's .barback arrow replaces the old floating .backfab: same
     // target (this view's index), same label.
     backHref: indexHref(token, lang, view),
-    // Same issue-line slot the index fills — the digest's own edition
-    // number and full date (the hero chip repeats only the short date).
+    // The phone masthead carries the full date and edition number.
     issueLineText: `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
   });
 }

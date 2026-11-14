@@ -432,6 +432,9 @@ export const CSS = `
   }
   section.hero .herotitle, .hero .headline-lead { font-size: var(--fs-hero); max-width: 20ch; }
   .hero-digest .herotitle, .archead .arctitle { max-width: 24ch; }
+  .digest-dateline { margin: 0; color: var(--muted); font-size: var(--fs-meta); line-height: 1.3; }
+  .digest-dateline::first-letter { text-transform: uppercase; }
+  .hero-digest .herotitle { margin-top: var(--sp-3); }
   .eyebrow-text { text-align: center; }
   .hero > .herotitle:first-child { margin-top: 0; }
   .herochip {
@@ -945,7 +948,7 @@ export const CSS = `
     .hero { padding: 36px 0 28px; }
     header.hero { padding: var(--sp-5) 0 var(--sp-4); }
     header.hero-digest { padding: var(--sp-2) 0; }
-    .hero-digest .herotitle { margin: 4px auto 0; font-size: 28px; }
+    .hero-digest .herotitle { margin: 8px auto 0; font-size: 28px; }
     .herosub, .hero .herosub.excerpt { font-size: calc(17px * var(--read-scale)); }
     .entry { padding: var(--sp-4); }
     .tldr, .attention, .aboutcard { padding: 18px var(--sp-4); }
@@ -1037,6 +1040,7 @@ export const CSS = `
   }
 
   @media screen and (max-width: 699.98px) {
+    .digest-dateline-date { display: none; }
     .toc a { padding-inline: var(--sp-2); font-size: var(--fs-meta); line-height: 1.35; }
     /* Size the list to the whole row while the summary shares it with Collapse all. */
     @supports (container-type: inline-size) and (width: 100cqi) {
@@ -1062,7 +1066,7 @@ export const CSS = `
       background: none; box-shadow: none; border-color: #999; color: #000;
     }
     .herotitle, .headline, .sechead h2, .secbody, .secbody p, .tldr, .attention, .deltatext, .deltaprev,
-    .deltanow, .deltalabel, .arccontextbody, .sourcekey, .provenance, .herosub, .excerpt { color: #000; }
+    .deltanow, .deltalabel, .arccontextbody, .sourcekey, .provenance, .herosub, .excerpt, .digest-dateline { color: #000; }
     h2 { break-after: avoid; }
     .sec { break-inside: auto; }
     /* A closed details hides its body through ::details-content; print forces
