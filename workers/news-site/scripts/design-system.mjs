@@ -1032,18 +1032,18 @@ Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`,
     "Article",
     170,
     stage(
-      `<nav class="toc"><a href="#s1"><span class="tocnum">01</span>Markets slide continues</a><a href="#s2"><span class="tocnum">02</span>EU agrees new package</a><a href="#s3"><span class="tocnum">03</span>Chip export rules tighten</a><button type="button" class="expandall">Expand all</button></nav>`,
+      `<div class="tocrow"><nav class="toc"><a href="#s1" title="Markets slide continues"><span class="tocnum">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2" title="EU agrees new package"><span class="tocnum">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3" title="Chip export rules tighten"><span class="tocnum">03</span><span class="toctitle">Chip export rules tighten</span></a></nav><button type="button" class="expandall">Expand all</button></div>`,
     ),
     `# Toc
 
 The section index above a digest: one pill per section with its two-digit number, and an Expand all / Collapse all button. On phones it is one scrolling row with a fading edge and a sticky button; from 700px the pills wrap.
 
-**Provide** \`nav.toc\` with one \`a\` per section (a \`span.tocnum\` and the title, linking to \`#sN\`) and \`button.expandall\` carrying \`data-expand\` / \`data-collapse\` labels, rendered \`hidden\`; the client reveals it.
+**Provide** \`div.tocrow\` holding \`nav.toc\` (one \`a\` per section with the full title in \`title\`: a \`span.tocnum\` and a \`span.toctitle\`, linking to \`#sN\`) and, beside the nav, \`button.expandall\` carrying \`data-expand\` / \`data-collapse\` labels, rendered \`hidden\`; the client reveals it.
 
 - Do generate it from the sections; never write it by hand.
 - Don't include the attention callout's heading.
 
-Source: \`render-digest.js\`, \`client.js\`; styles \`.toc\`, \`.tocnum\`, \`.expandall\`.
+Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.tocnum\`, \`.toctitle\`, \`.expandall\`.
 `,
   );
 

@@ -186,12 +186,18 @@ export const CSS = `
     pointer-events: none;
     background: radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 22px 22px;
   }
-  /* Oversized on the sides so the slow drift never exposes an edge. */
+  /* Oversized on the sides so the slow drift never exposes an edge. The
+     status-bar strip behind it on iOS is flat theme-color (= --bg), so the
+     top edge must BE the --bg colour. The mask fades the glow in over the first
+     140px, and the ellipse sits below the edge, so no bright band meets the
+     flat strip. currentColor only supplies opaque alpha; the mask never shows it. */
   body::after {
     content: "";
     position: fixed; top: 0; left: -10%; right: -10%; height: 100lvh; z-index: var(--z-bg);
     pointer-events: none;
-    background: radial-gradient(ellipse 900px 520px at 50% 0, var(--glow), transparent 70%);
+    background: radial-gradient(ellipse 900px 520px at 50% 60px, var(--glow), transparent 70%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, currentColor 140px);
+    mask-image: linear-gradient(to bottom, transparent 0, currentColor 140px);
   }
 
   /* ── Shell: the bar ───────────────────────────────────────────────── */
@@ -587,33 +593,40 @@ export const CSS = `
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Section index: one scrolling row of pills, not sticky. */
+  /* Section index: pills in .toc, "Expand all" beside it in .tocrow. The button
+     is a SIBLING of the scroller, not a sticky child: a sticky button inside
+     the scrolling row sat on top of the pills passing under it. */
+  .tocrow { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-4); }
   .toc {
-    display: flex; align-items: center; gap: var(--sp-2);
-    margin: 0 -4px var(--sp-4); padding: 4px;
+    display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0;
+    margin: 0; padding: 4px; scroll-padding-inline: 4px;
     overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity;
   }
   .toc::-webkit-scrollbar { display: none; }
   .toc a {
     display: inline-flex; align-items: center; gap: 8px; flex: none; scroll-snap-align: start;
+    max-width: min(72vw, 320px, 100%);
     min-height: 40px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
     background: var(--panel); color: var(--text); font-size: var(--fs-ui); text-decoration: none; white-space: nowrap;
   }
   .toc a:hover { border-color: var(--accent-line); background: var(--accent-soft); }
-  .tocnum { font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+  .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+  /* One long title must not fill the row (the 100% cap keeps a lone pill inside the scroller instead of clipped at its edge): it ellipsises, the number stays. */
+  .toctitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .expandall {
-    position: sticky; right: 0; flex: none; margin-left: auto; min-height: 40px; padding: 0 16px;
+    flex: none; min-height: 40px; padding: 0 16px;
     border: 1px solid var(--border-strong); border-radius: var(--r-pill);
     background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
   }
   .expandall:hover { border-color: var(--accent); }
-  /* From tablet width up the pills WRAP instead of scrolling: there is room,
-     and a sticky "Expand all" over a scrolling row covers the last pill. The
-     scrolling row (with its sticky button and edge fade) is a phone thing. */
+  /* From tablet width up the pills WRAP instead of scrolling: there is room.
+     The button stays at the end of the row, level with the first line of
+     pills. The width cap is a phone thing. */
   @media (min-width: 700px) {
+    .tocrow { align-items: flex-start; }
     .toc { flex-wrap: wrap; overflow: visible; }
-    .expandall { position: static; }
+    .toc a { max-width: none; }
   }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
@@ -831,7 +844,9 @@ export const CSS = `
     body::after { animation: drift var(--dur-drift) var(--ease-io) infinite alternate; }
     @keyframes drift {
       from { transform: translate3d(-4%, 0, 0); }
-      to { transform: translate3d(4%, -3%, 0); }
+      /* Downward only: drifting UP would drag the masked-out top rows above
+         the viewport and let the glow touch the top edge again. */
+      to { transform: translate3d(4%, 3%, 0); }
     }
     /* Hard loads only: html.enter is removed ~1.2s after the first paint and
        never comes back on soft navigation. No "to" keyframe so a hover lift
@@ -948,7 +963,7 @@ export const CSS = `
        viewport for the keyboard, so a bottom-anchored field would start under
        it. While the field has focus the dock moves to the top and the panel
        opens downward. */
-    html:has(.bar .filter:focus) .bar { top: calc(12px + env(safe-area-inset-top)); bottom: auto; }
+    html:has(.bar .filter:focus) .bar { top: calc(12px + env(safe-area-inset-top)); bottom: auto; transform: none; }
     html:has(.bar .filter:focus) .searchpanel { top: calc(100% + var(--sp-3)); bottom: auto; }
     /* No top bar on phones (the dock is at the bottom): a #sN jump needs only
        a little air above the heading. */
@@ -967,6 +982,13 @@ export const CSS = `
     .tlitem { padding: 14px var(--sp-4); }
     .weekrail a { padding: 0 12px; }
     .resumechip { bottom: calc(10px + var(--dock-h) + 14px + env(safe-area-inset-bottom)); }
+    /* html.dockhid (client.js) slides the dock away while the reader scrolls
+       down. A transform on the bar itself is fine; only its ancestors must
+       stay transform-free. It is inert while hidden so it cannot catch taps.
+       The chip drops to the dock's resting spot via translate (not bottom),
+       keeping motion transform-only. */
+    html.dockhid .bar { transform: translateY(calc(100% + 10px + env(safe-area-inset-bottom) + 8px)); pointer-events: none; }
+    html.dockhid .resumechip { translate: -50% calc(var(--dock-h) + 14px); }
     .pushnote { max-width: 55%; }
 
     .settingspanel:popover-open {
@@ -981,6 +1003,8 @@ export const CSS = `
     .settingsrow { min-height: 44px; }
     .minisegbtn, .langswitch strong, .langswitch a, .pushtoggle { min-height: 40px; }
     @media (prefers-reduced-motion: no-preference) {
+      .bar { transition: transform var(--dur) var(--ease-out); }
+      .resumechip { transition: translate var(--dur) var(--ease-out); }
       @starting-style {
         .settingspanel:popover-open { opacity: 0; transform: translateY(32px); }
       }
@@ -1005,7 +1029,7 @@ export const CSS = `
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .toc, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .toc, .expandall, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }

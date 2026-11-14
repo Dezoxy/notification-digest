@@ -174,6 +174,12 @@ export function pageChrome({
   // - mobile-web-app-capable is what makes an iOS Home Screen launch open
   //   standalone, which is in turn the ONLY context iOS delivers Web Push
   //   in — so it is load-bearing for the whole feature, not decoration.
+  // - apple-mobile-web-app-status-bar-style is deliberately left at its
+  //   default (opaque bar in theme-color). black-translucent would draw the
+  //   page under the status bar but forces WHITE status text, unreadable on
+  //   the near-white light theme's top edge, and a light-mode scrim would
+  //   put a visible band back. The default also keeps the safe-area inset
+  //   at 0 in standalone, so .phonehead's inset padding is not doubled.
   // - The service-worker registration is its own script tag rather than
   //   part of CLIENT_SCRIPT because the script URL must be absolute and
   //   token-bearing, and CLIENT_SCRIPT is one static string with no access
@@ -191,7 +197,9 @@ export function pageChrome({
 <!-- theme-color must track the CSS palette blocks' page background (light
      #eceff6 / dark #0b0d14 — Spatial Glass) so mobile browser chrome (URL
      bar/status bar tint) melts into the page instead of showing a stock
-     color. client.js THEME_COLORS (the manual-override path) and pwa.js
+     color. The status-bar strip is FLAT theme-color, so the page's top edge
+     must equal --bg (css.js fades the glow in below the edge); any visible
+     glow at y=0 shows as a hard seam. client.js THEME_COLORS (the manual-override path) and pwa.js
      (offline page, manifest colors) carry the same values. The prefers-color-scheme media attrs cover the
      automatic (Auto) case; a manual Light/Dark override from the theme
      miniseg (see the bottom script) updates both metas' content directly,

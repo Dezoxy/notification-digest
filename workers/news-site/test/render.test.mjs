@@ -212,6 +212,17 @@ test("client.js: folded sections, expand-all, print, entrance, typing state", as
   assert.match(CLIENT_SCRIPT, /addEventListener\(\s*"hashchange"/, "hashchange reveals a section");
   assert.match(CLIENT_SCRIPT, /revealHash\(location\.hash\);\s*$/, "boot-time hash reveal");
   assert.match(CLIENT_SCRIPT, /querySelector\("button\.expandall"\)/, "expand-all wired");
+  // Phone dock auto-hide: phone-only, rAF-throttled, with every pin guard.
+  assert.match(CLIENT_SCRIPT, /classList\.add\("dockhid"\)/, "dock hides via html.dockhid");
+  assert.match(CLIENT_SCRIPT, /matchMedia\("\(max-width: 699\.98px\)"\)/, "phone media query only");
+  assert.match(CLIENT_SCRIPT, /details\.searchpop\[open\]/, "dock stays while search popover open");
+  assert.match(CLIENT_SCRIPT, /#settings:popover-open/, "dock stays while settings open");
+  assert.match(
+    CLIENT_SCRIPT,
+    /cmdpalette-backdrop"\);\s*var pinned/,
+    "dock stays while palette open",
+  );
+  assert.match(CLIENT_SCRIPT, /requestAnimationFrame\(frame\)/, "rAF-throttled");
   assert.match(CLIENT_SCRIPT, /setAttribute\("aria-expanded"/, "expand-all reflects aria-expanded");
   assert.match(
     CLIENT_SCRIPT,
@@ -1613,9 +1624,19 @@ test("digest sections: section nav, expand-all button, folded details", async ()
     assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
     assert.match(
       html,
-      /<button type="button" class="expandall" hidden data-expand="[^"]+"/,
-      `${path}: expand-all`,
+      /<div class="tocrow"><nav class="toc"[^>]*>[\s\S]*?<\/nav>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
+      `${path}: expand-all is a sibling of nav.toc inside div.tocrow`,
     );
+    const toc = html.match(/<nav class="toc"[^>]*>([\s\S]*?)<\/nav>/)[1];
+    assert.ok(!toc.includes("expandall"), `${path}: button is not inside the scrolling nav`);
+    const pills = [
+      ...toc.matchAll(
+        /<a href="#s\d+" title="([^"]+)"><span class="tocnum">\d\d<\/span><span class="toctitle">([^<]+)<\/span><\/a>/g,
+      ),
+    ];
+    assert.equal(pills.length, 3, `${path}: three pills with title + .toctitle`);
+    for (const [, title, text] of pills)
+      assert.equal(title, text, `${path}: pill title is the full heading`);
     assert.equal(
       (html.match(/<details class="sec"/g) ?? []).length,
       3,
@@ -1633,7 +1654,7 @@ test("digest sections: section nav, expand-all button, folded details", async ()
         new RegExp(`<summary class="sechead"><h2 id="s${n}">`),
         `${path}: s${n} in summary`,
       );
-      assert.match(html, new RegExp(`<a href="#s${n}">`), `${path}: toc link s${n}`);
+      assert.match(html, new RegExp(`<a href="#s${n}" title=`), `${path}: toc link s${n}`);
     }
     const summaries = html.match(/<summary class="sechead">[\s\S]*?<\/summary>/g);
     assert.ok(
@@ -1747,8 +1768,8 @@ test("hero is a direct child of main.layout on index and digest; digest body sta
   );
   const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
   assert.ok(!main.includes("hero-digest"), "hero left the column");
-  const toc = main.indexOf('<nav class="toc"');
-  assert.ok(toc > -1, ".toc stays in .maincol");
+  const toc = main.indexOf('<div class="tocrow"><nav class="toc"');
+  assert.ok(toc > -1, ".tocrow (nav.toc + expand-all) stays in .maincol");
   assert.ok(toc < main.indexOf('<article class="digest">'), ".toc precedes the article");
   assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
   assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");

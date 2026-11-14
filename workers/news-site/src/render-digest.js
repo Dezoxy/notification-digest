@@ -93,14 +93,18 @@ export function renderToc(sections, strings) {
   const chips = sections
     .map(
       (s, i) =>
-        `<a href="#${s.id}"><span class="tocnum">${String(i + 1).padStart(2, "0")}</span>${esc(s.title)}</a>`,
+        `<a href="#${s.id}" title="${esc(s.title)}"><span class="tocnum">${String(i + 1).padStart(2, "0")}</span><span class="toctitle">${esc(s.title)}</span></a>`,
     )
     .join("\n");
-  // The expand/collapse-all button rides inside the nav (it acts on the
-  // folded sections the pills point at). `hidden` until the client behaviour
-  // un-hides it: without JS a button that does nothing must not show.
-  return `<nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}
-<button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></nav>\n`;
+  // The expand/collapse-all button acts on the folded sections the pills point
+  // at, but sits NEXT to the nav, not inside it: inside the phone's scrolling
+  // row it had to be sticky and covered the pills running underneath it. The
+  // pill's `title` carries the full text for pointer users (the visible one
+  // is ellipsised by CSS; assistive tech reads the span in full).
+  // `hidden` until the client behaviour un-hides it: without JS a button that
+  // does nothing must not show.
+  return `<div class="tocrow"><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav>
+<button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></div>\n`;
 }
 
 // Story-thread pills (ingest v3, roadmap 4 step 8; now the hero's pill row):
