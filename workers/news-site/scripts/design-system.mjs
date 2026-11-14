@@ -885,7 +885,7 @@ One briefing in the ledger, a glass card: a time and count line, a headline, a c
 **Provide** an \`a.entry\` (the whole card is the link) with a \`span.meta\` (\`.time\`, \`.count\`, optional \`.flag\`s), an \`h2.headline\` and a \`p.excerpt\`, inside \`section.ledger\`, grouped under a \`.dayhead\` per local day (Europe/Budapest).
 
 - Do add \`.time-accent\` to the latest edition of a day and \`.flag-daily\` + \`.excerpt-daily\` to a daily or weekly brief; the amber tint follows from those.
-- Do let \`data-density="compact"\` dissolve the cards into a hairline list: two-line excerpts, the time never hidden.
+- Do let \`data-density="compact"\` dissolve ledger cards into a hairline list: two-line excerpts, the time never hidden. On other pages tighten content spacing without shrinking reading text or touch targets; print retains its own layout.
 - Don't nest a card inside a card.
 
 The same card, with search hits wrapped in \`mark\`, is the search result; a thread's appearance is the same row inside a \`.tlitem\`.

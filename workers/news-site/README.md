@@ -21,6 +21,10 @@ Related story threads are available after the article when relevant. The picker
 and story disclosures work without JavaScript; Expand all / Collapse all is
 available when JavaScript is enabled.
 
+The Density setting applies throughout the site. Compact tightens spacing in
+editions, archives, story timelines, search results, and About. The browser
+remembers the selection as readers move between pages.
+
 ## Source layout
 
 One deployed script, several source files, plus a small `public/` directory
@@ -844,7 +848,7 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
 - **Settings and reading** — a settings panel (a popover opened from the bar's
   sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
   language, the three-state theme, text size (XS/S/M/L) and a Cards | Compact
-  ledger density; a plain black-on-white print stylesheet; an About page for
+  density setting; a plain black-on-white print stylesheet; an About page for
   anyone the capability link gets shared with. The Sans | Serif body-font
   toggle was retired by the Spatial Glass redesign (below).
 - **Spatial Glass redesign** (2026-11) — a ground-up visual pass with the same

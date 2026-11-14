@@ -843,16 +843,6 @@
   html[data-fontsize="s"] { --read-scale: 0.94; }
   html[data-fontsize="l"] { --read-scale: 1.12; }
 
-  /* ── Compact density: the cards dissolve into a hairline list ─────── */
-  html[data-density="compact"] .ledger { gap: 0; }
-  html[data-density="compact"] .ledger .entry {
-    padding: 10px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none;
-  }
-  html[data-density="compact"] .ledger .entry:has(.time-accent, .flag-daily) { background: none; }
-  html[data-density="compact"] .ledger .entry .excerpt { -webkit-line-clamp: 2; }
-  html[data-density="compact"] .ledger .entry .excerpt-daily { -webkit-line-clamp: 3; }
-  html[data-density="compact"] .ledger > .dayhead { margin-top: var(--sp-5); }
-
   /* ── Motion: the only place anything animates ─────────────────────── */
   @media (prefers-reduced-motion: no-preference) {
     html { scroll-behavior: smooth; }
@@ -1043,6 +1033,39 @@
     .bar, .settingspanel:popover-open, .cmdpalette { background: var(--sheet-solid); }
   }
 
+  /* Compact spacing is screen-only; reading text and touch targets retain their size. */
+  @media screen {
+    html[data-density="compact"] .ledger { gap: 0; }
+    html[data-density="compact"] :is(.ledger, .archiveresults) .entry,
+    html[data-density="compact"] .maincol > .entry {
+      padding: 10px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none;
+    }
+    html[data-density="compact"] .ledger .entry:has(.time-accent, .flag-daily) { background: none; }
+    html[data-density="compact"] .ledger .entry .excerpt { -webkit-line-clamp: 2; }
+    html[data-density="compact"] .ledger .entry .excerpt-daily { -webkit-line-clamp: 3; }
+    html[data-density="compact"] .ledger > .dayhead { margin-top: var(--sp-5); }
+    html[data-density="compact"] .archiveresults { gap: 0; margin-top: var(--sp-3); }
+    html[data-density="compact"] .hero { padding: var(--sp-5) 0 var(--sp-4); }
+    html[data-density="compact"] .hero .heropills { margin-top: var(--sp-3); }
+    html[data-density="compact"] .digest { gap: var(--sp-2); }
+    html[data-density="compact"] .toc { gap: 0; padding: 4px 0; }
+    html[data-density="compact"] :is(.tldr, .attention, .aboutcard) { padding: 14px var(--sp-4); }
+    html[data-density="compact"] .sechead { padding: 12px var(--sp-4); min-height: 44px; }
+    html[data-density="compact"] .secbody { padding: 0 var(--sp-4) var(--sp-4); }
+    html[data-density="compact"] .secbody > :is(p, ul, ol):not(:last-child) { margin-bottom: 0.7em; }
+    html[data-density="compact"] .secbody li { margin-bottom: 0.2em; }
+    html[data-density="compact"] .deltas { margin-bottom: var(--sp-3); }
+    html[data-density="compact"] .delta { padding: 10px 14px; }
+    html[data-density="compact"] .tlitem { margin-bottom: var(--sp-2); padding: 12px 16px; }
+    html[data-density="compact"] .tlitem::before { top: 18px; }
+    html[data-density="compact"] .searchform { margin-bottom: var(--sp-3); }
+  }
+
+  @media screen and (max-width: 699.98px) {
+    html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
+    html[data-density="compact"] header.hero-digest { padding: var(--sp-1) 0; }
+  }
+
   /* ── Print: a briefing as a plain black-on-white document ─────────── */
   @media print {
     :root, :root[data-theme] { color-scheme: light; }
@@ -1120,7 +1143,7 @@
 </ol></div>
     
   </main>
-  <section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Settings</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Close settings">×</button></div><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/a/markets-slide">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow pushrow" hidden
+  <section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Settings</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Close settings">×</button></div><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/a/markets-slide">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Density</span><span class="miniseg miniseg-density" role="group" aria-label="Density"><button class="minisegbtn" data-set="cards" hidden>Cards</button><button class="minisegbtn" data-set="compact" hidden>Compact</button></span></div><div class="settingsrow pushrow" hidden
     data-label="Notifications"
     data-enable="Turn on"
     data-enabled="On"
@@ -1597,7 +1620,7 @@
       },
     );
 
-    // Ledger density miniseg (Cards / Compact): same shape as the theme and
+    // Site density miniseg (Cards / Compact): same shape as the theme and
     // size minisegs above. Cards is the default and is expressed as the
     // ABSENCE of data-density (see setPref); only "compact" touches storage.
     // The head script already applied any stored choice before first paint.

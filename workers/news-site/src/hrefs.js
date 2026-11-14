@@ -185,16 +185,8 @@ export function renderSettingsPanel({
   // truth), so only s/l ever get set/stored. Letters are literal, not
   // STRINGS-keyed — "S"/"M"/"L" read the same in both languages.
   const sizeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTextSize)}</span><span class="miniseg miniseg-size" role="group" aria-label="${esc(strings.settingsTextSize)}"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div>`;
-  // Density: index pages only — it governs the ledger's .entry
-  // padding/clamp, which a digest page has none of, so the row would be a
-  // dead control there. "plain" (search/about) rides as its own kind for the
-  // language hop and so gets no row either. A miniseg like theme and size
-  // (same hidden-until-JS contract); data-set values are the stored
-  // preference values, the captions are display only.
-  const densityRow =
-    pageKind === "index"
-      ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><span class="miniseg miniseg-density" role="group" aria-label="${esc(strings.settingsDensity)}"><button class="minisegbtn" data-set="cards" hidden>${esc(strings.densityCards)}</button><button class="minisegbtn" data-set="compact" hidden>${esc(strings.densityCompact)}</button></span></div>`
-      : "";
+  // Density is shared across pages, with Cards as the default.
+  const densityRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><span class="miniseg miniseg-density" role="group" aria-label="${esc(strings.settingsDensity)}"><button class="minisegbtn" data-set="cards" hidden>${esc(strings.densityCards)}</button><button class="minisegbtn" data-set="compact" hidden>${esc(strings.densityCompact)}</button></span></div>`;
   // About link (discoverability for friends the owner shares the capability
   // link with): lives in this same settings panel, not a dedicated footer —
   // the site has no <footer> element (chrome is the bar + this popover
