@@ -6,7 +6,9 @@
 <!-- theme-color must track the CSS palette blocks' page background (light
      #eceff6 / dark #0b0d14 — Spatial Glass) so mobile browser chrome (URL
      bar/status bar tint) melts into the page instead of showing a stock
-     color. client.js THEME_COLORS (the manual-override path) and pwa.js
+     color. The status-bar strip is FLAT theme-color, so the page's top edge
+     must equal --bg (css.js fades the glow in below the edge); any visible
+     glow at y=0 shows as a hard seam. client.js THEME_COLORS (the manual-override path) and pwa.js
      (offline page, manifest colors) carry the same values. The prefers-color-scheme media attrs cover the
      automatic (Auto) case; a manual Light/Dark override from the theme
      miniseg (see the bottom script) updates both metas' content directly,
@@ -20,7 +22,7 @@
 <link rel="manifest" href="/t/goldentesttoken/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="NEWS">
+<meta name="apple-mobile-web-app-title" content="news.">
 
 <title>digest #235 · Tue 25 Aug 16:00</title>
 <!-- Font preloads sit ahead of the stylesheet so the fetch starts while the CSS
@@ -219,12 +221,18 @@
     pointer-events: none;
     background: radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 22px 22px;
   }
-  /* Oversized on the sides so the slow drift never exposes an edge. */
+  /* Oversized on the sides so the slow drift never exposes an edge. The
+     status-bar strip behind it on iOS is flat theme-color (= --bg), so the
+     top edge must BE the --bg colour. The mask fades the glow in over the first
+     140px, and the ellipse sits below the edge, so no bright band meets the
+     flat strip. currentColor only supplies opaque alpha; the mask never shows it. */
   body::after {
     content: "";
     position: fixed; top: 0; left: -10%; right: -10%; height: 100lvh; z-index: var(--z-bg);
     pointer-events: none;
-    background: radial-gradient(ellipse 900px 520px at 50% 0, var(--glow), transparent 70%);
+    background: radial-gradient(ellipse 900px 520px at 50% 60px, var(--glow), transparent 70%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, currentColor 140px);
+    mask-image: linear-gradient(to bottom, transparent 0, currentColor 140px);
   }
 
   /* ── Shell: the bar ───────────────────────────────────────────────── */
@@ -620,33 +628,40 @@
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Section index: one scrolling row of pills, not sticky. */
+  /* Section index: pills in .toc, "Expand all" beside it in .tocrow. The button
+     is a SIBLING of the scroller, not a sticky child: a sticky button inside
+     the scrolling row sat on top of the pills passing under it. */
+  .tocrow { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-4); }
   .toc {
-    display: flex; align-items: center; gap: var(--sp-2);
-    margin: 0 -4px var(--sp-4); padding: 4px;
+    display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0;
+    margin: 0; padding: 4px; scroll-padding-inline: 4px;
     overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity;
   }
   .toc::-webkit-scrollbar { display: none; }
   .toc a {
     display: inline-flex; align-items: center; gap: 8px; flex: none; scroll-snap-align: start;
+    max-width: min(72vw, 320px, 100%);
     min-height: 40px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
     background: var(--panel); color: var(--text); font-size: var(--fs-ui); text-decoration: none; white-space: nowrap;
   }
   .toc a:hover { border-color: var(--accent-line); background: var(--accent-soft); }
-  .tocnum { font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+  .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+  /* One long title must not fill the row (the 100% cap keeps a lone pill inside the scroller instead of clipped at its edge): it ellipsises, the number stays. */
+  .toctitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .expandall {
-    position: sticky; right: 0; flex: none; margin-left: auto; min-height: 40px; padding: 0 16px;
+    flex: none; min-height: 40px; padding: 0 16px;
     border: 1px solid var(--border-strong); border-radius: var(--r-pill);
     background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
   }
   .expandall:hover { border-color: var(--accent); }
-  /* From tablet width up the pills WRAP instead of scrolling: there is room,
-     and a sticky "Expand all" over a scrolling row covers the last pill. The
-     scrolling row (with its sticky button and edge fade) is a phone thing. */
+  /* From tablet width up the pills WRAP instead of scrolling: there is room.
+     The button stays at the end of the row, level with the first line of
+     pills. The width cap is a phone thing. */
   @media (min-width: 700px) {
+    .tocrow { align-items: flex-start; }
     .toc { flex-wrap: wrap; overflow: visible; }
-    .expandall { position: static; }
+    .toc a { max-width: none; }
   }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
@@ -843,7 +858,8 @@
   .cmdpalette-group { font-size: var(--fs-micro); color: var(--muted); }
   .cmdpalette-empty { padding: 14px 16px; font-size: var(--fs-ui); color: var(--muted); }
 
-  /* ── Reading size: M is the absence of data-fontsize ──────────────── */
+  /* ── Reading size (XS/S/L): M is the absence of data-fontsize ─────── */
+  html[data-fontsize="xs"] { --read-scale: 0.86; }
   html[data-fontsize="s"] { --read-scale: 0.94; }
   html[data-fontsize="l"] { --read-scale: 1.12; }
 
@@ -864,7 +880,9 @@
     body::after { animation: drift var(--dur-drift) var(--ease-io) infinite alternate; }
     @keyframes drift {
       from { transform: translate3d(-4%, 0, 0); }
-      to { transform: translate3d(4%, -3%, 0); }
+      /* Downward only: drifting UP would drag the masked-out top rows above
+         the viewport and let the glow touch the top edge again. */
+      to { transform: translate3d(4%, 3%, 0); }
     }
     /* Hard loads only: html.enter is removed ~1.2s after the first paint and
        never comes back on soft navigation. No "to" keyframe so a hover lift
@@ -981,7 +999,7 @@
        viewport for the keyboard, so a bottom-anchored field would start under
        it. While the field has focus the dock moves to the top and the panel
        opens downward. */
-    html:has(.bar .filter:focus) .bar { top: calc(12px + env(safe-area-inset-top)); bottom: auto; }
+    html:has(.bar .filter:focus) .bar { top: calc(12px + env(safe-area-inset-top)); bottom: auto; transform: none; }
     html:has(.bar .filter:focus) .searchpanel { top: calc(100% + var(--sp-3)); bottom: auto; }
     /* No top bar on phones (the dock is at the bottom): a #sN jump needs only
        a little air above the heading. */
@@ -1000,6 +1018,13 @@
     .tlitem { padding: 14px var(--sp-4); }
     .weekrail a { padding: 0 12px; }
     .resumechip { bottom: calc(10px + var(--dock-h) + 14px + env(safe-area-inset-bottom)); }
+    /* html.dockhid (client.js) slides the dock away while the reader scrolls
+       down. A transform on the bar itself is fine; only its ancestors must
+       stay transform-free. It is inert while hidden so it cannot catch taps.
+       The chip drops to the dock's resting spot via translate (not bottom),
+       keeping motion transform-only. */
+    html.dockhid .bar { transform: translateY(calc(100% + 10px + env(safe-area-inset-bottom) + 8px)); pointer-events: none; }
+    html.dockhid .resumechip { translate: -50% calc(var(--dock-h) + 14px); }
     .pushnote { max-width: 55%; }
 
     .settingspanel:popover-open {
@@ -1014,6 +1039,8 @@
     .settingsrow { min-height: 44px; }
     .minisegbtn, .langswitch strong, .langswitch a, .pushtoggle { min-height: 40px; }
     @media (prefers-reduced-motion: no-preference) {
+      .bar { transition: transform var(--dur) var(--ease-out); }
+      .resumechip { transition: translate var(--dur) var(--ease-out); }
       @starting-style {
         .settingspanel:popover-open { opacity: 0; transform: translateY(32px); }
       }
@@ -1038,7 +1065,7 @@
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .toc, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .toc, .expandall, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
@@ -1103,10 +1130,10 @@
     <span class="deltalabel">Markets slide continues</span>
     <p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p>
   </a></nav>
-<nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum">01</span>Markets slide continues</a>
-<a href="#s2"><span class="tocnum">02</span>EU agrees new package</a>
-<a href="#s3"><span class="tocnum">03</span>Chip export rules tighten</a>
-<button type="button" class="expandall" hidden data-expand="Expand all" data-collapse="Collapse all">Expand all</button></nav>
+<div class="tocrow"><nav class="toc" aria-label="Sections"><a href="#s1" title="Markets slide continues"><span class="tocnum">01</span><span class="toctitle">Markets slide continues</span></a>
+<a href="#s2" title="EU agrees new package"><span class="tocnum">02</span><span class="toctitle">EU agrees new package</span></a>
+<a href="#s3" title="Chip export rules tighten"><span class="tocnum">03</span><span class="toctitle">Chip export rules tighten</span></a></nav>
+<button type="button" class="expandall" hidden data-expand="Expand all" data-collapse="Collapse all">Expand all</button></div>
 <article class="digest">
 <p class="banner">⚠ polymarket collection failed this run</p>
 <div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
@@ -1132,7 +1159,7 @@
 <details class="colophon"><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div></details><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/">← All digests</a>
 <span class="spacer"></span>
 <a class="nav-older" href="/t/goldentesttoken/d/234">← 10:00</a></nav></div>
-    <aside class="side" aria-label="Edition panel"><section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">Earlier</h2><a class="earlierrow" href="/t/goldentesttoken/d/234"><span class="earliermeta">Tue 25 Aug 10:00 · 9 items</span><span class="earliertitle">The sell-off began; two sections follow.</span></a><a class="earlierrow" href="/t/goldentesttoken/d/233"><span class="earliermeta">Mon 24 Aug 22:00 · 6 items<span class="flag flag-daily">daily brief</span></span><span class="earliertitle">Daily brief for Monday.</span></a><a class="earlierrow" href="/t/goldentesttoken/d/232"><span class="earliermeta">Sun 23 Aug 21:00 · 40 items<span class="flag flag-daily">weekly report</span></span><span class="earliertitle">The week in one page.</span></a><a class="earlierrow" href="/t/goldentesttoken/d/231"><span class="earliermeta">Tue 18 Aug 12:00 · 7 items</span><span class="earliertitle">From the previous week.</span></a></section><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Settings</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Close settings">×</button></div><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/d/235">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow pushrow" hidden
+    <aside class="side" aria-label="Edition panel"><section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">Earlier</h2><a class="earlierrow" href="/t/goldentesttoken/d/234"><span class="earliermeta">Tue 25 Aug 10:00 · 9 items</span><span class="earliertitle">The sell-off began; two sections follow.</span></a><a class="earlierrow" href="/t/goldentesttoken/d/233"><span class="earliermeta">Mon 24 Aug 22:00 · 6 items<span class="flag flag-daily">daily brief</span></span><span class="earliertitle">Daily brief for Monday.</span></a><a class="earlierrow" href="/t/goldentesttoken/d/232"><span class="earliermeta">Sun 23 Aug 21:00 · 40 items<span class="flag flag-daily">weekly report</span></span><span class="earliertitle">The week in one page.</span></a><a class="earlierrow" href="/t/goldentesttoken/d/231"><span class="earliermeta">Tue 18 Aug 12:00 · 7 items</span><span class="earliertitle">From the previous week.</span></a></section><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Settings</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Close settings">×</button></div><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/d/235">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow pushrow" hidden
     data-label="Notifications"
     data-enable="Turn on"
     data-enabled="On"
@@ -1494,6 +1521,63 @@
     // <html class="typing"> behind (a removed element fires no focusout).
     syncTyping();
 
+    // Phone dock auto-hide: the fixed bottom bar slides away while the
+    // reader scrolls down and returns on any upward scroll (html.dockhid, see
+    // the phone block in css.js). A soft nav starts with the dock shown.
+    // Deltas accumulate in one direction so jitter never flips it; near the
+    // top and near the bottom (end of an article) the dock is always shown, and
+    // it never hides while something of the bar's own is in use.
+    (function () {
+      var root = document.documentElement;
+      root.classList.remove("dockhid");
+      var phone = window.matchMedia("(max-width: 699.98px)");
+      var bar = document.querySelector("header.bar");
+      var lastY = window.scrollY;
+      var acc = 0;
+      var queued = false;
+      function show() {
+        root.classList.remove("dockhid");
+        acc = 0;
+      }
+      function frame() {
+        queued = false;
+        if (!phone.matches) {
+          show();
+          return;
+        }
+        // One layout read per frame.
+        var y = window.scrollY;
+        var nearBottom = document.documentElement.scrollHeight - (y + window.innerHeight) <= 120;
+        var dy = y - lastY;
+        lastY = y;
+        var cmd = document.querySelector(".cmdpalette-backdrop");
+        var pinned =
+          document.querySelector("details.searchpop[open]") ||
+          (bar && bar.contains(document.activeElement)) ||
+          document.querySelector("#settings:popover-open") ||
+          (cmd && !cmd.hidden);
+        if (pinned || y <= 80 || nearBottom) {
+          show();
+          return;
+        }
+        if (dy > 0) {
+          acc = acc > 0 ? acc + dy : dy;
+          if (acc > 12) root.classList.add("dockhid");
+        } else if (dy < 0) {
+          acc = acc < 0 ? acc + dy : dy;
+          if (acc < -8) show();
+        }
+      }
+      subscribeScroll(function () {
+        if (queued) return;
+        queued = true;
+        window.requestAnimationFrame(frame);
+      }, signal);
+      phone.addEventListener("change", show, { signal: signal });
+      // Keyboard focus landing on a hidden dock must bring it back.
+      if (bar) bar.addEventListener("focusin", show, { signal: signal });
+    })();
+
     // Theme miniseg (owner upgrade: Light/Auto/Dark, replacing the old
     // two-state toggle). The head script already applied any stored override
     // to <html data-theme> before first paint, so this only wires the
@@ -1540,14 +1624,14 @@
       },
     );
 
-    // Text size miniseg: S/M/L. M is the default expressed as the ABSENCE
-    // of data-fontsize (see the CSS + setPref), so only s/l touch storage.
+    // Text size miniseg: XS/S/M/L. M is the default expressed as the ABSENCE
+    // of data-fontsize (see the CSS + setPref), so only xs/s/l touch storage.
     wireMiniseg(
       "size",
       signal,
       function () {
         var stored = document.documentElement.dataset.fontsize;
-        return stored === "s" || stored === "l" ? stored : "m";
+        return stored === "xs" || stored === "s" || stored === "l" ? stored : "m";
       },
       function (v) {
         setPref("fontsize", "fontsize", v, "m");

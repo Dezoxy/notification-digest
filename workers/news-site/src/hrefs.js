@@ -180,11 +180,11 @@ export function renderSettingsPanel({
   // default. Buttons start hidden (progressive enhancement, same contract
   // the old toggle had); the IIFE unhides and wires them.
   const themeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTheme)}</span><span class="miniseg miniseg-theme" role="group" aria-label="${esc(strings.themeToggle)}"><button class="minisegbtn" data-set="light" hidden>${esc(strings.themeLight)}</button><button class="minisegbtn" data-set="auto" hidden>${esc(strings.themeAuto)}</button><button class="minisegbtn" data-set="dark" hidden>${esc(strings.themeDark)}</button></span></div>`;
-  // Text size: S/M/L miniseg, same shape as theme's above — M is the
+  // Text size: XS/S/M/L miniseg, same shape as theme's above — M is the
   // absence of an override (owner-tuned defaults stay the single source of
   // truth), so only s/l ever get set/stored. Letters are literal, not
   // STRINGS-keyed — "S"/"M"/"L" read the same in both languages.
-  const sizeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTextSize)}</span><span class="miniseg miniseg-size" role="group" aria-label="${esc(strings.settingsTextSize)}"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div>`;
+  const sizeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTextSize)}</span><span class="miniseg miniseg-size" role="group" aria-label="${esc(strings.settingsTextSize)}"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div>`;
   // Density: index pages only — it governs the ledger's .entry
   // padding/clamp, which a digest page has none of, so the row would be a
   // dead control there. "plain" (search/about) rides as its own kind for the

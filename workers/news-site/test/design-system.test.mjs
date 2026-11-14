@@ -57,7 +57,7 @@ test("tokens.json resolves both themes from the parsed light-dark() pairs", () =
     light: "rgba(255, 255, 255, 0.66)",
     dark: "rgba(255, 255, 255, 0.055)",
   });
-  assert.equal(colour(tokens, "brand-mark").value, "#4f46e5");
+  assert.equal(colour(tokens, "brand-mark").value, "#9db0ff");
   assert.match(tokens.type.families.display, /^"Sora"/);
   assert.match(tokens.type.families.body, /^"Inter"/);
   const gutter = tokens.spacing.tokens.find((t) => t.name === "gutter");

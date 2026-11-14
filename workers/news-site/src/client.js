@@ -353,6 +353,63 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     // <html class="typing"> behind (a removed element fires no focusout).
     syncTyping();
 
+    // Phone dock auto-hide: the fixed bottom bar slides away while the
+    // reader scrolls down and returns on any upward scroll (html.dockhid, see
+    // the phone block in css.js). A soft nav starts with the dock shown.
+    // Deltas accumulate in one direction so jitter never flips it; near the
+    // top and near the bottom (end of an article) the dock is always shown, and
+    // it never hides while something of the bar's own is in use.
+    (function () {
+      var root = document.documentElement;
+      root.classList.remove("dockhid");
+      var phone = window.matchMedia("(max-width: 699.98px)");
+      var bar = document.querySelector("header.bar");
+      var lastY = window.scrollY;
+      var acc = 0;
+      var queued = false;
+      function show() {
+        root.classList.remove("dockhid");
+        acc = 0;
+      }
+      function frame() {
+        queued = false;
+        if (!phone.matches) {
+          show();
+          return;
+        }
+        // One layout read per frame.
+        var y = window.scrollY;
+        var nearBottom = document.documentElement.scrollHeight - (y + window.innerHeight) <= 120;
+        var dy = y - lastY;
+        lastY = y;
+        var cmd = document.querySelector(".cmdpalette-backdrop");
+        var pinned =
+          document.querySelector("details.searchpop[open]") ||
+          (bar && bar.contains(document.activeElement)) ||
+          document.querySelector("#settings:popover-open") ||
+          (cmd && !cmd.hidden);
+        if (pinned || y <= 80 || nearBottom) {
+          show();
+          return;
+        }
+        if (dy > 0) {
+          acc = acc > 0 ? acc + dy : dy;
+          if (acc > 12) root.classList.add("dockhid");
+        } else if (dy < 0) {
+          acc = acc < 0 ? acc + dy : dy;
+          if (acc < -8) show();
+        }
+      }
+      subscribeScroll(function () {
+        if (queued) return;
+        queued = true;
+        window.requestAnimationFrame(frame);
+      }, signal);
+      phone.addEventListener("change", show, { signal: signal });
+      // Keyboard focus landing on a hidden dock must bring it back.
+      if (bar) bar.addEventListener("focusin", show, { signal: signal });
+    })();
+
     // Theme miniseg (owner upgrade: Light/Auto/Dark, replacing the old
     // two-state toggle). The head script already applied any stored override
     // to <html data-theme> before first paint, so this only wires the
@@ -399,14 +456,14 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       },
     );
 
-    // Text size miniseg: S/M/L. M is the default expressed as the ABSENCE
-    // of data-fontsize (see the CSS + setPref), so only s/l touch storage.
+    // Text size miniseg: XS/S/M/L. M is the default expressed as the ABSENCE
+    // of data-fontsize (see the CSS + setPref), so only xs/s/l touch storage.
     wireMiniseg(
       "size",
       signal,
       function () {
         var stored = document.documentElement.dataset.fontsize;
-        return stored === "s" || stored === "l" ? stored : "m";
+        return stored === "xs" || stored === "s" || stored === "l" ? stored : "m";
       },
       function (v) {
         setPref("fontsize", "fontsize", v, "m");

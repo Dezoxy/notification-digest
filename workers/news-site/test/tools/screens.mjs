@@ -256,6 +256,24 @@ for (const vp of [PHONE, DESKTOP]) {
   for (const theme of ["light", "dark"]) {
     const sfx = `${vp.name}-${theme}`;
 
+    // Top edge (phone): the iOS status-bar strip is flat theme-color (= --bg),
+    // so the topmost rows of the page must be plain --bg: the glow layer is
+    // masked to fade in below the edge.
+    if (vp === PHONE) {
+      await state(vp, theme, `top-edge-${sfx}`, async (page) => {
+        await page.goto(T);
+        await settle(page);
+        const mask = await page.evaluate(() => {
+          const cs = getComputedStyle(document.body, "::after");
+          return cs.maskImage !== "none" ? cs.maskImage : cs.webkitMaskImage;
+        });
+        check(`glow layer is masked at the top edge (${sfx})`, !!mask && mask !== "none", String(mask));
+        const file = join(OUT, `state-top-edge-${sfx}.png`);
+        await page.screenshot({ path: file, clip: { x: 0, y: 0, width: 390, height: 120 } });
+        written.push(file);
+      });
+    }
+
     // Settings: a native popover. Phone = bottom sheet, desktop arc page =
     // anchored popover under the bar; the desktop index keeps the panel in
     // the sidebar (a closed popover forced visible by CSS), so it is only
@@ -338,6 +356,17 @@ for (const vp of [PHONE, DESKTOP]) {
       await settle(page);
       await page.waitForSelector("button.expandall:not([hidden])");
       await shot(page, `state-digest-folded-${sfx}`, { fullPage: false });
+      // The section-pill row at the top of the digest, with one pill given a
+      // worst-case title: it must ellipsise, keep its number, and leave
+      // "Expand all" fully visible beside the row.
+      await page.evaluate(() => {
+        const t = document.querySelector(".toc a .toctitle");
+        if (t) t.textContent = "The ground stop ends, and Duffy wants $" + "9 billion more for the air traffic system";
+        document.querySelector(".tocrow").scrollIntoView({ block: "center" });
+      });
+      await page.waitForTimeout(200);
+      await shot(page, `state-digest-tocrow-${sfx}`, { fullPage: false });
+      await page.evaluate(() => window.scrollTo(0, 0));
       await page.click("button.expandall");
       await page.waitForTimeout(500);
       const open = await page.evaluate(
@@ -541,6 +570,11 @@ console.log("\nbehaviour checks");
     await page.waitForTimeout(200);
     check("TOC #s3 click opens section 3", await page.evaluate(() => document.querySelector("h2#s3").closest("details.sec").open));
 
+    // The #s3 jump scrolled down, so the phone dock is auto-hidden; a small
+    // upward scroll brings it back before the settings button is used.
+    await page.waitForTimeout(900); // let the smooth #s3 scroll finish first
+    await page.evaluate(() => window.scrollBy({ top: -40, behavior: "instant" }));
+    await page.waitForTimeout(450);
     // Theme change: html.theming appears, then clears; rapid clicks do not strand it.
     await page.click("button.settingsbtn");
     await page.waitForSelector("#settings:popover-open");
@@ -562,7 +596,7 @@ console.log("\nbehaviour checks");
     );
     // Density miniseg lives on the index only; check on the index.
   } catch (e) {
-    problems.push(`[behaviour] ${e.message.split("\n")[0]}`);
+    problems.push(`[behaviour] ${e.message.split("\n").slice(0,12).join(" / ")}`);
   }
   await ctx.close();
 }
@@ -600,6 +634,46 @@ console.log("\nbehaviour checks");
     });
     check("unread fence present and in the ledger", !!fence && fence.parent.includes("ledger"), JSON.stringify(fence));
     check("fence is the ledger's first child when the hero is the only new entry", !!fence && fence.first, JSON.stringify(fence));
+    // Dock auto-hide: scroll down -> html.dockhid and the bar is translated
+    // out of view; scroll up -> shown again; an open search popover pins it.
+    // The fixture pages are short, so pad .wrap to make them scrollable.
+    await page.goto(T + "d/235");
+    await settle(page);
+    await page.evaluate(() => {
+      const pad = document.createElement("div");
+      pad.style.height = "3000px";
+      document.querySelector(".wrap").appendChild(pad);
+    });
+    const dockHidden = () => page.evaluate(() => document.documentElement.classList.contains("dockhid"));
+    const barOffscreen = () =>
+      page.evaluate(() => document.querySelector("header.bar").getBoundingClientRect().top >= window.innerHeight);
+    const scrollBy = async (dy) => {
+      await page.evaluate((d) => window.scrollBy({ top: d, behavior: "instant" }), dy);
+      await page.waitForTimeout(450);
+    };
+    check("dock shown at the top of the page", !(await dockHidden()));
+    await scrollBy(300);
+    await scrollBy(300);
+    check("scrolling down hides the dock (html.dockhid)", await dockHidden());
+    check("hidden dock is translated below the viewport", await barOffscreen());
+    await scrollBy(-60);
+    check("scrolling up shows the dock again", !(await dockHidden()) && !(await barOffscreen()));
+    await page.goto(T);
+    await settle(page);
+    await page.evaluate(() => {
+      const pad = document.createElement("div");
+      pad.style.height = "3000px";
+      document.querySelector(".wrap").appendChild(pad);
+    });
+    await page.click("summary.searchtoggle");
+    await page.waitForSelector("details.searchpop[open]");
+    await scrollBy(400);
+    await scrollBy(400);
+    check("open search popover keeps the dock visible", !(await dockHidden()));
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await scrollBy(400);
+    check("dock hides again once the popover is closed", await dockHidden());
     // Typing: focusing the search page input hides the dock via html.typing
     await page.goto(T + "search?q=markets");
     await settle(page);

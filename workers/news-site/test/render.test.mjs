@@ -212,6 +212,17 @@ test("client.js: folded sections, expand-all, print, entrance, typing state", as
   assert.match(CLIENT_SCRIPT, /addEventListener\(\s*"hashchange"/, "hashchange reveals a section");
   assert.match(CLIENT_SCRIPT, /revealHash\(location\.hash\);\s*$/, "boot-time hash reveal");
   assert.match(CLIENT_SCRIPT, /querySelector\("button\.expandall"\)/, "expand-all wired");
+  // Phone dock auto-hide: phone-only, rAF-throttled, with every pin guard.
+  assert.match(CLIENT_SCRIPT, /classList\.add\("dockhid"\)/, "dock hides via html.dockhid");
+  assert.match(CLIENT_SCRIPT, /matchMedia\("\(max-width: 699\.98px\)"\)/, "phone media query only");
+  assert.match(CLIENT_SCRIPT, /details\.searchpop\[open\]/, "dock stays while search popover open");
+  assert.match(CLIENT_SCRIPT, /#settings:popover-open/, "dock stays while settings open");
+  assert.match(
+    CLIENT_SCRIPT,
+    /cmdpalette-backdrop"\);\s*var pinned/,
+    "dock stays while palette open",
+  );
+  assert.match(CLIENT_SCRIPT, /requestAnimationFrame\(frame\)/, "rAF-throttled");
   assert.match(CLIENT_SCRIPT, /setAttribute\("aria-expanded"/, "expand-all reflects aria-expanded");
   assert.match(
     CLIENT_SCRIPT,
@@ -818,6 +829,12 @@ test("manifest: token-scoped, one app id across both languages", async () => {
   assert.equal(m.start_url, `/t/${SITE_TOKEN}/`);
   assert.equal(m.scope, `/t/${SITE_TOKEN}/`);
   assert.equal(m.display, "standalone");
+  // The installed app is "news." (brand label + full stop), not the old
+  // uppercased host label.
+  assert.equal(m.name, "news.");
+  assert.equal(m.short_name, "news.");
+  assert.equal(m.background_color, "#0b0d14");
+  assert.equal(m.theme_color, "#0b0d14");
   assert.ok(m.icons.length >= 1, "declares icons");
   assert.ok(
     m.icons.some((i) => i.purpose === "maskable"),
@@ -892,6 +909,33 @@ test("icons: real PNGs, tokenless, long-cached", async () => {
     const bytes = new Uint8Array(await res.arrayBuffer());
     // PNG magic number — proves the base64 survived source formatting.
     assert.deepEqual([...bytes.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47], `${path} is a PNG`);
+    // IHDR width/height (big-endian u32 at bytes 16 and 20): the manifest
+    // promises 512x512, and iOS wants exactly 180x180.
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    const side = path === "/apple-touch-icon.png" ? 180 : 512;
+    assert.equal(view.getUint32(16), side, `${path} width`);
+    assert.equal(view.getUint32(20), side, `${path} height`);
+    assert.ok(bytes.length < 60_000, `${path} stays small (${bytes.length} bytes)`);
+  }
+});
+
+test("favicon is the n. monogram with its periwinkle dot", async () => {
+  const res = await fetchPath("/favicon.svg");
+  assert.equal(res.status, 200);
+  const svg = await res.text();
+  assert.ok(svg.includes("M150 380V258a86 86 0 0 1 172 0V380"), "the n path");
+  assert.ok(svg.includes('fill="#9db0ff"'), "the periwinkle dot");
+  assert.ok(svg.includes('rx="112"'), "rounded ground: favicons get no OS mask");
+  assert.ok(!/href=|<filter|<image/.test(svg), "no external refs or filters");
+});
+
+test("every page titles the iOS Home Screen app 'news.'", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = await (await fetchPath(path)).text();
+    assert.ok(
+      html.includes('<meta name="apple-mobile-web-app-title" content="news.">'),
+      `${name} apple title`,
+    );
   }
 });
 
@@ -1572,6 +1616,23 @@ test("font preloads: latin always, latin-ext only on Hungarian pages; the body-f
   }
 });
 
+test("the size miniseg offers xs/s/m/l in that order and the client accepts xs", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    const group = html.match(/miniseg-size[\s\S]*?<\/span>/);
+    assert.ok(group, `${name}: size miniseg present`);
+    const sets = [...group[0].matchAll(/data-set="([a-z]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(sets, ["xs", "s", "m", "l"], `${name}: size order`);
+    assert.match(group[0], /data-set="xs" hidden>XS</, `${name}: literal XS label`);
+  }
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  assert.match(
+    CLIENT_SCRIPT,
+    /stored === "xs" \|\| stored === "s" \|\| stored === "l"/,
+    "client restores xs like s and l",
+  );
+});
+
 test("the density miniseg is index-only and replaces the old toggle", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const html = markupOf((await page(path)).html);
@@ -1613,9 +1674,19 @@ test("digest sections: section nav, expand-all button, folded details", async ()
     assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
     assert.match(
       html,
-      /<button type="button" class="expandall" hidden data-expand="[^"]+"/,
-      `${path}: expand-all`,
+      /<div class="tocrow"><nav class="toc"[^>]*>[\s\S]*?<\/nav>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
+      `${path}: expand-all is a sibling of nav.toc inside div.tocrow`,
     );
+    const toc = html.match(/<nav class="toc"[^>]*>([\s\S]*?)<\/nav>/)[1];
+    assert.ok(!toc.includes("expandall"), `${path}: button is not inside the scrolling nav`);
+    const pills = [
+      ...toc.matchAll(
+        /<a href="#s\d+" title="([^"]+)"><span class="tocnum">\d\d<\/span><span class="toctitle">([^<]+)<\/span><\/a>/g,
+      ),
+    ];
+    assert.equal(pills.length, 3, `${path}: three pills with title + .toctitle`);
+    for (const [, title, text] of pills)
+      assert.equal(title, text, `${path}: pill title is the full heading`);
     assert.equal(
       (html.match(/<details class="sec"/g) ?? []).length,
       3,
@@ -1633,7 +1704,7 @@ test("digest sections: section nav, expand-all button, folded details", async ()
         new RegExp(`<summary class="sechead"><h2 id="s${n}">`),
         `${path}: s${n} in summary`,
       );
-      assert.match(html, new RegExp(`<a href="#s${n}">`), `${path}: toc link s${n}`);
+      assert.match(html, new RegExp(`<a href="#s${n}" title=`), `${path}: toc link s${n}`);
     }
     const summaries = html.match(/<summary class="sechead">[\s\S]*?<\/summary>/g);
     assert.ok(
@@ -1747,8 +1818,8 @@ test("hero is a direct child of main.layout on index and digest; digest body sta
   );
   const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
   assert.ok(!main.includes("hero-digest"), "hero left the column");
-  const toc = main.indexOf('<nav class="toc"');
-  assert.ok(toc > -1, ".toc stays in .maincol");
+  const toc = main.indexOf('<div class="tocrow"><nav class="toc"');
+  assert.ok(toc > -1, ".tocrow (nav.toc + expand-all) stays in .maincol");
   assert.ok(toc < main.indexOf('<article class="digest">'), ".toc precedes the article");
   assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
   assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");
