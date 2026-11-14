@@ -703,7 +703,7 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 **Shape.** Cards are \`r-card\` (24px); inner rows and notes \`r-in\` (14px); every control is a pill (\`r-pill\`). Nothing is square.
 
-**Rules and borders.** 1px \`border\` on cards, \`border-strong\` on floating surfaces and controls. No left-border accent bars; the timeline rail is the one exception and it is a separate element.
+**Rules and borders.** Use a 1px \`border\` on cards and \`border-strong\` on floating surfaces and controls. In Compact digest view, a rule separates stories and an accent marks the TL;DR. The timeline rail is a separate element.
 
 **Glass and shadow.** Blur exists on exactly three surfaces: the bar, an open settings popover and the command palette (\`blur-chrome\`, \`blur-sheet\`, with \`sheet\` as their fill). Everything else is a flat \`panel\`; stacked blurs are expensive and nested ones do not composite. Only floating things cast the \`shadow\` token. Reduced transparency or a browser without backdrop-filter swaps those surfaces to \`sheet-solid\`.
 
@@ -1017,13 +1017,13 @@ Source: \`render-index.js\`; styles \`.weekrail\`, \`.railspark\`.
 </article>`),
     `# Callouts
 
-The digest's three blocks above the sections: the TL;DR card (a \`panel\` with an \`accent-line\` border), the attention callout and the collection-failed banner (both amber).
+The digest's three blocks above the sections are the TL;DR, the attention callout, and the collection-failed banner. The TL;DR uses a card in Cards mode and an accent rule in Compact mode. The two notices use amber in both modes.
 
 **Provide** them inside \`article.digest\`: \`div.tldr\` first with a \`.tldr-label\`, an optional \`div.attention\` with \`.attention-label\` and a \`p\`, and \`p.banner\` when a source failed. These arrive in the summarizer's HTML; the site strips its inline email styles and these classes take over.
 
 - Do keep exactly one TL;DR per digest; it is also the headline's source.
 - Do reserve \`attention\` for something the reader may act on.
-- Don't add a left border or icon; the label carries the meaning.
+- Use the TL;DR label in both density modes.
 
 Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`, \`.banner\`.
 `,
@@ -1062,7 +1062,7 @@ Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.to
 </article>`),
     `# Section
 
-One story in a digest, a native \`details\` card: a heading with a two-line preview and a source count when closed, a chevron, and the \`body\`-coloured article text when open. Every section ships open.
+One story in a digest uses native \`details\`. It has a card surface in Cards mode and a divider in Compact mode. It starts open, with a heading, a chevron, and the article text. When closed, it shows a two-line preview and a source count.
 
 **Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` numbered links.
 

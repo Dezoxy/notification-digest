@@ -21,9 +21,10 @@ Related story threads are available after the article when relevant. The picker
 and story disclosures work without JavaScript; Expand all / Collapse all is
 available when JavaScript is enabled.
 
-The Density setting applies throughout the site. Compact tightens spacing in
-editions, archives, story timelines, search results, and About. The browser
-remembers the selection as readers move between pages.
+The Density setting applies throughout the site. Compact digest stories
+use dividers between sections and a simple accent rule beside the TL;DR.
+Compact also tightens spacing in archives, story timelines, search results,
+and About. The browser remembers the selection as readers move between pages.
 
 ## Source layout
 
