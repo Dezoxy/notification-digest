@@ -26,7 +26,7 @@ Tovább estek.
 ## Az EU új csomagot fogadott el
 Éjjel aláírva.
 ## Szigorodnak a chipexport-szabályok
-Jövő negyedévtől.', 'window', '{"telegram":5,"x":4,"rss":3}', '["polymarket"]', '[{"slug":"markets-slide-continues","label":"Markets slide continues","key":"markets-slide"},{"slug":"eu-agrees-new-package","label":"EU agrees new package"}]', '[{"slug":"markets-slide-continues","previously":"Down two percent","now":"Down four percent"}]', '{"summarize":{"model":"claude-opus-5","effort":"high","fallback":false},"translate":{"model":"openai/gpt-5.6-terra","effort":"high","fallback":true}}');
+Jövő negyedévtől.', 'window', '{"telegram":5,"x":4,"rss":3}', '["polymarket"]', '[{"slug":"markets-slide-continues","label":"Markets slide continues","key":"markets-slide"},{"slug":"eu-agrees-new-package","label":"EU agrees new package"}]', '[{"slug":"markets-slide-continues","previously":"Down two percent","now":"Down four percent"}]', '{"app_version":"0.29.21","summarize":{"model":"claude-opus-5","effort":"high","fallback":false},"translate":{"model":"openai/gpt-5.6-terra","effort":"high","fallback":true}}');
 INSERT INTO digests (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas, provenance) VALUES (234, '2026-08-25T08:00:00Z', 'The sell-off began; two sections follow.', 9, 2, 0, '<div class="tldr"><strong>TL;DR:</strong> The sell-off began; two sections follow.</div>
 <h2>Markets slide, day two</h2>
 <p>The slide that started yesterday accelerated into the close.</p>

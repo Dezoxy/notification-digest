@@ -89,7 +89,7 @@ export function renderSearchFragment(results, token, lang) {
 // message. Non-null (possibly empty, including the try/catch error-fallback
 // case in handleSearchPage) means a search WAS attempted, so the count/
 // no-results line always renders.
-export function renderSearchPage(results, q, token, host, lang) {
+export function renderSearchPage(results, q, token, host, lang, appVersion = null) {
   const strings = STRINGS[lang];
 
   // No-JS baseline: a plain GET form, submitting back to this exact route
@@ -138,7 +138,7 @@ export function renderSearchPage(results, q, token, host, lang) {
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "plain"),
+    renderSwitchers(token, lang, "all", "plain", undefined, null, false, appVersion),
     `${formHtml}${resultsHtml}`,
     strings.searchLabel,
   );
@@ -158,7 +158,7 @@ export function renderSearchPage(results, q, token, host, lang) {
 //     already carries elsewhere, just applied here directly since this page
 //     has no body_html of its own to style through.
 // No new CSS at all, deliberately — every class below already exists.
-export function renderAboutPage(token, host, lang) {
+export function renderAboutPage(token, host, lang, appVersion = null) {
   const strings = STRINGS[lang];
   const bodyHtml = `<div class="digest">
     <h2>${esc(strings.aboutWhatTitle)}</h2>
@@ -178,7 +178,7 @@ export function renderAboutPage(token, host, lang) {
     token,
     lang,
     "all",
-    renderSwitchers(token, lang, "all", "plain"),
+    renderSwitchers(token, lang, "all", "plain", undefined, null, false, appVersion),
     bodyHtml,
     strings.aboutLabel,
   );

@@ -182,6 +182,7 @@ export function renderSwitchers(
   id,
   archiveWeek = null,
   showSearch = false,
+  appVersion = null,
 ) {
   const strings = STRINGS[lang];
   const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
@@ -219,7 +220,16 @@ export function renderSwitchers(
   // makes the link reachable everywhere, not just the index. A single link,
   // no settingslabel column — .settingsrow's flex layout degrades cleanly
   // to one child.
-  const aboutRow = `<div class="settingsrow"><a href="${aboutHref(token, lang)}">${esc(strings.aboutLabel)}</a></div>`;
+  //
+  // Deployed digest-app version, bottom-right of the same row (About stays
+  // left via .settingsrow's space-between). `appVersion` is already validated
+  // X.Y.Z by latestAppVersion (handlers.js); null renders the row exactly as
+  // it was before the label existed, so the version is purely additive.
+  const versionHtml =
+    appVersion === null
+      ? ""
+      : `<span class="settingslabel appversion" title="${esc(strings.versionTitle)}">v${esc(appVersion)}</span>`;
+  const aboutRow = `<div class="settingsrow"><a href="${aboutHref(token, lang)}">${esc(strings.aboutLabel)}</a>${versionHtml}</div>`;
   // Push notifications (PLAN.md §11.7, PR B). The whole row starts hidden —
   // not just its button, unlike every miniseg above — because "can this
   // browser do Web Push at all" is a question only the client can answer,

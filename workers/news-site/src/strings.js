@@ -222,6 +222,7 @@ export const STRINGS = {
     // surfaces want the exact same word, so one string covers both rather
     // than two identical keys.
     aboutLabel: "About",
+    versionTitle: "Deployed digest version",
     aboutWhatTitle: "What this is",
     aboutWhatBody:
       "A private, automatically curated news briefing, built for a small circle the owner shares this link with. Every six hours, a pipeline pulls new items from the owner's own sources — their Telegram groups, their X/Twitter notifications, a set of curated news desks (world wire services and Hungarian outlets), Reddit, prediction markets, and Hacker News — and an AI editor summarizes and organizes them into a briefing. Every claim links back to the source it came from.",
@@ -403,6 +404,7 @@ export const STRINGS = {
     // mirror the EN block's pattern. Machine-drafted translation, not yet
     // read by a native speaker.
     aboutLabel: "Névjegy",
+    versionTitle: "Telepített digest-verzió",
     aboutWhatTitle: "Miről van szó",
     aboutWhatBody:
       "Ez egy privát, automatikusan összeállított hírösszefoglaló, egy szűk körnek, akikkel a tulajdonos megosztja ezt a linket. Hat óránként egy folyamat összegyűjti az újdonságokat a tulajdonos saját forrásaiból — Telegram-csoportjaiból, X/Twitter-értesítéseiből, egy válogatott hírforrás-készletből (nemzetközi hírügynökségek és magyar hírportálok), a Redditből, előrejelzési piacokról és a Hacker Newsból —, egy AI szerkesztő pedig összefoglalóvá szerkeszti és rendezi őket. Minden állítás visszalinkel a forrására.",

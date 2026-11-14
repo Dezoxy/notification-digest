@@ -62,6 +62,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bakes the release version (tag without "v") into the image as
+          # DIGEST_APP_VERSION; the app stamps it into each digest's provenance.
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
         env:
           # The repository is public: skip uploading the .dockerbuild build-record
           # artifact, which anyone could download. Documented in

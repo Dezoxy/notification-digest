@@ -1142,3 +1142,61 @@ test("sender: a broken VAPID key costs no subscriptions", async () => {
     "and are not blamed for it",
   );
 });
+
+// ── settings panel: deployed app version ──────────────────────────────────
+
+// The About row, extracted: the one `.settingsrow` that holds the About link.
+function aboutRowOf(html) {
+  const m = html.match(/<div class="settingsrow"><a href="[^"]*\/about">[\s\S]*?<\/div>/);
+  assert.ok(m, "About settings row present");
+  return m[0];
+}
+
+const VERSION_SPAN = (v, title = "Deployed digest version") =>
+  `<span class="settingslabel appversion" title="${title}">v${v}</span>`;
+
+test("every page shows the newest app_version in the About row", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const { html } = await page(path);
+    const row = aboutRowOf(html);
+    const title = name.endsWith("-hu") ? "Telepített digest-verzió" : "Deployed digest version";
+    assert.ok(
+      row.endsWith(`${VERSION_SPAN("0.29.21", title)}</div>`),
+      `${name}: version after About link`,
+    );
+  }
+  const hu = aboutRowOf((await page("hu/")).html);
+  assert.ok(hu.includes(VERSION_SPAN("0.29.21", "Telepített digest-verzió")), "HU title");
+});
+
+test("no app_version available: About row is the original markup", async () => {
+  for (const versionRows of [[], [{ v: null }]]) {
+    const res = await fetchPath("about", { env: makeEnv({ versionRows }) });
+    const row = aboutRowOf(await res.text());
+    assert.match(row, /^<div class="settingsrow"><a href="[^"]*\/about">About<\/a><\/div>$/);
+  }
+});
+
+test("malformed app_version is never rendered", async () => {
+  for (const v of ["0.29.21<script>", "latest", "1.2", "v1.2.3", "1.2.3-rc1", 1.5, {}]) {
+    const res = await fetchPath("", { env: makeEnv({ versionRows: [{ v }] }) });
+    const html = await res.text();
+    assert.equal(res.status, 200);
+    assert.ok(!html.includes('appversion"'), `no label for ${JSON.stringify(v)}`);
+    assert.ok(!html.includes("0.29.21<"), "nothing injected");
+  }
+});
+
+test("a D1 error in the version query does not fail the page", async () => {
+  const env = makeEnv();
+  const realPrepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => {
+    if (/app_version/.test(sql)) throw new Error("D1 down");
+    return realPrepare(sql);
+  };
+  for (const { name, path } of GOLDEN_PAGES) {
+    const res = await fetchPath(path, { env });
+    assert.equal(res.status, 200, `${name} still renders`);
+    assert.ok(!(await res.text()).includes('appversion"'), `${name}: no label`);
+  }
+});

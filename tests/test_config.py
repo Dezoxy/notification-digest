@@ -544,6 +544,7 @@ def _clear_delivery_channel_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "TELEGRAM_NOTIFY_THREAD_ID",
         "TELEGRAM_DAILY_THREAD_ID",
         "TELEGRAM_WEEKLY_THREAD_ID",
+        "DIGEST_APP_VERSION",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -561,6 +562,24 @@ def test_delivery_channel_defaults_email_only(monkeypatch):
     assert config.telegram_notify_bot_token is None
     assert config.telegram_notify_chat_id is None
     assert config.telegram_notify_thread_id == 0
+    assert config.app_version is None
+
+
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_app_version_blank_is_none(monkeypatch, raw):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_APP_VERSION", raw)
+
+    assert Config.from_env().app_version is None
+
+
+def test_app_version_is_parsed_and_stripped(monkeypatch):
+    _set_base_env(monkeypatch)
+    _clear_delivery_channel_env(monkeypatch)
+    monkeypatch.setenv("DIGEST_APP_VERSION", "  1.2.3 ")
+
+    assert Config.from_env().app_version == "1.2.3"
 
 
 def test_email_enabled_false_is_parsed(monkeypatch):

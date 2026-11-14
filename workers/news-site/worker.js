@@ -52,6 +52,7 @@
  *   GET  /t/:token/a/:slug        -> arc page (EN): every digest carrying that topic slug
  *   GET  /t/:token/hu/a/:slug     -> same arc page, Hungarian chrome
  *   GET  /t/:token/about          -> about page (EN): static, no D1 query beyond the token check
+ *                                    and the settings panel's version lookup
  *   GET  /t/:token/hu/about       -> same about page, Hungarian chrome
  *   GET  /t/:token/manifest.webmanifest    -> web app manifest, start_url = the EN token root
  *   GET  /t/:token/hu/manifest.webmanifest -> same manifest, start_url = the HU token root
@@ -315,7 +316,8 @@ export default {
       return handleArcPage(env, arcMatch[1], arcMatch[3], url, lang);
     }
 
-    // About page (static, no-JS, no D1 query beyond the token check): also
+    // About page (static, no-JS, no D1 query beyond the token check and the
+    // settings panel's version lookup): also
     // standalone, same shape as search/arc just above — no daily/weekly/w/
     // variant, since the about text doesn't depend on which view a reader
     // came from. Reuses the exact same token-gate/404 contract as every

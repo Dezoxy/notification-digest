@@ -70,4 +70,11 @@ ENV USER=digest
 # to know this default existed in order to override it. Callers that want a
 # specific location set CLAUDE_CONFIG_DIR themselves.
 
+# Release version, baked in by .github/workflows/release.yml via
+# --build-arg APP_VERSION (the tag without its "v"); local builds leave it
+# empty and the app then records no version. Placed last so a new version
+# only invalidates this metadata layer, not the dependency/code layers.
+ARG APP_VERSION=
+ENV DIGEST_APP_VERSION=${APP_VERSION}
+
 ENTRYPOINT ["python", "-m", "digest"]

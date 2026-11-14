@@ -687,6 +687,32 @@ def test_deliver_stores_provenance_naming_summarize_and_translate_models(conn, m
     }
 
 
+def test_provenance_app_version_included_only_when_truthy():
+    run = ModelRun(model="m", effort="high", fallback=False)
+
+    assert main_mod._provenance(run, None, "1.2.3")["app_version"] == "1.2.3"
+    assert "app_version" not in main_mod._provenance(run, None, None)
+    assert "app_version" not in main_mod._provenance(run, None, "")
+
+
+def test_deliver_stores_app_version_in_provenance(conn, monkeypatch):
+    commit_new_items(conn, [_item("1")], {("telegram", "123"): "1"})
+    summarize_run = ModelRun(model="claude-opus-5", effort="high", fallback=False)
+    monkeypatch.setattr(
+        main_mod,
+        "summarize",
+        lambda *a, **k: ("**TL;DR:** hi\n\n## S\n\nx", [], [], summarize_run),
+    )
+    monkeypatch.setattr(deliver_mod, "send_digest", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "archive", lambda *a, **k: None)
+
+    ok = _deliver(conn, replace(_cfg(), app_version="1.2.3"), [])
+
+    assert ok is True
+    stored = json.loads(conn.execute("SELECT provenance FROM digests").fetchone()[0])
+    assert stored["app_version"] == "1.2.3"
+
+
 def test_deliver_translation_disabled_stores_no_translate_key_in_provenance(conn, monkeypatch):
     # `translate_hu_enabled=False` means translate_digest is never called at
     # all -- the stored provenance object must carry no "translate" key,

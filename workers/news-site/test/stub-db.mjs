@@ -54,7 +54,7 @@ function identityOf(topic) {
 const M1 = String.fromCharCode(1);
 const M2 = String.fromCharCode(2);
 
-export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {} } = {}) {
+export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {}, versionRows } = {}) {
   // Web Push (PLAN.md §11.7 PR B). Unlike every other arm in this file,
   // these need real MUTABLE state: subscribe/unsubscribe are the first
   // handlers whose whole behavior is what the table contains afterwards
@@ -66,6 +66,21 @@ export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {} } = {}) 
 
   function dispatch(sql, binds) {
     const s = String(sql);
+
+    // Settings-panel version label (latestAppVersion in handlers.js): newest
+    // digest whose provenance JSON carries app_version, derived from the
+    // fixtures. `versionRows` lets a test override what D1 would return.
+    if (/json_extract\(provenance, '\$\.app_version'\)/.test(s)) {
+      if (versionRows) return { first: async () => versionRows[0] ?? null };
+      const row = DIGESTS.filter((d) => {
+        try {
+          return JSON.parse(d.provenance)?.app_version != null;
+        } catch {
+          return false;
+        }
+      }).sort(byCreatedDesc)[0];
+      return { first: async () => (row ? { v: JSON.parse(row.provenance).app_version } : null) };
+    }
 
     // Push arms come FIRST so their distinctive tables/shapes are matched
     // before the broader digests patterns below can claim them.

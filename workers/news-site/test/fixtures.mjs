@@ -133,6 +133,7 @@ export const DIGESTS = [
     // muted/↻ fallback chip in one golden render (digest 235 is the only
     // digest with a golden-covered own page — see GOLDEN_PAGES in env.mjs).
     provenance: JSON.stringify({
+      app_version: "0.29.21",
       summarize: { model: "claude-opus-5", effort: "high", fallback: false },
       translate: { model: "openai/gpt-5.6-terra", effort: "high", fallback: true },
     }),
