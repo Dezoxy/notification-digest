@@ -1688,11 +1688,10 @@ test("the size miniseg offers xs/s/m/l in that order and the client accepts xs",
   );
 });
 
-test("the density miniseg is index-only and replaces the old toggle", async () => {
+test("the density miniseg appears on every page and replaces the old toggle", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const html = markupOf((await page(path)).html);
-    const isIndex = ["index-en", "index-hu", "daily-en", "weekly-en"].includes(name);
-    assert.equal(count(html, /miniseg-density/g), isIndex ? 1 : 0, `${name}: density miniseg`);
+    assert.equal(count(html, /miniseg-density/g), 1, `${name}: density miniseg`);
     assert.ok(!html.includes("densitytoggle"), `${name}: no densitytoggle`);
   }
 });

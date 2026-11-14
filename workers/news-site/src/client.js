@@ -470,7 +470,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       },
     );
 
-    // Ledger density miniseg (Cards / Compact): same shape as the theme and
+    // Site density miniseg (Cards / Compact): same shape as the theme and
     // size minisegs above. Cards is the default and is expressed as the
     // ABSENCE of data-density (see setPref); only "compact" touches storage.
     // The head script already applied any stored choice before first paint.
