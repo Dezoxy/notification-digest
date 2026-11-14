@@ -38,6 +38,16 @@
       "enabled": true
     }
   },
+  // Static files in ./public (self-hosted fonts, with their _headers) are
+  // served by Cloudflare BEFORE the Worker runs. Only public/ is exposed:
+  // never point this at "." (it would publish source, schema and tests).
+  // not_found_handling is left at its default ("none"), so any path that is
+  // not a file in public/ still falls through to the Worker and its uniform
+  // 404 is unchanged. Fonts are tokenless by design, like /favicon.svg:
+  // they carry no private data, so no capability token guards them.
+  "assets": {
+    "directory": "./public"
+  },
   "d1_databases": [
     {
       "binding": "DB",

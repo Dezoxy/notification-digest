@@ -119,24 +119,124 @@ test("digest section ids are sequential and agree with the TOC", async () => {
 
 // ── branch markers (one per fixture-covered branch) ───────────────────────
 
-test("hover-to-open is wired for both popovers and gated to hovering pointers", async () => {
+test("search popover hover-to-open is gated to hovering pointers", async () => {
   // Marker test, not a behaviour test: the client script is inlined as TEXT
   // and never executed here, so there is no DOM to dispatch mouseenter on.
   // What this pins is the part whose loss would be silent and bad -- the
   // pointer gate. Without it a touch device synthesises mouseenter on tap,
-  // opening a panel that then has no pointer to move away from it.
+  // opening a panel that then has no pointer to move away from it. The
+  // settings panel is a native popover now and has no hover machinery.
   const { CLIENT_SCRIPT } = await import("../src/client.js");
   assert.match(CLIENT_SCRIPT, /hover: hover\) and \(pointer: fine/, "pointer gate present");
-  assert.match(CLIENT_SCRIPT, /hoverPopovers\(\s*settings/, "settings wired");
-  assert.match(CLIENT_SCRIPT, /hoverPopovers\(\s*pop/, "search popover wired");
-  // Settings must close through its animated close() helper, never by
-  // assigning open = false, or the pointer path skips the animation every
-  // other close path runs.
+  assert.match(CLIENT_SCRIPT, /pop\.addEventListener\(\s*"mouseenter"/, "search popover wired");
+  for (const gone of [
+    "hoverPopovers",
+    "details.settings",
+    "summary.gear",
+    "panelclosing",
+    "settingsOpen",
+  ]) {
+    assert.ok(!CLIENT_SCRIPT.includes(gone), `client.js no longer carries ${gone}`);
+  }
+});
+
+test("client.js: dead masthead/FAB/serif behaviour is gone", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  for (const gone of [
+    "masthid",
+    "--mast-h",
+    "header.mast",
+    "backfab",
+    "densitytoggle",
+    '"font"',
+    ".digest > h2",
+  ]) {
+    assert.ok(!CLIENT_SCRIPT.includes(gone), `client.js no longer carries ${gone}`);
+  }
+  assert.ok(!/setProperty\(/.test(CLIENT_SCRIPT), "the client sets no CSS custom properties");
+});
+
+test("client.js: theme colours, density miniseg mapping, theming window", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
   assert.match(
     CLIENT_SCRIPT,
-    /hoverPopovers\(\s*settings,[\s\S]*?\n\s*close,\n/,
-    "settings closes via close()",
+    /THEME_COLORS = \{ light: "#eceff6", dark: "#0b0d14" \}/,
+    "THEME_COLORS match the Spatial Glass --bg values",
   );
+  // cards <-> absence of data-density, compact <-> "compact", same storage key.
+  assert.match(CLIENT_SCRIPT, /wireMiniseg\(\s*"density"/, "density wired as a miniseg");
+  assert.match(
+    CLIENT_SCRIPT,
+    /=== "compact" \? "compact" : "cards"/,
+    "reflect: cards is the default",
+  );
+  assert.match(
+    CLIENT_SCRIPT,
+    /setPref\("density", "density", v === "compact" \? "compact" : "", ""\)/,
+    "apply: compact stored, cards is absence",
+  );
+  assert.match(CLIENT_SCRIPT, /classList\.add\("theming"\)/, "theming class added");
+  assert.match(
+    CLIENT_SCRIPT,
+    /clearTimeout\(themingTimer\)/,
+    "rapid clicks clear the pending timer",
+  );
+  assert.match(CLIENT_SCRIPT, /\}, 350\)/, "theming window is 350ms");
+});
+
+test("client.js: settings popover is closed by hidePopover only, never opened", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  assert.match(CLIENT_SCRIPT, /matchMedia\("\(min-width: 1040px\)"\)/, "sidebar-mode listener");
+  assert.match(CLIENT_SCRIPT, /typeof panel\.hidePopover !== "function"/, "hidePopover is guarded");
+  assert.match(
+    CLIENT_SCRIPT,
+    /panel\.closest\("\.side"\)/,
+    "only the sidebar copy is closed on widen",
+  );
+  assert.match(
+    CLIENT_SCRIPT,
+    /closeSettingsPopover\(\);\s*withPageTransition/,
+    "closed before the soft-nav swap",
+  );
+  assert.ok(!/\.showPopover\(/.test(CLIENT_SCRIPT), "the client never calls showPopover()");
+});
+
+test("client.js: folded sections, expand-all, print, entrance, typing state", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  // Folded sections.
+  assert.match(
+    CLIENT_SCRIPT,
+    /closest\('a\[href\^="#s"\]'\)/,
+    "in-page #sN clicks open their section",
+  );
+  assert.match(CLIENT_SCRIPT, /addEventListener\(\s*"hashchange"/, "hashchange reveals a section");
+  assert.match(CLIENT_SCRIPT, /revealHash\(location\.hash\);\s*$/, "boot-time hash reveal");
+  assert.match(CLIENT_SCRIPT, /querySelector\("button\.expandall"\)/, "expand-all wired");
+  assert.match(CLIENT_SCRIPT, /setAttribute\("aria-expanded"/, "expand-all reflects aria-expanded");
+  assert.match(
+    CLIENT_SCRIPT,
+    /btn\.dataset\.collapse : btn\.dataset\.expand/,
+    "label from data-expand/data-collapse",
+  );
+  // Print.
+  assert.match(CLIENT_SCRIPT, /addEventListener\("beforeprint"/, "beforeprint");
+  assert.match(CLIENT_SCRIPT, /addEventListener\("afterprint"/, "afterprint");
+  for (const sel of ["details.sec", "details.colophon", "details.arccontext"]) {
+    assert.ok(CLIENT_SCRIPT.includes(sel + ":not([open])"), `print opens ${sel}`);
+  }
+  // Entrance: removed once at boot, immediately on a bfcache restore.
+  assert.match(
+    CLIENT_SCRIPT,
+    /classList\.remove\("enter"\);\s*\}, 1200\)/,
+    "enter removed after 1200ms",
+  );
+  assert.match(CLIENT_SCRIPT, /e\.persisted/, "bfcache restore drops enter at once");
+  assert.ok(!CLIENT_SCRIPT.includes('add("enter")'), "the client never adds html.enter");
+  // Typing state, phone only.
+  assert.match(CLIENT_SCRIPT, /\(max-width: 699\.98px\)/, "phone breakpoint");
+  assert.match(CLIENT_SCRIPT, /toggle\("typing", on\)/, "html.typing");
+  assert.match(CLIENT_SCRIPT, /addEventListener\("focusin"/, "focusin");
+  assert.match(CLIENT_SCRIPT, /addEventListener\("focusout"/, "focusout");
 });
 
 test("day headers are an ALL-view affordance; daily/weekly flow flat", async () => {
@@ -166,15 +266,95 @@ test("day headers are an ALL-view affordance; daily/weekly flow flat", async () 
 
 test("index EN: NOW section, week rail, degraded badge, kind badges", async () => {
   const { html } = await page("");
-  assert.match(html, /class="now"/, "NOW section (2-appearance arc via stable key)");
+  assert.match(html, /class="sidecard now"/, "NOW card (2-appearance arc via stable key)");
   assert.match(html, /class="weekrail"/, "week rail");
   assert.match(html, /flag-degraded/, "degraded badge from failed_sources");
   assert.match(html, /flag-daily/, "daily/weekly kind badge");
 });
 
-test("digest 235 EN: arcs line, what-changed block, source key, stripped styles, cite titles", async () => {
+test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail after ledger", async () => {
+  const { html } = await page("");
+  const hero = html.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0] ?? "";
+  assert.ok(hero, "hero section");
+  const lead = hero.match(/<a class="entry entry-lead herolink"[^>]*>/)?.[0] ?? "";
+  assert.match(lead, /data-id="235"/, "lead keeps the client hooks (data-id)");
+  assert.match(lead, /data-created="2026-08-25T14:00:00Z"/, "lead keeps data-created");
+  assert.match(
+    hero,
+    /<h1 class="herotitle headline-lead">Markets slid[^<]*<\/h1>/,
+    "headline is h1",
+  );
+  const sub = hero.match(/<p class="herosub[^"]*">([^<]*)<\/p>/)?.[1];
+  assert.ok(sub && !sub.startsWith("Markets slid"), "subline is present and not the headline");
+  assert.equal(sub, "12 items · 3 sections", "single-sentence TL;DR falls back to the counts");
+  assert.ok(!html.includes('class="leadfacts"'), "old facts column is gone");
+  assert.match(hero, /class="livedot" aria-hidden="true"/, "live dot");
+  assert.match(hero, /<a class="herocta" href="[^"]*\/d\/235[^"]*">Read the edition →<\/a>/, "CTA");
+  // Fixture lead 235 has topics: the keyed arc (key markets-slide) and a slug-only one.
+  assert.match(
+    hero,
+    /<a class="threadpill" href="[^"]*markets-slide[^"]*">Markets slide continues<\/a>/,
+  );
+  assert.match(
+    hero,
+    /<a class="threadpill" href="[^"]*eu-agrees-new-package[^"]*">EU agrees new package<\/a>/,
+  );
+
+  const aside = html.match(/<aside class="side"[\s\S]*?<\/aside>/)?.[0] ?? "";
+  assert.match(
+    aside,
+    /<section class="sidecard now"[^>]*><h2 id="nowhead" class="sidehead">Now<\/h2>/,
+  );
+  assert.match(aside, /id="settings"/, "settings panel rides in the sidebar");
+  assert.ok(!/<main[^>]*>[\s\S]*class="now"[\s\S]*<\/main>/.test(html), "NOW left the main column");
+
+  const ledgerEnd = html.indexOf("</section>", html.indexOf("data-unread-label"));
+  // WP2e: the hero is a direct child of main.layout (before .maincol), so it
+  // sits OUTSIDE the ledger section; the ledger carries the .ledger class.
+  assert.match(
+    html,
+    /<main class="layout has-side" id="main">\s*<section class="hero" aria-label="[^"]*">[\s\S]*?<\/section>\s*<div class="maincol">/,
+    "hero is a direct child of main.layout, before .maincol",
+  );
+  const ledger = html.match(
+    /<section class="ledger" data-unread-label="[^"]*"[^>]*>[\s\S]*?<\/section>/,
+  )?.[0];
+  assert.ok(ledger, "ledger section carries class=ledger and keeps data-unread-label");
+  assert.ok(!ledger.includes("entry-lead"), "lead entry is outside the ledger section");
+  assert.ok(!html.includes('<h3 class="headline">'), "ledger headlines are not h3");
+  assert.match(ledger, /<h2 class="headline">/, "ledger headlines are h2 under the h1 hero");
+  assert.ok(html.indexOf('class="weekrail"') > ledgerEnd, "week rail follows the ledger");
+  assert.ok(
+    html.indexOf('class="weekrail"') < html.indexOf("</main>"),
+    "rail ends the main column",
+  );
+});
+
+test("index hero: daily view fetches the lead's threads; HU hero uses HU text", async () => {
+  const daily = (await page("daily/")).html;
+  assert.match(daily, /<section class="hero"/, "daily view has a hero");
+  assert.ok(!markupOf(daily).includes("threadpill"), "daily lead (233) has no topics: CTA only");
+  assert.match(daily, /class="herocta"/);
+
+  const hu = (await page("hu/")).html;
+  assert.match(hu, /<h1 class="herotitle headline-lead">A piacok második napja estek/);
+  assert.match(hu, /<p class="herosub[^"]*">12 elem · 3 szakasz<\/p>/, "HU subline");
+  assert.match(hu, /class="herocta"[^>]*>A kiadás elolvasása →/);
+});
+
+test("deriveSubline: text after the first sentence, clamped at a word boundary", async () => {
+  const { deriveSubline } = await import("../src/render-index.js");
+  assert.equal(deriveSubline("One sentence only."), "");
+  assert.equal(deriveSubline("TL;DR: First. Second part here."), "Second part here.");
+  const long = `Head. ${"word ".repeat(80)}`;
+  const out = deriveSubline(long);
+  assert.ok(out.endsWith("…") && out.length <= 221, "clamped with an ellipsis");
+  assert.ok(!out.slice(0, -1).endsWith("wor"), "clipped on a word boundary");
+});
+
+test("digest 235 EN: thread pills, what-changed block, source key, stripped styles, cite titles", async () => {
   const { html } = await page("d/235");
-  assert.match(html, /class="arc"/, "story-arc chip (recurring topic)");
+  assert.match(html, /class="threadpill"/, "story-thread pill (recurring topic)");
   assert.match(html, /class="deltas"/, "what-changed block from deltas");
   assert.match(html, /class="sourcekey"/, "source key colophon");
   assert.match(html, /sk-failed/, "failed source pill in the source key");
@@ -221,6 +401,40 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
     /class="sk sk-fallback" title="openai\/gpt-5\.6-terra">↻ GPT-5\.6 Terra · high/,
     "fallback leg gets ↻, the muted class, the display name, and the raw id in the title",
   );
+});
+
+test("digest 235: multi-paragraph sections, list and attention callout render in both languages", async () => {
+  // Realistic section shapes (the redesign folds each h2-section into a
+  // <details>): the first section carries two paragraphs and a <ul>, the
+  // attention callout is the emailer's div.attention (label span + <p>, no
+  // nested h2) and must stay out of the section numbering.
+  for (const path of ["d/235", "hu/d/235"]) {
+    const { html } = await page(path);
+    assert.match(
+      html,
+      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>\s*<\/div><\/details>\s*<details class="sec"><summary class="sechead"><h2 id="s2">/,
+      `${path}: section 1 has two paragraphs then a list`,
+    );
+    assert.match(
+      html,
+      /<div class="attention"><span class="attention-label">[^<]+<\/span><p>[\s\S]*?<\/p><\/div>/,
+      `${path}: attention callout`,
+    );
+    assert.match(
+      html,
+      /<p class="banner">⚠ polymarket collection failed this run<\/p>/,
+      `${path}: failure banner`,
+    );
+    assert.match(html, /<span class="tldr-label">[^<]+<\/span>/, `${path}: tldr-label span`);
+    // Production shape: nh3 puts `rel` AFTER `href`; addCiteTitles must still title it.
+    assert.match(
+      html,
+      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer" title="example\.com">²<\/a>/,
+      `${path}: cite chip rendered, inline style stripped`,
+    );
+    assert.ok(!/<h2 id="s4"/.test(html), `${path}: callout is not numbered as a section`);
+    assert.match(html, /example\.com\/export-rules/, `${path}: last section citation link`);
+  }
 });
 
 test("digest 235 HU: deltas suppressed, translated body used", async () => {
@@ -415,6 +629,70 @@ test("arc page: chain of 2, momentum, context primer, per-appearance delta", asy
   assert.match(html, /Markets slide, day two/, "earlier appearance (different slug, same key)");
   assert.match(html, /class="arccontext"/, "context primer disclosure");
   assert.match(html, /deltaprev/, "appearance-level delta markup");
+});
+
+function countMatches(html, re) {
+  return (html.match(re) || []).length;
+}
+
+test("arc page: centred hero, timeline newest-first, primer kept", async () => {
+  for (const [path, kicker] of [
+    ["a/markets-slide", "Story thread"],
+    ["hu/a/markets-slide", "Történetszál"],
+  ]) {
+    const { html } = await page(path);
+    assert.equal(countMatches(html, /<h1[\s>]/g), 1, `${path}: exactly one h1`);
+    assert.match(
+      html,
+      /<header class="hero archead"><span class="herochip">[^<]*<\/span><h1 class="herotitle arctitle" data-arc-slug="[^"]+"/,
+    );
+    assert.ok(html.includes(`<span class="herochip">${kicker} · `), `${path}: chip kicker`);
+    assert.match(html, /class="arccontext"/, "background primer still rendered");
+    assert.equal(countMatches(html, /<ol class="timeline">/g), 1);
+    const items = [...html.matchAll(/<li class="tlitem( tlitem-latest)?">/g)];
+    assert.ok(items.length >= 2);
+    assert.ok(items[0][1], "newest appearance carries tlitem-latest");
+    const markup = markupOf(html);
+    assert.equal(countMatches(markup, /tlitem-latest/g), 1, "only one latest item");
+    const latestAt = html.indexOf("Markets slide continues");
+    const olderAt = html.indexOf("Markets slide, day two");
+    assert.ok(
+      html.indexOf('<li class="tlitem tlitem-latest">') < olderAt && latestAt < olderAt,
+      "newest first",
+    );
+  }
+});
+
+test("search page: hero h1, form intact, marked results", async () => {
+  for (const [path, heading] of [
+    ["search?q=markets", "Search every edition"],
+    ["hu/search?q=markets", "Keresés minden kiadásban"],
+  ]) {
+    const { html } = await page(path);
+    assert.equal(countMatches(html, /<h1[\s>]/g), 1, `${path}: exactly one h1`);
+    assert.ok(html.includes(`<h1 class="herotitle">${heading}</h1>`), `${path}: heading`);
+    assert.match(
+      html,
+      /<form class="searchform"[\s\S]*?name="q"[\s\S]*?<button class="searchbtn" type="submit">/,
+    );
+    assert.match(html, /<mark>/, "matched terms highlighted");
+  }
+  const empty = (await page("search")).html;
+  assert.equal(countMatches(empty, /<h1[\s>]/g), 1);
+  assert.match(empty, /class="searchbtn"/);
+});
+
+test("about page: one h1 and one card per section", async () => {
+  for (const [path, label] of [
+    ["about", "About"],
+    ["hu/about", "Névjegy"],
+  ]) {
+    const { html } = await page(path);
+    assert.equal(countMatches(html, /<h1[\s>]/g), 1, `${path}: exactly one h1`);
+    assert.ok(html.includes(`<h1 class="herotitle">${label}</h1>`));
+    // what / rhythm / reading + the caveat
+    assert.equal(countMatches(html, /<section class="aboutcard">/g), 4);
+  }
 });
 
 test("unknown arc identity 404s indistinguishably", async () => {
@@ -1199,4 +1477,315 @@ test("a D1 error in the version query does not fail the page", async () => {
     assert.equal(res.status, 200, `${name} still renders`);
     assert.ok(!(await res.text()).includes('appversion"'), `${name}: no label`);
   }
+});
+
+// ── Spatial Glass shell: one bar, one popover settings panel ──────────────
+
+const count = (html, re) => (html.match(re) || []).length;
+
+// Server markup only: css.js and client.js still carry the old shell's names
+// until their packages land, and a text search over the whole page would
+// trip on them.
+const markupOf = (html) =>
+  html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<style[\s\S]*?<\/style>/g, "")
+    .replace(/<script[\s\S]*?<\/script>/g, "");
+
+test("every page has exactly one header.bar, one phonehead, one main and one settings popover", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    assert.equal(count(html, /<header class="bar">/g), 1, `${name}: one header.bar`);
+    assert.equal(count(html, /<div class="phonehead">/g), 1, `${name}: one phonehead`);
+    assert.equal(
+      count(html, /<main class="layout(?: has-side)?" id="main">/g),
+      1,
+      `${name}: one main`,
+    );
+    assert.equal(
+      count(html, /<section id="settings" class="settingspanel" popover /g),
+      1,
+      `${name}: #settings[popover] exactly once`,
+    );
+    assert.equal(count(html, /\bid="settings"/g), 1, `${name}: settings id unique`);
+    assert.match(
+      html,
+      /<button type="button" class="settingsbtn" popovertarget="settings" aria-label="[^"]+">/,
+      `${name}: gear button targets the popover`,
+    );
+    assert.ok(!/class="mast[ "]|mastleft|mastright|<details class="settings"/.test(html), name);
+  }
+});
+
+test("the search control renders exactly once, in .baractions", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    const bar = html.match(/<div class="baractions">([\s\S]*?)<\/header>/)[1];
+    const popovers = count(html, /class="searchpop"/g);
+    // The bar link is .barsearch (distinct from the search page form's own .searchbtn).
+    const buttons = count(html, /<a class="barsearch"/g);
+    assert.equal(popovers + buttons, 1, `${name}: one search control`);
+    assert.ok(bar.includes('class="searchpop"') || bar.includes('class="barsearch"'), name);
+  }
+  // Pages without a ledger to filter link to the search page instead.
+  for (const name of ["about-en", "search-en"]) {
+    const html = markupOf((await page(GOLDEN_PAGES.find((p) => p.name === name).path)).html);
+    assert.ok(html.includes('<a class="barsearch" href="/t/'), `${name}: plain search link`);
+  }
+});
+
+test("no floating FABs: .backfab is gone and .barback is digest-only", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    assert.ok(!html.includes("backfab"), `${name}: no backfab`);
+    assert.ok(!html.includes("<noscript>"), `${name}: no noscript block`);
+    const isDigest = name.startsWith("digest-");
+    assert.equal(count(html, /class="barback"/g), isDigest ? 1 : 0, `${name}: barback`);
+  }
+});
+
+test("font preloads: latin always, latin-ext only on Hungarian pages; the body-font pref is retired", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const raw = (await page(path)).html;
+    const html = markupOf(raw);
+    for (const f of ["inter-latin", "sora-latin"]) {
+      assert.ok(
+        html.includes(
+          `<link rel="preload" href="/fonts/${f}-wght.v1.woff2" as="font" type="font/woff2" crossorigin>`,
+        ),
+        `${name}: ${f} preload`,
+      );
+    }
+    const ext = count(html, /<link rel="preload" href="\/fonts\/[a-z]+-latin-ext-wght/g);
+    assert.equal(ext, name.endsWith("-hu") ? 2 : 0, `${name}: latin-ext preloads`);
+    assert.ok(html.includes("viewport-fit=cover"), `${name}: viewport-fit`);
+    assert.ok(
+      !html.includes("data-font") && !html.includes("dataset.font="),
+      `${name}: no data-font`,
+    );
+    assert.ok(!html.includes("miniseg-font"), `${name}: no font row`);
+    // The early head script is stripped from markupOf, so check the raw page.
+    assert.ok(
+      raw.includes('localStorage.removeItem("font")') && raw.includes('classList.add("enter")'),
+      `${name}: retired pref cleanup + entrance hook`,
+    );
+  }
+});
+
+test("the density miniseg is index-only and replaces the old toggle", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    const isIndex = ["index-en", "index-hu", "daily-en", "weekly-en"].includes(name);
+    assert.equal(count(html, /miniseg-density/g), isIndex ? 1 : 0, `${name}: density miniseg`);
+    assert.ok(!html.includes("densitytoggle"), `${name}: no densitytoggle`);
+  }
+});
+
+// ── Spatial Glass digest page: hero, folded sections, sidebar ─────────────
+
+const stripTags = (h) => h.replace(/<[^>]*>/g, "");
+
+test("digest hero: chip, headline, thread pills; subline differs from the headline", async () => {
+  const { html } = await page("d/235");
+  const hero = html.match(/<header class="hero hero-digest">[\s\S]*?<\/header>/)?.[0];
+  assert.ok(hero, "hero header present");
+  assert.ok(!html.includes('class="edhead"'), "old edhead is gone");
+  assert.ok(!html.includes('<nav class="arcs"'), "old arcs line is gone");
+  assert.match(hero, /<span class="herochip">[^<]*12 items · 3 sections<\/span>/, "chip counts");
+  assert.match(hero, /<h1 class="herotitle">[^<]+<\/h1>/, "headline");
+  assert.match(
+    hero,
+    /<a class="threadpill" href="\/t\/goldentesttoken\/a\/markets-slide">[^<]*<span class="pillcount">×2 this week<\/span><\/a>/,
+    "thread pill links to the arc page and keeps the repeat count",
+  );
+  assert.match(html, /aria-label="Story threads"/, "pills nav is labelled");
+  // Subline (HU digest has a multi-sentence-free fixture, so assert the
+  // helper contract directly).
+  const { deriveSubline, deriveHeadline } = await import("../src/render-index.js");
+  const tldr = "Markets slid for a second day. The EU package landed overnight, gated on reforms.";
+  assert.equal(deriveHeadline(tldr), "Markets slid for a second day.");
+  assert.equal(deriveSubline(tldr), "The EU package landed overnight, gated on reforms.");
+});
+
+test("digest sections: section nav, expand-all button, folded details", async () => {
+  for (const path of ["d/235", "hu/d/235"]) {
+    const { html } = await page(path);
+    assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
+    assert.match(
+      html,
+      /<button type="button" class="expandall" hidden data-expand="[^"]+"/,
+      `${path}: expand-all`,
+    );
+    assert.equal(
+      (html.match(/<details class="sec"/g) ?? []).length,
+      3,
+      `${path}: 3 folded sections`,
+    );
+    assert.equal((html.match(/<details class="sec" open>/g) ?? []).length, 1, `${path}: one open`);
+    assert.match(
+      html,
+      /<details class="sec" open><summary class="sechead"><h2 id="s1">/,
+      `${path}: first is open`,
+    );
+    for (const n of [1, 2, 3]) {
+      assert.match(
+        html,
+        new RegExp(`<summary class="sechead"><h2 id="s${n}">`),
+        `${path}: s${n} in summary`,
+      );
+      assert.match(html, new RegExp(`<a href="#s${n}">`), `${path}: toc link s${n}`);
+    }
+    const summaries = html.match(/<summary class="sechead">[\s\S]*?<\/summary>/g);
+    assert.ok(
+      summaries.every((x) => !x.includes("<a ")),
+      `${path}: no links inside summaries`,
+    );
+    assert.ok(
+      !html.includes('<summary class="sechead"><h2 id="s1">Markets slide continues</h2><a'),
+      "secarc not adjacent",
+    );
+    // Outside the folds: banner, tldr, attention before the first <details>; foot after the last.
+    const art = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
+    const firstFold = art.indexOf('<details class="sec"');
+    const lastFold = art.lastIndexOf("</details>");
+    for (const marker of ['class="banner"', 'class="tldr"', 'class="attention"']) {
+      const at = art.indexOf(marker);
+      assert.ok(at > -1 && at < firstFold, `${path}: ${marker} before the folds`);
+    }
+    assert.ok(art.indexOf('class="foot"') > lastFold, `${path}: foot after the folds`);
+    const previews = [
+      ...art.matchAll(/<span class="secpreview" aria-hidden="true">([^<]*)<\/span>/g),
+    ].map((m) => m[1]);
+    assert.equal(previews.length, 3, `${path}: preview per section`);
+    assert.ok(
+      previews.every((t) => t.length > 0 && t.length <= 141),
+      `${path}: previews clamped`,
+    );
+  }
+  const { html } = await page("d/235");
+  const secarc = html.match(/<div class="secbody"><a class="secarc"[^>]*>/);
+  assert.ok(secarc, "secarc leads the section body");
+});
+
+test("addCiteTitles: production shape (rel after href) gets a title; bad href untouched", async () => {
+  const { addCiteTitles } = await import("../src/sections.js");
+  assert.equal(
+    addCiteTitles(
+      '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer">¹</a>',
+    ),
+    '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer" title="example.com">¹</a>',
+  );
+  assert.equal(
+    addCiteTitles('<a class="cite" href="https://example.org/y">²</a>'),
+    '<a class="cite" href="https://example.org/y" title="example.org">²</a>',
+  );
+  const bad = '<a class="cite" href="not a url" rel="noopener">³</a>';
+  assert.equal(addCiteTitles(bad), bad, "unparseable href fails safe");
+});
+
+test("foldSections: folds a normal body, refuses unbalanced or miscounted ones", async () => {
+  const { foldSections, buildSectionToc } = await import("../src/sections.js");
+  const { STRINGS } = await import("../src/strings.js");
+  const strings = STRINGS.en;
+  const body =
+    '<p class="banner">b</p><div class="tldr">t</div><h2>One</h2><a class="secarc" href="/x">arc</a><p>Hello &amp; welcome ' +
+    "word ".repeat(60) +
+    '<a class="cite" href="https://e.com/">¹</a></p><h2>Two</h2><p>Second.</p><p class="foot">f</p>';
+  const { html, sections } = buildSectionToc(body);
+  const folded = foldSections(html, sections.length, strings);
+  assert.notEqual(folded, html);
+  assert.equal(folded.match(/<details class="sec" open>/g).length, 1);
+  assert.equal(folded.match(/<details class="sec">/g).length, 1);
+  assert.deepEqual(
+    folded.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
+    html.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
+    "h2 ids identical",
+  );
+  assert.ok(folded.indexOf('class="tldr"') < folded.indexOf("<details"), "tldr outside");
+  assert.ok(folded.indexOf('class="foot"') > folded.lastIndexOf("</details>"), "foot outside");
+  assert.match(folded, /<span class="seccount">1 source<\/span>/);
+  assert.match(
+    folded,
+    /<span class="secpreview" aria-hidden="true">Hello &amp; welcome word[^<]*…<\/span>/,
+    "entity kept, clamped",
+  );
+  assert.ok(!/&[a-z]*…/.test(folded), "never cut inside an entity");
+  assert.ok(
+    !/<summary[^>]*>[^]*?<a /.test(folded.match(/<summary[\s\S]*?<\/summary>/)[0]),
+    "no link in summary",
+  );
+
+  const unbalanced = html.replace("<p>Second.</p>", "<p>Second.");
+  assert.equal(foldSections(unbalanced, sections.length, strings), unbalanced);
+  assert.equal(foldSections(html, sections.length + 1, strings), html, "count mismatch refuses");
+});
+
+test("digest sidebar: Earlier card from the widened older query; nav link unchanged", async () => {
+  const { html } = await page("d/235");
+  const card = html.match(/<section class="sidecard earlier"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(card, "earlier card");
+  assert.match(card, /<h2 id="earlierhead" class="sidehead">Earlier<\/h2>/);
+  const rows = card.match(/<a class="earlierrow"/g);
+  assert.ok(rows.length >= 1 && rows.length <= 4, "1..4 rows");
+  assert.match(card, /<span class="earliermeta">[^<]*items/, "meta line");
+  assert.match(card, /<span class="earliertitle">[^<]+<\/span>/, "derived headline");
+  const older = html.match(/<a class="nav-older" href="([^"]+)"/)[1];
+  assert.ok(card.includes(`href="${older}"`), "row 0 is the same edition the older link targets");
+  assert.ok(stripTags(card).length > 0);
+});
+
+// ── WP2e: hero spans the layout, heading order, accessible names ─────────
+
+test("hero is a direct child of main.layout on index and digest; digest body stays in .maincol", async () => {
+  const idx = (await page("")).html;
+  assert.match(idx, /<main class="layout has-side" id="main">\s*<section class="hero"/);
+  const dig = (await page("d/235")).html;
+  assert.match(
+    dig,
+    /<main class="layout has-side" id="main">\s*<nav class="digestnav">[\s\S]*?<\/nav>\s*<header class="hero hero-digest">[\s\S]*?<\/header>\s*<div class="maincol">/,
+    "digest top nav + hero precede .maincol",
+  );
+  const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
+  assert.ok(!main.includes("hero-digest"), "hero left the column");
+  const toc = main.indexOf('<nav class="toc"');
+  assert.ok(toc > -1, ".toc stays in .maincol");
+  assert.ok(toc < main.indexOf('<article class="digest">'), ".toc precedes the article");
+  assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
+  assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");
+});
+
+test("phone brand is a focusable link; the decorative dot is what is hidden", async () => {
+  const { html } = await page("");
+  const head = html.match(/<div class="phonehead">[\s\S]*?<\/a>/)?.[0] ?? "";
+  assert.match(
+    head,
+    /<a class="brand" href="[^"]*">\w+<span class="brandmark" aria-hidden="true">\.<\/span><\/a>/,
+  );
+  assert.ok(!/tabindex|<a[^>]*aria-hidden/.test(head), "no tabindex/aria-hidden on the link");
+});
+
+test("section previews are aria-hidden; the count stays readable", async () => {
+  const { html } = await page("d/235");
+  assert.match(html, /<span class="secpreview" aria-hidden="true">/);
+  assert.ok(!/<span class="secpreview">/.test(html));
+  assert.match(html, /<span class="seccount">/);
+});
+
+test("exactly one h1 on every golden page and on an archive-week index", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    assert.equal(count(html, /<h1[\s>]/g), 1, `${name}: exactly one h1`);
+    assert.equal(count(html, /<main[\s>]/g), 1, `${name}: h1 lives in the one main`);
+    const mainHtml = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
+    assert.equal(count(mainHtml, /<h1[\s>]/g), 1, `${name}: h1 inside main`);
+  }
+  const week = markupOf((await page("w/2026-W34/")).html);
+  assert.equal(count(week, /<h1[\s>]/g), 1, "archive week: one h1");
+  assert.ok(
+    week.includes('<header class="hero"><h1 class="herotitle">Week 34 · 17–23 Aug</h1></header>'),
+    "archive week h1 is the week label",
+  );
+  assert.match(week, /<h2 class="headline">/, "archive entries are h2");
+  const empty = markupOf((await page("w/2026-W20/")).html);
+  assert.equal(count(empty, /<h1[\s>]/g), 1, "empty archive week: one h1");
 });

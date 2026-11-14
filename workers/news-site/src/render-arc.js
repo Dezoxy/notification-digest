@@ -3,13 +3,12 @@ import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import { formatRelativeTime, formatShortDate, formatTime } from "./dates.js";
 import { findArcSectionAnchor } from "./sections.js";
-import { digestHref, indexHref, renderSwitchers } from "./hrefs.js";
+import { digestHref, indexHref } from "./hrefs.js";
 import {
   computeArcMomentum,
   deltasRenderableIn,
   groupByDay,
   kindBadge,
-  renderDayLedger,
   renderDeltaLine,
 } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
@@ -99,11 +98,12 @@ export function renderArcPage(
           ? `↓ ${strings.arcMomentumDown}`
           : `→ ${strings.arcMomentumSame}`;
 
-  // One mono metadata line, reusing the digest page's own `.stamp` styling
-  // (same "wire dateline" register — total appearances, first-seen date,
-  // last-updated relative time, momentum when present) rather than a new
-  // CSS class.
-  const metaLine = [
+  // Hero chip: kicker + appearance count + first-seen date, reusing the
+  // existing arc strings (no new keys). The "updated {t}" relative time and
+  // momentum live in the hero subline instead, since the h1 already IS the
+  // latest label (see `title` below) and repeating it would be noise.
+  const chipText = [
+    strings.threadKicker,
     (appearances.length === 1 ? strings.arcAppearancesOne : strings.arcAppearances).replace(
       "{n}",
       String(appearances.length),
@@ -112,6 +112,8 @@ export function renderArcPage(
       "{date}",
       formatShortDate(new Date(first.created_at), strings.locale),
     ),
+  ].join(" · ");
+  const subText = [
     strings.arcUpdated.replace(
       "{t}",
       formatRelativeTime(new Date(latest.created_at), strings.locale, nowMs),
@@ -121,22 +123,34 @@ export function renderArcPage(
     .filter(Boolean)
     .join(" · ");
 
-  // Title (H1, the site's first — every other page uses the masthead brand
+  // Title (H1, the site's first — every other page uses the bar brand
   // link instead): the arc's MOST RECENT label, not the first — labels can
   // drift across digests as headings get rephrased run to run, and the
   // latest phrasing is the freshest editorial framing of the story.
   const title = latest.label;
 
-  // Timeline, newest-day-first (matches the index ledger's own newest-first
-  // convention — groupByDay just buckets consecutive same-day rows in
-  // whatever order it's handed, so the DESC order has to come from the
-  // caller, same as handleIndexPage's own `created_at DESC` query does for
-  // the ledger). `appearances` itself stays ASC (oldest first) throughout
-  // this function — only this local copy is reversed, for display only.
+  // Timeline, newest first (matches the index ledger's own newest-first
+  // convention). `appearances` itself stays ASC (oldest first) throughout
+  // this function — only this local copy is reversed, for display only. The
+  // day label rides inside the first <li> of each day (not as a sibling of
+  // the <li>s, which would be invalid inside an <ol>), so the date context
+  // the old day-ledger gave each appearance is kept.
   const groups = groupByDay(appearances.slice().reverse(), strings.locale);
-  const timelineHtml = renderDayLedger(groups, (row) => renderArcAppearance(row, token, lang));
+  let isFirstItem = true;
+  const timelineHtml = `<ol class="timeline">
+${groups
+  .flatMap((group) =>
+    group.items.map((row, i) => {
+      const latestClass = isFirstItem ? " tlitem-latest" : "";
+      isFirstItem = false;
+      const dayHtml = i === 0 ? `<div class="dayhead">${esc(group.label)}</div>\n` : "";
+      return `<li class="tlitem${latestClass}">${dayHtml}${renderArcAppearance(row, token, lang)}</li>`;
+    }),
+  )
+  .join("\n")}
+</ol>`;
 
-  // .archead (§11.2, optional "follow list" feature): a flex row wrapping
+  // .archead (§11.2, optional "follow list" feature): the hero header wraps
   // the h1 so the bottom script can inject a text-control follow toggle
   // "next to the arc title" per the spec, without a card/button — see the
   // follow-toggle IIFE in pageChrome. data-arc-slug/data-follow-add/
@@ -146,27 +160,32 @@ export function renderArcPage(
   // localStorage array of followed slugs, never sent here), so this is the
   // only place slug/i18n strings meet the DOM for it to read.
   // Background primer (§11.6 context mode): collapsed disclosure directly
-  // under the title/metadata line, above the timeline — see
+  // under the hero, above the timeline — see
   // renderArcContext, which renders "" (nothing at all, no empty state) when
   // this arc has no primer.
   const contextHtml = renderArcContext(contextMd, strings);
 
+  // Hero keeps .archead: client.js appends the follow toggle to it and reads
+  // data-arc-slug/data-follow-* off the .arctitle h1 inside it.
   const body = `<nav class="digestnav"><a href="${indexHref(token, lang, "all")}">${esc(strings.allDigests)}</a></nav>
-<div class="archead"><h1 class="arctitle" data-arc-slug="${esc(identity)}" data-follow-add="${esc(strings.followAdd)}" data-follow-remove="${esc(strings.followRemove)}">${esc(title)}</h1></div>
-<p class="stamp">${esc(metaLine)}</p>
+<header class="hero archead"><span class="herochip">${esc(chipText)}</span><h1 class="herotitle arctitle" data-arc-slug="${esc(identity)}" data-follow-add="${esc(strings.followAdd)}" data-follow-remove="${esc(strings.followRemove)}">${esc(title)}</h1><p class="herosub">${esc(subText)}</p></header>
 ${contextHtml}<div class="archivelabel">${esc(strings.arcTimelineLabel)}</div>
 ${timelineHtml}`;
 
   // view "all": an arc has no view of its own (see the file-header comment)
   // — the view tabs/brand link just need SOME valid view to target, same
   // reasoning as renderSearchPage's own "all" choice.
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
-    "all",
-    renderSwitchers(token, lang, "all", "arc", identity, null, true, appVersion),
-    body,
+    view: "all",
+    pageKind: "arc",
+    id: identity,
+    archiveWeek: null,
+    showSearch: true,
+    appVersion,
+    bodyHtml: body,
     title,
-  );
+  });
 }

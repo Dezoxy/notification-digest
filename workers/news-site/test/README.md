@@ -41,10 +41,11 @@ not mean to.
 | `fixtures.mjs` | The dataset. Its header lists every render branch it keeps alive. |
 | `fixtures.sql` | The same rows for a real local D1 (browser-based checks). |
 | `render.test.mjs` | The invariant suite. |
-| `design-system.test.mjs` | The design-system export (`scripts/design-system.mjs`): builds against the real `css.js` and fails when a palette variable has no usage note. |
+| `design-system.test.mjs` | The design-system export (`scripts/design-system.mjs`): builds against the real `css.js` and fails when a custom property in the `tokens:start`/`tokens:end` block has no usage note. |
+| `coverage.test.mjs` | Class-coverage guard: every class in the goldens or created by `client.js` must have a selector in `css.js` (or sit on the commented `JS_ONLY_HOOKS` list). `COVERAGE_REPORT=1` also lists dead-rule candidates. |
 | `golden.mjs` | Golden renderer/checker (`--update` / `--check` / `--bundle`). |
 | `golden/*.html` | Committed expected output (~1.2MB). |
-| `tools/css-matrix.html` | Computed-style regression matrix for CSS refactors. |
+| `tools/screens.mjs` | Playwright screenshot harness (not in `npm test`): page × viewport × theme × language matrix plus JS-created UI states, to `tools/screens-out/<label>/`. |
 
 ### Two things that are load-bearing, not incidental
 
@@ -116,28 +117,32 @@ npx wrangler deploy --dry-run --outdir dist
 node test/golden.mjs --check --bundle dist/worker.js
 ```
 
-### CSS refactors: the computed-style matrix
+### CSS refactors
 
-Golden bytes catch a changed stylesheet, but they cannot tell you whether a
-*reordered* stylesheet still computes the same. `tools/css-matrix.html`
-loads before/after pages in paired iframes and diffs `getComputedStyle` for
-every element and its `::before`/`::after` across 375/700/1280px × light/dark
-× masthead shown/hidden.
+Golden bytes catch a changed stylesheet, but not whether a *reordered* one
+still computes the same. The old `tools/css-matrix.html` (paired iframes diffing
+`getComputedStyle`) was retired with the pre-redesign masthead and breakpoints
+it drove; `tools/screens.mjs` below replaces it. Take a `before` and `after`
+run around the change and compare the folders by eye. Neither covers `:hover`
+or `:focus`; check those by hand.
+
+### Screenshots
+
+`tools/screens.mjs` is for looking, not asserting. It serves the real router
+over the fixture DB (frozen clock; `public/` files win over the worker, like
+Workers Static Assets) and drives the pre-installed Playwright Chromium:
+every page type at phone and desktop, light and dark, EN and HU, then the
+states the goldens never show (settings, search bubble, command palette,
+compact density, catch-up banner + unread fence, resume chip, scrolled
+digest), a reduced-motion pass, a print PDF of the digest, and a soft
+navigation round trip. It exits non-zero on page errors, console errors or
+HTTP errors.
 
 ```bash
-mkdir -p /tmp/m/before /tmp/m/after
-cp test/golden/*.html /tmp/m/before/          # before = current goldens
-# …make the CSS change, then regenerate into /tmp/m/after/
-cp test/tools/css-matrix.html /tmp/m/
-cd /tmp/m && python3 -m http.server 8791
-# open http://localhost:8791/css-matrix.html, then per page in the console:
-#   await runPage("index-en")   -> { comparisons, diffCount, diffs }
+node test/tools/screens.mjs before   # PNGs in test/tools/screens-out/before/ (gitignored)
+# …make the change…
+node test/tools/screens.mjs after    # then compare the two folders by eye
 ```
-
-Zero diffs means the change is computationally inert for everything covered.
-It does **not** cover `:hover`, `:focus`, or print — check those by hand, or
-confirm (as the phone-block consolidation did) that the moved ranges contain
-no such selectors.
 
 ### Service workers: the browser pane cannot test them
 
@@ -203,8 +208,8 @@ Then browse `http://localhost:8791/t/goldentesttoken/`.
 When touching `src/client.js`, re-run the whole feature list **after two
 consecutive soft navigations** — the `wirePage()` teardown/rebind cycle is
 where that file breaks. A cheap way to prove subscribers are not
-accumulating across rewires: a `MutationObserver` counting `masthid` class
-flips over one scroll-down/scroll-up cycle should see exactly **2**.
+accumulating across rewires: `tools/screens.mjs` section 5 asserts listener
+hygiene after two soft navigations and exits non-zero if it fails.
 
 ## Adding a fixture
 

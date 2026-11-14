@@ -33,12 +33,11 @@ import { indexHref } from "./hrefs.js";
 // place — start_url/scope/id — instead of in four more icon URLs beside it.
 
 export function buildManifest(host, token, lang) {
-  // Uppercased to match what a reader actually SEES. The masthead wordmark
-  // is `brandFirst(host)` rendered through `.brand { text-transform:
-  // uppercase }` (src/css.js), so the host label alone ("news") is the
-  // brand's source, not its appearance — and a Home Screen label sits
-  // directly under an icon carrying that wordmark, where the two
-  // disagreeing is conspicuous.
+  // Uppercased because a Home Screen label sits directly under an icon and
+  // reads better as a short uppercase word. The on-page wordmark is
+  // `brandFirst(host)` in lowercase with an accent full stop (`.brand` in
+  // src/css.js, Spatial Glass), so this is a deliberate choice, not a
+  // mirror of the page.
   const name = brandFirst(host).toUpperCase();
   return JSON.stringify(
     {
@@ -58,15 +57,15 @@ export function buildManifest(host, token, lang) {
       lang,
       dir: "ltr",
       // Splash-screen ground and (where the OS uses it) title-bar tint.
-      // Dark rather than the light palette's #ffffff: an installed app
-      // opens to a splash before any CSS runs, and a dark ground is the
+      // Dark (#0b0d14) rather than the light page's #eceff6: an installed
+      // app opens to a splash before any CSS runs, and a dark ground is the
       // gentler miss for a reader who turns out to be in light mode than a
-      // white flash is for one in dark. The page's own theme-color metas
+      // bright flash is for one in dark. The page's own theme-color metas
       // (pageChrome) still win the moment the document paints, so this
       // value only ever governs that pre-paint instant. One-line change if
       // the owner disagrees.
-      background_color: "#131418",
-      theme_color: "#131418",
+      background_color: "#0b0d14",
+      theme_color: "#0b0d14",
       icons: [
         { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
         {
@@ -160,17 +159,17 @@ function offlineResponse(url) {
     (hu ? "hu" : "en") +
     '"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-    '<meta name="theme-color" content="#131418"><title>' +
+    '<meta name="theme-color" content="#0b0d14"><title>' +
     s.title +
     "</title><style>" +
     "html{color-scheme:light dark}" +
     "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;" +
-    "background:#fff;color:#131418;font:16px/1.5 ui-sans-serif,system-ui,sans-serif;" +
+    "background:#eceff6;color:#151823;font:16px/1.5 ui-sans-serif,system-ui,sans-serif;" +
     "padding:2rem;text-align:center}" +
-    "@media(prefers-color-scheme:dark){body{background:#131418;color:#e9e9ee}}" +
+    "@media(prefers-color-scheme:dark){body{background:#0b0d14;color:#eef0f7}}" +
     "h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0 0 1.5rem;opacity:.75}" +
-    "a{color:#4f46e5;font-weight:600;text-decoration:none}" +
-    "@media(prefers-color-scheme:dark){a{color:#a5b4fc}}" +
+    "a{color:#3243b5;font-weight:600;text-decoration:none}" +
+    "@media(prefers-color-scheme:dark){a{color:#b9c6ff}}" +
     "</style></head><body><div><h1>" +
     s.title +
     "</h1><p>" +

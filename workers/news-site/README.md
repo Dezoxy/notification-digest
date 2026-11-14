@@ -17,11 +17,13 @@ repo root).
 
 ## Source layout
 
-One deployed script, several source files. `worker.js` is the entry —
+One deployed script, several source files, plus a small `public/` directory
+of static files (see "Static assets" below). `worker.js` is the entry —
 the authoritative file-header doc, the route patterns, the dispatch — and
 everything else lives in `src/`, which wrangler's bundler folds back into a
 single self-contained script at deploy time. **No build step and no build
-configuration**: `wrangler.jsonc` still just names `worker.js` as `main`.
+configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
+`./public` as the static-assets directory).
 
 | | |
 | --- | --- |
@@ -50,13 +52,17 @@ Two rules worth knowing before editing:
   may contain a backtick, a `${` sequence, or its own closing tag — any of
   the three corrupts the literal or the inline embedding. `npm test`
   enforces it, but it is easier to simply not write one.
-- **Every phone override lives in ONE `max-width: 40em` block** near the end
-  of `css.js`, after every base rule it overrides. (Grep finds a second
-  match: its `and (prefers-reduced-motion: reduce)` twin, immediately after.
-  Print is last.) Scattered phone blocks used to lose silently to
-  equal-specificity base rules defined later in the file — that cost six
-  separate rules over this file's history. Add phone rules to that block,
-  not next to the feature they modify.
+- **Every phone override lives in ONE `max-width: 699.98px` block** near the
+  end of `css.js`, after every base rule it overrides (the tablet and desktop
+  blocks sit before it; the no-blur fallbacks and print come after). Scattered
+  phone blocks used to lose silently to equal-specificity base rules defined
+  later in the file — that cost six separate rules over this file's history.
+  Add phone rules to that block, not next to the feature they modify.
+- **Colours live only in the token block** at the top of `css.js`, between
+  `/* tokens:start */` and `/* tokens:end */`, as `light-dark()` pairs; the
+  `data-theme` blocks only switch `color-scheme`. The design-system export
+  parses that block (see below), so keep one themed colour per line and keep
+  that format.
 
 ## Tests
 
@@ -74,16 +80,42 @@ pass with a **zero** golden diff; a change that should alter output
 regenerates the goldens, and that diff is the review artifact.
 
 See `test/README.md` for the fixture/branch contract and the verification
-recipes (bundled-artifact check, the CSS computed-style matrix, driving the
-real router in a browser).
+recipes (bundled-artifact check, the screenshot harness, driving the real
+router in a browser).
+
+## Static assets (`public/`)
+
+Files in `public/` are served by Cloudflare Workers Static Assets *before* the
+Worker runs (`"assets": {"directory": "./public"}` in `wrangler.jsonc`). Only
+`public/` is exposed; never point that setting at `.`. A path that is not a
+file there falls through to the Worker, whose uniform 404 is unchanged
+(`not_found_handling` stays at its default).
+
+- `public/fonts/` holds Inter and Sora (variable `wght`, woff2, latin +
+  latin-ext; Hungarian ő/ű need latin-ext), copied once from pinned
+  `@fontsource-variable/*` packages. No npm dependency is added.
+  `SOURCES.md` records each file's package, original name, size, sha256 and
+  `unicode-range`; `test/fonts.test.mjs` checks the bytes against it. Both
+  fonts are SIL OFL 1.1 (`OFL.txt`).
+- **Tokenless by design**, like `/favicon.svg`: fonts carry no private data,
+  and a stylesheet cannot send a path token for them anyway.
+- `public/_headers` sets `Cache-Control: public, max-age=31536000, immutable`,
+  `X-Content-Type-Options: nosniff` and `X-Robots-Tag: noindex` on `/fonts/*`.
+  The immutable cache is only safe because filenames are versioned.
+- **Bumping a font:** never edit a file in place. Add the new binary under a
+  new name (`...v2.woff2`), update `SOURCES.md` (package version, size,
+  sha256, ranges), the `test/fonts.test.mjs` file list and the `@font-face`
+  `src` in `src/css.js`, then drop the old file.
 
 ## Design system
 
-`scripts/design-system.mjs` turns this Worker's own look into the file set of a
-design-system artifact on claude.ai: the palette (light and dark), type styles,
-spacing, radii and shadows as tokens, the logos and icon, and one preview card
-plus README per UI component, all rendered on the site's real stylesheet
-(`components/bundle.css` is `src/css.js` minus its palette blocks).
+`scripts/design-system.mjs` turns this Worker's own look ("Spatial Glass") into
+the file set of a design-system artifact on claude.ai: the colour tokens (light
+and dark), type styles, spacing, radii, shadow and motion tokens, the logos and
+icon, and one preview card plus README per UI component (bar, hero, entry
+cards, side cards, settings panel, sections, timeline, ...), all rendered on the
+site's real stylesheet (`components/bundle.css` is `src/css.js` minus its token
+block).
 
 ```bash
 npm run design-system                 # writes $TMPDIR/digest-news-design-system/project
@@ -91,11 +123,14 @@ npm run design-system -- /some/dir    # or to /some/dir/project
 ```
 
 It prints the output path, a light/dark contrast table and the component list.
-The palette is parsed from `css.js`, not copied, and that parse is a drift
-guard: a new custom property in the palette blocks fails `npm test` (via
-`test/design-system.test.mjs`) until it has a usage note in the script. Type
-styles, the other spacing and radius tokens, the two literal shadows and the
-component markup are curated by hand in the script and are not checked.
+The tokens are parsed from `css.js`, not copied: the block between
+`/* tokens:start */` and `/* tokens:end */` is split on the top-level comma of
+each `light-dark(light, dark)` pair, and `--shadow`, whose two layers carry a
+`light-dark()` each, is resolved per theme. That parse is a drift guard: a new
+custom property in the block fails `npm test` (via `test/design-system.test.mjs`)
+until it has a usage note in the script. Type-style names and samples, the
+contrast pairs and the component markup are curated by hand in the script and
+are not checked.
 
 The script only writes files. Publishing is done afterwards from Claude Code:
 merge the artifact's existing `design-system.json` rather than overwriting it
@@ -191,8 +226,8 @@ stores and serves whatever the app sends.
   idempotent and reflect the latest payload exactly, in both languages.
 - **Reading**: every reader route has a parameterized Hungarian twin —
   `GET /t/:token/hu/` and `GET /t/:token/hu/d/:id` — with the same token
-  check, headers, and 404 philosophy as the English routes. A masthead
-  switcher (`EN | HU`) links between the same page in both language spaces.
+  check, headers, and 404 philosophy as the English routes. The settings
+  panel's switcher (`EN | HU`) links between the same page in both language spaces.
   If a digest has no Hungarian translation yet, the `/hu/` pages fall back
   to the English `tldr`/`body_html` with a small in-page note rather than
   erroring or showing nothing.
@@ -230,6 +265,7 @@ instead of in four more icon URLs beside it.
 | `GET /robots.txt` | Disallow-everything. |
 | `GET /favicon.svg` | Tab icon. |
 | `GET /icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png` | PWA icons. |
+| `GET /fonts/*` | Self-hosted font files from `public/`, served by Cloudflare before the Worker runs; tokenless. |
 | `PUT /ingest/:id` | Upsert a digest. Requires the `x-ingest-key` header. |
 | `GET /t/:token/` | Index, all kinds, newest first, grouped by day. `hu/` prefix for Hungarian chrome throughout. |
 | `GET /t/:token/daily/`, `/weekly/` | Same index filtered to that `kind` only; prev/next on digest pages stays within the kind. |
@@ -471,6 +507,12 @@ curl -s "$HOST/t/$TOKEN/d/1"     # the digest page itself
 ```
 
 ## Design roadmap (2026-08)
+
+> Historical: the roadmaps 1-4 below describe the "private wire desk" look
+> (print poster, masthead, system font stacks, serif and mono type roles,
+> sticky headings, back FAB) as it was when each step shipped. The 2026-11
+> Spatial Glass redesign (see "Since roadmap 4") replaced that look; where a
+> step below contradicts the current stylesheet, the stylesheet wins.
 
 A visual/reading-experience upgrade pass, agreed 2026-08-08 under the
 direction "the private wire desk": this site is a timestamped briefing wire
@@ -778,17 +820,27 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   map does not recognise renders unchanged. The colophon (source key and
   provenance together) is collapsed by default behind one native `<details>`
   disclosure, "How this was made" / "Hogyan készült", and print forces it
-  open. It sits between two hairline rules. The article's closing coverage
+  open. It sits under one hairline rule. The article's closing coverage
   line (`p.foot`, "From N items; …" / "Synthesized from …") is hidden on the
   site: the source key already carries those numbers per source.
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
   palette, j/k list navigation, and an Archive nav link.
-- **Settings and reading** — a settings bubble holding the three-state theme
-  toggle, text size, ledger density, and a Sans | Serif body-font toggle; a Front
-  Page print-poster stylesheet; an About page for anyone the capability link gets
-  shared with.
+- **Settings and reading** — a settings panel (a popover opened from the bar's
+  sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
+  language, the three-state theme, text size (S/M/L) and a Cards | Compact
+  ledger density; a plain black-on-white print stylesheet; an About page for
+  anyone the capability link gets shared with. The Sans | Serif body-font
+  toggle was retired by the Spatial Glass redesign (below).
+- **Spatial Glass redesign** (2026-11) — a ground-up visual pass with the same
+  routes and data: a dotted page with a drifting glow, flat translucent cards,
+  one floating pill bar (a bottom dock on phones), centred hero headlines, a
+  right-hand sidebar from 1040px (Now, Earlier, settings), native `details`
+  sections with a pill table of contents, and a timeline for story threads. Sora
+  (headings) and Inter (body) are self-hosted from `public/fonts/` (see "Static
+  assets"); every colour is a `light-dark()` token. It removed the masthead, the
+  floating back button, the sticky headings and the serif/mono type roles.
 - **Deployed app version** — the settings panel's About row carries a muted
   `v0.29.21` label at its right edge (About stays at the left). The source is
   `provenance.app_version` (a plain `X.Y.Z` string) on the NEWEST digest that has

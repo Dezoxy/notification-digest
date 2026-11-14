@@ -2,7 +2,7 @@ import { STRINGS } from "./strings.js";
 import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import { formatShortDate, formatTime } from "./dates.js";
-import { aboutHref, digestHref, renderLangSwitcher, renderSwitchers, searchHref } from "./hrefs.js";
+import { aboutHref, digestHref, renderLangSwitcher, searchHref } from "./hrefs.js";
 import { kindBadge } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
 import { renderExcerpt, renderIndexEntry, renderLeadCard } from "./render-index.js";
@@ -120,7 +120,7 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
     }
   }
 
-  // Switchers: pageKind "plain" (index-style language hop, no ledger) — the
+  // Settings panel: pageKind "plain" (index-style language hop, no ledger) — the
   // language switch on this page goes to the OTHER language's root index,
   // not to that language's own search results for the same query. Losing
   // the query string on a language hop is an accepted, deliberate
@@ -133,21 +133,26 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
   // need SOME valid view to render against, and "all" is the closest
   // meaning — clicking "Daily" from here goes to the daily index, not to a
   // (nonexistent) daily-scoped search.
-  return pageChrome(
+  const heroHtml = `<header class="hero"><h1 class="herotitle">${esc(strings.searchHeading)}</h1></header>`;
+  return pageChrome({
     host,
     token,
     lang,
-    "all",
-    renderSwitchers(token, lang, "all", "plain", undefined, null, false, appVersion),
-    `${formHtml}${resultsHtml}`,
-    strings.searchLabel,
-  );
+    view: "all",
+    pageKind: "plain",
+    id: undefined,
+    archiveWeek: null,
+    showSearch: false,
+    appVersion,
+    bodyHtml: `${heroHtml}\n${formHtml}${resultsHtml}`,
+    title: strings.searchLabel,
+  });
 }
 
 // About page: short, static, no D1 data at all — the simplest page this
 // file renders. Reuses the site's existing chrome/typography wholesale
 // rather than inventing anything new:
-//   - pageChrome for the masthead/CSS/settings popover, same as every other
+//   - pageChrome for the bar/CSS/settings popover, same as every other
 //     page (see renderSearchPage just above for the closest example).
 //   - `.digest` (the article-body class the digest pages use for their own
 //     prose — see the CSS) for the h2/p typography, including its numbered-
@@ -157,29 +162,34 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
 //     the honest-caveat paragraph at the end — same register that class
 //     already carries elsewhere, just applied here directly since this page
 //     has no body_html of its own to style through.
-// No new CSS at all, deliberately — every class below already exists.
+// Layout classes (.hero, .aboutcard) come from the shared Spatial Glass CSS.
 export function renderAboutPage(token, host, lang, appVersion = null) {
   const strings = STRINGS[lang];
-  const bodyHtml = `<div class="digest">
-    <h2>${esc(strings.aboutWhatTitle)}</h2>
-    <p>${esc(strings.aboutWhatBody)}</p>
-    <h2>${esc(strings.aboutRhythmTitle)}</h2>
-    <p>${esc(strings.aboutRhythmBody)}</p>
-    <h2>${esc(strings.aboutReadingTitle)}</h2>
-    <p>${esc(strings.aboutReadingBody)}</p>
-    <p class="closing">${esc(strings.aboutCaveat)}</p>
-  </div>`;
+  // One h1 (the hero); each section is a glass card whose heading stays an
+  // h2 inside .digest so the numbered-section styling still applies. The
+  // caveat has no heading of its own and gets its own card.
+  const bodyHtml = `<header class="hero"><h1 class="herotitle">${esc(strings.aboutLabel)}</h1></header>
+<div class="digest">
+  <section class="aboutcard"><h2>${esc(strings.aboutWhatTitle)}</h2><p>${esc(strings.aboutWhatBody)}</p></section>
+  <section class="aboutcard"><h2>${esc(strings.aboutRhythmTitle)}</h2><p>${esc(strings.aboutRhythmBody)}</p></section>
+  <section class="aboutcard"><h2>${esc(strings.aboutReadingTitle)}</h2><p>${esc(strings.aboutReadingBody)}</p></section>
+  <section class="aboutcard"><p class="closing">${esc(strings.aboutCaveat)}</p></section>
+</div>`;
   // Switchers/view: same "all"/"index" pageKind choice as renderSearchPage
   // just above, and for the same reason — the about page has no
   // daily/weekly/week variant of its own (see aboutHref), so the view tabs
   // just need some valid view to render against.
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
-    "all",
-    renderSwitchers(token, lang, "all", "plain", undefined, null, false, appVersion),
+    view: "all",
+    pageKind: "plain",
+    id: undefined,
+    archiveWeek: null,
+    showSearch: false,
+    appVersion,
     bodyHtml,
-    strings.aboutLabel,
-  );
+    title: strings.aboutLabel,
+  });
 }

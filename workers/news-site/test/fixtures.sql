@@ -2,26 +2,46 @@
 --   wrangler d1 execute news-digests --local --file schema.sql
 --   wrangler d1 execute news-digests --local --file test/fixtures.sql
 --   wrangler dev   (SITE_TOKEN=goldentesttoken INGEST_KEY=goldeningestkey in .dev.vars)
--- Keep in lockstep with fixtures.mjs — the CSS-matrix and client-JS browser
+-- Keep in lockstep with fixtures.mjs — the client-JS browser
 -- checks in later refactor PRs drive wrangler dev against THIS data.
-INSERT INTO digests (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas, provenance) VALUES (235, '2026-08-25T14:00:00Z', 'Markets slid for a second day while the EU package landed.', 12, 3, 0, '<div class="tldr"><strong>TL;DR:</strong> Markets slid for a second day while the EU package landed.</div>
+INSERT INTO digests (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas, provenance) VALUES (235, '2026-08-25T14:00:00Z', 'Markets slid for a second day while the EU package landed.', 12, 3, 0, '<p class="banner" style="background-color:#fff3cd;color:#664d03;padding:0.75em 1em;border-radius:10px;margin:0 0 1em 0;">⚠ polymarket collection failed this run</p>
+<div class="tldr" style="background-color:#eef2ff;color:#262a49;padding:0.85em 1em;border-radius:10px;margin:0 0 1em 0;"><span class="tldr-label" style="display:block;font-size:0.72em;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.35em;color:#4f46e5;">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
+<div class="attention" style="background-color:#fef3c7;color:#78350f;padding:0.85em 1em;border-radius:10px;margin:0 0 1em 0;"><span class="attention-label" style="display:block;font-size:0.72em;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.35em;color:#b45309;">⚑ Needs attention</span><p>The reform deadline falls on Friday, so check the filing window before then<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/deadline" rel="noopener noreferrer">¹</a>.</p></div>
 <h2>Markets slide continues</h2>
 <p>Equities extended losses. <a href="https://example.com/markets-report">Reuters</a> puts the drawdown at four percent.</p>
+<p>Traders pointed to thin liquidity and a stronger dollar. A desk note expects volatility to persist into the weekend<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/liquidity-note" rel="noopener noreferrer">²</a>.</p>
+<ul>
+<li>Index futures pointed lower again before the open.</li>
+<li>Bond yields eased as investors sought safety.</li>
+<li>Currency desks reported the widest spreads this month.</li>
+</ul>
 <h2>EU agrees new package</h2>
 <p>The council signed off <span style="color: red">overnight</span>, with disbursement gated on reforms.</p>
+<p>Several members asked for a review clause. The council statement sets a first checkpoint in the spring<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/council-statement" rel="noopener noreferrer">³</a>.</p>
 <h2>Chip export rules tighten</h2>
-<p>New licensing requirements take effect next quarter.</p>', '## Markets slide continues
+<p>New licensing requirements take effect next quarter.</p>
+<p>Exporters have ninety days to file. The ministry notice lists the affected product classes<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/export-rules" rel="noopener noreferrer">⁴</a>.</p>', '## Markets slide continues
 Equities extended losses.
 ## EU agrees new package
 Signed overnight.
 ## Chip export rules tighten
-Next quarter.', 'A piacok második napja estek, az EU-csomag megszületett.', '<div class="tldr"><strong>Röviden:</strong> A piacok második napja estek, az EU-csomag megszületett.</div>
+Next quarter.', 'A piacok második napja estek, az EU-csomag megszületett.', '<p class="banner" style="background-color:#fff3cd;color:#664d03;padding:0.75em 1em;border-radius:10px;margin:0 0 1em 0;">⚠ polymarket collection failed this run</p>
+<div class="tldr" style="background-color:#eef2ff;color:#262a49;padding:0.85em 1em;border-radius:10px;margin:0 0 1em 0;"><span class="tldr-label" style="display:block;font-size:0.72em;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.35em;color:#4f46e5;">Röviden</span>A piacok második napja estek, az EU-csomag megszületett.</div>
+<div class="attention" style="background-color:#fef3c7;color:#78350f;padding:0.85em 1em;border-radius:10px;margin:0 0 1em 0;"><span class="attention-label" style="display:block;font-size:0.72em;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.35em;color:#b45309;">⚑ Figyelmet igényel</span><p>A reformhatáridő pénteken jár le, ezért előtte ellenőrizd a benyújtási időszakot<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/deadline" rel="noopener noreferrer">¹</a>.</p></div>
 <h2>Folytatódik a piaci esés</h2>
 <p>A részvények tovább estek. <a href="https://example.com/markets-report">Reuters</a> négy százalékra teszi a visszaesést.</p>
+<p>A kereskedők a szűk likviditásra és az erősebb dollárra mutattak. Egy elemzői jegyzet a hétvégére is ingadozást vár<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/liquidity-note" rel="noopener noreferrer">²</a>.</p>
+<ul>
+<li>Az indexfutures ismét lejjebb nyitott.</li>
+<li>A kötvényhozamok csökkentek, mert a befektetők biztonságot kerestek.</li>
+<li>A devizapultoknál e hónapban a legnagyobb a felár.</li>
+</ul>
 <h2>Az EU új csomagot fogadott el</h2>
 <p>A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</p>
+<p>Több tag felülvizsgálati záradékot kért. A tanácsi közlemény tavaszra tűzi ki az első ellenőrzési pontot<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/council-statement" rel="noopener noreferrer">³</a>.</p>
 <h2>Szigorodnak a chipexport-szabályok</h2>
-<p>Az új engedélyezési követelmények a következő negyedévtől élnek.</p>', '## Folytatódik a piaci esés
+<p>Az új engedélyezési követelmények a következő negyedévtől élnek.</p>
+<p>Az exportőröknek kilencven napjuk van a bejelentésre. A minisztériumi közlemény felsorolja az érintett termékcsoportokat<a class="cite" style="font-size:0.75em;vertical-align:super;text-decoration:none;color:#4f46e5;" href="https://example.com/export-rules" rel="noopener noreferrer">⁴</a>.</p>', '## Folytatódik a piaci esés
 Tovább estek.
 ## Az EU új csomagot fogadott el
 Éjjel aláírva.

@@ -93,14 +93,11 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
   // own explicit cleanup: teardown collects one closure per such case, and
   // wirePage runs and clears the whole list before rewiring.
   // ── one scroll listener for the whole page ─────────────────────────────
-  // Four features react to scroll (sticky section headings, the phone
-  // masthead, the back-to-top button, the resume chip). They used to attach
-  // four independent global listeners, and the index filter faked a scroll
-  // event to make them all recompute after it hid entries. One manager, a
-  // subscriber list: features subscribe per wirePage() pass (their abort
-  // signal unsubscribes them on soft-nav rewiring, same lifecycle their own
-  // listeners had), and the filter now asks for the recompute by name
-  // instead of forging an event.
+  // Scroll-dependent UI (today just the resume chip) subscribes to one
+  // manager instead of attaching its own global listener, and the index
+  // filter asks for a recompute by name rather than forging a scroll event.
+  // Features subscribe per wirePage() pass (their abort signal unsubscribes
+  // them on soft-nav rewiring, same lifecycle their own listeners have).
   var scrollSubs = [];
   function notifyScrollSubs() {
     for (var i = 0; i < scrollSubs.length; i++) scrollSubs[i]();
@@ -113,8 +110,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       if (ix !== -1) scrollSubs.splice(ix, 1);
     });
     // Every subscriber also runs once at subscribe time so a mid-page
-    // reload (browser scroll restoration) starts in the right state — the
-    // convention all four listeners already followed individually.
+    // reload (browser scroll restoration) starts in the right state.
     fn();
   }
 
@@ -135,7 +131,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     }
   }
 
-  // The three preference minisegs share one storage contract: the default
+  // The preference minisegs (theme, size, density) share one storage contract: the default
   // value is expressed as ABSENCE (empty dataset attr, no localStorage
   // key), so only a non-default choice is ever stored. The head script's
   // || "" reads render absence as the default on the next load.
@@ -147,7 +143,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     } catch (e) {}
   }
 
-  // One miniseg wiring (theme/size/font share it exactly): unhide the
+  // One miniseg wiring (theme/size/density share it exactly): unhide the
   // buttons (progressive enhancement — no JS, no buttons), reflect the
   // active segment, and on click apply inside a page crossfade. current()
   // resolves the active value; apply(v) performs the swap (each segment's
@@ -182,6 +178,164 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     }
   }
 
+  // Theme changes crossfade colours only while <html class="theming"> is
+  // present (see the CSS). One module-level timer, so rapid clicks extend the
+  // window instead of the first click's timeout cutting the second short.
+  var themingTimer = null;
+  function markTheming() {
+    var root = document.documentElement;
+    root.classList.add("theming");
+    if (themingTimer) clearTimeout(themingTimer);
+    themingTimer = setTimeout(function () {
+      themingTimer = null;
+      root.classList.remove("theming");
+    }, 350);
+  }
+
+  // Open the folded digest section (details.sec) that contains "el" — the
+  // heading itself sits in the always-visible <summary>, so a #sN link
+  // reaches it either way, but the reader following it wants the section
+  // BODY. Returns true when it had to open one. Opening happens BEFORE any
+  // scroll the caller does, so the layout the scroll targets is final.
+  function openSectionContaining(el) {
+    var sec = el && el.closest ? el.closest("details.sec") : null;
+    if (sec && !sec.open) {
+      sec.open = true;
+      return true;
+    }
+    return false;
+  }
+
+  // Resolve a "#id" hash to its element (null when absent). decodeURIComponent
+  // can throw on a malformed escape; fall back to the raw text.
+  function hashTarget(hash) {
+    if (!hash || hash.length < 2) return null;
+    var id = hash.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch (e) {}
+    return document.getElementById(id);
+  }
+
+  // Same-document hash arrival (page load with #sN, hashchange): open the
+  // target's section, then — only if the browser's own anchor jump left the
+  // heading off screen — scroll it into view. The jump usually already
+  // landed (the h2 lives in the summary, which never hides), so this is a
+  // safety net for the ordering where the jump ran before the section was
+  // open, not a second scroll fighting the first.
+  function revealHash(hash) {
+    var target = hashTarget(hash);
+    if (!target) return;
+    if (!openSectionContaining(target)) return;
+    requestAnimationFrame(function () {
+      var r = target.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight) {
+        target.scrollIntoView({ behavior: "instant", block: "start" });
+      }
+    });
+  }
+
+  // Close the settings popover if it is open. Called before a soft-nav swap
+  // so the top layer never holds a node that is about to be replaced. The
+  // panel is looked up fresh every time — never a cached reference — because
+  // each swap replaces it along with the rest of .wrap. Guarded: browsers
+  // without the Popover API have no hidePopover (and no :popover-open).
+  function closeSettingsPopover() {
+    var panel = document.getElementById("settings");
+    if (!panel || typeof panel.hidePopover !== "function") return;
+    try {
+      if (panel.matches(":popover-open")) panel.hidePopover();
+    } catch (e) {}
+  }
+
+  // ── page-level state that outlives a wirePage() pass ───────────────────
+  // Everything in this block is registered ONCE at module init: it either
+  // listens on window/document for something unrelated to the swapped DOM
+  // or looks its elements up fresh when it fires.
+
+  // Sidebar mode (>= 1040px): CSS forces the settings panel visible inside
+  // .side while it is NOT :popover-open, so a popover opened at a narrower
+  // width must be closed the moment the viewport widens, or it would sit in
+  // the top layer on top of its own sidebar copy. The client never calls
+  // showPopover() — opening is the declarative popovertarget's job.
+  (function () {
+    if (!window.matchMedia) return;
+    var wide = matchMedia("(min-width: 1040px)");
+    wide.addEventListener("change", function () {
+      if (!wide.matches) return;
+      var panel = document.getElementById("settings");
+      if (!panel || typeof panel.hidePopover !== "function") return;
+      if (!panel.closest(".side")) return;
+      try {
+        if (panel.matches(":popover-open")) panel.hidePopover();
+      } catch (e) {}
+    });
+  })();
+
+  // Print: every folded section must be on paper. Open whatever is closed
+  // (remembering which), restore on afterprint. beforeprint can fire more
+  // than once; only still-closed elements are recorded, so the second pass
+  // is a no-op and afterprint restores exactly what the reader had.
+  var printOpened = [];
+  addEventListener("beforeprint", function () {
+    var closed = document.querySelectorAll(
+      "details.sec:not([open]), details.colophon:not([open]), details.arccontext:not([open])",
+    );
+    for (var i = 0; i < closed.length; i++) {
+      closed[i].open = true;
+      printOpened.push(closed[i]);
+    }
+  });
+  addEventListener("afterprint", function () {
+    for (var i = 0; i < printOpened.length; i++) printOpened[i].open = false;
+    printOpened = [];
+  });
+
+  // Entrance choreography: the head script adds <html class="enter"> on a
+  // hard load and the CSS staggers the rise-in while it is present. Drop it
+  // once the animation has had time to finish, so later DOM changes cannot
+  // replay it. This runs at module init only — never in wirePage() — and a
+  // soft navigation can never bring the class back (the head script does not
+  // re-run). A bfcache restore replays no head script either, so remove it
+  // immediately there instead of re-running the entrance.
+  setTimeout(function () {
+    document.documentElement.classList.remove("enter");
+  }, 1200);
+  addEventListener("pageshow", function (e) {
+    if (e.persisted) document.documentElement.classList.remove("enter");
+  });
+
+  // Typing state (phone only): while a text field has focus, <html
+  // class="typing"> lets the CSS tuck the dock away so the on-screen keyboard
+  // never pushes it over the field. Fields INSIDE the bar (the dock's own
+  // search input) are excluded — hiding the dock would hide the field being
+  // typed in. Derived from document.activeElement every time rather than
+  // toggled per event, so a field removed by a soft-nav swap cannot leave the
+  // class stuck. Registered once, on document.
+  var isTextField = function (el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.closest && el.closest(".bar")) return false;
+    if (el.isContentEditable) return true;
+    if (el.tagName === "TEXTAREA") return true;
+    if (el.tagName !== "INPUT") return false;
+    var type = (el.getAttribute("type") || "text").toLowerCase();
+    return (
+      ["checkbox", "radio", "button", "submit", "reset", "image", "file", "range", "color", "hidden"].indexOf(type) === -1
+    );
+  };
+  var phoneMq = window.matchMedia ? matchMedia("(max-width: 699.98px)") : null;
+  function syncTyping() {
+    var on = Boolean(phoneMq && phoneMq.matches && isTextField(document.activeElement));
+    document.documentElement.classList.toggle("typing", on);
+  }
+  document.addEventListener("focusin", syncTyping);
+  // focusout fires BEFORE the next element is focused; read activeElement
+  // after the move has happened, so tabbing between two fields never flickers.
+  document.addEventListener("focusout", function () {
+    setTimeout(syncTyping, 0);
+  });
+  if (phoneMq) phoneMq.addEventListener("change", syncTyping);
+
   var wireController = null;
   var teardown = [];
 
@@ -195,101 +349,9 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     });
     teardown.length = 0;
 
-    // Show the floating back button only after the header nav has scrolled
-    // away. Passive listener; runs once immediately so a mid-page reload
-    // (browser scroll restoration) starts in the right state.
-    // Sticky section headings inside a digest (see .digest > h2 in the CSS).
-    // A sticky element normally stops sticking at the bottom of its
-    // containing block, which is what makes stacked section headers push each
-    // other out of the way. These headings are flat siblings of one article,
-    // so they share one containing block and would instead pin on top of each
-    // other. This reproduces the missing constraint: each heading is shifted
-    // up by exactly the amount the NEXT heading has encroached on it, so it
-    // is eased out of view precisely as its successor arrives.
-    (function () {
-      var heads = [].slice.call(document.querySelectorAll(".digest > h2"));
-      if (heads.length < 2) return;
-      var root = document.documentElement;
-      // What we last shifted each heading by. Kept so a heading's natural
-      // position can be recovered from its live rect without clearing the
-      // transform first, which would force a reflow on every scroll event.
-      var shifted = [];
-      var onHeads = function () {
-        // Where the headings pin: below the masthead while it is on screen,
-        // at the viewport edge once it has slid away. Matches the CSS.
-        var line = root.classList.contains("masthid")
-          ? 0
-          : parseFloat(getComputedStyle(root).getPropertyValue("--mast-h")) || 0;
-        var tops = [];
-        for (var i = 0; i < heads.length; i++) {
-          tops[i] = heads[i].getBoundingClientRect().top + (shifted[i] || 0);
-        }
-        for (var j = 0; j < heads.length; j++) {
-          var push = 0;
-          if (j + 1 < heads.length) {
-            var h = heads[j].offsetHeight;
-            // Room left between the pin line and the next heading. Once that
-            // is smaller than this heading, the difference is the overlap.
-            var room = tops[j + 1] - line;
-            push = Math.min(h, Math.max(0, h - room));
-          }
-          if (push !== (shifted[j] || 0)) {
-            heads[j].style.transform = push ? "translateY(" + -push + "px)" : "";
-            shifted[j] = push;
-          }
-        }
-      };
-      subscribeScroll(onHeads, signal);
-      addEventListener("resize", onHeads, { passive: true, signal: signal });
-    })();
-
-    // Sticky masthead on the phone (see header.mast in the CSS): hide while
-    // the reader scrolls DOWN, bring it back the moment they scroll UP.
-    (function () {
-      var mast = document.querySelector("header.mast");
-      if (!mast) return;
-      var root = document.documentElement;
-      var mq = matchMedia("(max-width: 40em)");
-      var lastY = window.scrollY;
-      var lastH = -1;
-      var onMastScroll = function () {
-        if (!mq.matches) {
-          // Desktop: the masthead is static again, so leave no state behind
-          // — a stale masthid class would translate a non-sticky header off
-          // the top of the page, and a stale --mast-h would push the sticky
-          // day headers and section headings down by a phone masthead's
-          // height on a viewport that has none.
-          root.classList.remove("masthid");
-          root.style.removeProperty("--mast-h");
-          lastH = -1;
-          return;
-        }
-        var h = mast.offsetHeight;
-        if (h !== lastH) {
-          // offsetHeight ignores the transform, so this stays correct while
-          // the masthead is translated out of view.
-          root.style.setProperty("--mast-h", h + "px");
-          lastH = h;
-        }
-        var y = window.scrollY;
-        // Never hide while one of the masthead's own disclosures is open —
-        // the reader would lose the panel they just tapped open.
-        if (y <= h || mast.querySelector("details[open]")) root.classList.remove("masthid");
-        else if (y > lastY + 4) root.classList.add("masthid");
-        else if (y < lastY - 4) root.classList.remove("masthid");
-        lastY = y;
-      };
-      subscribeScroll(onMastScroll, signal);
-      mq.addEventListener("change", onMastScroll, { signal: signal });
-    })();
-
-    (function () {
-      var fab = document.querySelector(".backfab");
-      if (!fab) return;
-      subscribeScroll(function () {
-        fab.classList.toggle("show", window.scrollY > 320);
-      }, signal);
-    })();
+    // A focused field the swap just removed would otherwise leave
+    // <html class="typing"> behind (a removed element fires no focusout).
+    syncTyping();
 
     // Theme miniseg (owner upgrade: Light/Auto/Dark, replacing the old
     // two-state toggle). The head script already applied any stored override
@@ -305,7 +367,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     // restores each meta to its OWN media-appropriate color (a meta whose
     // media attr mentions "light" gets the light color) instead of leaving
     // both stuck on whichever value the last manual click set.
-    var THEME_COLORS = { light: "#ffffff", dark: "#131418" };
+    var THEME_COLORS = { light: "#eceff6", dark: "#0b0d14" };
     var syncThemeColorMetas = function (theme) {
       document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
         var color =
@@ -331,6 +393,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         return document.documentElement.dataset.theme || "auto";
       },
       function (v) {
+        markTheming();
         setPref("theme", "theme", v, "auto");
         syncThemeColorMetas(v);
       },
@@ -350,49 +413,84 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       },
     );
 
-    // Body-font miniseg (owner-requested serif toggle): Sans is the default
-    // expressed as the ABSENCE of data-font, so only serif touches storage.
-    // The head script applied any stored choice before first paint — no
-    // font flash.
+    // Ledger density miniseg (Cards / Compact): same shape as the theme and
+    // size minisegs above. Cards is the default and is expressed as the
+    // ABSENCE of data-density (see setPref); only "compact" touches storage.
+    // The head script already applied any stored choice before first paint.
     wireMiniseg(
-      "font",
+      "density",
       signal,
       function () {
-        return document.documentElement.dataset.font === "serif" ? "serif" : "sans";
+        return document.documentElement.dataset.density === "compact" ? "compact" : "cards";
       },
       function (v) {
-        setPref("font", "font", v, "sans");
+        setPref("density", "density", v === "compact" ? "compact" : "", "");
       },
     );
 
-    // Ledger density toggle (roadmap 4 step 4). Same shape as the theme/size
-    // minisegs just above: the head script already applied any stored
-    // preference to <html data-density> before first paint, so this only
-    // wires the button — unhide it, reflect the current state in
-    // aria-pressed, and on click flip compact<->comfortable and persist it.
-    // Unlike theme there's no OS-preference fallback to resolve — comfortable
-    // (empty string) IS the default, so effective state is just the dataset.
+    // Folded digest sections (details.sec). Three pieces, all per-pass:
+    //   1. An in-page link to a section (TOC chips, in-article #sN links)
+    //      opens that section on click — synchronously, BEFORE the browser's
+    //      default anchor jump, so the jump targets the final layout.
+    //   2. hashchange (back/forward over a fragment, a hand-edited URL, a
+    //      link the click handler never saw) does the same. A page that LOADS
+    //      with #sN is handled once, at boot (see the end of this script),
+    //      and a soft nav that lands on a hash in doSoftNav.
+    //   3. The "expand all" button in the TOC: server-rendered hidden (no
+    //      JS, no button), unhidden here only when there are sections to
+    //      fold. One click toggles every section; its label and
+    //      aria-expanded follow the ACTUAL state, so sections the reader
+    //      opens or closes by hand keep it honest. "toggle" does not bubble,
+    //      so it is caught in the capture phase on document.
+    document.addEventListener(
+      "click",
+      function (e) {
+        var a = e.target.closest ? e.target.closest('a[href^="#s"]') : null;
+        if (!a) return;
+        var target = hashTarget(a.getAttribute("href"));
+        if (target) openSectionContaining(target);
+      },
+      { capture: true, signal: signal },
+    );
+    addEventListener(
+      "hashchange",
+      function () {
+        revealHash(location.hash);
+      },
+      { signal: signal },
+    );
     (function () {
-      var btn = document.querySelector(".densitytoggle");
+      var btn = document.querySelector("button.expandall");
       if (!btn) return;
+      var secs = function () {
+        return Array.prototype.slice.call(document.querySelectorAll("details.sec"));
+      };
+      if (secs().length === 0) return;
       btn.hidden = false;
       var reflect = function () {
-        btn.setAttribute("aria-pressed", String(document.documentElement.dataset.density === "compact"));
+        var all = secs().every(function (d) {
+          return d.open;
+        });
+        btn.textContent = all ? btn.dataset.collapse : btn.dataset.expand;
+        btn.setAttribute("aria-expanded", String(all));
       };
       reflect();
       btn.addEventListener("click", function () {
-        var next = document.documentElement.dataset.density === "compact" ? "" : "compact";
-        // Crossfade the ledger reflow — same withPageTransition treatment the
-        // theme and size minisegs get (owner-reported: density was the one
-        // preference left snapping; it predates the helper).
-        withPageTransition(function () {
-          document.documentElement.dataset.density = next;
-          try {
-            localStorage.setItem("density", next);
-          } catch (e) {}
-          reflect();
+        var open = !secs().every(function (d) {
+          return d.open;
         });
+        secs().forEach(function (d) {
+          d.open = open;
+        });
+        reflect();
       }, { signal: signal });
+      document.addEventListener(
+        "toggle",
+        function (e) {
+          if (e.target && e.target.matches && e.target.matches("details.sec")) reflect();
+        },
+        { capture: true, signal: signal },
+      );
     })();
 
     // Push notifications (PLAN.md §11.7, PR B). The row is server-rendered
@@ -567,223 +665,23 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       }
     })();
 
-    // Hover-to-open for the masthead popovers (owner request, DESKTOP ONLY).
-    // Both bubbles stay native details/summary: this only sets .open, so
-    // click, Enter, Escape, the "/" shortcut and the palette all keep working
-    // exactly as before, and the [open] attribute stays the single source of
-    // truth every other handler already reads.
-    //
-    // Gated on a real hovering pointer. A touch device synthesises
-    // mouseenter on tap, which would open the panel and then immediately
-    // leave it open with no pointer to move away -- worse than the tap it
-    // replaced. pointer: fine excludes coarse styluses/remotes for the same
-    // reason.
-    //
-    // Timers, both cancellable:
-    //   openDelay  ignores a pointer merely CROSSING the chip on its way
-    //              somewhere else, which would otherwise flash the panel.
-    //   closeDelay covers the pointer leaving one edge and re-entering
-    //              another (the summary/panel seam), so the bubble does not
-    //              blink during ordinary travel. Kept SHORT on purpose: an
-    //              open panel swallows the next click anywhere on the page
-    //              (the dismiss handlers below, and the soft-nav bail that
-    //              reads details.settings[open], details.searchpop[open]),
-    //              so a bubble left open after the pointer has gone would
-    //              eat a link click. The .5em gap between chip and panel is
-    //              bridged in CSS instead of by a longer timer -- see the
-    //              .settingspanel::before / .searchpanel::before rules.
-    //
-    // keepOpen() is per-popover rather than a blanket "focus is inside"
-    // check, because the search bubble focuses its own input the moment it
-    // opens (see its toggle handler below) -- a blanket check would mean a
-    // hover-opened search panel could never close on mouseleave, since it
-    // had focused itself on the way in. Each caller decides what counts as
-    // work in progress worth protecting.
-    var hoverPopovers = function (el, keepOpen, onClose) {
-      if (!el) return;
-      if (!window.matchMedia || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
-      var openTimer = null;
-      var closeTimer = null;
-      var clear = function () {
-        if (openTimer) { clearTimeout(openTimer); openTimer = null; }
-        if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-      };
-      // data-hoveropen marks a panel the reader never asked for. The three
-      // places that treat an open panel as MODAL -- both outside-click
-      // swallows and the soft-nav bail -- skip a panel wearing it, so a
-      // bubble the pointer merely drifted across cannot eat the next click
-      // on the page. The attribute is dropped the moment the panel closes or
-      // the reader interacts with it deliberately (pointerdown on the
-      // summary), because from then on it IS a panel they asked for and the
-      // modal behaviour is right again.
-      el.addEventListener("mouseenter", function () {
-        clear();
-        if (el.open) return;
-        openTimer = setTimeout(function () {
-          el.setAttribute("data-hoveropen", "");
-          el.open = true;
-        }, 120);
-      }, { signal: signal });
-      el.addEventListener("toggle", function () {
-        if (!el.open) el.removeAttribute("data-hoveropen");
-      }, { signal: signal });
-      var summaryEl = el.querySelector("summary");
-      if (summaryEl) {
-        summaryEl.addEventListener("pointerdown", function () {
-          el.removeAttribute("data-hoveropen");
-        }, { signal: signal });
-      }
-      el.addEventListener("mouseleave", function () {
-        clear();
-        if (!el.open) return;
-        closeTimer = setTimeout(function () {
-          if (keepOpen()) return;
-          // Blur first when the thing losing focus is inside: details hides
-          // its content on close, and leaving focus parked on a hidden
-          // element strands the keyboard there.
-          if (el.contains(document.activeElement)) document.activeElement.blur();
-          onClose();
-        }, 140);
-      }, { signal: signal });
-    };
-
-    // Settings bubble close polish (owner redesign). Opening needs no JS at
-    // all — details/summary opens natively, and the CSS above animates that
-    // open state directly off the [open] attribute. Closing is different:
-    // <details> snaps shut the instant open is set false, with no hook to
-    // intercept, so this IIFE's close() gives the mirrored close animation
-    // (see the CSS above) somewhere to run before the panel actually leaves —
-    // then wires outside-click, Escape, AND the gear's own click (so every
-    // path that can close the bubble animates it the same way) through that
-    // one helper.
-    (function () {
-      var settings = document.querySelector("details.settings");
-      if (!settings) return;
-      var panel = settings.querySelector(".settingspanel");
-      var summary = settings.querySelector("summary.gear");
-      var closing = false;
-      var close = function () {
-        if (!settings.open || closing) return;
-        closing = true;
-        // "panelclosing", not the shorter "closing" — .closing already names
-        // the digest article's closing-line style elsewhere on this page,
-        // and reusing it here would leak that border/italic/spacing onto the
-        // settings panel for the animation's duration (see the CSS above).
-        panel.classList.add("panelclosing");
-        // setTimeout, not transitionend/animationend: an end event can simply
-        // never fire (interrupted mid-animation, reduced motion turning the
-        // animation into a no-op, a stray browser quirk) and would strand the
-        // panel open with the "panelclosing" class stuck on it forever. A
-        // plain timer always fires. Under reduced motion the "panelclosing"
-        // class's animation is a no-op (it lives inside the
-        // prefers-reduced-motion: no-preference gate above), but this
-        // timeout still runs its full 120ms before the panel closes — an
-        // imperceptible, acceptable delay rather than a second, motion-aware
-        // code path.
-        setTimeout(function () {
-          panel.classList.remove("panelclosing");
-          settings.open = false;
-          closing = false;
-        }, 120);
-      };
-      // Hover-open/close (desktop). Routed through close() above, not a bare
-      // settings.open = false, so the pointer path animates exactly like the
-      // click, Escape and outside-tap paths already do. keepOpen guards a
-      // reader who tabbed into the rows and then moved the mouse away.
-      hoverPopovers(
-        settings,
-        function () { return settings.contains(document.activeElement); },
-        close,
-      );
-
-      // Dismiss-tap swallowing (owner-reported): with the bubble open, a tap
-      // outside used to close it AND activate whatever sat under the finger —
-      // closing the panel by tapping an article link opened the article. An
-      // open bubble behaves like a modal with an invisible scrim now: the
-      // first outside tap only dismisses. Capture phase + preventDefault +
-      // stopPropagation is what actually swallows the click before the
-      // underlying link/button ever sees it — a bubble-phase listener would
-      // run after the link's default navigation was already committed.
-      document.addEventListener(
-        "click",
-        function (e) {
-          if (settings.open && !closing && !settings.contains(e.target)) {
-            // A hover-opened bubble still DISMISSES on an outside click, it
-            // just does not swallow it: the reader never opened this panel,
-            // so making them click twice to reach a link is a papercut the
-            // dismiss-tap rule was never meant to cause.
-            if (!settings.hasAttribute("data-hoveropen")) {
-              e.preventDefault();
-              e.stopPropagation();
-            }
-            close();
-          }
-        },
-        { capture: true, signal: signal },
-      );
-      // Keep the bubble open across a language hop (owner-reported: switching
-      // language closed the menu — it's a full navigation, so the fresh
-      // document rendered with the details in its default closed state).
-      // sessionStorage, not localStorage: "the settings were open" is
-      // navigation state, not a preference — it must not resurrect the panel
-      // tomorrow. Set on language-link click inside the panel, consumed
-      // (removed) on the very next load. No animation on the restore —
-      // the panel was never closed from the reader's point of view.
-      try {
-        if (sessionStorage.getItem("settingsOpen")) {
-          sessionStorage.removeItem("settingsOpen");
-          settings.open = true;
-        }
-      } catch (e) {}
-      panel.addEventListener("click", function (e) {
-        var link = e.target.closest ? e.target.closest(".langswitch a") : null;
-        if (link) {
-          try {
-            sessionStorage.setItem("settingsOpen", "1");
-          } catch (err) {}
-        }
-      }, { signal: signal });
-      document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape" && settings.open) {
-          close();
-          summary.focus();
-        }
-      }, { signal: signal });
-      // Without this, clicking the gear while open would let <details> close
-      // itself natively and instantly, skipping the animation entirely — the
-      // native toggle already handles OPENING fine (nothing to intercept
-      // there), so this only ever preventDefaults the closing half of the
-      // click. No-JS readers keep the plain native open/close (progressive
-      // enhancement) — this listener simply never attaches for them.
-      summary.addEventListener("click", function (e) {
-        if (settings.open) {
-          e.preventDefault();
-          close();
-        }
-      }, { signal: signal });
-    })();
-
-    // Search bubble open-focus (owner-requested index cleanup, index pages
-    // only — guarded on details.searchpop existing, since digest/arc pages
-    // never render it). Opening itself needs no JS at all — same native
-    // <details>/<summary> toggle the settings bubble above relies on — this
-    // IIFE only adds the one explicit behavioral ask the brief called out:
-    // move focus into the filter input the moment the popover opens, so a
-    // pointer click on the trigger lands the reader ready to type without a
-    // second, separate focus step. The native "toggle" event fires for BOTH
-    // opening and closing (unlike click, which only fires on the summary
-    // itself), so this checks details.open rather than assuming direction.
-    // Outside-click and Escape dismissal match the settings bubble exactly
-    // (owner-reported: "i cant close the search box like at settings, just
-    // with another click on the button"). A native <details> only closes via
-    // its own summary, which is fine for a menu nobody expects to behave like
-    // a popover — but this one sits beside the gear and looks identical to
-    // it, so it has to dismiss identically. Capture phase + preventDefault +
-    // stopPropagation for the same reason close() uses them above: with the
-    // panel open, the first outside tap must ONLY dismiss, never also
-    // activate the link or button under the finger. No closing animation
-    // dance here — the search panel has no .panelclosing counterpart, so it
-    // just closes.
+    // Search bubble (index pages only — guarded on details.searchpop
+    // carrying a .filter input, since the other pages render a plain link
+    // instead). It stays a native <details>/<summary> that CSS lays out as a
+    // popover under the bar (upward from the dock on the phone), so opening
+    // needs no JS; this IIFE adds the behaviours <details> lacks:
+    //   - focus moves into the filter input the moment the panel opens (the
+    //     native "toggle" event fires for both directions, so it checks
+    //     pop.open rather than assuming one);
+    //   - hover-to-open on a real hovering pointer, DESKTOP ONLY (below);
+    //   - outside-click and Escape dismissal. Capture phase + preventDefault
+    //     + stopPropagation is what swallows the dismissing click before the
+    //     link or button under the pointer ever sees it — a bubble-phase
+    //     listener would run after a link's navigation was already
+    //     committed. Escape returns focus to the trigger so keyboard users
+    //     are not stranded on a detached input.
+    // The settings panel is NOT handled here: it is a native [popover]
+    // (popovertarget), which light-dismisses and closes on Escape by itself.
     (function () {
       var pop = document.querySelector("details.searchpop");
       if (!pop) return;
@@ -791,23 +689,65 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       if (!input) return;
       pop.addEventListener("toggle", function () {
         if (pop.open) input.focus();
+        else pop.removeAttribute("data-hoveropen");
       }, { signal: signal });
-      // Hover-open/close (desktop). keepOpen protects a query in progress:
-      // the input focuses itself on open, so "focus is inside" alone would
-      // pin the panel open forever. A TYPED value is the real signal that
-      // closing would destroy something; an empty field is not, and neither
-      // is focus sitting on the archive link, which the reader is about to
-      // leave anyway if the pointer has gone.
-      hoverPopovers(
-        pop,
-        function () { return input.value !== ""; },
-        function () { pop.open = false; },
-      );
+
+      // Hover-to-open/close. Gated on a real hovering pointer: a touch
+      // device synthesises mouseenter on tap, which would open the panel and
+      // then leave it open with no pointer to move away. pointer: fine
+      // excludes coarse styluses/remotes for the same reason. Two
+      // cancellable timers: the open delay ignores a pointer merely
+      // crossing the chip, the (short) close delay covers the seam between
+      // the summary and the panel so the bubble does not blink.
+      //
+      // data-hoveropen marks a panel the reader never asked for: the outside
+      // click and the soft-nav bail skip a panel wearing it, so a bubble the
+      // pointer merely drifted across cannot eat the next click. It is
+      // dropped when the panel closes or on a deliberate pointerdown on the
+      // summary, after which the modal behaviour is right again.
+      //
+      // keepOpen is "a typed query exists": the input focuses itself on
+      // open, so "focus is inside" alone would pin the panel open forever.
+      if (window.matchMedia && matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        var openTimer = null;
+        var closeTimer = null;
+        var clearTimers = function () {
+          if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+          if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+        };
+        pop.addEventListener("mouseenter", function () {
+          clearTimers();
+          if (pop.open) return;
+          openTimer = setTimeout(function () {
+            pop.setAttribute("data-hoveropen", "");
+            pop.open = true;
+          }, 120);
+        }, { signal: signal });
+        var summaryEl = pop.querySelector("summary");
+        if (summaryEl) {
+          summaryEl.addEventListener("pointerdown", function () {
+            pop.removeAttribute("data-hoveropen");
+          }, { signal: signal });
+        }
+        pop.addEventListener("mouseleave", function () {
+          clearTimers();
+          if (!pop.open) return;
+          closeTimer = setTimeout(function () {
+            if (input.value !== "") return;
+            // Blur first when focus is inside: details hides its content on
+            // close, and focus parked on a hidden element strands the keyboard.
+            if (pop.contains(document.activeElement)) document.activeElement.blur();
+            pop.open = false;
+          }, 140);
+        }, { signal: signal });
+      }
+
       document.addEventListener(
         "click",
         function (e) {
           if (pop.open && !pop.contains(e.target)) {
-            // Same hover exemption as the settings bubble above.
+            // A hover-opened bubble still DISMISSES on an outside click, it
+            // just does not swallow it.
             if (!pop.hasAttribute("data-hoveropen")) {
               e.preventDefault();
               e.stopPropagation();
@@ -817,10 +757,6 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         },
         { capture: true, signal: signal },
       );
-      // Escape closes regardless of focus target, same unconditional
-      // convention the settings bubble and the ⌘K palette both use. Focus
-      // returns to the trigger so keyboard users aren't stranded on a
-      // detached input.
       document.addEventListener(
         "keydown",
         function (e) {
@@ -841,6 +777,8 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     // here and everything older. No JS = no fence (progressive enhancement —
     // the class is never in the server-rendered markup).
     (function () {
+      // Document order = hero lead first (it sits OUTSIDE the ledger section,
+      // above it), then the ledger's entries — newest first throughout.
       var entries = Array.prototype.slice.call(document.querySelectorAll(".entry[data-created]"));
       if (entries.length === 0) return;
       var section = document.querySelector("section[data-unread-label]");
@@ -861,9 +799,9 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         lastVisit = localStorage.getItem("lastVisit");
       } catch (e) {}
 
-      // entries are in document order = newest first (lead card first, see the
-      // renderIndexPage/renderLeadCard comments), so entries[0] is the newest
-      // digest in this view overall.
+      // entries are in document order = newest first (the hero lead first, see
+      // the renderIndexPage/renderLeadCard comments), so entries[0] is the
+      // newest digest in this view overall.
       var newest = entries[0].getAttribute("data-created");
 
       if (lastVisit) {
@@ -879,7 +817,31 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         // new (skip); lastNewIndex === entries.length - 1 means EVERYTHING is
         // new — typically a first-ever visit — and a fence above zero old
         // entries would just be noise, so skip that too.
+        // Where the fence goes: after the last new .entry in the ledger — or,
+        // when that entry IS the hero lead (it lives above the ledger, not in
+        // it), as the first child of the ledger section, which is exactly
+        // "between the lead and everything older". A ledger with no entries
+        // has nothing older to fence off, so no fence then.
+        var fenceParent = null;
+        var fenceBefore = null;
         if (lastNewIndex >= 0 && lastNewIndex < entries.length - 1) {
+          var lastNewEntry = entries[lastNewIndex];
+          if (lastNewEntry.closest(".hero")) {
+            var ledger = section.classList.contains("ledger")
+              ? section
+              : document.querySelector("section.ledger");
+            if (ledger && ledger.querySelector(".entry")) {
+              fenceParent = ledger;
+              fenceBefore = ledger.firstChild;
+            }
+          } else {
+            // If that entry's next sibling happens to be a .dayhead, the
+            // fence lands above the day header, which reads naturally.
+            fenceParent = lastNewEntry.parentNode;
+            fenceBefore = lastNewEntry.nextSibling;
+          }
+        }
+        if (fenceParent) {
           var fence = document.createElement("div");
           fence.className = "unreadfence";
           fence.setAttribute("role", "separator");
@@ -894,11 +856,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
           fence.appendChild(label);
           fence.appendChild(lineAfter);
 
-          // Insertion point is strictly "after the last new .entry element" —
-          // if that entry's next sibling happens to be a .dayhead, the fence
-          // lands above the day header, which reads naturally.
-          var lastNewEntry = entries[lastNewIndex];
-          lastNewEntry.parentNode.insertBefore(fence, lastNewEntry.nextSibling);
+          fenceParent.insertBefore(fence, fenceBefore);
 
           // Resume chip (roadmap 4 step 3): the fence above is passive — a
           // reader landing at the top of a long index has no way to know it
@@ -1140,14 +1098,21 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       // would live-hide the previous results before the form ever submits.
       // The index page's own filter input is the only .filter with no form.
       if (input.form) return;
-      // Digest/arc pages carry the same masthead search bubble as the index
-      // (consistent-masthead follow-up) but have no ledger to filter — bail
+      // Digest/arc pages carry the same bar search bubble as the index
+      // (the bar renders it on every page) but have no ledger to filter — bail
       // BEFORE the reveal, so their bubble shows only the archive search
       // link and this input never surfaces as a dead control.
       var section = document.querySelector("section[data-empty-filtered]");
       if (!section) return;
       input.hidden = false;
-      var entries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
+      // Every entry on the page, hero lead included, feeds the archive-result
+      // dedupe below; only the LEDGER's entries are filterable. The hero is
+      // the page's headline and lives outside the ledger section — the filter
+      // must never hide it.
+      var allEntries = Array.prototype.slice.call(document.querySelectorAll(".entry"));
+      var entries = allEntries.filter(function (el) {
+        return !el.closest(".hero");
+      });
       var dayheads = Array.prototype.slice.call(document.querySelectorAll(".dayhead"));
       var emptyEl = null;
 
@@ -1179,11 +1144,9 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         // so after toggling the fence above, just re-trigger that listener
         // rather than duplicating the rule here — setting chip.hidden
         // directly would wrongly un-hide it on query clear even with the
-        // fence already in view. Harmless for the other scroll listeners
-        // (backfab, the chip's sibling), which are all idempotent recomputes.
-        // Recompute every scroll-dependent UI (chip, fab, masthead, sticky
-        // headings) now that entries were hidden/shown — by name, not by
-        // forging a scroll event at them.
+        // fence already in view.
+        // Recompute every scroll-dependent UI (the resume chip) now that
+        // entries were hidden/shown — by name, not by forging a scroll event.
         notifyScrollSubs();
 
         // Empty-filtered state (roadmap 2 step 5): lazily create the message
@@ -1261,7 +1224,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
               // present in the rendered ledger above, so the reader never
               // sees the same digest twice on one page.
               var shown = new Set(
-                entries.map(function (el) {
+                allEntries.map(function (el) {
                   return el.getAttribute("data-id");
                 }),
               );
@@ -1339,10 +1302,10 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     // digest pages always have at least one, unless at the very end of the
     // archive, see below), bare j/k (NOT the arrow keys — those stay
     // digest-nav-only) instead move a focus-based selection through the
-    // page's primary link list: NOW's .nowrow rows then the ledger's .entry
-    // rows, in DOM order (renderNowSection always renders before the ledger —
-    // see renderIndexPage), or an arc page's timeline .entry rows (no .nowrow
-    // there). Selection IS real focus (moveNavSelection's list[next].focus()),
+    // page's primary link list in DOM order: the hero lead (an .entry that
+    // sits above the ledger), then the ledger's .entry rows, then NOW's
+    // .nowrow rows (the sidebar comes after the main column in the markup);
+    // or an arc page's timeline .entry rows (no .nowrow there). Selection IS real focus (moveNavSelection's list[next].focus()),
     // so the site's existing :focus-visible ring is what shows it — no new
     // highlight styling needed. No wrap-around: stepping past either end
     // simply stops. "o" opens the currently focused row (Enter already does,
@@ -1481,13 +1444,13 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         });
         var searchLink = document.querySelector(".searchlink");
         if (searchLink) items.push({ label: config.getAttribute("data-cmd-search"), el: searchLink });
-        // The masthead Archive link this used to read (.archivelink) was
+        // The bar Archive link this used to read (.archivelink) was
         // removed in the index-cleanup pass — this lookup now always comes up
         // empty, so the "Archive" command simply never gets pushed, the same
         // graceful-disappearance behavior every other optional command here
         // already relies on (compare searchLink/langLink/latest just above and
         // below). Left in place rather than deleted: harmless dead code that
-        // documents its own absence, and a future masthead Archive link (if
+        // documents its own absence, and a future bar Archive link (if
         // one ever comes back) would only need its class restored, not this.
         var archiveLink = document.querySelector(".archivelink");
         if (archiveLink) items.push({ label: config.getAttribute("data-cmd-archive"), el: archiveLink });
@@ -1645,8 +1608,8 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         { signal: signal },
       );
       // Escape closes regardless of where focus happens to be — same
-      // unconditional-on-focus-target convention the settings-bubble's own
-      // Escape handler above already uses (unlike the OPEN trigger below,
+      // unconditional-on-focus-target convention the search bubble's own
+      // Escape handler above uses (unlike the OPEN trigger below,
       // which — per the §11.1 spec's "no bindings while focus is in an
       // input/textarea/select or contenteditable" guardrail — deliberately
       // does NOT fire while the reader is typing somewhere else on the page).
@@ -1740,9 +1703,14 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
           var newWrap = doc.querySelector(".wrap");
           var curWrap = document.querySelector(".wrap");
           if (!newWrap || !curWrap) throw new Error("soft-nav: .wrap missing");
+          // An open settings popover sits in the TOP LAYER: leave it open and
+          // the swap would strand a detached node there (and its backdrop
+          // would hang over the new page). Close it before the transition
+          // snapshots anything.
+          closeSettingsPopover();
           withPageTransition(function () {
-            // .wrap is the ENTIRE page body except the masthead-adjacent
-            // script tag and the resume chip (both live outside it) — see
+            // .wrap is the ENTIRE page body except the script tag and the
+            // palette/resume-chip nodes (all live outside it) — see
             // pageChrome's document skeleton above — so swapping just its
             // innerHTML replaces everything a reader would call "the page"
             // in one move. speculationrules/prefetch artifacts in the
@@ -1755,9 +1723,11 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
             // carry that onto the live <html> along with the content.
             document.documentElement.lang = doc.documentElement.lang;
             // Deliberately UNCHANGED: html's data-theme/data-density/
-            // data-fontsize/data-font. Those are live preference state, not page
-            // content — leaving them alone is what makes the swap flicker-
-            // free (no re-applying a preference that was already in effect).
+            // data-fontsize and its state classes (enter/theming/typing).
+            // Those are live preference/UI state, not page content — leaving
+            // them alone is what makes the swap flicker-free, and it is why
+            // a soft nav can never replay the entrance animation: the head
+            // script that adds html.enter only runs on a hard load.
             // Same for the theme-color metas in <head> — theme state is
             // live-owned, the fetched document's copies are simply ignored.
             //
@@ -1786,7 +1756,10 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
             // An explicit behavior overrides the CSS per spec; the
             // transition's own crossfade is this swap's motion story
             // anyway, an animated scroll under it was never wanted.
-            var target = hash ? document.getElementById(hash.slice(1)) : null;
+            var target = hashTarget(hash);
+            // A folded digest section opens first, so the scroll below lands
+            // on the final layout (the heading itself is always visible).
+            if (target) openSectionContaining(target);
             if (target) target.scrollIntoView({ behavior: "instant", block: "start" });
             else window.scrollTo({ top: 0, left: 0, behavior: "instant" });
           });
@@ -1813,13 +1786,14 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     }
 
     // Capture phase, attached before wirePage's first call — see the
-    // settings-dismiss handler inside wirePage above. That handler also
+    // search-dismiss handler inside wirePage above. That handler also
     // listens for document clicks in the capture phase; because this
     // listener is registered first (module init, before the initial
     // wirePage() call at the bottom of this script) and re-registering it
     // inside wirePage never moves this one, this listener always runs
     // FIRST in capture order, on every pass. That ordering is what the
-    // settings-open bail below depends on.
+    // search-open bail below depends on. (The settings panel needs no bail:
+    // a native popover light-dismisses itself.)
     document.addEventListener(
       "click",
       function (e) {
@@ -1840,23 +1814,18 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         // Hash-only change on the same path/query: let the browser do its
         // native in-page anchor scroll instead of soft-navving nowhere.
         if (dest.pathname === location.pathname && dest.search === location.search && dest.hash) return;
-        // Dismiss-swallow interplay, for BOTH masthead disclosures: with
-        // one open, a click OUTSIDE it belongs to that disclosure's dismiss
-        // handler behind this listener — bail here with no preventDefault
-        // so the click reaches it untouched. Clicks INSIDE an open panel
-        // (the settings language switcher) soft-nav normally.
+        // Dismiss-swallow interplay for the search bubble: with it open, a
+        // click OUTSIDE it belongs to its dismiss handler behind this
+        // listener — bail here with no preventDefault so the click reaches
+        // it untouched. Clicks INSIDE the open panel soft-nav normally.
         //
         // This listener is registered at module init, BEFORE wirePage()
-        // attaches either dismiss handler, and capture listeners on the
-        // same node fire in registration order — so without this bail THIS
-        // one wins and navigates before the dismiss handler can swallow
-        // anything. That is exactly what the search popover did until now:
-        // clicking a headline to dismiss it opened the headline (caught by
-        // driving a real browser; the popover's own preventDefault looked
-        // correct in isolation).
-        var openPanel = document.querySelector(
-          "details.settings[open]:not([data-hoveropen]), details.searchpop[open]:not([data-hoveropen])",
-        );
+        // attaches the dismiss handler, and capture listeners on the same
+        // node fire in registration order — so without this bail THIS one
+        // wins and navigates before the dismiss handler can swallow
+        // anything (clicking a headline to dismiss the popover opened the
+        // headline; caught by driving a real browser).
+        var openPanel = document.querySelector("details.searchpop[open]:not([data-hoveropen])");
         if (openPanel && !openPanel.contains(a)) return;
         e.preventDefault();
         doSoftNav(dest.pathname + dest.search, false, dest.hash);
@@ -1894,4 +1863,8 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     });
   })();
 
-  wirePage();`;
+  wirePage();
+  // A hard load that arrives with a #sN hash: open the target's folded
+  // section. Once per document, so it lives here and not in wirePage() (a
+  // soft nav handles its own hash in doSoftNav).
+  revealHash(location.hash);`;

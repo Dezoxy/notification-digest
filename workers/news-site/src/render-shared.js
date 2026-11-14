@@ -4,8 +4,8 @@ import { findArcSectionAnchor } from "./sections.js";
 
 // ── page bodies ──────────────────────────────────────────────────────────
 
-// One day-bucketed ledger shape — a sticky .dayhead per group, then that
-// day's rows — shared by the index (twice: lead-card split and archive
+// One day-bucketed ledger shape — a .dayhead per group, then that
+// day's rows — shared by the index (twice: hero split and archive
 // week) and the arc page's timeline, which differ only in the row renderer.
 export function renderDayLedger(groups, renderRow) {
   return groups

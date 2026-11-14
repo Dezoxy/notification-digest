@@ -14,15 +14,7 @@ import {
   mondayOfIsoWeek,
   tzAbbr,
 } from "./dates.js";
-import {
-  arcHref,
-  digestHref,
-  indexHref,
-  renderSearchBubble,
-  renderSwitchers,
-  searchHref,
-  weekHref,
-} from "./hrefs.js";
+import { arcHref, digestHref, indexHref, searchHref, weekHref } from "./hrefs.js";
 import { computeArcMomentum, groupByDay, kindBadge, renderDayLedger } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
 
@@ -30,7 +22,7 @@ import { pageChrome } from "./chrome.js";
 // app never sent one for this digest, fall back to the English tldr and mark
 // it with a muted "EN" chip rather than silently presenting English text as
 // if translated. Used by both the compact ledger entries (renderIndexEntry)
-// and the lead card (renderLeadCard) so the two never drift apart. `rawText`
+// and the hero (renderLeadCard) so the two never drift apart. `rawText`
 // is the SAME string `excerptHtml` was esc()'d from — surfaced unescaped so
 // callers can feed it to deriveHeadline (below) without re-decoding HTML
 // entities out of the already-escaped copy.
@@ -60,9 +52,17 @@ export function renderExcerpt(row, lang) {
 // the call site once the headline is inserted into HTML, same convention as
 // every other derived string in this file.
 export function deriveHeadline(tldr) {
-  if (!tldr) return "";
+  return splitFirstSentence(tldr).headline;
+}
+
+// The hero's headline and subline come from ONE split of the TL;DR so they can
+// never overlap or drop text between them: `headline` is exactly what
+// deriveHeadline returns, `rest` is everything after the first sentence it
+// took (trimmed, "" when the TL;DR is a single sentence).
+function splitFirstSentence(tldr) {
+  if (!tldr) return { headline: "", rest: "" };
   const text = tldr.trim();
-  if (!text) return "";
+  if (!text) return { headline: "", rest: "" };
   // First sentence: up to and including the first ./!/? that actually ENDS
   // a sentence — i.e. is followed by whitespace or the end of the string.
   // The lookahead is what keeps decimal numbers intact: real TL;DRs lead
@@ -71,14 +71,68 @@ export function deriveHeadline(tldr) {
   // (live data, digest #105). Lazy .*? finds the EARLIEST qualifying end.
   const sentenceMatch = text.match(/^.*?[.!?](?=\s|$)/s);
   const sentence = (sentenceMatch ? sentenceMatch[0] : text).trim();
-  if (sentence.length <= 110) return sentence;
+  const rest = sentenceMatch ? text.slice(sentenceMatch[0].length).trim() : "";
+  if (sentence.length <= 110) return { headline: sentence, rest };
   let clipped = sentence.slice(0, 110);
   const lastSpace = clipped.lastIndexOf(" ");
   // Only back off to the word boundary when one actually exists inside the
   // clip — a single 110+ character "word" (unusual, but not impossible)
   // clips at the raw character limit rather than not clipping at all.
   if (lastSpace > 0) clipped = clipped.slice(0, lastSpace);
-  return `${clipped.trim()}…`;
+  return { headline: `${clipped.trim()}…`, rest };
+}
+
+// Hero subline: the TL;DR after the sentence the headline took, clamped at a
+// word boundary. A leading "TL;DR:" label is dropped first — legacy digests
+// stored it inside the text, and it would otherwise become the headline's
+// first words. "" when nothing remains; the caller falls back to the counts.
+const SUBLINE_MAX = 220;
+export function deriveSubline(tldr) {
+  if (!tldr) return "";
+  const { rest } = splitFirstSentence(tldr.trim().replace(/^TL;DR:?\s*/i, ""));
+  if (rest.length <= SUBLINE_MAX) return rest;
+  const clipped = rest.slice(0, SUBLINE_MAX);
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${(lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped).trim()}…`;
+}
+
+// Story-thread pills for the hero: the lead digest's topics folded to arc
+// identities (key when present, else slug — same fold the digest page's arc
+// chips use), deduped, first four. Two sources, one output shape, so the
+// handler picks whichever it already has: the NOW query's rows (`fromNowRows`)
+// or the lead's own `topics` column (`fromTopicsJson`, fail-safe like every
+// other D1-JSON reader here).
+const MAX_HERO_THREADS = 4;
+function dedupeThreads(entries) {
+  const seen = new Set();
+  const out = [];
+  for (const { identity, label } of entries) {
+    if (typeof identity !== "string" || typeof label !== "string" || seen.has(identity)) continue;
+    seen.add(identity);
+    out.push({ identity, label });
+    if (out.length === MAX_HERO_THREADS) break;
+  }
+  return out;
+}
+
+export function leadThreadsFromNowRows(nowRows, leadId) {
+  return dedupeThreads(nowRows.filter((row) => row.id === leadId));
+}
+
+export function leadThreadsFromTopicsJson(topicsJson) {
+  if (!topicsJson) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(topicsJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return dedupeThreads(
+    parsed
+      .filter((t) => t !== null && typeof t === "object" && !Array.isArray(t))
+      .map((t) => ({ identity: arcIdentity(t), label: t.label })),
+  );
 }
 
 // Source-spectrum palette (roadmap 2 step 8): a STABLE per-source hue for
@@ -374,57 +428,71 @@ export function renderIndexEntry(row, token, lang, view) {
   // script tell "already in this ledger" from "genuinely archive-only".
   return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
     <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${degradedHtml}${badgeHtml}${langChip}</span>
-    <h3 class="headline">${esc(headline)}</h3>
+    <h2 class="headline">${esc(headline)}</h2>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
 
-// The lead card (roadmap step 4): the newest digest in the current view,
-// rendered full-weight above the compact ledger — the reader's most common
-// task is "read the newest one". Structurally still one big clickable
-// `.entry` <a>, same pattern as renderIndexEntry, but the usual time+count
-// `.meta` row is replaced by a mono dateline eyebrow (same flex layout,
-// class="meta" reused) and the excerpt runs unclamped at a slightly larger
-// size (see the .entry-lead CSS).
-export function renderLeadCard(row, token, lang, view) {
+// The hero (Spatial Glass home page): the newest digest in the current view,
+// rendered as the page's centred opening block above the ledger — the
+// reader's most common task is "read the newest one". The headline/chip block
+// is still ONE `a.entry.entry-lead` link, because the client script's unread
+// fence, keyboard nav, "latest" palette command and catch-up all find the
+// lead through `.wrap .entry` and read its data-created/data-id. The CTA and
+// thread pills sit OUTSIDE that link (no nested anchors) in `.heropills`.
+//
+// `.eyebrow-text` and `.excerpt` stay on the chip text and subline because the
+// ⌘K palette builds each briefing's label from `.time, .eyebrow-text` plus
+// `.excerpt` (client.js); without them the lead would show up unlabelled.
+//
+// The index has no other <h1> (digest and arc pages carry their own), so the
+// hero headline is the page's h1; an empty or archive-week index gets a plain
+// `header.hero` h1 from renderIndexPage instead. The hero is passed to
+// pageChrome as `heroHtml`, a sibling of .maincol, so it is OUTSIDE the
+// ledger section (the client finds the lead via `.wrap .entry`, not there).
+// `threads` is [{identity, label}] from leadThreadsFrom*; empty omits the pills
+// but keeps the CTA.
+export function renderLeadCard(row, token, lang, view, threads = []) {
   const strings = STRINGS[lang];
   const date = new Date(row.created_at);
   // See kindBadge — same daily/weekly badge as renderIndexEntry's, so the
   // two never drift apart building it separately.
   const badgeHtml = kindBadge(row, view, strings);
 
-  const { excerptHtml, langChip, rawText } = renderExcerpt(row, lang);
-  // Front Page redesign: derived hero headline — see deriveHeadline.
+  const { langChip, rawText } = renderExcerpt(row, lang);
   const headline = deriveHeadline(rawText);
+  // The counts stand in when the TL;DR is a single sentence, so the line is
+  // never a repeat of the headline and never blank.
+  const subline =
+    deriveSubline(rawText) ||
+    `${row.item_count} ${strings.itemsWord} · ${row.section_count} ${strings.sectionsWord}`;
 
-  const eyebrow = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
+  const chipText = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
 
-  // Degraded-run badge: same contract as renderIndexEntry's — see comments
-  // there (including why there's no source-spectrum bar alongside it here).
+  // Degraded-run badge: same contract as renderIndexEntry's.
   const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
 
-  // Facts column (Front Page redesign, "if cheap" per spec): items/sections
-  // are already-selected row columns (see handleIndexPage's SELECT), so this
-  // is free — no extra query. Reuses itemsWord/sectionsWord (already
-  // localized) as the <dt> labels rather than minting new strings for them.
-  const factsHtml = `<dl class="leadfacts">
-    <dt>${esc(strings.itemsWord)}</dt><dd>${esc(row.item_count)}</dd>
-    <dt>${esc(strings.sectionsWord)}</dt><dd>${esc(row.section_count)}</dd>
-  </dl>`;
+  const href = digestHref(token, lang, view, row.id);
+  const pillsHtml = threads
+    .map(
+      ({ identity, label }) =>
+        `<a class="threadpill" href="${arcHref(token, lang, identity)}">${esc(label)}</a>`,
+    )
+    .join("");
 
   // data-created / data-id: same contract as renderIndexEntry's — see
   // comments there.
-  return `<a class="entry entry-lead" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
-    <div class="leadmain">
-      <span class="meta"><span class="eyebrow-text">${esc(eyebrow)}</span>${degradedHtml}${badgeHtml}${langChip}</span>
-      <h2 class="headline headline-lead">${esc(headline)}</h2>
-      <p class="excerpt"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
-    </div>
-    ${factsHtml}
-  </a>`;
+  return `<section class="hero" aria-label="${esc(strings.latest)}">
+    <a class="entry entry-lead herolink" href="${href}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
+      <span class="herochip"><span class="livedot" aria-hidden="true"></span><span class="eyebrow-text">${esc(chipText)}</span>${degradedHtml}${badgeHtml}${langChip}</span>
+      <h1 class="herotitle headline-lead">${esc(headline)}</h1>
+      <p class="herosub excerpt">${esc(subline)}</p>
+    </a>
+    <div class="heropills"><a class="herocta" href="${href}">${esc(strings.heroRead)} →</a>${pillsHtml}</div>
+  </section>`;
 }
 
-// Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
+// Week rail (roadmap 3 step 2): wire-style `← W31 · WEEK 32 · 3–9 AUG ·
 // W33 →` nav, rendered on ALL-view index pages only — see the call site in
 // renderIndexPage, and the file-header roadmap notes on why the daily view
 // has no week address. `weekInfo` is handleIndexPage's { year, week,
@@ -432,12 +500,8 @@ export function renderLeadCard(row, token, lang, view) {
 // that function). Absent older/newer render as empty (but still flex:1)
 // spacer spans, via the shared .rail-older/.rail-newer classes, so the
 // center label stays visually centered either way (see the .weekrail CSS).
-// The search bubble (see renderSearchBubble just above) rides as a fourth,
-// non-growing flex child after rail-newer — the two flex:1 spacer spans
-// still grow to equal widths regardless, so the center label stays centered
-// between them; the search control just sits further right, clear of the
-// rail-newer "→" link on an archive week (§11 index-cleanup spec: "must not
-// collide with the rail-newer link").
+// The search control no longer rides in the rail: pageChrome renders it
+// once, in the bar's .baractions, on every page.
 //
 // Archive sparkline (roadmap 4 step 6): `rows` is null on every page except
 // an archive week (see the call site in renderIndexPage, which passes null
@@ -627,21 +691,14 @@ export function renderLedgerFor(view, rows, locale, renderRow) {
 //
 // Each arc renders as ONE row, not a card (design guidance: no card soup) —
 // a single link carrying the momentum arrow, the arc's own label
-// (arcHref, §11.1 PR A), and a mono metadata tail. The metadata tail is the
+// (arcHref, §11.1 PR A), and a metadata tail. The metadata tail is the
 // relative last-updated time ONLY (owner-requested index cleanup, dropped
 // the "×{n} this week" appearance count this row used to lead with) —
 // arcRepeat itself is untouched and stays in active use on the digest
 // page's own arc chips (see renderArcs), this is just NOW's own metadata
-// getting quieter. Reuses .archivelabel for the eyebrow, same mono-eyebrow
+// getting quieter. Reuses .archivelabel for the eyebrow, same small-label
 // recipe already shared by the arc timeline and archive-search labels (see
 // there) rather than a fourth near-identical class.
-// `searchHtml` (owner-requested placement): the search control rides in
-// THIS section's head row, right-aligned — the same right edge the arc
-// rows' own relative-time meta aligns to, so the icon reads as belonging
-// to the top of the page rather than to the week rail below it. Empty
-// string on any page where the caller placed the control elsewhere (see
-// renderIndexPage: the week rail keeps it whenever this section is
-// absent, so the control never disappears with the section).
 export function renderNowSection(nowArcs, strings, token, lang, nowMs) {
   if (!nowArcs || nowArcs.length === 0) return "";
   const rowsHtml = nowArcs
@@ -674,10 +731,10 @@ export function renderNowSection(nowArcs, strings, token, lang, nowMs) {
       return `<a class="nowrow" href="${arcHref(token, lang, arc.identity)}" data-arc-slug="${esc(arc.identity)}" data-last-seen="${esc(arc.lastSeen)}">${arrow ? `<span class="nowarrow" aria-hidden="true">${arrow}</span>` : ""}<span class="nowarclabel">${esc(arc.label)}</span><span class="nowmeta">${esc(meta)}</span></a>`;
     })
     .join("\n");
-  return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
+  return `<section class="sidecard now" aria-labelledby="nowhead"><h2 id="nowhead" class="sidehead">${esc(strings.nowLabel)}</h2><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></section>`;
 }
 
-// Big masthead issue line (Front Page redesign, index pages only): "No.
+// Issue line (shown in pageChrome's .phonehead) (Front Page redesign, index pages only): "No.
 // {n} · {full date} · {n} editions today" — every piece is derived from
 // data the page already has, no new plumbing (per the task spec):
 //   - edition number: the lead digest's own `id` (an existing, already-
@@ -725,6 +782,7 @@ export function renderIndexPage(
   nowMs = null,
   showCatchup = false,
   appVersion = null,
+  leadArcs = [],
 ) {
   const strings = STRINGS[lang];
   const emptyMessage =
@@ -734,7 +792,7 @@ export function renderIndexPage(
         ? strings.noWeeklyBriefs
         : strings.noDigests;
 
-  // Current-week-only features (roadmap 3 step 3): the lead card, pulse
+  // Current-week-only features (roadmap 3 step 3): the hero, pulse
   // strip, and prefetch hint below all imply "this is what's happening
   // right now" — a "Latest" card on an archive week would lie, so they're
   // gated on isCurrent, true on the (week-less) daily view and on the
@@ -748,11 +806,12 @@ export function renderIndexPage(
   // this function.
   let leadRow = null;
   let body;
+  let heroHtml = "";
   if (rows.length === 0) {
     body = `<p class="empty">${esc(emptyMessage)}</p>`;
   } else if (isCurrent) {
     // rows are ordered created_at DESC, so rows[0] is the newest digest in
-    // this view — it renders as the lead card above the ledger and is
+    // this view — it renders as the hero above the ledger and is
     // excluded from the grouped list below (no duplicate). groupByDay runs
     // on the remainder, so if the newest digest was that day's only entry,
     // no empty day header is left behind.
@@ -761,14 +820,29 @@ export function renderIndexPage(
     const ledger = renderLedgerFor(view, rest, strings.locale, (row) =>
       renderIndexEntry(row, token, lang, view),
     );
-    body = `${renderLeadCard(lead, token, lang, view)}\n${ledger}`;
+    heroHtml = renderLeadCard(lead, token, lang, view, leadArcs);
+    body = ledger;
   } else {
-    // Archive week (roadmap 3 step 3): no lead card — every row, including
+    // Archive week (roadmap 3 step 3): no hero — every row, including
     // rows[0], goes through the plain day-grouped ledger, same as the
     // "rest" branch above minus the exclusion.
     body = renderLedgerFor(view, rows, strings.locale, (row) =>
       renderIndexEntry(row, token, lang, view),
     );
+  }
+
+  // No lead row (empty view, or an archive week) means no hero h1, and a
+  // page without an h1 has no document outline. The title reuses a string the
+  // page already shows: an archive week's own "Week N · range" label (the
+  // rail's centre label), otherwise the empty-state message.
+  if (!leadRow) {
+    const title =
+      weekInfo && !isCurrent
+        ? strings.weekLabel
+            .replace("{w}", String(weekInfo.week))
+            .replace("{range}", formatWeekRangeLabel(weekInfo.year, weekInfo.week, strings.locale))
+        : emptyMessage;
+    heroHtml = `<header class="hero"><h1 class="herotitle">${esc(title)}</h1></header>`;
   }
 
   // Unified search (owner UX pass): the container the bottom script's
@@ -781,11 +855,11 @@ export function renderIndexPage(
   // other data-* hook on this page (data-created, data-unread-label, …).
   const archiveResultsHtml = `<div class="archiveresults" data-search-href="${searchHref(token, lang)}" hidden></div>`;
 
-  // Week rail (roadmap 3 step 2): between the view tabs (rendered by
-  // pageChrome, just above this) and the ledger — ALL-view index pages only
-  // (weekInfo is null for the daily/weekly views, see handleIndexPage). Sits
-  // above the empty-state message too, since both live inside the <section>
-  // wrapper assembled below. Renders on the current week too (unlike the
+  // Week rail (roadmap 3 step 2): the end of the main column, below the
+  // ledger and the archive-search results — ALL-view index pages only
+  // (weekInfo is null for the daily/weekly views, see handleIndexPage). It is
+  // week PAGING, so it reads as the ledger's footer, and it still renders
+  // after the empty-state message. Renders on the current week too (unlike the
   // lead/prefetch below) — the rail IS the archive navigation, so it stays
   // regardless of isCurrent.
   //
@@ -797,24 +871,15 @@ export function renderIndexPage(
   // removed in the owner-requested index cleanup; the current-week rail was
   // deliberately left as-is rather than backfilling a sparkline onto it —
   // out of scope for that pass).
-  // Owner-requested placement: whenever the NOW section renders, IT carries
-  // the search control (in its own head row, right-aligned) and the rail
-  // below goes without — exactly one search control per page, always.
   const railHtml =
     view === "all" && weekInfo
       ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows)
       : "";
 
-  // Search row (owner-requested index cleanup): the daily/weekly views have
-  // no week rail to carry the search bubble (see railHtml just above), so
-  // they get a minimal standalone row instead — same renderSearchBubble
-  // markup, just without the week-nav spans around it, in the same
-  // between-tabs-and-ledger slot the old filterrow occupied. Skipped
-  // whenever railHtml is truthy (the ALL view) so the bubble never renders
-  // twice on the same page. This keeps the ⌘K palette's "Search" command
-  // (which reads `.searchlink` off the DOM, see collectPaletteItems)
-  // available on every view, not just ALL — losing it silently on daily/
-  // weekly would have been a real regression, not just a cosmetic one.
+  // The search control is not rendered here: pageChrome puts the one search
+  // popover in the bar's .baractions (which also keeps the ⌘K palette's
+  // "Search" command, reading `.searchlink` off the DOM, available on every
+  // view).
 
   // data-week-archive (roadmap 3 step 3): marks the <section> on any
   // non-current week so the bottom script's unread-fence IIFE can bail out
@@ -837,9 +902,12 @@ export function renderIndexPage(
   // an archive week never has a leadRow to prefetch in the first place.
   const prefetchHref = leadRow ? digestHref(token, lang, view, leadRow.id) : null;
 
-  // NOW section (§11.1 PR B): the very top of the page, above the rail/
-  // filter row/pulse strip/ledger — a situational overview, not part of the
-  // chronological archive chrome below it. `nowArcs` is only ever non-empty
+  // NOW section (§11.1 PR B): a sidebar card ("Now"), beside the ledger —
+  // a situational overview, not part of the chronological list. It is
+  // `sidebarHtml` below, and the sidebar is ALWAYS passed — "" when there
+  // are no NOW rows — so the settings panel still lands in the sidebar on
+  // desktop (pageChrome treats any string, empty included, as "has a
+  // sidebar"; only null means single-column). `nowArcs` is only ever non-empty
   // when handleIndexPage ran the query (current-week all view — see there);
   // renderNowSection itself also fails safe to "" on an empty array, so this
   // stays a no-op on every other view/week without a second gate here.
@@ -855,31 +923,26 @@ export function renderIndexPage(
   // false, so this whole const is "") all see nothing, same "inert until JS
   // proves it's warranted" contract as every other progressive-enhancement
   // shell in this file. Positioned as the very first element of the body
-  // markup — above nowHtml — so it always renders "one row above the NOW
-  // section" per the §11.2 spec, whether or not the NOW section itself has
-  // any content that day (0-eligible-arcs still leaves this shell in place).
+  // markup, above the hero and ledger, whether or not the NOW card has any
+  // content that day (0-eligible-arcs still leaves this shell in place).
   const catchupHtml = showCatchup
     ? `<div class="catchup" hidden data-prefix="${esc(strings.catchupPrefix)}" data-tmpl-briefings="${esc(strings.catchupBriefings)}" data-tmpl-briefings-one="${esc(strings.catchupBriefingsOne)}" data-tmpl-arcs="${esc(strings.catchupArcUpdates)}" data-tmpl-arcs-one="${esc(strings.catchupArcUpdatesOne)}" data-tmpl-more="${esc(strings.catchupArcMore)}"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="${esc(strings.catchupJumpLabel)}">↓</button><button type="button" class="catchupdismiss" aria-label="${esc(strings.catchupDismissLabel)}">×</button></div>`
     : "";
 
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
     view,
-    renderSwitchers(
-      token,
-      lang,
-      view,
-      "index",
-      undefined,
-      isCurrent ? null : weekInfo,
-      true,
-      appVersion,
-    ),
-    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
-    null,
+    pageKind: "index",
+    id: undefined,
+    archiveWeek: isCurrent ? null : weekInfo,
+    showSearch: true,
+    appVersion,
+    heroHtml,
+    bodyHtml: `${catchupHtml}<section class="ledger" data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}${railHtml}`,
+    sidebarHtml: nowHtml || "",
     prefetchHref,
-    buildIssueLine(leadRow, rows, view, strings),
-  );
+    issueLineText: buildIssueLine(leadRow, rows, view, strings),
+  });
 }

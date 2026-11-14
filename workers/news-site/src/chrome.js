@@ -1,10 +1,18 @@
 import { STRINGS } from "./strings.js";
 import { CSS } from "./css.js";
 import { esc } from "./http.js";
-import { indexHref, manifestHref, renderViewTabs, swHref } from "./hrefs.js";
+import {
+  indexHref,
+  manifestHref,
+  renderSearchBubble,
+  renderSearchButton,
+  renderSettingsPanel,
+  renderViewTabs,
+  swHref,
+} from "./hrefs.js";
 import { CLIENT_SCRIPT } from "./client.js";
 
-// ── page chrome (shared masthead/footer/CSS — one template, both pages) ─
+// ── page chrome (shared bar/layout/CSS — one template, every page) ──────
 
 // The tab icon: the site's indigo accent as a rounded square, three white
 // "digest lines" of tapering width — reads as a summary/list at 16px, and
@@ -32,7 +40,7 @@ export function brandFirst(host) {
 //
 // `prefetchHref` defaults to null, same contract again (roadmap 2 step 7):
 // only renderIndexPage ever passes a value, and only when the index is
-// non-empty — the lead card's digest is the reader's most likely next tap,
+// non-empty — the hero's digest is the reader's most likely next tap,
 // so hint the browser to fetch it early. Digest pages never pass this
 // (deliberate restraint — prev/next COULD be prefetched too, but that's 2
 // extra fetches per read × 8 reads/day for what the roadmap scoped as
@@ -46,57 +54,88 @@ export function brandFirst(host) {
 // — that's the deal with speculative loading in general, not a bug here, so
 // neither mechanism is load-bearing for anything. Privacy-wise this adds
 // nothing new: the JSON embeds the same capability-token URL that's already
-// sitting in the lead card's own href on the same page (same-document
+// sitting in the hero's own href on the same page (same-document
 // exposure), and the speculation rules processor doesn't send that URL
 // anywhere the visible link wouldn't already send it on a click.
-// The masthead is ONE layout on every page (owner follow-up: it must not
-// change shape between the index and a digest page): big brand left,
-// view-tab capsule centered, search/settings right, with an optional mono
-// issue line above — the index passes buildIssueLine's edition line, the
-// digest page passes its own "No. {id} · {date}", and pages with nothing
-// to say (arc, search) pass none, keeping the row itself identical.
-// `issueLineText` is the RAW (unescaped) issue-line string; pageChrome
-// esc()s it once here, same convention as `title` just below.
-export function pageChrome(
+// The shell is ONE layout on every page: a single header.bar (brand, view
+// tabs, search, settings button) that CSS renders as the desktop top bar AND
+// the phone bottom dock — never a second nav in the markup — a phone-only
+// .phonehead row (brand + issue line), and a <main class="layout"> holding an
+// optional full-width `heroHtml`, then .maincol and an optional .side column.
+// The hero is a layout child rather than part of .maincol so it can span both
+// columns; the page's h1 must still sit inside <main>, hence <main> IS the
+// layout. Pages with nothing to put in the sidebar pass `sidebarHtml: null`
+// and the settings panel rides after </main> at the end of .wrap instead;
+// with a sidebar it lives inside .side. Single-column pages keep their hero
+// in `bodyHtml`.
+// The phone brand is a real link (CSS shows one of the two brands per
+// breakpoint), so the hidden one is display:none, not aria-hidden.
+// `issueLineText` is the RAW (unescaped) issue-line string, shown in
+// .phonehead; pageChrome esc()s it once here, same convention as `title`.
+// `backHref` is the digest page's "back to index" href: it adds the bar's
+// .barback arrow (the phone's way back now that the floating back button is
+// gone); every other page passes null.
+export function pageChrome({
   host,
   token,
   lang,
   view,
-  switchersHtml,
+  pageKind,
+  id,
+  archiveWeek,
+  showSearch,
+  appVersion,
   bodyHtml,
+  heroHtml = "",
+  sidebarHtml = null,
   title = null,
   prefetchHref = null,
   issueLineText = "",
-  showTopFab = true,
-) {
+  backHref = null,
+}) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   // Only the first host label renders — the brand is just "NEWS" (owner
   // follow-up; see brandFirst).
   const first = brandFirst(host);
   const strings = STRINGS[lang];
-  const prefetchLinkHtml = prefetchHref ? `<link rel="prefetch" href="${esc(prefetchHref)}">` : "";
-  // Scroll-to-top FAB for every page that is not a digest (owner-requested:
-  // "on a main page where there is no button I want an up button"). The
-  // digest page renders its own .backfab — an arrow BACK to the index, which
-  // is the more useful action there — and opts out via showTopFab, so no page
-  // ever shows two.
-  //
-  // Same .backfab class as that one on purpose, not a new one: the class is
-  // the FAB *primitive* here (shape, placement, the scroll-past-320px reveal
-  // in wirePage(), the safe-area insets, the print rule, the <noscript>
-  // always-visible fallback). Reusing it means this button inherits all of
-  // that and needs no CSS or JS of its own — wirePage() re-queries .backfab
-  // on every soft-nav pass, so it rebinds across navigations for free.
-  //
-  // href="#top" rather than a JS scroll handler: with no element of that id,
-  // HTML defines "#top" as the top of the document, so it works with JS off,
-  // and html { scroll-behavior: smooth } (already reduced-motion-gated)
-  // animates it. It also survives the soft-nav interceptor untouched — that
-  // handler explicitly bails on a same-path link carrying a hash, handing it
-  // back to the browser instead of re-fetching the page.
-  const topFabHtml = showTopFab
-    ? `<a class="backfab" href="#top" aria-label="${esc(strings.topFabLabel)}">↑</a>`
+  const homeHref = indexHref(token, lang, view);
+  // A page HAS a sidebar when it passes any string, empty included: the
+  // index and digest pages always want the settings panel in the sidebar on
+  // desktop, even when their own card (NOW / Earlier) has nothing to show.
+  // null (arc, search, about) means single-column, panel after the layout.
+  const hasSide = sidebarHtml !== null && sidebarHtml !== undefined;
+  const settingsPanelHtml = renderSettingsPanel({
+    token,
+    lang,
+    view,
+    pageKind,
+    id,
+    archiveWeek,
+    appVersion,
+  });
+  // Search: the popover (with the ledger filter input) where the page has a
+  // ledger-or-nothing to drive, a plain link to the search page elsewhere.
+  const searchHtml = showSearch
+    ? renderSearchBubble(token, lang, strings)
+    : renderSearchButton(token, lang, strings);
+  const backHtml = backHref
+    ? `<a class="barback" href="${backHref}" aria-label="${esc(strings.backFabLabel)}">←</a>`
     : "";
+  // Sliders icon (not a gear: it reads as "preferences" at 18px without the
+  // cog's busy teeth). Inline SVG for the same cross-platform reason as the
+  // search magnifier; currentColor keeps it theme-aware.
+  const settingsIcon = `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 6h9M16 6h1M3 14h1M8 14h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="14" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`;
+  // Hungarian ő/ű exist only in the latin-ext subsets, so HU pages preload
+  // those too; EN pages would pay for bytes they never paint.
+  const fontFiles = ["inter-latin", "sora-latin"];
+  if (lang === "hu") fontFiles.push("inter-latin-ext", "sora-latin-ext");
+  const fontPreloadHtml = fontFiles
+    .map(
+      (f) =>
+        `<link rel="preload" href="/fonts/${f}-wght.v1.woff2" as="font" type="font/woff2" crossorigin>`,
+    )
+    .join("\n");
+  const prefetchLinkHtml = prefetchHref ? `<link rel="prefetch" href="${esc(prefetchHref)}">` : "";
   const prefetchScriptHtml = prefetchHref
     ? `<script type="speculationrules">${JSON.stringify({ prefetch: [{ urls: [prefetchHref] }] })}</script>`
     : "";
@@ -148,18 +187,19 @@ export function pageChrome(
 <html lang="${lang}">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- theme-color must track the CSS palette blocks' --bg values above (light
-     #ffffff / dark #131418 — "print poster" redesign) so mobile browser
-     chrome (URL bar/status bar tint) melts into the page instead of showing
-     a stock color. The prefers-color-scheme media attrs cover the automatic
-     (Auto) case; a manual Light/Dark override from the theme miniseg (see
-     the bottom script) updates both metas' content directly, since a
-     media-query meta can't react to a data-theme attribute switch on its
-     own — and clicking back to Auto restores each meta to its own
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- theme-color must track the CSS palette blocks' page background (light
+     #eceff6 / dark #0b0d14 — Spatial Glass) so mobile browser chrome (URL
+     bar/status bar tint) melts into the page instead of showing a stock
+     color. client.js THEME_COLORS (the manual-override path) and pwa.js
+     (offline page, manifest colors) carry the same values. The prefers-color-scheme media attrs cover the
+     automatic (Auto) case; a manual Light/Dark override from the theme
+     miniseg (see the bottom script) updates both metas' content directly,
+     since a media-query meta can't react to a data-theme attribute switch
+     on its own — and clicking back to Auto restores each meta to its own
      media-appropriate value. -->
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131418">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#eceff6">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0d14">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <!-- PWA shell — see src/chrome.js for why each line is shaped this way. -->
 <link rel="manifest" href="${manifestHref(token, lang)}">
@@ -168,31 +208,39 @@ export function pageChrome(
 <meta name="apple-mobile-web-app-title" content="${esc(first.toUpperCase())}">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.font=localStorage.getItem("font")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
+<!-- Font preloads sit ahead of the stylesheet so the fetch starts while the CSS
+     is still being parsed. crossorigin is REQUIRED even though the files are
+     same-origin: fonts are always fetched in CORS mode, and a preload
+     without it is made in a different mode, never matches the later
+     @font-face request, and downloads the file twice. -->
+${fontPreloadHtml}
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.density=localStorage.getItem("density")||"";localStorage.removeItem("font");document.documentElement.classList.add("enter")}catch(e){}</script>
 <style>${CSS}</style>
 </head>
 <body>
 ${prefetchScriptHtml}
 <div class="wrap">
-  ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
-  <header class="mast mast-big">
-    <div class="mastleft">
-      <a class="brand" href="${indexHref(token, lang, view)}">${esc(first)}</a>
-    </div>
+  <header class="bar">
+    <a class="brand" href="${homeHref}">${esc(first)}<span class="brandmark" aria-hidden="true">.</span></a>
+    ${backHtml}
     ${viewTabsHtml}
-    <div class="mastright">
-      ${switchersHtml}
+    <div class="baractions">
+      ${searchHtml}
+      <button type="button" class="settingsbtn" popovertarget="settings" aria-label="${esc(strings.settingsLabel)}">${settingsIcon}</button>
     </div>
   </header>
+  <div class="phonehead">
+    <a class="brand" href="${homeHref}">${esc(first)}<span class="brandmark" aria-hidden="true">.</span></a>
+    ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
+  </div>
   ${paletteConfigHtml}
-  ${bodyHtml}
-  ${topFabHtml}
+  <main class="layout${hasSide ? " has-side" : ""}" id="main">
+    ${heroHtml}
+    <div class="maincol">${bodyHtml}</div>
+    ${hasSide ? `<aside class="side" aria-label="${esc(strings.sidebarLabel)}">${sidebarHtml}${settingsPanelHtml}</aside>` : ""}
+  </main>
+  ${hasSide ? "" : settingsPanelHtml}
 </div>
-<noscript><style>.backfab { opacity: 1; pointer-events: auto; }
-  /* The sticky section headings need wirePage's push loop to stop them
-     stacking on top of one another; with no script they go back to being
-     ordinary headings rather than a pile at the top of the viewport. */
-  .digest > h2 { position: static; }</style></noscript>
 <script>
 ${CLIENT_SCRIPT}
 </script>
