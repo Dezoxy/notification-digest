@@ -219,6 +219,7 @@ notification-digest/
 │       ├── worker.js              # entry: file-header doc, route patterns, dispatch
 │       ├── src/                   # config/auth/http/dates/strings/hrefs/css/client/
 │       │                          #   chrome/sections/ingest/handlers/render-* modules
+│       ├── public/                # static assets served before the Worker: self-hosted Inter/Sora fonts
 │       ├── test/                  # node --test invariants + byte-golden pages
 │       ├── scripts/               # operator tools: send-test-push, design-system export
 │       ├── schema.sql, migrations/ # D1 schema (separate from digest/state.py's SQLite)
@@ -1461,7 +1462,31 @@ PRESENTATION: the title varies by kind, and `has_attention` sets
   send, on the app's own release train, if the doubling gets old.
 - Not an offline reader, by construction (first guardrail).
 
-§11.1–11.7 are all shipped except the two entries that were closed rather
+### 11.8 Spatial Glass redesign (site-only, shipped 2026-11)
+
+A visual rebuild of `workers/news-site/` with the same routes, data and trust
+model: a dotted page with a drifting glow, flat translucent cards, one floating
+pill bar (a bottom dock on phones), centred hero headlines, a sidebar from
+1040px (Now, Earlier, settings), native `details` sections with a pill table of
+contents, and a timeline for story threads. It replaces the "private wire desk"
+look of the 2026-08 roadmaps (print poster, masthead, serif/mono type roles,
+sticky headings, floating back button), which stay in `workers/news-site/README.md`
+as history.
+
+- **Tokens:** every colour is one `light-dark()` pair in a single block of
+  `src/css.js`; `data-theme` only switches `color-scheme`. The design-system
+  export parses that block.
+- **Fonts:** Inter and Sora are self-hosted from `public/fonts/` via Workers
+  Static Assets (tokenless, immutable, hash-checked by `test/fonts.test.mjs`),
+  superseding the "system font stacks only" rule.
+- **Removed:** the Sans | Serif body-font preference (`data-font`), the
+  masthead and its scroll behaviour, and the back FAB (the bar's back arrow
+  replaces it on phones).
+- **Tests:** a safety net (`coverage.test.mjs`, the screenshot harness
+  `test/tools/screens.mjs`) landed before the rewrite; `css-matrix.html` was
+  retired with the old masthead.
+
+§11.1–11.8 are all shipped except the two entries that were closed rather
 than built: §11.5 (rejected, §9 decision 6) and the OPEN GAP inside §11.3
 (Hungarian delta text, `deltas_hu` — unapproved), plus §11.4's still-open
 "flip the in-repo default" decision and its optional site status chips.

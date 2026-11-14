@@ -492,7 +492,7 @@ export function renderLeadCard(row, token, lang, view, threads = []) {
   </section>`;
 }
 
-// Week rail (roadmap 3 step 2): mono wire-style `← W31 · WEEK 32 · 3–9 AUG ·
+// Week rail (roadmap 3 step 2): wire-style `← W31 · WEEK 32 · 3–9 AUG ·
 // W33 →` nav, rendered on ALL-view index pages only — see the call site in
 // renderIndexPage, and the file-header roadmap notes on why the daily view
 // has no week address. `weekInfo` is handleIndexPage's { year, week,
@@ -691,12 +691,12 @@ export function renderLedgerFor(view, rows, locale, renderRow) {
 //
 // Each arc renders as ONE row, not a card (design guidance: no card soup) —
 // a single link carrying the momentum arrow, the arc's own label
-// (arcHref, §11.1 PR A), and a mono metadata tail. The metadata tail is the
+// (arcHref, §11.1 PR A), and a metadata tail. The metadata tail is the
 // relative last-updated time ONLY (owner-requested index cleanup, dropped
 // the "×{n} this week" appearance count this row used to lead with) —
 // arcRepeat itself is untouched and stays in active use on the digest
 // page's own arc chips (see renderArcs), this is just NOW's own metadata
-// getting quieter. Reuses .archivelabel for the eyebrow, same mono-eyebrow
+// getting quieter. Reuses .archivelabel for the eyebrow, same small-label
 // recipe already shared by the arc timeline and archive-search labels (see
 // there) rather than a fourth near-identical class.
 export function renderNowSection(nowArcs, strings, token, lang, nowMs) {
@@ -823,7 +823,7 @@ export function renderIndexPage(
     heroHtml = renderLeadCard(lead, token, lang, view, leadArcs);
     body = ledger;
   } else {
-    // Archive week (roadmap 3 step 3): no lead card — every row, including
+    // Archive week (roadmap 3 step 3): no hero — every row, including
     // rows[0], goes through the plain day-grouped ledger, same as the
     // "rest" branch above minus the exclusion.
     body = renderLedgerFor(view, rows, strings.locale, (row) =>
@@ -831,7 +831,7 @@ export function renderIndexPage(
     );
   }
 
-  // No lead row (empty view, or an archive week) means no lead-card h1, and a
+  // No lead row (empty view, or an archive week) means no hero h1, and a
   // page without an h1 has no document outline. The title reuses a string the
   // page already shows: an archive week's own "Week N · range" label (the
   // rail's centre label), otherwise the empty-state message.

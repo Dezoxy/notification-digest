@@ -7,28 +7,40 @@
 // WHY it is a script and not a one-off: the first import was done with a
 // scratch script that hard-coded the palette. A hard-coded copy drifts the
 // first time someone edits src/css.js, and the artifact then documents a site
-// that no longer exists. So the palette is PARSED out of the stylesheet (the
-// first `:root {` block for light, `:root[data-theme="dark"] {` for dark),
-// and every custom property found there must be classified and documented
-// below. A new `--something` in css.js with no usage note here makes
-// buildDesignSystem() throw — and test/design-system.test.mjs runs it against
-// the real stylesheet, so `npm test` fails until the note is written. That is
-// the point: nobody adds a colour without deciding how it is described.
+// that no longer exists. So every token is PARSED out of the stylesheet, and
+// every custom property found must be documented below. A new `--something`
+// in css.js with no usage note here makes buildDesignSystem() throw — and
+// test/design-system.test.mjs runs it against the real stylesheet, so
+// `npm test` fails until the note is written. That is the point: nobody adds
+// a token without deciding how it is described.
 //
-// What is NOT drift-checked: the type styles, the non-FAB spacing tokens, the
-// radius tokens, the two literal shadows (float-shadow, palette-shadow) and
-// every component card's markup. They mirror values and class names in
-// css.js and the render-*.js files and are curated by hand. Edit them here
-// when the site changes; nothing will tell you if you forget.
+// THE PARSE CONTRACT (written into the head of css.js, which owns it):
+//   - exactly one block between `/* tokens:start */` and `/* tokens:end */`,
+//     holding one `:root { ... }` rule;
+//   - a themed colour is one line, `--name: light-dark(<light>, <dark>);`,
+//     split here on the top-level comma (rgba() has commas of its own);
+//   - every other token is single-valued in the same block;
+//   - `--shadow` is the one themed value that is not a whole colour: two
+//     layers with a `light-dark()` inside each. It is classified as a shadow
+//     token and resolved per theme by taking one arm of every inner pair;
+//   - the data-theme blocks hold `color-scheme` and nothing else (checked).
+// A phone-width override of `--gutter` / `--fs-read` lives outside the block
+// in the phone media query; the usage notes say so, the parser ignores it.
+//
+// What is NOT drift-checked: the type styles' names, weights and samples, the
+// contrast pairs, and every component card's markup. They mirror class names
+// in css.js and the render-*.js files and are curated by hand (sizes are read
+// from the parsed tokens where the style uses one). Edit them here when the
+// site changes; nothing will tell you if you forget.
 //
 // What it produces, under <out-dir>/project/ (paths as the artifact expects):
 //   README.md, tokens.json, design-system.json
-//   components/bundle.css          the site's stylesheet minus its palette
+//   components/bundle.css          the site's stylesheet minus its token block
 //   components/<Name>/preview.html + README.md   (one per component)
 //   components/Cover/preview.html
 //   assets/Logos/*, assets/Icons/*  (favicon SVG + the three PWA PNGs)
 // It does NOT write tokens.css: the artifact page generates that itself from
-// tokens.json.
+// tokens.json. Token names there are the css.js custom-property names.
 //
 // This script only WRITES FILES. It does not publish anything. Publishing is
 // done afterwards from Claude Code against the existing artifact, and two
@@ -56,172 +68,119 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// ── Palette parsing ─────────────────────────────────────────────────────────
-// The families below are the ones css.js does not define as custom properties
-// (chrome is the body font-family; serif is the data-font="serif" override).
-// The serif stack is cross-checked against the parsed override.
-const CHROME_STACK = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-const SERIF_STACK = 'ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
-
-// Custom properties that are the same in both themes (defined once in :root).
-const THEME_INVARIANT = ["fab-size", "fab-inset", "font-prose", "font-data"];
-
-const FAB_USAGE = {
-  "fab-size": "Back FAB diameter; the resume chip steers around it.",
-  "fab-inset": "Back FAB inset from the viewport corner.",
-};
-
-// One usage note per hex colour custom property in css.js. chip-text and
-// h2-border are aliases of accent (checked below). The faint note quotes
-// measured ratios, so the map is built from the audit.
-function colorUsage(r) {
-  return {
-    bg: "Paper. Page and card background; also the text colour on solid `accent` fills (active view tab, back FAB, hovered cite chip).",
-    "page-bg": "The gutter the lifted desktop column sits on (viewport ≥ 52em). Never behind text.",
-    text: "Ink. Headlines, brand, active controls and strong/em inside prose, on `bg`.",
-    muted:
-      "Secondary text on `bg` and `chip-bg`: counts, excerpts, settings labels, metadata, inactive segments.",
-    accent:
-      "Press blue. Links, eyebrows, section numbers, times on the newest entry, active view tab fill, focus rings. On `bg`, `tldr-bg` and `chip-bg`.",
-    "accent-strong": "Hover and pressed state of `accent` text.",
-    "tldr-bg": "The TL;DR leader block and the hover wash on inactive view tabs.",
-    "tldr-text": "Text inside the TL;DR block, on `tldr-bg`.",
-    "chip-bg": "Citation chips, story-thread chips, search-hit highlight and sparkline bars.",
-    "chip-text": "Text on `chip-bg`; an alias of `accent`.",
-    hairline:
-      "1px separators: between entries, under nav, around panels and inputs. Decorative, not a control boundary.",
-    "h2-border": "Section-heading rule colour; an alias of `accent`.",
-    "attention-bg": "Attention callout, the collection-failed banner and entry flags.",
-    "attention-text": "Text on `attention-bg`.",
-    "rule-heavy":
-      "The 4px masthead rule, the lead-entry rule and pill-control outlines (view tabs, segmented, gear, search button).",
-    mark: "Highlighter behind a phrase inside a headline (`.headline mark`, `.edhead h1 mark`).",
-    "mark-ink":
-      "Text on `mark`. Identical in both themes on purpose: the highlighter is always a light chip.",
-    faint: `One step quieter than \`muted\`: day headers, lead-fact labels, folios. Small uppercase mono only. Misses 4.5:1 on \`bg\` (${r("faint/bg", "light")}:1 light, ${r("faint/bg", "dark")}:1 dark); kept exact from the source.`,
-    prose:
-      "Article body paragraphs, one step under `text` so headlines and bold stats stand out. On `bg`.",
-  };
-}
-
-const ALIASES = ["chip-text", "h2-border"];
-const isHex = (v) => /^#[0-9a-fA-F]{3,8}$/.test(v);
+// ── Token parsing ───────────────────────────────────────────────────────────
+const TOKENS_START = "/* tokens:start */";
+const TOKENS_END = "/* tokens:end */";
+const BRAND_MARK = "#4f46e5";
 
 const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 
-// The text between `opener` and the first closing brace. css.js palette
-// blocks contain no nested braces.
-function blockBody(css, opener) {
-  const at = css.indexOf(opener);
-  if (at < 0) throw new Error(`design-system: block not found in css.js: ${opener}`);
-  const from = at + opener.length;
-  const to = css.indexOf("}", from);
-  if (to < 0) throw new Error(`design-system: unterminated block in css.js: ${opener}`);
-  return css.slice(from, to);
+// Index of the `)` that closes the `(` at `open`.
+function closeParen(s, open) {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")" && --depth === 0) return i;
+  }
+  throw new Error(`design-system: unbalanced parentheses in token value: ${s}`);
 }
 
-// Every `--name: value;` in a block body, in source order. `color-scheme` and
-// other real properties do not match and are ignored.
-function declarations(body) {
+// Split on commas that are not inside parentheses.
+function splitTop(s) {
+  const parts = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") depth--;
+    else if (s[i] === "," && depth === 0) {
+      parts.push(s.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  parts.push(s.slice(from).trim());
+  return parts;
+}
+
+// `light-dark(a, b)` as the whole value -> [a, b]; anything else -> null.
+function wholePair(value) {
+  if (!value.startsWith("light-dark(")) return null;
+  const open = "light-dark".length;
+  if (closeParen(value, open) !== value.length - 1) return null;
+  const arms = splitTop(value.slice(open + 1, -1));
+  if (arms.length !== 2) {
+    throw new Error(`design-system: light-dark() needs exactly two arms: ${value}`);
+  }
+  return arms;
+}
+
+// Replace every light-dark() pair anywhere in `value` with one arm.
+function resolve(value, theme) {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const k = value.indexOf("light-dark(", at);
+    if (k < 0) return (out + value.slice(at)).replace(/\s+/g, " ").trim();
+    const open = k + "light-dark".length;
+    const close = closeParen(value, open);
+    const arms = splitTop(value.slice(open + 1, close));
+    if (arms.length !== 2) throw new Error(`design-system: light-dark() needs two arms: ${value}`);
+    out += value.slice(at, k) + resolve(arms[theme === "light" ? 0 : 1], theme);
+    at = close + 1;
+  }
+}
+
+// Every `--name: value;` of the single token block, in source order.
+function parseTokens(css) {
+  const start = css.indexOf(TOKENS_START);
+  const end = css.indexOf(TOKENS_END);
+  if (start < 0 || end < start || css.indexOf(TOKENS_START, start + 1) >= 0) {
+    throw new Error("design-system: css.js needs exactly one tokens:start ... tokens:end block");
+  }
+  const block = stripComments(css.slice(start + TOKENS_START.length, end));
+  const rule = block.match(/^\s*:root\s*\{([\s\S]*)\}\s*$/);
+  if (!rule) throw new Error("design-system: the token block must be a single :root rule");
   const map = new Map();
-  for (const [, name, value] of body.matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)) {
+  for (const [, name, value] of rule[1].matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)) {
+    if (map.has(name))
+      throw new Error(`design-system: --${name} is defined twice in the token block`);
     map.set(name, value.trim().replace(/\s+/g, " "));
+  }
+  // The theme blocks only switch color-scheme; a colour there would be a
+  // second source of truth that this parser never sees.
+  const outside = stripComments(css.slice(0, start) + css.slice(end));
+  for (const [, theme, body] of outside.matchAll(
+    /:root\[data-theme="(light|dark)"\]\s*\{([^}]*)\}/g,
+  )) {
+    if (!/^\s*color-scheme:\s*[^;]+;?\s*$/.test(body)) {
+      throw new Error(
+        `design-system: the data-theme="${theme}" block must contain only color-scheme, found: ${body.trim()}`,
+      );
+    }
   }
   return map;
 }
 
-function need(map, name, where) {
-  if (!map.has(name))
-    throw new Error(`design-system: css.js no longer defines --${name} (${where})`);
-  return map.get(name);
+// ── Colour maths (contrast audit) ───────────────────────────────────────────
+function parseColor(text) {
+  const t = text.trim();
+  if (t === "transparent") return [0, 0, 0, 0];
+  let m = t.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (m) {
+    const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join("") : m[1];
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).concat(1);
+  }
+  m = t.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/);
+  if (m) return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]];
+  return null;
 }
-
-function parsePalette(css, faviconSvg) {
-  const clean = stripComments(css);
-  const light = declarations(blockBody(clean, ":root {"));
-  const dark = declarations(blockBody(clean, ':root[data-theme="dark"] {'));
-  const serif = declarations(blockBody(clean, ':root[data-font="serif"] {'));
-
-  // Light and dark must define the same theme-varying names.
-  const lightVarying = [...light.keys()].filter((n) => !THEME_INVARIANT.includes(n));
-  const darkNames = [...dark.keys()];
-  const onlyLight = lightVarying.filter((n) => !dark.has(n));
-  const onlyDark = darkNames.filter((n) => !light.has(n) || THEME_INVARIANT.includes(n));
-  if (onlyLight.length || onlyDark.length) {
-    throw new Error(
-      `design-system: light and dark palettes differ — only in light: [${onlyLight.join(", ")}]; only in dark: [${onlyDark.join(", ")}]`,
-    );
-  }
-
-  // Classify every light custom property.
-  const names = [];
-  for (const [name, value] of light) {
-    if (THEME_INVARIANT.includes(name) || name === "card-shadow") continue;
-    if (!isHex(value)) {
-      throw new Error(
-        `design-system: --${name} (${value}) is a custom property in css.js's palette block that is not a hex colour and has no classification; handle it in scripts/design-system.mjs`,
-      );
-    }
-    names.push(name);
-  }
-
-  // Usage notes <-> CSS, both directions. The faint ratio is irrelevant here.
-  const documented = Object.keys(colorUsage(() => "0"));
-  const undocumented = names.filter((n) => !documented.includes(n));
-  if (undocumented.length) {
-    throw new Error(
-      `design-system: css.js defines --${undocumented.join(", --")} with no usage note in scripts/design-system.mjs (colorUsage); document it`,
-    );
-  }
-  const stale = documented.filter((n) => !names.includes(n));
-  if (stale.length) {
-    throw new Error(
-      `design-system: usage note for --${stale.join(", --")} but css.js no longer defines it; remove the note`,
-    );
-  }
-
-  for (const alias of ALIASES) {
-    for (const [theme, map] of [
-      ["light", light],
-      ["dark", dark],
-    ]) {
-      if (map.get(alias) !== map.get("accent")) {
-        throw new Error(
-          `design-system: --${alias} (${map.get(alias)}) no longer equals --accent (${map.get("accent")}) in ${theme}; it can no longer be emitted as an alias`,
-        );
-      }
-    }
-  }
-
-  const fontProse = need(light, "font-prose", ":root");
-  const fontData = need(light, "font-data", ":root");
-  if (need(serif, "font-prose", 'data-font="serif"') !== SERIF_STACK) {
-    throw new Error("design-system: the data-font=serif stack in css.js differs from SERIF_STACK");
-  }
-  if (!faviconSvg.includes('fill="#4f46e5"')) {
-    throw new Error("design-system: FAVICON_SVG no longer uses #4f46e5; update brand-mark");
-  }
-
-  return {
-    names,
-    light,
-    dark,
-    fontProse,
-    fontData,
-    cardShadow: {
-      light: need(light, "card-shadow", ":root"),
-      dark: need(dark, "card-shadow", 'data-theme="dark"'),
-    },
-    fab: ["fab-size", "fab-inset"].map((name) => ({ name, value: need(light, name, ":root") })),
-  };
-}
-
-// ── Contrast audit ──────────────────────────────────────────────────────────
-const lum = (hex) => {
-  const c = hex
-    .slice(1)
-    .match(/../g)
-    .map((h) => parseInt(h, 16) / 255)
+const over = (top, base) => {
+  const a = top[3];
+  return [0, 1, 2].map((i) => top[i] * a + base[i] * (1 - a)).concat(1);
+};
+const lum = ([r, g, b]) => {
+  const c = [r, g, b]
+    .map((v) => v / 255)
     .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
   return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 };
@@ -229,24 +188,181 @@ const ratio = (a, b) => {
   const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
   return (x + 0.05) / (y + 0.05);
 };
+
+// [foreground, [surface layers, bottom first]]. Translucent layers are
+// composited in order, so "panel on bg" is the glass card as it renders.
 const PAIRS = [
-  ["text", "bg"],
-  ["prose", "bg"],
-  ["muted", "bg"],
-  ["faint", "bg"],
-  ["accent", "bg"],
-  ["accent-strong", "bg"],
-  ["tldr-text", "tldr-bg"],
-  ["accent", "tldr-bg"],
-  ["accent", "chip-bg"],
-  ["muted", "chip-bg"],
-  ["attention-text", "attention-bg"],
-  ["mark-ink", "mark"],
-  ["bg", "accent"],
-  ["text", "page-bg"],
-  ["hairline", "bg"],
-  ["rule-heavy", "bg"],
+  ["text", ["bg"]],
+  ["strong", ["bg"]],
+  ["body", ["bg"]],
+  ["muted", ["bg"]],
+  ["link", ["bg"]],
+  ["accent", ["bg"]],
+  ["accent-text", ["bg"]],
+  ["daily", ["bg"]],
+  ["text", ["bg", "panel"]],
+  ["body", ["bg", "panel"]],
+  ["muted", ["bg", "panel"]],
+  ["accent-text", ["bg", "panel", "accent-soft"]],
+  ["daily", ["bg", "panel", "daily-soft"]],
+  ["strong", ["bg", "pill"]],
+  ["muted", ["bg", "track"]],
+  ["on-accent", ["accent"]],
+  ["text", ["sheet-solid"]],
+  ["muted", ["sheet-solid"]],
 ];
+const pairKey = (fg, layers) => `${fg}/${layers.join("+")}`;
+
+// ── Usage notes: one per custom property in the token block ─────────────────
+// Themed colours (a whole light-dark() pair). The measured ratios are woven
+// into a few notes, so this is a function of the audit lookup `r`.
+function colorUsage(r) {
+  return {
+    bg: "The page. Canvas under the dot grid and the glow; the surface every other colour is measured on.",
+    dot: "The dot-grid dots on the page background (`body::before`). Decorative.",
+    glow: "The soft radial wash at the top of the page (`body::after`), the one slow-drifting layer.",
+    text: "Default ink: body copy in controls, list rows, the settings panel.",
+    strong: "Strongest ink: headlines, the brand, active tabs, strong/em inside prose.",
+    body: `Reading text: excerpts, the hero subline, article paragraphs. One step under \`strong\` so headlines lead (${r("body/bg", "light")}:1 light, ${r("body/bg", "dark")}:1 dark on \`bg\`).`,
+    muted: `Secondary text: counts, metadata, settings labels, inactive tabs. On \`bg\` ${r("muted/bg", "light")}:1 light, ${r("muted/bg", "dark")}:1 dark.`,
+    panel:
+      "The flat glass card: entries, side cards, sections, the TL;DR block. Translucent over the page; never blurred.",
+    "panel-2":
+      "A quieter panel: nested notes, the week rail, delta rows, the Background disclosure.",
+    border: "1px hairline around panels, cards and rows.",
+    "border-strong":
+      "Hairline on floating surfaces and controls: the bar, popovers, inputs, the follow toggle.",
+    pill: "Fill of the active segment (view tab, settings miniseg) and of the hero chip: a raised pill on a `track`.",
+    track: "The groove behind a segmented control and the fill of the quiet bar buttons.",
+    accent:
+      "Indigo-blue brand colour: the settings button, primary CTA, search button, focus ring, live dot, timeline rail dots.",
+    "accent-soft":
+      "Tint of `accent`: hover wash, thread pills, cite chips, `mark` highlight, the catch-up strip.",
+    "accent-line":
+      "Border of accent-tinted surfaces: thread pills, the TL;DR card, the timeline rail, the unread fence.",
+    "accent-text":
+      "Accent used as text on a tint or on `bg`: times, eyebrow labels, counts in pills, section numbers.",
+    "on-accent": "Text and glyphs on a solid `accent` fill.",
+    sheet:
+      "Translucent surface of the three blurred things: the bar, an open settings popover, the command palette.",
+    "sheet-solid":
+      "Opaque twin of `sheet`: the search popover (it sits inside the blurred bar), the phone sheet, the resume chip, and the fallback when blur is unavailable or reduced.",
+    link: "Inline links and link-like rows (search link, settings About link).",
+    daily: "Amber text: daily and weekly briefs, the partial-run flag, the attention label.",
+    "daily-soft":
+      "Amber tint behind daily and weekly entries, the attention callout and the collection-failed banner.",
+    "daily-line": "Border of amber-tinted surfaces.",
+    scrim: "Dim layer behind the command palette and the phone settings sheet.",
+  };
+}
+
+// Themed values that are NOT a whole colour (light-dark() inside a longer value).
+const SHADOW_USAGE = {
+  shadow:
+    "Two stacked layers: a cool light-mode lift and a deep dark-mode one, each transparent in the other theme. The bar, popovers, the command palette and the resume chip.",
+};
+
+// Single-valued tokens: [group in tokens.json, usage note].
+const PLAIN_USAGE = {
+  "font-display": [
+    "font",
+    "Sora with a system fallback. Brand, hero and section headings, entry times, day heads.",
+  ],
+  "font-body": ["font", "Inter with a system fallback. Everything else, including article prose."],
+  "fs-hero": ["type", "Index hero headline. Fluid, 34px to 60px."],
+  "fs-hero-sm": ["type", "Digest, thread and page titles. Fluid, 28px to 44px."],
+  "fs-h2": ["type", "Section heading in a digest."],
+  "fs-card": ["type", "Entry headline and the About card title."],
+  "fs-read": [
+    "type",
+    "Article reading size, before `read-scale`. 16px on phones (the phone media query overrides it).",
+  ],
+  "lh-read": ["type", "Article reading line height."],
+  "fs-ui": ["type", "Controls, nav, settings rows, search."],
+  "fs-meta": ["type", "Counts, chips, the issue line, the catch-up strip."],
+  "fs-micro": ["type", "Smallest labels: section counts, tags, uppercase eyebrows."],
+  "read-scale": [
+    "type",
+    "Multiplier for reading text; the S and L text sizes redefine it on `html[data-fontsize]` (0.94 and 1.12). Headings and controls never scale.",
+  ],
+  "sp-1": ["spacing", "4px."],
+  "sp-2": ["spacing", "8px. Gap inside control groups."],
+  "sp-3": ["spacing", "12px. Gap between ledger cards."],
+  "sp-4": ["spacing", "16px. Phone card padding, gap between digest blocks."],
+  "sp-5": ["spacing", "24px. Card padding on wide screens."],
+  "sp-6": ["spacing", "32px. Column gap between main and side."],
+  "sp-7": ["spacing", "48px. Hero top padding."],
+  "sp-8": ["spacing", "72px. Page bottom padding."],
+  maxw: ["layout", "Maximum width of the whole page."],
+  "side-w": ["layout", "Sidebar column width from 1040px."],
+  "main-min": ["layout", "Smallest the main column may get beside the sidebar."],
+  gutter: ["layout", "Page side padding; 16px on phones (the phone media query overrides it)."],
+  "bar-h": ["layout", "Height of the pill bar."],
+  "dock-h": ["layout", "Phone dock height, used to keep content clear of the bottom bar."],
+  "r-card": ["radius", "Cards: entries, sections, side cards, the TL;DR block, popovers."],
+  "r-lg": ["radius", "Top corners of the phone settings sheet."],
+  "r-in": ["radius", "Inner rows and notes: list rows, deltas, the banner, palette items."],
+  "r-pill": ["radius", "Every control: bar, tabs, buttons, chips, flags, inputs."],
+  "dur-fast": ["motion", "Hover border colour."],
+  dur: ["motion", "Hover lift, popover and section unfold."],
+  "dur-slow": ["motion", "Slower fades. Reserved."],
+  "dur-enter": ["motion", "The page-load rise of hero, columns and cards, staggered 60ms apart."],
+  "dur-drift": ["motion", "One cycle of the background glow drift."],
+  "ease-out": ["motion", "Entrances and lifts."],
+  "ease-io": ["motion", "The ambient glow drift."],
+  "blur-chrome": ["effects", "Backdrop blur of the bar."],
+  "blur-sheet": ["effects", "Backdrop blur of the settings popover and the command palette."],
+  "z-bg": ["effects", "Background layers."],
+  "z-chip": ["effects", "The resume chip."],
+  "z-bar": ["effects", "The bar."],
+  "z-pop": ["effects", "Popovers anchored to the bar."],
+  "z-palette": ["effects", "The command palette, above everything."],
+};
+const PLAIN_GROUPS = ["font", "type", "spacing", "layout", "radius", "motion", "effects"];
+
+function parseDesignTokens(css, faviconSvg) {
+  const raw = parseTokens(css);
+  const colors = new Map(); // name -> { light, dark }
+  const shadows = new Map();
+  const plain = new Map();
+  for (const [name, value] of raw) {
+    const pair = wholePair(value);
+    if (pair && pair.every((a) => parseColor(a))) {
+      colors.set(name, { light: pair[0], dark: pair[1] });
+    } else if (value.includes("light-dark(")) {
+      shadows.set(name, { light: resolve(value, "light"), dark: resolve(value, "dark") });
+    } else {
+      plain.set(name, value);
+    }
+  }
+  if (!faviconSvg.includes(`fill="${BRAND_MARK}"`)) {
+    throw new Error(`design-system: FAVICON_SVG no longer uses ${BRAND_MARK}; update brand-mark`);
+  }
+
+  // Usage notes <-> CSS, both directions, per kind. A token that moved kind
+  // (a plain value that became a pair, say) shows up as undocumented in the
+  // new kind and stale in the old one.
+  const kinds = [
+    ["colour", [...colors.keys()], Object.keys(colorUsage(() => "0"))],
+    ["shadow", [...shadows.keys()], Object.keys(SHADOW_USAGE)],
+    ["plain", [...plain.keys()], Object.keys(PLAIN_USAGE)],
+  ];
+  for (const [kind, found, documented] of kinds) {
+    const undocumented = found.filter((n) => !documented.includes(n));
+    if (undocumented.length) {
+      throw new Error(
+        `design-system: css.js defines ${kind} token --${undocumented.join(", --")} with no usage note in scripts/design-system.mjs; document it`,
+      );
+    }
+    const stale = documented.filter((n) => !found.includes(n));
+    if (stale.length) {
+      throw new Error(
+        `design-system: usage note for ${kind} token --${stale.join(", --")} but css.js no longer defines it that way; fix or remove the note`,
+      );
+    }
+  }
+  return { colors, shadows, plain };
+}
 
 // ── The build (pure: no fs, no git, no clock) ───────────────────────────────
 /**
@@ -259,42 +375,63 @@ const PAIRS = [
 export function buildDesignSystem({ css, faviconSvg, icons, sha, by, now }) {
   const files = new Map();
   const put = (rel, data) => files.set(rel, data);
-  const palette = parsePalette(css, faviconSvg);
-  const L = palette.light;
-  const D = palette.dark;
+  const { colors, shadows, plain } = parseDesignTokens(css, faviconSvg);
 
   const audit = {};
-  for (const [fg, bg] of PAIRS) {
-    for (const n of [fg, bg]) {
-      if (!L.has(n)) throw new Error(`design-system: contrast pair names unknown colour --${n}`);
+  const solid = (name, theme, layers) => {
+    let base = null;
+    for (const layer of layers) {
+      const c = colors.get(layer);
+      const v = parseColor(c[theme]);
+      if (base === null) {
+        if (v[3] !== 1) throw new Error(`design-system: contrast base --${layer} is not opaque`);
+        base = v;
+      } else base = over(v, base);
     }
-    audit[`${fg}/${bg}`] = [ratio(L.get(fg), L.get(bg)), ratio(D.get(fg), D.get(bg))];
+    return base;
+  };
+  for (const [fg, layers] of PAIRS) {
+    for (const n of [fg, ...layers]) {
+      if (!colors.has(n))
+        throw new Error(`design-system: contrast pair names unknown colour --${n}`);
+    }
+    const [l, d] = ["light", "dark"].map((theme) => {
+      const bg = solid(null, theme, layers);
+      const f = parseColor(colors.get(fg)[theme]);
+      return ratio(f[3] === 1 ? f : over(f, bg), bg);
+    });
+    audit[pairKey(fg, layers)] = [l, d];
   }
   const r = (k, t) => audit[k][t === "light" ? 0 : 1].toFixed(1);
+  const lowest = Object.entries(audit)
+    .flatMap(([k, [l, d]]) => [
+      [k, "light", l],
+      [k, "dark", d],
+    ])
+    .sort((a, b) => a[2] - b[2])[0];
 
-  // ── bundle.css: the site's real stylesheet minus the four palette blocks ──
-  const start = css.indexOf("  :root {");
-  const lightPin = css.indexOf(':root[data-theme="light"] {');
-  const end = css.indexOf("\n  }\n", lightPin) + 5;
-  if (start < 0 || lightPin < 0 || end < 5) throw new Error("palette blocks not found");
+  // ── bundle.css: the site's real stylesheet minus its token block ──
+  const start = css.indexOf(TOKENS_START);
+  const end = css.indexOf(TOKENS_END) + TOKENS_END.length;
   const body = css.slice(0, start) + css.slice(end);
   if (/<\/style/i.test(body)) throw new Error("</style in CSS");
   put(
     "components/bundle.css",
     `/* Digest News — the news site's own stylesheet, lifted verbatim from
-   workers/news-site/src/css.js @ ${sha}, minus its four palette blocks
-   (:root, the prefers-color-scheme dark copy, and both data-theme pins).
-   Those values live in tokens.json now and reach this file as tokens.css,
-   so a palette edit on the page reaches every preview. */
-:root { color-scheme: light; }
-:root[data-theme="dark"] { color-scheme: dark; }
+   workers/news-site/src/css.js @ ${sha}, minus its token block (the one
+   between its two token markers). Those values live in tokens.json now
+   and reach this file as tokens.css, so a token edit on the page reaches
+   every preview. The font-face rules point at the site's /fonts files, which
+   the artifact does not ship: previews fall back to the system stack. */
 ${body}
 /* Preview stage for this design system's cards. Not part of the site. */
-body:has(> .ds-stage) { padding: 16px; background: var(--page-bg); }
-.ds-stage { background: var(--bg); color: var(--text); padding: 1.1em 1.5em; border-radius: 20px; box-shadow: var(--card-shadow); }
+body:has(> .ds-stage) { padding: 16px; }
 .ds-stage > :first-child { margin-top: 0; }
-.ds-row { display: flex; flex-wrap: wrap; gap: 0.8em; align-items: center; }
-.ds-note { font-family: var(--font-data); font-size: 0.66em; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin: 1.2em 0 0.4em; }
+.ds-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.ds-note { margin: 18px 0 8px 8px; font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+/* The settings panel is a popover that is only visible while open; cards show
+   it as the open popover looks. */
+.settingspanel.ds-open { display: flex; flex-direction: column; gap: var(--sp-4); max-width: 340px; padding: 22px; font-size: var(--fs-ui); border: 1px solid var(--border-strong); border-radius: var(--r-card); background: var(--sheet-solid); box-shadow: var(--shadow); }
 `,
   );
 
@@ -305,53 +442,51 @@ body:has(> .ds-stage) { padding: 16px; background: var(--page-bg); }
   put("assets/Logos/apple-touch-icon.png", icons.APPLE_TOUCH_ICON);
   put(
     "assets/Icons/search.svg",
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="#101215" stroke-width="1.6"/><path d="M10.6 10.6 14 14" stroke="#101215" stroke-width="1.6" stroke-linecap="round"/></svg>\n`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="#151823" stroke-width="1.6"/><path d="M10.6 10.6 14 14" stroke="#151823" stroke-width="1.6" stroke-linecap="round"/></svg>\n`,
   );
   put(
     "assets/Logos/README.md",
     `# Logos
 
-The mark is an indigo (\`brand-mark\`, #4f46e5) rounded tile carrying three white bars of falling length and opacity: a stack of headlines, longest first. It is a 64-unit grid: tile rx 14, bars 6 high with rx 3, at widths 36 / 28 / 20 and opacity 1 / 0.85 / 0.70.
+The mark is an indigo (\`brand-mark\`, ${BRAND_MARK}) rounded tile carrying three white bars of falling length and opacity: a stack of headlines, longest first. It is a 64-unit grid: tile rx 14, bars 6 high with rx 3, at widths 36 / 28 / 20 and opacity 1 / 0.85 / 0.70.
 
 - \`favicon.svg\` is the source geometry. The three PNGs are renders of it, and each differs only in framing:
   - \`icon-512.png\`: corners rounded, transparent outside. The manifest's \`purpose: "any"\` icon.
   - \`icon-maskable-512.png\`: full-bleed tile, art inset 10%. Android crops it to its own mask.
   - \`apple-touch-icon.png\`: 180×180, square, full bleed. iOS applies its own squircle.
-- Use the mark for the tab, Home Screen and push notifications only. Inside the page the brand is the word **NEWS** set in the \`brand\` style; never place the tile in the masthead.
-- Never recolor the tile to \`accent\`. Indigo is the app-icon colour and press blue is the page colour; they are deliberately different.
+- Use the mark for the tab, Home Screen and push notifications only. Inside the page the brand is the word **news** in Sora with an \`accent\` full stop, set by the \`brand\` style; never place the tile in the bar.
+- Never recolor the tile to \`accent\`. Indigo is the app-icon colour; the page's accent is a different, lighter indigo-blue, and they are deliberately not the same.
 `,
   );
   put(
     "assets/Icons/README.md",
     `# Icons
 
-The site carries one drawn icon: \`search.svg\`, a 16-unit magnifier stroked at 1.6. In the page it is inlined with \`stroke="currentColor"\` so it takes the toggle's text colour; this file is fixed to \`text\` ink (#101215) because \`<img>\` cannot inherit colour.
+The site draws two glyphs, both inline SVG with \`stroke="currentColor"\`, 1.6 stroke: the search magnifier (\`search.svg\`, a 16-unit grid) and the settings sliders (20-unit grid, in the bar's settings button). \`search.svg\` is fixed to \`text\` ink in light (#151823) because \`<img>\` cannot inherit colour.
 
-Every other glyph is a text character in the font stack, never an icon file: ⚙ settings, ↑ / ← back-to-top and back FAB, → delta arrow, ↓ jump, × dismiss, ⚠ degraded run, ↻ fallback model, ▤ density, ☆ / ★ follow. Keep it that way: no icon font, no emoji.
+Every other glyph is a text character in the font stack, never an icon file: ← back and previous, → next and the hero CTA, ↑ moved-up thread, ↓ jump to unread, × dismiss and close, ⚠ degraded run, ↻ fallback model, ☆ / ★ follow. Keep it that way: no icon font, no emoji.
 `,
   );
 
   // ── tokens.json ──
   const usage = colorUsage(r);
-  const colorTokens = palette.names.map((name) =>
-    ALIASES.includes(name)
-      ? { name, value: { light: "{accent}", dark: "{accent}" }, usage: usage[name] }
-      : { name, value: { light: L.get(name), dark: D.get(name) }, usage: usage[name] },
-  );
+  const colorTokens = [...colors].map(([name, value]) => ({ name, value, usage: usage[name] }));
   colorTokens.push({
     name: "brand-mark",
-    value: "#4f46e5",
+    value: BRAND_MARK,
     usage:
       "App-icon indigo (favicon, Home Screen and notification icons). Not a page colour; never use it in the UI.",
   });
+  const group = (g) =>
+    Object.entries(PLAIN_USAGE)
+      .filter(([, [grp]]) => grp === g)
+      .map(([name, [, note]]) => ({ name, value: plain.get(name), usage: note }));
+  const T = (name) => plain.get(name);
+  const stack = (name) => T(name);
 
-  // Type styles, the non-FAB spacing tokens, the radius tokens and the two
-  // literal shadows below mirror values in css.js and are NOT drift-checked:
-  // edit them here by hand when the site's look changes.
-  const px = (em) => `${+(em * 17).toFixed(2)}px`;
   const tokens = {
     name: "Digest News",
-    version: 1,
+    version: 2,
     meta: {
       source: "github",
       repo: "Dezoxy/notification-digest",
@@ -359,7 +494,7 @@ Every other glyph is a text character in the font stack, never an icon file: ⚙
       package: "workers/news-site",
       paths: {
         tokens: ["workers/news-site/src/css.js"],
-        fonts: [],
+        fonts: ["workers/news-site/public/fonts/"],
         assets: [
           "workers/news-site/src/chrome.js",
           "workers/news-site/src/icons.js",
@@ -378,345 +513,268 @@ Every other glyph is a text character in the font stack, never an icon file: ⚙
     },
     type: {
       fonts: [],
-      families: {
-        chrome: CHROME_STACK,
-        prose: palette.fontProse,
-        data: palette.fontData,
-        serif: SERIF_STACK,
-      },
+      families: { display: stack("font-display"), body: stack("font-body") },
+      scale: group("type"),
       groups: [
         {
           name: "Display",
-          family: "chrome",
+          family: "display",
           styles: [
             {
-              name: "edition-title",
-              fontSize: px(2.3),
-              lineHeight: 1.08,
-              fontWeight: 800,
-              letterSpacing: "-0.03em",
+              name: "hero",
+              fontSize: T("fs-hero"),
+              lineHeight: 1.05,
+              fontWeight: 600,
+              letterSpacing: "-0.035em",
               sample: "Markets slid for a second day while the EU package landed.",
-              usage: "Digest page h1 (`.edhead h1`). clamp(1.6em, 5vw, 2.3em); max shown.",
+              usage: "Index hero headline (`.hero .headline-lead`), centred, balanced, 20ch.",
             },
             {
-              name: "brand-big",
-              fontSize: px(2.1),
-              lineHeight: 0.98,
-              fontWeight: 800,
-              letterSpacing: "-0.03em",
-              sample: "NEWS",
-              usage:
-                "Masthead wordmark on the index (`.mast-big .brand`), uppercase. clamp(1.5em, 4.5vw, 2.1em).",
-            },
-            {
-              name: "headline-lead",
-              fontSize: px(2.1),
-              lineHeight: 1.08,
-              fontWeight: 800,
-              letterSpacing: "-0.02em",
-              sample: "Markets slid for a second day.",
-              usage:
-                "Newest briefing on the index (`.entry-lead .headline-lead`). clamp(1.5em, 4.2vw, 2.1em).",
-            },
-            {
-              name: "arc-title",
-              fontSize: px(1.7),
-              lineHeight: 1.15,
-              fontWeight: 800,
-              letterSpacing: "-0.025em",
+              name: "title",
+              fontSize: T("fs-hero-sm"),
+              lineHeight: 1.05,
+              fontWeight: 600,
+              letterSpacing: "-0.035em",
               sample: "Markets slide continues",
-              usage: "Story-thread page h1 (`.arctitle`).",
+              usage: "Digest headline, thread title, Search and About page titles (`.herotitle`).",
             },
             {
-              name: "section-heading",
-              fontSize: px(1.3),
-              lineHeight: 1.15,
-              fontWeight: 800,
-              letterSpacing: "-0.025em",
-              sample: "EU agrees new package",
-              usage: "Numbered digest section (`.digest > h2`), sticky while its section is read.",
-            },
-            {
-              name: "headline",
-              fontSize: px(1.17),
-              lineHeight: 1.15,
-              fontWeight: 800,
+              name: "section",
+              fontSize: T("fs-h2"),
+              lineHeight: 1.25,
+              fontWeight: 600,
               letterSpacing: "-0.02em",
-              sample: "The sell-off began; two sections follow.",
-              usage: "Ledger entry headline (`.headline` on an h3).",
+              sample: "EU agrees new package",
+              usage: "Digest section heading (`.sechead h2`).",
             },
             {
               name: "brand",
-              fontSize: px(0.95),
-              lineHeight: 1.6,
-              fontWeight: 800,
+              fontSize: "22px",
+              lineHeight: 1,
+              fontWeight: 700,
               letterSpacing: "-0.02em",
-              sample: "NEWS",
-              usage: "Masthead wordmark on inner pages (`.mast .brand`), uppercase.",
+              sample: "news.",
+              usage:
+                "The wordmark (`.brand`), lowercase, with an `accent` full stop (`.brandmark`).",
+            },
+            {
+              name: "time",
+              fontSize: "18px",
+              lineHeight: 1.5,
+              fontWeight: 600,
+              sample: "16:00",
+              usage:
+                "Entry time (`.entry .time`), tabular, in `accent-text` (amber on the daily brief).",
+            },
+            {
+              name: "dayhead",
+              fontSize: "15px",
+              lineHeight: 1.5,
+              fontWeight: 600,
+              sample: "Tuesday, 25 August 2026",
+              usage: "Ledger day header (`.dayhead`), in `muted`.",
             },
           ],
         },
         {
           name: "Reading",
-          family: "prose",
+          family: "body",
           styles: [
             {
-              name: "body",
-              family: "chrome",
-              fontSize: "17px",
-              lineHeight: 1.6,
-              fontWeight: 400,
-              sample: "Settings, navigation and every chrome label sit on this base.",
-              usage: "`body`. Steps to 18px at ≥ 75em and 19px at ≥ 100em; 15px on phones.",
-            },
-            {
-              name: "tldr",
-              fontSize: px(1.02),
-              lineHeight: 1.65,
-              fontWeight: 400,
-              sample: "Markets slid for a second day while the EU package landed.",
-              usage: "TL;DR leader (`.tldr`), on `tldr-bg`.",
+              name: "headline",
+              fontSize: T("fs-card"),
+              lineHeight: 1.3,
+              fontWeight: 600,
+              letterSpacing: "-0.015em",
+              sample: "The sell-off began; two sections follow.",
+              usage: "Entry headline (`.headline`), in `strong`, balanced.",
             },
             {
               name: "prose",
-              fontSize: "17px",
-              lineHeight: 1.65,
+              fontSize: `calc(${T("fs-read")} * ${T("read-scale")})`,
+              lineHeight: T("lh-read"),
               fontWeight: 400,
               sample: "Equities extended losses into the close, with the drawdown at four percent.",
-              usage: "Digest paragraphs (`.digest p`) in `prose` colour. Hyphenated.",
+              usage:
+                "Article text (`.secbody`, `.tldr`, About) in `body`; hyphenated. Scales with the reader's text size.",
+            },
+            {
+              name: "subline",
+              fontSize: "19px",
+              lineHeight: 1.6,
+              fontWeight: 400,
+              sample: "The council signed off overnight, with disbursement gated on reforms.",
+              usage: "Hero subline (`.herosub`), centred, 54ch; 17px on phones.",
             },
             {
               name: "excerpt",
-              fontSize: px(0.88),
+              fontSize: "15px",
               lineHeight: 1.55,
               fontWeight: 400,
               sample: "TL;DR: The sell-off began; two sections follow.",
-              usage: "Entry excerpt (`.entry .excerpt`) in `muted`, clamped to a few lines.",
+              usage:
+                "Entry excerpt (`.entry .excerpt`) in `body`, clamped to three lines (two when compact).",
             },
           ],
         },
         {
-          name: "Data",
-          family: "data",
+          name: "Interface",
+          family: "body",
           styles: [
             {
-              name: "time",
-              fontSize: px(0.85),
-              lineHeight: 1.6,
-              fontWeight: 700,
-              sample: "16:00",
-              usage:
-                "Entry time (`.entry .time`), tabular. `accent` on the newest edition of a day.",
+              name: "ui",
+              fontSize: T("fs-ui"),
+              lineHeight: 1.5,
+              fontWeight: 500,
+              sample: "View tabs, buttons, settings rows",
+              usage: "Controls and nav; active states go to 600.",
             },
             {
-              name: "count",
-              fontSize: px(0.75),
-              lineHeight: 1.6,
-              fontWeight: 400,
+              name: "meta",
+              fontSize: T("fs-meta"),
+              lineHeight: 1.5,
+              fontWeight: 500,
               sample: "9 items · 2 sections",
-              usage: "Entry counts, colophon source key, follow toggle.",
+              usage: "Counts, hero chip, catch-up strip, colophon.",
             },
             {
-              name: "eyebrow",
-              fontSize: px(0.68),
-              lineHeight: 1.6,
-              fontWeight: 400,
-              letterSpacing: "0.1em",
-              sample: "LATEST · TUE 25 AUG · 16:00 CEST",
+              name: "label",
+              fontSize: T("fs-micro"),
+              lineHeight: 1.5,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              sample: "EARLIER · NOW · TL;DR",
               usage:
-                "Uppercase. Lead eyebrow, view tabs, digest nav, TL;DR label, flags. The wire dateline.",
-            },
-            {
-              name: "dateline",
-              fontSize: px(0.66),
-              lineHeight: 1.6,
-              fontWeight: 400,
-              letterSpacing: "0.11em",
-              sample: "NO. 235 · TUESDAY, 25 AUGUST 2026",
-              usage: "Uppercase. The issue line above the masthead and the digest stamp.",
+                "Uppercase labels (`.sidehead`, `.archivelabel`, `.tldr-label`, `.unreadfence .label`).",
             },
             {
               name: "cite",
-              fontSize: px(0.7),
-              lineHeight: 1.6,
+              fontSize: "0.72em",
+              lineHeight: 1,
               fontWeight: 700,
               sample: "1",
-              usage: "Citation chip (`.cite`), superscript, on `chip-bg`.",
+              usage: "Citation chip (`.cite`), superscript, on `accent-soft`.",
             },
           ],
         },
       ],
     },
-    spacing: {
-      tokens: [
-        {
-          name: "rule-heavy-w",
-          value: "4px",
-          usage: "Masthead bottom rule thickness, in `rule-heavy`.",
-        },
-        {
-          name: "gutter",
-          value: "1.25em",
-          usage: "Side padding of the reading column (`.wrap`) on phones and tablets.",
-        },
-        {
-          name: "gutter-desktop",
-          value: "3em",
-          usage: "Side padding inside the lifted desktop column.",
-        },
-        {
-          name: "entry-pad",
-          value: "1.1em",
-          usage: "Top padding of a ledger entry (1.3em below).",
-        },
-        {
-          name: "section-gap",
-          value: "2.2em",
-          usage: "Space above each numbered digest section and the closing note.",
-        },
-        { name: "column", value: "42em", usage: "Reading column max width below 52em." },
-        { name: "column-desktop", value: "61em", usage: "Lifted desktop column max width." },
-        ...palette.fab.map(({ name, value }) => ({ name, value, usage: FAB_USAGE[name] })),
-      ],
-    },
-    radius: {
-      tokens: [
-        {
-          name: "radius-square",
-          value: "0",
-          usage: "Surfaces: entries, attention callout, rules, sections. The poster default.",
-        },
-        { name: "radius-chip", value: "3px", usage: "Citation chips only." },
-        { name: "radius-input", value: "8px", usage: "Search inputs." },
-        {
-          name: "radius-panel",
-          value: "14px",
-          usage: "TL;DR block, settings and search popovers, command palette.",
-        },
-        { name: "radius-column", value: "20px", usage: "The lifted desktop column." },
-        {
-          name: "radius-pill",
-          value: "999px",
-          usage:
-            "Every interactive control: view tabs, segmented, gear, search button, thread chips, flags, resume chip.",
-        },
-        { name: "radius-fab", value: "50%", usage: "Back-to-top FAB." },
-      ],
-    },
+    spacing: { tokens: [...group("spacing"), ...group("layout")] },
+    radius: { tokens: group("radius") },
     shadow: {
-      tokens: [
-        { name: "card-shadow", value: palette.cardShadow, usage: "The lifted desktop column." },
-        {
-          name: "float-shadow",
-          value: "0 4px 14px rgba(0, 0, 0, 0.28)",
-          usage:
-            "Popovers, the back FAB and the resume chip (a literal in css.js, same in both themes).",
-        },
-        {
-          name: "palette-shadow",
-          value: "0 12px 40px rgba(0, 0, 0, 0.35)",
-          usage: "Command palette over its dimmed backdrop (a literal in css.js).",
-        },
-      ],
+      tokens: [...shadows].map(([name, value]) => ({ name, value, usage: SHADOW_USAGE[name] })),
     },
+    motion: {
+      note: "Everything animates under prefers-reduced-motion: no-preference only, and only transform and opacity.",
+      tokens: group("motion"),
+    },
+    effects: { tokens: group("effects") },
   };
   put("tokens.json", JSON.stringify(tokens, null, 2) + "\n");
 
   // ── README (the brand book) ──
   put(
     "README.md",
-    `Digest News is the reading surface of a personal notification digest: every six hours a briefing of the owner's Telegram groups, X notifications, RSS, Hacker News and Polymarket, summarized and published as a page. The look is a **print poster**: one heavy sans voice, a monospaced wire dateline for anything keyed on time, square surfaces, pill-shaped controls, press blue for links and a yellow highlighter for the phrase that matters. It runs in English and Hungarian, light and dark, on a phone first.
+    `Digest News is the reading surface of a personal notification digest: every six hours a briefing of the owner's Telegram groups, X notifications, RSS, Hacker News and Polymarket, summarized and published as a page. The look is **Spatial Glass**: a dotted page with a soft indigo glow, flat translucent cards with a hairline border, one floating pill bar, and two typefaces, Sora for headings and Inter for everything else. It runs in English and Hungarian, light and dark, on a phone first.
 
 Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own stylesheet, so markup with the class names in each component card renders exactly as production does.
 
 ## Content fundamentals
 
-- **Time is the primary key.** Every entry leads with its time; every page carries a dateline. Set times, counts, datelines, citations and eyebrows in the \`data\` family (mono, tabular) and everything a person reads at length in \`prose\`.
+- **Time leads.** Every entry opens with its time in the display face; every page carries a dated chip. Counts and metadata are small, \`muted\`, tabular.
 - **Headlines are sentences.** A briefing's headline is its TL;DR's first sentence, in sentence case, ending with a full stop: "Markets slid for a second day while the EU package landed." Never title case, never a teaser.
-- **Labels are short and uppercase** through CSS (\`text-transform\`), written in normal case in the markup: "Latest · Tue 25 Aug · 16:00 CEST · 12 items". The middle dot \`·\` separates facts.
+- **Labels are short.** Small uppercase labels are written in normal case in the markup and uppercased by CSS. The middle dot \`·\` separates facts: "Latest · Tue 25 Aug · 16:00 CEST · 12 items".
 - **Plain, factual voice.** No exclamation marks, no "breaking", no emoji. State counts honestly ("6 items · 1 sections" is a known plural gap, not a style).
 - **Every string has a Hungarian twin.** Copy lives in \`strings.js\`; leave room for Hungarian's longer compounds (prose is hyphenated with \`hyphens: auto\`; chrome is not).
 - **Arrows and symbols are text.** ← → ↑ ↓ × ⚠ ↻ ☆ ★ come from the font. See Iconography.
 
 ## Visual foundations
 
-**Colour.** Paper \`bg\`, ink \`text\`, press blue \`accent\`. Body copy in an article is \`prose\`, one step under ink, so headlines and \`strong\` figures (which snap back to \`text\`) stand out. Secondary metadata is \`muted\`; small uppercase folios are \`faint\`. The highlighter \`mark\` with \`mark-ink\` marks a phrase inside a headline; the search hit highlight is \`chip-bg\` + \`chip-text\` instead. \`attention-bg\` + \`attention-text\` carry every warning: the attention callout, the collection-failed banner, entry flags. Solid \`accent\` fills (active view tab, back FAB, hovered cite) take \`bg\` as their text colour.
+**Colour.** One block of \`light-dark()\` pairs, so a theme is a single declaration per colour. \`bg\` is the page; \`text\`, \`strong\`, \`body\` and \`muted\` are the four ink steps (headlines in \`strong\`, reading text in \`body\`, metadata in \`muted\`). \`panel\` is the translucent card, \`border\` its hairline. \`accent\` is the brand blue: the settings button, the primary CTA, the focus ring; its tint \`accent-soft\` with \`accent-line\` and \`accent-text\` makes thread pills, cite chips and the TL;DR card. Amber (\`daily\`, \`daily-soft\`, \`daily-line\`) is the one other hue and means "a different kind of edition" (daily and weekly briefs) or "attention" (partial run, the attention callout).
 
-**Contrast.** Measured pairs, light / dark: \`text\` on \`bg\` ${r("text/bg", "light")} / ${r("text/bg", "dark")}; \`prose\` ${r("prose/bg", "light")} / ${r("prose/bg", "dark")}; \`muted\` ${r("muted/bg", "light")} / ${r("muted/bg", "dark")}; \`accent\` ${r("accent/bg", "light")} / ${r("accent/bg", "dark")}; \`bg\` on \`accent\` ${r("bg/accent", "light")} / ${r("bg/accent", "dark")}; \`tldr-text\` on \`tldr-bg\` ${r("tldr-text/tldr-bg", "light")} / ${r("tldr-text/tldr-bg", "dark")}; \`attention-text\` on \`attention-bg\` ${r("attention-text/attention-bg", "light")} / ${r("attention-text/attention-bg", "dark")}; \`mark-ink\` on \`mark\` ${r("mark-ink/mark", "light")} / ${r("mark-ink/mark", "dark")}. One known miss, kept exact from the source: \`faint\` on \`bg\` is ${r("faint/bg", "light")} / ${r("faint/bg", "dark")}, so use it only for decorative folios and repeat anything important in \`muted\`.
+**Contrast.** Measured as rendered, translucent layers composited over \`bg\`, light / dark: \`strong\` on \`bg\` ${r("strong/bg", "light")} / ${r("strong/bg", "dark")}; \`body\` ${r("body/bg", "light")} / ${r("body/bg", "dark")}; \`muted\` ${r("muted/bg", "light")} / ${r("muted/bg", "dark")}; \`accent-text\` ${r("accent-text/bg", "light")} / ${r("accent-text/bg", "dark")}; \`muted\` on a \`panel\` card ${r("muted/bg+panel", "light")} / ${r("muted/bg+panel", "dark")}; \`accent-text\` on \`accent-soft\` ${r("accent-text/bg+panel+accent-soft", "light")} / ${r("accent-text/bg+panel+accent-soft", "dark")}; \`daily\` on \`daily-soft\` ${r("daily/bg+panel+daily-soft", "light")} / ${r("daily/bg+panel+daily-soft", "dark")}; \`on-accent\` on \`accent\` ${r("on-accent/accent", "light")} / ${r("on-accent/accent", "dark")}. The lowest measured pair is \`${lowest[0]}\` in ${lowest[1]} at ${lowest[2].toFixed(1)}:1.
 
-**Type.** System faces only, zero bytes downloaded: \`chrome\` (the body stack) for UI, \`prose\` for reading, \`data\` (mono) for time and metadata. Readers can switch reading text to \`serif\` ("Classic") in Settings, which redefines \`--font-prose\` and nothing else. Display styles are weight 800 with negative tracking (-0.02 to -0.03em) and tight leading (0.98–1.15); never set a headline lighter than 750. Base size is 17px, 18px at ≥ 75em, 19px at ≥ 100em, 15px on phones; readers add S / M / L on top through \`data-fontsize\`.
+**Type.** Two self-hosted variable faces: \`font-display\` (Sora, weight 600 to 700, tight tracking -0.035 to -0.015em) for the wordmark, hero, section headings, entry times and day heads; \`font-body\` (Inter) for everything else. Sizes come from the \`fs-*\` scale. Article text is \`fs-read\` (17px, 16px on phones) at 1.75 leading, multiplied by \`read-scale\` for the reader's S / M / L; only reading text scales.
 
-**Layout.** One reading column: \`column\` (42em) with \`gutter\` side padding, centred. From 52em the column lifts off the \`page-bg\` gutter as a paper card (\`radius-column\`, \`card-shadow\`, up to \`column-desktop\` 61em). Ledger entries stack with \`hairline\` separators; there are no cards in the list. Sections inside a digest are separated by space (\`section-gap\`) and a hairline top rule, numbered 01, 02, … in \`accent\` mono by a CSS counter, and stay sticky while read.
+**Layout.** Pages are \`maxw\` (1200px) wide, centred, with \`gutter\` padding. From 1040px a page with a sidebar becomes two columns, main (at least \`main-min\`) and a \`side-w\` (360px) side column holding the Now and Earlier cards and the settings panel. Narrower, the sidebar stacks below the main column; pages without one are a single 760px column. Spacing is the \`sp-*\` scale (4 to 72px).
 
-**Shape.** Surfaces are square: entries, callouts, rules, sections. Every interactive control is a pill (\`radius-pill\`) outlined in \`rule-heavy\`: view tabs, segmented toggles, the gear, the search button. Chips are pills on \`chip-bg\` except citation chips (\`radius-chip\`, 3px). Floating panels (TL;DR, popovers, command palette) use \`radius-panel\`. Do not round an entry or a section.
+**Shape.** Cards are \`r-card\` (24px); inner rows and notes \`r-in\` (14px); every control is a pill (\`r-pill\`). Nothing is square.
 
-**Rules and borders.** The masthead sits on a \`rule-heavy-w\` (4px) \`rule-heavy\` rule; the lead entry on a 1px \`rule-heavy\` rule; everything else on 1px \`hairline\`. No left-border accent bars anywhere.
+**Rules and borders.** 1px \`border\` on cards, \`border-strong\` on floating surfaces and controls. No left-border accent bars; the timeline rail is the one exception and it is a separate element.
 
-**Shadows.** Only floating things cast one: \`float-shadow\` for popovers, the FAB and the resume chip; \`palette-shadow\` for the command palette; \`card-shadow\` for the lifted column. Entries and sections never.
+**Glass and shadow.** Blur exists on exactly three surfaces: the bar, an open settings popover and the command palette (\`blur-chrome\`, \`blur-sheet\`, with \`sheet\` as their fill). Everything else is a flat \`panel\`; stacked blurs are expensive and nested ones do not composite. Only floating things cast the \`shadow\` token. Reduced transparency or a browser without backdrop-filter swaps those surfaces to \`sheet-solid\`.
 
-**States.** Hover on a link or entry moves it to \`accent\` (\`accent-strong\` when it was already blue); inactive view tabs wash to \`tldr-bg\`. Focus is a solid 2px outline in \`accent\` (on entries, offset 4px) or \`text\` (on accent-filled controls). Disabled controls are hidden, not greyed.
+**States.** Hover on a card darkens its border and lifts it 2px (hover devices only); on a row or tab it washes to \`accent-soft\` or \`strong\` text. Focus is one 2px \`accent\` ring. Disabled controls are hidden, not greyed.
 
-**Motion.** Ambient only, and only under \`prefers-reduced-motion: no-preference\`: smooth anchor scrolling, the browser's default cross-page fade, a 120ms drop-in for the command palette, a fade for the back FAB. No scroll-triggered reveals.
+**Motion.** Only under \`prefers-reduced-motion: no-preference\`, only transform and opacity: the page-load rise (staggered), the drifting background glow, the live-dot ping, card lift, section unfold, the settings popover. No scroll-triggered reveals.
 
-**Themes.** Light, dark, or the OS preference, chosen in Settings and pinned through \`data-theme\` on \`<html>\`. Every colour reads from a token; set \`color-scheme\` with the theme so the canvas between pages never flashes white.
+**Themes.** Light, dark, or the OS preference, chosen in Settings and pinned through \`data-theme\` on \`<html>\`, which only switches \`color-scheme\`; \`light-dark()\` does the rest.
+
+**Phone.** Below 700px the bar becomes a floating bottom dock (a back arrow replaces the wordmark on digest pages), a quiet brand and issue line sit at the top, and Settings opens as a bottom sheet.
 
 ## Iconography
 
-The mark is the indigo tile with three falling bars (\`assets/Logos\`, colour \`brand-mark\`), used for the tab, Home Screen and push notifications only. In the page the brand is the word NEWS in \`brand\` / \`brand-big\`. The one drawn icon is the search magnifier (\`assets/Icons/search.svg\`, inlined with \`currentColor\`). All other glyphs are Unicode characters in the current font: ⚙ ↑ ← → ↓ × ⚠ ⚑ ↻ ▤ ☆ ★. No icon font, no emoji.
+The mark is the indigo tile with three falling bars (\`assets/Logos\`, colour \`brand-mark\`), used for the tab, Home Screen and push notifications only. In the page the brand is the word "news" in Sora with an accent full stop. Two inline SVG glyphs, the search magnifier and the settings sliders, take \`currentColor\`. All other glyphs are Unicode characters in the current font: ← → ↑ ↓ × ⚠ ↻ ☆ ★. No icon font, no emoji.
 `,
   );
+
   // ── Components ──
-  const stage = (inner, extra = "") => `<main class="ds-stage"${extra}>\n${inner}\n</main>`;
+  const stage = (inner) => `<main class="ds-stage">\n${inner}\n</main>`;
   const C = [];
   const add = (name, group, height, markup, readme, subtitle) =>
     C.push({ name, group, height, markup, readme, subtitle });
+  const searchIcon = `<svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+  const slidersIcon = `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 6h9M16 6h1M3 14h1M8 14h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="14" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`;
+  const brand = `<a class="brand" href="#">news<span class="brandmark" aria-hidden="true">.</span></a>`;
+  const tabs = (active) =>
+    `<nav class="viewtabs">${["All", "Daily", "Weekly"]
+      .map((t) =>
+        t === active
+          ? `<span class="viewtab active">${t}</span>`
+          : `<a class="viewtab" href="#">${t}</a>`,
+      )
+      .join("")}</nav>`;
 
   add(
-    "Masthead",
+    "Bar",
     "Chrome",
-    200,
-    stage(`<div class="issueline">No. 235 · Tuesday, 25 August 2026 · 2 editions today</div>
-<header class="mast mast-big">
-  <div class="mastleft"><a class="brand" href="#">news</a></div>
-  <nav class="viewtabs"><span class="viewtab active">All</span><a class="viewtab" href="#">Daily</a><a class="viewtab" href="#">Weekly</a></nav>
-  <div class="mastright">
-    <details class="searchpop"><summary class="searchtoggle" aria-label="Search"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Search</span></summary></details>
-    <details class="settings"><summary class="gear" aria-label="Settings"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary></details>
+    150,
+    stage(`<header class="bar">
+  ${brand}
+  ${tabs("All")}
+  <div class="baractions">
+    <details class="searchpop"><summary class="searchtoggle" aria-label="Search">${searchIcon}<span class="searchlabel">Search</span></summary></details>
+    <button type="button" class="settingsbtn" aria-label="Settings">${slidersIcon}</button>
   </div>
-</header>
-<div class="ds-note">Inner pages: base masthead</div>
-<header class="mast"><div class="mastleft"><a class="brand" href="#">news</a></div><div class="mastright"><details class="settings"><summary class="gear"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary></details></div></header>`),
-    `# Masthead
+</header>`),
+    `# Bar
 
-The top of every page: an optional mono issue line, the NEWS wordmark, the view tabs on the index, and the Search and Settings pills, sitting on the 4px \`rule-heavy\` rule.
+The one floating pill at the top of every page: wordmark, view tabs, Search and Settings. It is the same \`header.bar\` on every breakpoint; below 700px CSS turns it into the bottom dock.
 
-**Use** \`header.mast\` on every page. Add \`.mast-big\` and a preceding \`.issueline\` on the index views (All, Daily, Weekly), which carry the issue number and date; inner pages (digest, arc, search, about) use the base masthead.
+**Provide** \`header.bar\` with the brand link (\`news\` plus \`span.brandmark\` for the accent full stop), a \`nav.viewtabs\`, and \`.baractions\` holding the search control and \`button.settingsbtn\` (\`popovertarget\` the settings panel). A digest page adds \`a.barback\` after the brand; it is shown only on phones.
 
-**Provide** the brand link (lowercase "news" in markup; CSS uppercases it), the \`.viewtabs\` nav when on an index view, and the two \`details\` popovers (\`.searchpop\`, \`.settings\`) in \`.mastright\`.
+- Do keep the bar sticky and never put a transform, filter or backdrop-filter on an ancestor: that breaks sticky and the fixed dock.
+- Do keep the search control a \`details.searchpop\` where the page has a ledger to filter, and a plain \`a.barsearch\` icon link elsewhere.
+- Don't add items; new destinations go in the command palette.
 
-- Do keep the wordmark as text. The indigo tile is the app icon, not a page logo.
-- Do keep Search and Settings as pills outlined in \`rule-heavy\`; on phones they collapse to bare icons by CSS alone.
-- Don't add items to the masthead; new destinations go in the command palette.
-
-Source: \`chrome.js\`, \`hrefs.js\`; styles \`header.mast\`, \`.issueline\`, \`summary.gear\`, \`summary.searchtoggle\`.
+Source: \`chrome.js\`, \`hrefs.js\`; styles \`.bar\`, \`.brand\`, \`.baractions\`, \`.settingsbtn\`, \`.searchtoggle\`.
 `,
   );
 
   add(
     "ViewTabs",
     "Controls",
-    110,
-    stage(`<div class="ds-row"><nav class="viewtabs"><span class="viewtab active">All</span><a class="viewtab" href="#">Daily</a><a class="viewtab" href="#">Weekly</a></nav>
-<nav class="viewtabs"><a class="viewtab" href="#">All</a><span class="viewtab active">Daily</span><a class="viewtab" href="#">Weekly</a></nav></div>`),
+    100,
+    stage(`<div class="ds-row">${tabs("All")}${tabs("Daily")}</div>`),
     `# ViewTabs
 
-A pill-shaped segmented nav that switches the index between All, Daily and Weekly.
+A segmented pill on a \`track\` that switches the index between All, Daily and Weekly.
 
-**Provide** a \`nav.viewtabs\` with one \`.viewtab\` per view: the current one a \`span.viewtab.active\` (solid \`accent\`, \`bg\` text), the others links. Labels are mono uppercase by CSS.
+**Provide** a \`nav.viewtabs\` with one \`.viewtab\` per view: the current one a \`span.viewtab.active\` (a raised \`pill\`), the others links.
 
-- Do use it only in the masthead of index views.
 - Do mark the current view with a \`span\`, not a link, so it is not focusable.
-- Don't add a fourth view without checking the phone masthead still fits on one row.
+- Do keep labels short; tabs shrink their padding before they wrap, and Hungarian runs about 30% longer.
+- Don't add a fourth view without checking the phone dock still fits on one row.
 
 Source: \`hrefs.js\`; styles \`.viewtabs\`, \`.viewtab\`.
 `,
@@ -725,86 +783,112 @@ Source: \`hrefs.js\`; styles \`.viewtabs\`, \`.viewtab\`.
   add(
     "SettingsPanel",
     "Controls",
-    330,
-    stage(`<div style="display:flex;justify-content:flex-end;align-items:flex-start;min-height:270px">
-<details class="settings" open><summary class="gear" aria-label="Settings"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Settings</span></summary><div class="settingspanel">
-<div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="#">HU</a></span></div>
-<div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn">Light</button><button class="minisegbtn active">Auto</button><button class="minisegbtn">Dark</button></span></div>
-<div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg" role="group" aria-label="Text size"><button class="minisegbtn">S</button><button class="minisegbtn active">M</button><button class="minisegbtn">L</button></span></div>
-<div class="settingsrow"><span class="settingslabel">Body font</span><span class="miniseg" role="group" aria-label="Body font"><button class="minisegbtn active">Modern</button><button class="minisegbtn">Classic</button></span></div>
-<div class="settingsrow"><span class="settingslabel">Density</span><button class="densitytoggle" aria-label="Toggle compact list">▤</button></div>
-<div class="settingsrow"><a href="#">About</a></div>
-</div></details></div>`),
+    470,
+    stage(`<section class="settingspanel ds-open" aria-label="Settings">
+  <div class="settingshead"><h2 class="settingstitle">Settings</h2><button type="button" class="settingsclose" aria-label="Close">×</button></div>
+  <div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="#">HU</a></span></div>
+  <div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg"><button class="minisegbtn">Light</button><button class="minisegbtn active">Auto</button><button class="minisegbtn">Dark</button></span></div>
+  <div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg"><button class="minisegbtn">S</button><button class="minisegbtn active">M</button><button class="minisegbtn">L</button></span></div>
+  <div class="settingsrow"><span class="settingslabel">Density</span><span class="miniseg"><button class="minisegbtn active">Cards</button><button class="minisegbtn">Compact</button></span></div>
+  <div class="settingsrow"><span class="settingslabel">Notifications</span><button class="pushtoggle" aria-pressed="false">Enable</button></div>
+  <div class="settingsrow"><a href="#">About</a><span class="settingslabel appversion">v1.4.2</span></div>
+</section>`),
     `# SettingsPanel
 
-The Settings popover: language, theme, text size, reading font, density and notifications, each a labelled row with a segmented pill control.
+Language, theme, text size, density and notifications, each a labelled row with a segmented pill, plus the About link and app version. One element, three presentations: a card in the desktop sidebar, a popover anchored under the bar on tablets, a bottom sheet on phones.
 
-**Provide** a \`details.settings\` whose \`summary.gear\` opens a \`.settingspanel\` of \`.settingsrow\`s. Each row is a \`.settingslabel\` plus a control: \`.miniseg\` with \`.minisegbtn\` buttons (the chosen one \`.active\`), \`.densitytoggle\`, \`.pushtoggle\`, or a plain link.
+**Provide** a \`section.settingspanel[popover]#settings\` with a \`.settingshead\` (title and \`.settingsclose\`) and \`.settingsrow\`s. Each row is a \`.settingslabel\` plus a control: \`.miniseg\` of \`.minisegbtn\` (the chosen one \`.active\`), \`.langswitch\`, \`.pushtoggle\`, or a link. The bar's \`.settingsbtn\` opens it with \`popovertarget\`.
 
-- Do ship the buttons with \`hidden\` in markup; the client script reveals them, so readers without JavaScript never see dead controls.
-- Do write each preference to \`localStorage\` and to a \`data-*\` attribute on \`<html>\` (\`data-theme\`, \`data-fontsize\`, \`data-font\`, \`data-density\`); styles key off the attribute.
+- Do ship the buttons with \`hidden\`; the client script reveals them, and a row with nothing visible disappears, so readers without JavaScript never see dead controls.
+- Do write each preference to \`localStorage\` and to a \`data-*\` attribute on \`<html>\` (\`data-theme\`, \`data-fontsize\`, \`data-density\`); styles key off the attribute.
+- Don't give the bare \`.settingspanel\` a display: a closed popover must stay hidden by the UA.
 - Don't add a setting whose effect is not visible on the page that is open.
 
-Source: \`hrefs.js\`, \`client.js\`; styles \`.settingspanel\`, \`.miniseg\`, \`.minisegbtn\`.
+The preview shows the open popover. Source: \`hrefs.js\`, \`client.js\`; styles \`.settingspanel\`, \`.settingsrow\`, \`.miniseg\`, \`.minisegbtn\`.
+`,
+    "Shown as the open popover.",
+  );
+
+  add(
+    "HeroLead",
+    "Hero",
+    440,
+    stage(`<section class="hero">
+  <a class="entry entry-lead herolink" href="#">
+    <span class="herochip"><span class="livedot" aria-hidden="true"></span><span class="eyebrow-text">Latest · Tue 25 Aug · 16:00 CEST · 12 items</span><span class="flag flag-degraded" title="polymarket">⚠ partial</span></span>
+    <h1 class="herotitle headline-lead">Markets slid for a second day while the EU package landed.</h1>
+    <p class="herosub excerpt">Equities extended losses into the close; two sections follow on the council vote and chip export rules.</p>
+  </a>
+  <div class="heropills"><a class="herocta" href="#">Read the edition →</a><a class="threadpill" href="#">Markets slide continues</a><a class="threadpill" href="#">EU agrees new package</a></div>
+</section>`),
+    `# HeroLead
+
+The newest briefing at the top of the index, centred and large: a chip with a live dot and the dateline, the headline, a subline, a primary CTA and the threads it belongs to.
+
+**Provide** \`section.hero\` with an \`a.entry.entry-lead.herolink\` linking to the digest (containing \`span.herochip\` with \`.livedot\`, \`.eyebrow-text\` and optional \`.flag\`s, an \`h1.herotitle.headline-lead\`, and \`p.herosub.excerpt\`), then \`.heropills\` holding \`a.herocta\` and one \`a.threadpill\` per thread.
+
+- Do use exactly one per index page, above the ledger; it is the page's h1.
+- Do let the live dot's ping run only under no-preference motion.
+- Don't wrap it in a card; the hero sheds the entry's card surface.
+
+Source: \`render-index.js\`; styles \`.hero\`, \`.herotitle\`, \`.herochip\`, \`.herocta\`, \`.threadpill\`.
 `,
   );
 
   add(
-    "LeadEntry",
-    "Ledger",
-    230,
-    stage(`<a class="entry entry-lead" href="#">
-  <div class="leadmain">
-    <span class="meta"><span class="eyebrow-text">Latest · Tue 25 Aug · 16:00 CEST · 12 items</span><span class="flag flag-degraded" title="polymarket">⚠ partial</span></span>
-    <h2 class="headline headline-lead">Markets slid for a second day while the <mark>EU package</mark> landed.</h2>
-    <p class="excerpt"><strong>TL;DR:</strong> Markets slid for a second day while the EU package landed.</p>
-  </div>
-  <dl class="leadfacts"><dt>items</dt><dd>12</dd><dt>sections</dt><dd>3</dd></dl>
-</a>`),
-    `# LeadEntry
+    "DigestHero",
+    "Hero",
+    330,
+    stage(`<nav class="digestnav"><a href="#">← All digests</a><span class="spacer"></span><a class="nav-older" href="#">← 10:00</a></nav>
+<header class="hero hero-digest">
+  <span class="herochip">Digest · Tue 25 Aug · 16:00 CEST · 12 items · 3 sections</span>
+  <h1 class="herotitle">Markets slid for a second day while the EU package landed.</h1>
+  <p class="herosub">Equities extended losses into the close.</p>
+</header>`),
+    `# DigestHero
 
-The newest briefing at the top of the index, set large: an \`accent\` eyebrow dateline, a display headline, its TL;DR, and a facts column of counts.
+The top of a digest page: the back and older/newer links, then a centred hero with a chip (kind, date, time, counts), the derived headline as the page's h1, and a subline.
 
-**Provide** an \`a.entry.entry-lead\` linking to the digest, containing \`.leadmain\` (a \`.meta\` with \`.eyebrow-text\` and optional \`.flag\`, an \`h2.headline.headline-lead\`, a \`p.excerpt\`) and a \`dl.leadfacts\` of \`dt\`/\`dd\` pairs.
+**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`span.herochip\`, \`h1.herotitle\` and an optional \`p.herosub\`. The headline and subline are derived from the TL;DR.
 
-- Do use exactly one per index page, first in the list.
-- Do highlight at most one phrase of the headline with \`mark\`.
-- Don't wrap it in a card; it sits on a 1px \`rule-heavy\` rule like a newspaper lead.
+- Do repeat \`nav.digestnav.digestnav-bottom\` after the colophon.
+- Do omit the older or newer link at either end instead of showing a disabled one.
 
-Source: \`render-index.js\`; styles \`.entry-lead\`, \`.leadfacts\`.
+Source: \`render-digest.js\`; styles \`.digestnav\`, \`.hero-digest\`, \`.herochip\`.
 `,
   );
 
   add(
     "Entry",
     "Ledger",
-    330,
-    stage(`<div class="dayhead">Tuesday, 25 August 2026</div>
-<a class="entry" href="#">
-  <span class="meta"><span class="time">10:00</span><span class="count">9 items · 2 sections</span></span>
-  <h3 class="headline">The sell-off began; two sections follow.</h3>
-  <p class="excerpt"><strong>TL;DR:</strong> The sell-off began; two sections follow.</p>
-</a>
-<div class="dayhead">Monday, 24 August 2026</div>
-<a class="entry" href="#">
-  <span class="meta"><span class="time time-accent">22:00</span><span class="count">6 items · 1 sections</span><span class="flag flag-daily">daily brief</span></span>
-  <h3 class="headline">Daily brief for Monday.</h3>
-  <p class="excerpt excerpt-daily"><strong>TL;DR:</strong> Daily brief for Monday.</p>
-</a>`),
+    430,
+    stage(`<section class="ledger">
+  <div class="dayhead">Tuesday, 25 August 2026</div>
+  <a class="entry" href="#">
+    <span class="meta"><span class="time">10:00</span><span class="count">9 items · 2 sections</span></span>
+    <h2 class="headline">The sell-off began; two sections follow.</h2>
+    <p class="excerpt"><strong>TL;DR:</strong> Equities extended losses into the close, with the drawdown at four percent and two sections on the council vote and chip export rules.</p>
+  </a>
+  <div class="dayhead">Monday, 24 August 2026</div>
+  <a class="entry" href="#">
+    <span class="meta"><span class="time time-accent">22:00</span><span class="count">6 items · 1 sections</span><span class="flag flag-daily">daily brief</span></span>
+    <h2 class="headline">Daily brief for Monday.</h2>
+    <p class="excerpt excerpt-daily"><strong>TL;DR:</strong> A quieter day: the council vote slipped to Tuesday and exporters have ninety days to file.</p>
+  </a>
+</section>`),
     `# Entry
 
-One briefing in the ledger: a mono time and count line, a headline, and a clamped excerpt, separated from the next by a hairline.
+One briefing in the ledger, a glass card: a time and count line, a headline, a clamped excerpt.
 
-**Provide** an \`a.entry\` (the whole row is the link) with a \`span.meta\` (\`.time\`, \`.count\`, optional \`.flag\`), an \`h3.headline\` and a \`p.excerpt\`. Group entries under a \`.dayhead\` per local day (Europe/Budapest).
+**Provide** an \`a.entry\` (the whole card is the link) with a \`span.meta\` (\`.time\`, \`.count\`, optional \`.flag\`s), an \`h2.headline\` and a \`p.excerpt\`, inside \`section.ledger\`, grouped under a \`.dayhead\` per local day (Europe/Budapest).
 
-- Do add \`.time-accent\` to the latest edition of a day and \`.flag-daily\` + \`.excerpt-daily\` to the daily brief.
-- Do use a \`.flag\` for run state: \`.flag-degraded\` (⚠ partial) when a collector failed, \`.flag-muted\` ("EN") on a Hungarian page for an English-only entry.
-- Do let \`data-density="compact"\` tighten padding and clamp the excerpt to two lines; never hide the time.
-- Don't box entries; the hairline is the only separator.
+- Do add \`.time-accent\` to the latest edition of a day and \`.flag-daily\` + \`.excerpt-daily\` to a daily or weekly brief; the amber tint follows from those.
+- Do let \`data-density="compact"\` dissolve the cards into a hairline list: two-line excerpts, the time never hidden.
+- Don't nest a card inside a card.
 
-The same row, with search hits wrapped in \`mark\`, is the search result and the arc appearance.
+The same card, with search hits wrapped in \`mark\`, is the search result; a thread's appearance is the same row inside a \`.tlitem\`.
 
-Source: \`render-index.js\`, \`render-search.js\`, \`render-arc.js\`; styles \`.entry\`, \`.dayhead\`, \`.flag\`.
+Source: \`render-index.js\`, \`render-search.js\`, \`render-arc.js\`; styles \`.entry\`, \`.ledger\`, \`.dayhead\`.
 `,
   );
 
@@ -813,39 +897,41 @@ Source: \`render-index.js\`, \`render-search.js\`, \`render-arc.js\`; styles \`.
     "Ledger",
     90,
     stage(
-      `<div class="entry" style="border:0;padding:0"><span class="meta"><span class="flag flag-daily">daily brief</span><span class="flag flag-daily">weekly brief</span><span class="flag flag-degraded" title="polymarket">⚠ partial</span><span class="flag flag-muted">EN</span></span></div>`,
+      `<div class="entry" style="padding:12px 16px"><span class="meta"><span class="flag flag-daily">daily brief</span><span class="flag flag-daily">weekly brief</span><span class="flag flag-degraded" title="polymarket">⚠ partial</span><span class="flag flag-muted">EN</span></span></div>`,
     ),
     `# Flag
 
-A small mono pill on an entry's meta line that says what kind of briefing it is or what went wrong collecting it.
+A one-line pill on an entry's meta line (or in the hero chip) that says what kind of briefing it is or what went wrong collecting it.
 
-**Provide** a \`span.flag\` inside an entry's \`.meta\` with exactly one modifier:
+**Provide** a \`span.flag\` with exactly one modifier:
 - \`.flag-daily\`: "daily brief" or "weekly brief", on the roll-up editions.
 - \`.flag-degraded\`: "⚠ partial" when a collector failed; the failed sources go in \`title\`.
 - \`.flag-muted\`: "EN" on a Hungarian page when the entry exists only in English.
 
-- Do keep the text to one or two words; prefix a failure with ⚠.
+- Do keep the text to one or two words; prefix a failure with ⚠ so colour is never the only signal.
 - Don't use a flag as a category tag; sections and threads carry topics.
 
-Source: \`render-index.js\`; styles \`.entry .flag\`.
+Source: \`render-index.js\`; styles \`.flag\`.
 `,
   );
 
   add(
     "DayHead",
     "Ledger",
-    150,
-    stage(`<div class="dayhead">Tuesday, 25 August 2026</div>
-<a class="entry" href="#"><span class="meta"><span class="time">16:00</span></span><h3 class="headline">Markets slid for a second day.</h3></a>
-<div class="unreadfence" role="separator"><span class="line"></span><span class="label">new since your last visit</span><span class="line"></span></div>
-<div class="dayhead">Monday, 24 August 2026</div>`),
+    210,
+    stage(`<section class="ledger">
+  <div class="dayhead">Tuesday, 25 August 2026</div>
+  <a class="entry" href="#"><span class="meta"><span class="time">16:00</span></span><h2 class="headline">Markets slid for a second day.</h2></a>
+  <div class="unreadfence" role="separator"><span class="line"></span><span class="label">new since your last visit</span><span class="line"></span></div>
+  <div class="dayhead">Monday, 24 August 2026</div>
+</section>`),
     `# DayHead
 
-The ledger's dividers: a sticky \`faint\` mono day header per local day, and the \`accent\` "new since your last visit" fence the client inserts after the last unread entry.
+The ledger's dividers: a \`muted\` display-face day header per local day, and the "new since your last visit" fence the client inserts after the last unread entry.
 
-**Provide** \`div.dayhead\` with the full local date. The fence (\`.unreadfence\` with two \`.line\`s around a \`.label\`) is built by \`client.js\` from the section's \`data-unread-label\`; never render it on the server.
+**Provide** \`div.dayhead\` with the full local date. The fence (\`.unreadfence\` with two \`.line\`s around a \`.label\`) is built by \`client.js\` from the ledger's \`data-unread-label\`; never render it on the server.
 
-- Do keep day headers sticky so a long day keeps its date on screen.
+- Do keep the fence in \`accent-text\` on an \`accent-line\` rule: it is a state, not a heading.
 - Don't show the fence when everything, or nothing, is new.
 
 Source: \`render-index.js\`, \`client.js\`; styles \`.dayhead\`, \`.unreadfence\`.
@@ -853,220 +939,61 @@ Source: \`render-index.js\`, \`client.js\`; styles \`.dayhead\`, \`.unreadfence\
   );
 
   add(
-    "NowList",
+    "SideCard",
     "Ledger",
-    170,
-    stage(`<div class="now"><div class="archivelabel">Now</div><nav class="nowlist" aria-label="Now">
-<a class="nowrow" href="#"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">Markets slide continues</span><span class="nowmeta">4 hours ago</span></a>
-<a class="nowrow" href="#"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">EU agrees new package</span><span class="nowmeta">yesterday</span></a>
-</nav></div>`),
-    `# NowList
+    360,
+    stage(`<aside class="side">
+  <section class="sidecard now"><h2 class="sidehead">Now</h2><nav class="nowlist">
+    <a class="nowrow" href="#"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">Markets slide continues</span><span class="nowmeta">4 hours ago</span></a>
+    <a class="nowrow" href="#"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">EU agrees new package</span><span class="nowmeta">yesterday</span></a>
+  </nav></section>
+  <section class="sidecard earlier"><h2 class="sidehead">Earlier</h2>
+    <a class="earlierrow" href="#"><span class="earliermeta">10:00 · 9 items</span><span class="earliertitle">The sell-off began; two sections follow.</span></a>
+    <a class="earlierrow" href="#"><span class="earliermeta">06:00 · 7 items</span><span class="earliertitle">Overnight: Asian markets open lower.</span></a>
+  </section>
+</aside>`),
+    `# SideCard
 
-A short, quiet list of story threads that moved recently, shown above the ledger under a "Now" label.
+The sidebar's cards, shown beside the main column from 1040px and stacked below it on narrower screens: "Now" (threads that moved recently) on the index, "Earlier" (the day's other editions) on a digest.
 
-**Provide** a \`.now\` block with an \`.archivelabel\` and a \`nav.nowlist\` of \`a.nowrow\`s: an arrow (\`.nowarrow\`), the thread title (\`.nowarclabel\`) and a relative time (\`.nowmeta\`).
+**Provide** \`aside.side\` of \`section.sidecard\`s, each with an \`h2.sidehead\`. A Now card holds \`nav.nowlist\` of \`a.nowrow\`s (\`.nowarrow\`, \`.nowarclabel\`, \`.nowmeta\`); an Earlier card holds \`a.earlierrow\`s (\`.earliermeta\`, \`.earliertitle\`, clamped to two lines). The settings panel is the last child of \`.side\`.
 
-- Do keep it to the few threads with fresh coverage; it is a pointer, not a second ledger.
-- Don't style rows as chips; they are plain \`muted\` rows on hairlines.
+- Do keep Now to the few threads with fresh coverage; it is a pointer, not a second ledger.
+- Do give the card its own top margin; an empty sidebar then adds no height on tablets.
 
-Source: \`render-index.js\`; styles \`.now\`, \`.nowrow\`.
+Source: \`render-index.js\`, \`render-digest.js\`; styles \`.sidecard\`, \`.nowrow\`, \`.earlierrow\`.
 `,
   );
 
   add(
     "CatchUp",
     "Ledger",
-    110,
+    150,
     stage(`<div class="catchup"><span class="catchuptext">Since your last visit: <a href="#">3 briefings</a> · <a href="#">2 arc updates</a></span><button type="button" class="catchupjump" aria-label="Jump to where you left off">↓</button><button type="button" class="catchupdismiss" aria-label="Dismiss">×</button></div>
-<div style="position:relative;height:40px"><button type="button" class="resumechip" style="position:absolute;bottom:0">↓ new since your last visit</button></div>`),
+<div style="position:relative;height:64px"><button type="button" class="resumechip" style="position:absolute;bottom:0;left:50%">↓ new since your last visit</button></div>`),
     `# CatchUp
 
-The returning-reader strip: a mono line summarising what arrived since the last visit, with jump and dismiss, plus the floating "↓ new since your last visit" resume chip.
+The returning-reader strip, an \`accent-soft\` pill summarising what arrived since the last visit with jump and dismiss, plus the floating "↓ new since your last visit" resume chip.
 
-**Provide** \`div.catchup\` with its \`data-prefix\` and \`data-tmpl-*\` strings; \`client.js\` fills \`.catchuptext\` and unhides it. The \`.resumechip\` is created by the client on \`document.body\` and is visible only while the unread fence is below the viewport.
+**Provide** \`div.catchup\` with its \`data-prefix\` and \`data-tmpl-*\` strings, rendered \`hidden\`; \`client.js\` fills \`.catchuptext\` and shows it. The \`.resumechip\` is created by the client on \`document.body\` and is visible only while the unread fence is below the viewport.
 
-- Do render both hidden on the server; they depend on the reader's local history.
-- Don't let the resume chip overlap the back FAB; it offsets by \`fab-size\` and \`fab-inset\`.
+- Do render it hidden on the server; it depends on the reader's local history.
+- Don't let the chip sit under the phone dock; it offsets by \`dock-h\` there.
 
 Source: \`render-index.js\`, \`client.js\`; styles \`.catchup\`, \`.resumechip\`.
 `,
   );
 
   add(
-    "EditionHead",
-    "Article",
-    170,
-    stage(`<nav class="digestnav"><a href="#">← All digests</a><span class="spacer"></span><a class="nav-older" href="#">← 10:00</a></nav>
-<header class="edhead"><p class="stamp">digest · 16:00 CEST · 12 items · 3 sections</p><h1>Markets slid for a second day while the <mark>EU package</mark> landed.</h1></header>`),
-    `# EditionHead
-
-The top of a digest page: the mono back/older nav, an \`accent\` stamp with time and counts, and the headline as the page's h1.
-
-**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / newer links), then \`header.edhead\` with \`p.stamp\` and an \`h1\` derived from the TL;DR's first sentence.
-
-- Do repeat \`nav.digestnav.digestnav-bottom\` after the colophon.
-- Do allow one \`mark\` in the h1, as on the lead entry.
-
-Source: \`render-digest.js\`; styles \`nav.digestnav\`, \`.stamp\`, \`.edhead\`.
-`,
-  );
-
-  add(
-    "Callouts",
-    "Article",
-    230,
-    stage(`<article class="digest">
-<div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
-<div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The council vote on the package closes at 18:00 CEST; two of your groups are organising around it.</p></div>
-<p class="banner">⚠ Polymarket could not be collected this run; its items are missing.</p>
-</article>`),
-    `# Callouts
-
-The digest's three tinted blocks: the TL;DR leader (\`tldr-bg\`, \`radius-panel\`), the attention callout and the collection-failed banner (both \`attention-bg\`, square).
-
-**Provide** them inside \`article.digest\`: \`div.tldr\` first, an optional \`div.attention\` with an \`h2\` or \`.attention-label\` and \`p\`, and \`p.banner\` when a source failed. These arrive in the summarizer's HTML; the site strips inline email styles and these classes take over.
-
-- Do keep exactly one TL;DR per digest; it is also the headline's source.
-- Do reserve \`attention\` for something the reader may act on.
-- Don't add a left border or icon to any of them.
-
-Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`, \`.digest .banner\`.
-`,
-  );
-
-  add(
-    "DigestSection",
-    "Article",
-    260,
-    stage(`<article class="digest" style="counter-reset:secnum">
-<h2 id="s1" style="position:static;margin-top:0">Markets slide continues</h2><a class="secarc" href="#">story so far ×2</a>
-<p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#" title="reuters.com">1</a></p>
-<h2 id="s2" style="position:static">EU agrees new package</h2>
-<p>The council signed off overnight, with disbursement gated on reforms.<a class="cite" href="#" title="consilium.europa.eu">2</a></p>
-</article>`),
-    `# DigestSection
-
-A numbered section of a briefing: a display h2 with an automatic 01, 02 … counter in \`accent\` mono, an optional "story so far" thread link, and \`prose\` paragraphs with citation chips.
-
-**Provide** direct-child \`h2\`s (with \`id="sN"\`) inside \`article.digest\`, paragraphs as \`p\`, citations as \`a.cite\` with the source domain in \`title\`, and \`a.secarc\` right after an h2 that belongs to a thread.
-
-- Do keep h2s as direct children of \`.digest\`; the counter and sticky behaviour depend on it.
-- Do bold the figure that matters; \`strong\` snaps to full \`text\` against \`prose\`.
-- Don't number sections in the text; the counter does it.
-
-Source: \`render-digest.js\`, \`sections.js\`; styles \`.digest > h2\`, \`.digest p\`, \`.cite\`, \`.secarc\`.
-`,
-    "Sticky positioning is switched off in this preview.",
-  );
-
-  add(
-    "Cite",
-    "Article",
-    90,
-    stage(
-      `<p style="font-family:var(--font-prose);margin:0">Drawdown at four percent<a class="cite" href="#" title="reuters.com">1</a> and widening<a class="cite" href="#" title="ft.com">2</a>. Hits: <mark>Markets</mark> extended losses.</p>`,
-    ),
-    `# Cite
-
-A superscript citation chip: a 3px-radius \`chip-bg\` pill with the source number in \`accent\` mono, filling solid \`accent\` on hover.
-
-**Provide** \`a.cite\` linking to the source with the source domain in \`title\` (\`sections.js\` adds it); on touch screens CSS shows the domain inside the chip.
-
-- Do place it directly after the claim, with no space.
-- Don't use it for anything but sources; search hits use plain \`mark\` on \`chip-bg\`.
-
-Source: \`sections.js\`; styles \`.cite\`, \`mark\`.
-`,
-  );
-
-  add(
-    "TOC",
-    "Article",
-    150,
-    stage(`<nav class="toc"><a href="#s1"><span class="tocnum">01</span>Markets slide continues</a>
-<a href="#s2"><span class="tocnum">02</span>EU agrees new package</a>
-<a href="#s3"><span class="tocnum">03</span>Chip export rules tighten</a></nav>`),
-    `# TOC
-
-The "in this edition" list of numbered section links above a digest, matching the 01, 02 … section numbers.
-
-**Provide** \`nav.toc\` with one \`a\` per section: a \`span.tocnum\` (two-digit) and the section title, linking to \`#sN\`.
-
-- Do generate it from the sections; never write it by hand.
-- Don't include the attention callout's heading.
-
-Source: \`render-digest.js\` (\`buildSectionToc\`); styles \`.toc\`.
-`,
-  );
-
-  add(
-    "ThreadChips",
-    "Article",
-    150,
-    stage(`<nav class="arcs" aria-label="Story threads"><a class="arc" href="#"><span class="arclabel">Markets slide continues</span><span class="arccount">×2 this week</span></a><a class="arc" href="#"><span class="arclabel">Chip export rules</span><span class="arccount">×3 this week</span></a></nav>
-<div class="archivelabel" style="margin-top:1.2em">What changed</div><nav class="deltas" aria-label="What changed"><a class="delta" href="#"><span class="deltalabel">Markets slide continues</span><p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p></a></nav>`),
-    `# ThreadChips
-
-Story threads ("arcs") on a digest: pill chips on \`chip-bg\` naming each thread with its weekly count, and a "What changed" list showing a previous → current value.
-
-**Provide** \`nav.arcs\` of \`a.arc\` (\`.arclabel\`, \`.arccount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`).
-
-- Do show a delta only when both values are known.
-- Don't colour deltas red or green; the previous value is \`muted\`, the current one \`text\`.
-
-Source: \`render-digest.js\`; styles \`.arcs\`, \`.deltas\`.
-`,
-  );
-
-  add(
-    "ArcHead",
-    "Article",
-    190,
-    stage(`<div class="archead"><h1 class="arctitle">Markets slide continues</h1></div><button type="button" class="followtoggle" aria-pressed="false">☆ Follow</button>
-<p class="stamp">2 appearances · first seen Tue 25 Aug · updated 4 hours ago · ↑ more coverage</p>
-<details class="arccontext" open><summary>Background</summary><div class="arccontextbody"><p>A sell-off that began on the 24th; central banks have not reacted yet.</p></div></details>`),
-    `# ArcHead
-
-The head of a story-thread page: the thread title, a bare Follow text toggle, an \`accent\` stamp of appearances and freshness, and a collapsible Background.
-
-**Provide** \`.archead\` with \`h1.arctitle\` (carrying \`data-follow-add\` / \`data-follow-remove\`; the client adds the \`.followtoggle\` button), a \`p.stamp\`, and \`details.arccontext\`.
-
-- Do keep Follow a text control (☆ Follow / ★ Following) with no button chrome.
-
-Source: \`render-arc.js\`, \`client.js\`; styles \`.arctitle\`, \`.followtoggle\`, \`.arccontext\`.
-`,
-  );
-
-  add(
-    "Colophon",
-    "Article",
-    190,
-    stage(
-      `<details class="colophon" open><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
-    ),
-    `# Colophon
-
-The collapsible "How this was made" footer of a digest: per-source item counts with colour keys, failed sources, and which model wrote and translated it.
-
-**Provide** \`details.colophon\` with a \`.sourcekey\` (\`.sklabel\`, then \`.sk\` per source with an \`i\` swatch; \`.sk-failed\` for a source that failed) and a \`.provenance\` of \`.provline\`s; \`.sk-fallback\` with ↻ marks a fallback model.
-
-- Do keep it collapsed by default; it is for the curious, not the reader.
-- The source swatch colours are per-source literals in \`render-digest.js\`, not tokens.
-
-Source: \`render-digest.js\`; styles \`.colophon\`, \`.sourcekey\`, \`.provenance\`.
-`,
-  );
-
-  add(
     "WeekRail",
-    "Navigation",
-    120,
+    "Ledger",
+    130,
     stage(
       `<nav class="weekrail" aria-label="Week navigation"><span class="rail-older"><a href="#">← W34</a></span><span class="rail-center">Week 35 · 24–30 Aug<span class="railspark" aria-hidden="true"><i style="height:40%"></i><i style="height:100%"></i><i style="height:65%"></i><i class="sd0"></i><i style="height:15%"></i><i class="sd0"></i><i class="sd0"></i></span></span><span class="rail-newer"><a href="#">W36 →</a></span></nav>`,
     ),
     `# WeekRail
 
-Week-by-week navigation for the index: older and newer week links either side of a centred week label with a seven-bar sparkline of items per day.
+Week-by-week navigation under the weekly ledger: older and newer week pills either side of a centred week label with a seven-bar sparkline of items per day.
 
 **Provide** \`nav.weekrail\` with \`.rail-older\`, \`.rail-center\` and \`.rail-newer\`; the sparkline is a \`span.railspark\` of seven \`i\` bars, each \`height\` a percentage of the week's busiest day (minimum 15%), zero days as \`i.sd0\`.
 
@@ -1078,60 +1005,210 @@ Source: \`render-index.js\`; styles \`.weekrail\`, \`.railspark\`.
   );
 
   add(
+    "Callouts",
+    "Article",
+    330,
+    stage(`<article class="digest">
+  <div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
+  <div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The council vote on the package closes at 18:00 CEST; two of your groups are organising around it.</p></div>
+  <p class="banner">⚠ Polymarket could not be collected this run; its items are missing.</p>
+</article>`),
+    `# Callouts
+
+The digest's three blocks above the sections: the TL;DR card (a \`panel\` with an \`accent-line\` border), the attention callout and the collection-failed banner (both amber).
+
+**Provide** them inside \`article.digest\`: \`div.tldr\` first with a \`.tldr-label\`, an optional \`div.attention\` with \`.attention-label\` and a \`p\`, and \`p.banner\` when a source failed. These arrive in the summarizer's HTML; the site strips its inline email styles and these classes take over.
+
+- Do keep exactly one TL;DR per digest; it is also the headline's source.
+- Do reserve \`attention\` for something the reader may act on.
+- Don't add a left border or icon; the label carries the meaning.
+
+Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`, \`.banner\`.
+`,
+  );
+
+  add(
+    "Toc",
+    "Article",
+    170,
+    stage(
+      `<nav class="toc"><a href="#s1"><span class="tocnum">01</span>Markets slide continues</a><a href="#s2"><span class="tocnum">02</span>EU agrees new package</a><a href="#s3"><span class="tocnum">03</span>Chip export rules tighten</a><button type="button" class="expandall">Expand all</button></nav>`,
+    ),
+    `# Toc
+
+The section index above a digest: one pill per section with its two-digit number, and an Expand all / Collapse all button. On phones it is one scrolling row with a fading edge and a sticky button; from 700px the pills wrap.
+
+**Provide** \`nav.toc\` with one \`a\` per section (a \`span.tocnum\` and the title, linking to \`#sN\`) and \`button.expandall\` carrying \`data-expand\` / \`data-collapse\` labels, rendered \`hidden\`; the client reveals it.
+
+- Do generate it from the sections; never write it by hand.
+- Don't include the attention callout's heading.
+
+Source: \`render-digest.js\`, \`client.js\`; styles \`.toc\`, \`.tocnum\`, \`.expandall\`.
+`,
+  );
+
+  add(
+    "Section",
+    "Article",
+    420,
+    stage(`<article class="digest">
+  <details class="sec" open><summary class="sechead"><h2 id="s1">Markets slide continues</h2><span class="seccount">2 sources</span></summary><div class="secbody">
+    <a class="secarc" href="#">story so far ×2</a>
+    <p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#" title="reuters.com">1</a></p>
+  </div></details>
+  <details class="sec"><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody"><p>The council signed off overnight.</p></div></details>
+</article>`),
+    `# Section
+
+One story in a digest, a native \`details\` card: a heading with a two-line preview and a source count when closed, a chevron, and the \`body\`-coloured article text when open. The first section ships open.
+
+**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` chips.
+
+- Do keep it a native \`details\`: it works without JavaScript, and print forces every section open.
+- Do bold the figure that matters; \`strong\` snaps to \`strong\` ink against \`body\`.
+- Don't number sections in the text; the TOC pills do.
+
+Source: \`sections.js\`; styles \`.sec\`, \`.sechead\`, \`.secbody\`, \`.secarc\`.
+`,
+  );
+
+  add(
+    "Cite",
+    "Article",
+    90,
+    stage(
+      `<p style="font-size:17px;margin:0">Drawdown at four percent<a class="cite" href="#" title="reuters.com">1</a> and widening<a class="cite" href="#" title="ft.com">2</a>. Hits: <mark>Markets</mark> extended losses.</p>`,
+    ),
+    `# Cite
+
+A superscript citation chip: an \`accent-soft\` rounded chip with the source number in \`accent-text\`, filling solid \`accent\` on hover or focus.
+
+**Provide** \`a.cite\` linking to the source with the source domain in \`title\` (\`sections.js\` adds it); on touch screens CSS prints the domain after the number.
+
+- Do place it directly after the claim, with no space.
+- Don't use it for anything but sources; search hits use plain \`mark\`.
+
+Source: \`sections.js\`; styles \`.cite\`, \`mark\`.
+`,
+  );
+
+  add(
+    "ThreadPills",
+    "Article",
+    250,
+    stage(`<nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues <span class="pillcount">×2 this week</span></a><a class="threadpill" href="#">Chip export rules <span class="pillcount">×3 this week</span></a></nav>
+<div class="archivelabel" style="margin-top:24px">What changed</div>
+<nav class="deltas" aria-label="What changed"><a class="delta" href="#"><span class="deltalabel">Markets slide continues</span><p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p></a></nav>`),
+    `# ThreadPills
+
+Story threads ("arcs") on a digest: tinted pills naming each thread with its weekly count, and a "What changed" list showing a previous → current value.
+
+**Provide** \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the same pills sit in the hero.
+
+- Do show a delta only when both values are known.
+- Don't colour deltas red or green; the previous value is \`muted\`, the current one \`strong\`.
+
+Source: \`render-digest.js\`, \`render-index.js\`; styles \`.threadpill\`, \`.deltas\`.
+`,
+  );
+
+  add(
+    "ArcHead",
+    "Hero",
+    420,
+    stage(`<nav class="digestnav"><a href="#">← All digests</a></nav>
+<header class="hero archead"><span class="herochip">2 appearances · first seen Tue 25 Aug · updated 4 hours ago</span><h1 class="herotitle arctitle">Markets slide continues</h1><p class="herosub">A sell-off that began on the 24th; central banks have not reacted yet.</p></header>
+<div style="text-align:center"><button type="button" class="followtoggle" aria-pressed="false">☆ Follow</button></div>
+<details class="arccontext" open style="margin-top:16px"><summary>Background</summary><div class="arccontextbody"><p>The sell-off began on the 24th after weak export data; central banks have not reacted yet.</p></div></details>`),
+    `# ArcHead
+
+The head of a story-thread page: a centred hero with a chip of appearances and freshness, the thread title, a subline, a Follow toggle, and a collapsible Background.
+
+**Provide** \`header.hero.archead\` with \`span.herochip\`, \`h1.herotitle.arctitle\` (carrying \`data-arc-slug\`, \`data-follow-add\` and \`data-follow-remove\`; the client adds the \`.followtoggle\` button) and \`p.herosub\`, then \`details.arccontext\`.
+
+- Do keep Follow a pill that turns \`accent-soft\` when pressed (☆ Follow / ★ Following).
+
+Source: \`render-arc.js\`, \`client.js\`; styles \`.archead\`, \`.followtoggle\`, \`.arccontext\`.
+`,
+  );
+
+  add(
+    "Timeline",
+    "Article",
+    360,
+    stage(`<div class="archivelabel">Timeline</div>
+<ol class="timeline">
+  <li class="tlitem tlitem-latest"><div class="dayhead">Tuesday, 25 August 2026</div><a class="entry" href="#"><span class="meta"><span class="time">16:00</span></span><p class="excerpt">Markets slid for a second day.</p></a></li>
+  <li class="tlitem"><div class="dayhead">Monday, 24 August 2026</div><a class="entry" href="#"><span class="meta"><span class="time">22:00</span></span><p class="excerpt">The sell-off began.</p></a></li>
+</ol>`),
+    `# Timeline
+
+A thread's appearances, newest first: a vertical rail in \`accent-line\`, one glass card per appearance, a dot on the rail, the newest dot filled and haloed.
+
+**Provide** \`ol.timeline\` of \`li.tlitem\` (add \`.tlitem-latest\` to the first), each with an optional \`.dayhead\` and an \`a.entry\` that sheds its own card surface inside the item.
+
+- Do show the day header only once per day.
+- Don't put anything but appearances on the rail.
+
+Source: \`render-arc.js\`; styles \`.timeline\`, \`.tlitem\`.
+`,
+  );
+
+  add(
+    "Colophon",
+    "Article",
+    230,
+    stage(
+      `<details class="colophon" open><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
+    ),
+    `# Colophon
+
+The collapsible "How this was made" footer of a digest: per-source item counts with colour keys, failed sources, and which model wrote and translated it.
+
+**Provide** \`details.colophon\` with a \`.sourcekey\` (\`.sklabel\`, then \`.sk\` per source with an \`i\` swatch; \`.sk-failed\` for a source that failed) and a \`.provenance\` of \`.provline\`s; \`.sk-fallback\` with ↻ marks a fallback model.
+
+- Do keep it collapsed by default and quiet; it is for the curious, not the reader.
+- The source swatch colours are per-source literals in \`render-index.js\`, not tokens.
+
+Source: \`render-digest.js\`, \`render-index.js\`; styles \`.colophon\`, \`.sourcekey\`, \`.provenance\`.
+`,
+  );
+
+  add(
     "Search",
     "Controls",
-    200,
+    330,
     stage(`<form class="searchform" onsubmit="return false"><input class="filter" type="search" value="markets" placeholder="Search all briefings…" aria-label="Search all briefings…"><button class="searchbtn" type="submit">Search</button></form>
 <p class="empty">2 results</p>
 <a class="entry" href="#"><span class="meta"><span class="time">Tue 25 Aug 16:00</span></span><p class="excerpt"><mark>Markets</mark> extended losses into the close…</p></a>`),
     `# Search
 
-The full-text search form and its results: a rounded input beside a pill Search button, then entry rows with hits highlighted.
+The full-text search page: a pill input beside a filled Search button, then entry cards with hits highlighted.
 
-**Provide** \`form.searchform\` (GET, \`q\`) with \`input.filter\` and \`button.searchbtn\`, a \`p.empty\` result count, and one \`a.entry\` per hit with matches wrapped in \`mark\`. The masthead's \`.searchpop\` holds the quick in-page filter and links here.
+**Provide** \`form.searchform\` (GET, \`q\`) with \`input.filter\` and \`button.searchbtn\`, a \`p.empty\` result count, and one \`a.entry\` per hit with matches wrapped in \`mark\`. The bar's search popover holds the quick in-page filter and links here.
 
-- Do keep the button secondary: outlined, never filled.
+- Do keep the input 16px: smaller makes iOS zoom the page on focus.
 
-Source: \`render-search.js\`, \`hrefs.js\`; styles \`.searchform\`, \`.searchbtn\`.
+Source: \`render-search.js\`, \`hrefs.js\`; styles \`.searchform\`, \`.searchbtn\`, \`mark\`.
 `,
   );
 
   add(
     "CommandPalette",
     "Controls",
-    320,
+    360,
     `<div class="cmdpalette-backdrop" style="position:absolute;padding-top:24px"><div class="cmdpalette" role="dialog" aria-label="Command palette"><input class="cmdpalette-input" type="text" value="da" placeholder="Type a command or search…" aria-label="Type a command or search…"><div class="cmdpalette-list" role="listbox"><div class="cmdpalette-item active" role="option" aria-selected="true"><span>Daily view</span><span class="cmdpalette-group">View</span></div><div class="cmdpalette-item" role="option"><span>Latest briefing</span><span class="cmdpalette-group">Go</span></div><div class="cmdpalette-item" role="option"><span>Markets slide continues</span><span class="cmdpalette-group">Thread</span></div></div></div></div>
-<div style="height:290px"></div>`,
+<div style="height:320px"></div>`,
     `# CommandPalette
 
-A keyboard-first command palette (⌘K / Ctrl+K, or /) over a dimmed backdrop: a text input and a filtered list of views, destinations and threads.
+A keyboard-first command palette (⌘K / Ctrl+K, or /) over a \`scrim\`: a blurred glass sheet with a text input and a filtered list of views, destinations and threads.
 
 **Provide** nothing on the server except \`span.paletteconfig\` carrying the localized labels as \`data-*\` attributes; \`client.js\` builds \`.cmdpalette-backdrop\` > \`.cmdpalette\` with \`.cmdpalette-input\`, \`.cmdpalette-list\` and \`.cmdpalette-item\`s (\`.active\` on the highlighted row, \`.cmdpalette-group\` for its kind).
 
-- Do add new destinations here rather than to the masthead.
+- Do add new destinations here rather than to the bar.
 - Do close on Escape and on a backdrop click.
 
 Source: \`client.js\`; styles \`.cmdpalette*\`.
-`,
-  );
-
-  add(
-    "BackFab",
-    "Navigation",
-    110,
-    stage(
-      `<div style="position:relative;height:64px"><a class="backfab show" href="#" aria-label="Back to top" style="position:absolute;right:0;bottom:0;left:auto">↑</a></div>`,
-    ),
-    `# BackFab
-
-The round floating button in the corner: back to top on long pages (↑), back to all digests on a digest (←).
-
-**Provide** \`a.backfab\` with an \`aria-label\`; the client toggles \`.show\` after the reader scrolls. It is \`fab-size\` across, inset \`fab-inset\`, solid \`accent\` with \`bg\` glyph, \`float-shadow\`.
-
-- Do keep exactly one per page.
-- Don't put text in it; one arrow glyph.
-
-Source: \`render-*.js\`, \`client.js\`; styles \`.backfab\`.
 `,
   );
 
@@ -1141,36 +1218,30 @@ Source: \`render-*.js\`, \`client.js\`; styles \`.backfab\`.
     `<!-- @dsCard height=300 -->
 <style>
   html, body { margin: 0; padding: 0; background: var(--bg); }
-  .cv { position: relative; width: 960px; height: 300px; overflow: hidden; background: var(--bg); }
-  .cv svg { position: absolute; inset: 0; }
-  .b-accent { fill: var(--accent); }
-  .b-ink { fill: var(--rule-heavy); }
-  .b-mark { fill: var(--mark); }
-  .b-tint { fill: var(--tldr-bg); }
-  .b-hair { stroke: var(--hairline); stroke-width: 1; }
-  .numeral { fill: var(--bg); font-family: var(--font-data); font-size: 230px; font-weight: 700; letter-spacing: -0.04em; }
-  .name { position: absolute; left: 40px; bottom: 74px; max-width: 420px; margin: 0; font-family: var(--font-chrome); font-weight: 800; font-size: 100px; line-height: 0.92; letter-spacing: -0.03em; color: var(--text); }
-  .tag { position: absolute; left: 42px; bottom: 40px; max-width: 420px; margin: 0; font-family: var(--font-data); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .cv { position: relative; width: 960px; height: 300px; overflow: hidden; background: radial-gradient(ellipse 620px 320px at 50% 0, var(--glow), transparent 70%), radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 22px 22px, var(--bg); }
+  .card { position: absolute; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--panel); }
+  .pillbar { position: absolute; left: 40px; top: 32px; display: flex; align-items: center; gap: 14px; height: 48px; padding: 0 8px 0 22px; border: 1px solid var(--border-strong); border-radius: var(--r-pill); background: var(--sheet); box-shadow: var(--shadow); }
+  .pillbar b { font-family: var(--font-display); font-size: 20px; color: var(--strong); letter-spacing: -0.02em; }
+  .pillbar b i { color: var(--accent); font-style: normal; }
+  .tab { padding: 8px 14px; border-radius: var(--r-pill); font-size: 13px; color: var(--muted); }
+  .tab.on { background: var(--pill); color: var(--strong); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+  .dot { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); }
+  .name { position: absolute; left: 40px; bottom: 74px; max-width: 520px; margin: 0; font-family: var(--font-display); font-weight: 600; font-size: 84px; line-height: 0.95; letter-spacing: -0.035em; color: var(--strong); }
+  .tag { position: absolute; left: 42px; bottom: 40px; margin: 0; font-size: 15px; color: var(--muted); }
 </style>
 <div class="cv">
   <!--
-    blocks: accent slab 360x196 (bleeds top and right); tldr-bg tint 120x196; rule-heavy bar 480x8 (2x rule-heavy-w); mark band 300x96 and rule-heavy block 180x96, both bleeding the bottom edge. All radius-square.
-    arrangement: a masthead read sideways. Tint and slab on top, the heavy rule under them, highlighter and ink below, like a lead story over its rule.
-    pattern: the oversized numeral row. The section counter 01 in the data face, cut out of the accent slab in bg, because numbered sections in accent mono are this site's signature.
-    scales: radius-square everywhere (surfaces are square); rule-heavy-w doubled for the rule; two hairline rules on the tint at the column gutter pitch.
+    blocks: three glass panels (a tall entry card, a short daily card in the amber trio, a thread pill) and a floating pill bar with three tabs and an accent dot.
+    arrangement: the product in miniature: the bar floats top left over the glow, the cards stack on the right like a ledger, the name sits bottom left.
+    pattern: the dot grid and the top glow of the page background, drawn with the real tokens.
+    scales: r-card on the panels, r-pill on every control, one shadow token on the bar only.
   -->
-  <svg width="960" height="300" viewBox="0 0 960 300" aria-hidden="true">
-    <rect class="b-tint" x="480" y="0" width="120" height="196"/>
-    <line class="b-hair" x1="480" y1="64" x2="600" y2="64"/>
-    <line class="b-hair" x1="480" y1="128" x2="600" y2="128"/>
-    <rect class="b-accent" x="600" y="0" width="360" height="196"/>
-    <text class="numeral" x="626" y="186">01</text>
-    <rect class="b-ink" x="480" y="196" width="480" height="8"/>
-    <rect class="b-mark" x="480" y="204" width="300" height="96"/>
-    <rect class="b-ink" x="780" y="204" width="180" height="96"/>
-  </svg>
+  <div class="pillbar"><b>news<i>.</i></b><span class="tab on">All</span><span class="tab">Daily</span><span class="tab">Weekly</span><span class="dot"></span></div>
+  <div class="card" style="left:560px;top:28px;width:360px;height:118px"></div>
+  <div class="card" style="left:560px;top:160px;width:360px;height:96px;background:var(--daily-soft);border-color:var(--daily-line)"></div>
+  <div class="card" style="left:500px;top:112px;width:150px;height:40px;border-radius:999px;background:var(--accent-soft);border-color:var(--accent-line)"></div>
   <h1 class="name">Digest News</h1>
-  <p class="tag">Briefings every six hours, set like a poster</p>
+  <p class="tag">Briefings every six hours, on glass</p>
 </div>
 `,
   );
@@ -1208,7 +1279,7 @@ Source: \`render-*.js\`, \`client.js\`; styles \`.backfab\`.
           by,
           at: stamp,
           via: `GitHub · Dezoxy/notification-digest@${sha}`,
-          note: `Generated from workers/news-site: palette, type, radii, ${C.length} components, logos.`,
+          note: `Generated from workers/news-site: tokens, type, radii, ${C.length} components, logos.`,
         },
       },
       null,
@@ -1258,9 +1329,8 @@ async function main() {
 
   console.log(`wrote ${files.size} files to ${project}\n`);
   for (const [pair, [l, d]] of Object.entries(audit)) {
-    const [fg, bg] = pair.split("/");
     console.log(
-      `${(fg + " on " + bg).padEnd(30)} light ${l.toFixed(2).padStart(5)}  dark ${d.toFixed(2).padStart(5)}`,
+      `${pair.padEnd(40)} light ${l.toFixed(2).padStart(5)}  dark ${d.toFixed(2).padStart(5)}`,
     );
   }
   console.log("\ncomponents:", components.join(", "));

@@ -154,7 +154,7 @@ export function renderViewTabs(token, lang, view) {
 }
 
 // The settings panel (language, theme, text size, density, push, About): a
-// native popover (`popover` attribute) opened by the bar's gear button via
+// native popover (`popover` attribute) opened by the bar's settings button via
 // `popovertarget="settings"`, so it opens and light-dismisses with NO JS and
 // no <details> bookkeeping. The language links inside keep working for
 // no-JS readers exactly as before; theme, size and density are miniseg

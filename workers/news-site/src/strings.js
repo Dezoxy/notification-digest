@@ -55,7 +55,6 @@ export const STRINGS = {
     viewsNavLabel: "Views",
     sidebarLabel: "Edition panel",
     heroRead: "Read the edition",
-    tldrCardLabel: "In thirty seconds",
     sectionsNavLabel: "Sections",
     expandAll: "Expand all",
     collapseAll: "Collapse all",
@@ -105,7 +104,7 @@ export const STRINGS = {
     searchToggleLabel: "Search",
     // Unified search (owner UX pass): eyebrow label above the archive
     // results the index page's own filter box surfaces in-page — see
-    // renderSearchFragment/the .archivelabel CSS. Mono-eyebrow voice, not a
+    // renderSearchFragment/the .archivelabel CSS. Small-label voice, not a
     // template (no {n} — the count line stays on the standalone search page
     // only).
     archiveResults: "From the archive",
@@ -136,7 +135,7 @@ export const STRINGS = {
     arcMomentumSame: "steady",
     arcMomentumDown: "less coverage",
     arcTimelineLabel: "Appearances",
-    // NOW section (§11.1 PR B, renderNowSection): the mono eyebrow above the
+    // NOW section (§11.1 PR B, renderNowSection): the small uppercase label above the
     // situational-overview block at the top of the current-week all-view
     // index — see computeNowArcs/renderNowSection. Each row's momentum
     // arrow reuses the same computeArcMomentum classification arcMomentum
@@ -198,8 +197,8 @@ export const STRINGS = {
     // states, same star-glyph convention brief specified.
     followAdd: "☆ Follow",
     followRemove: "★ Following",
-    // "What changed" block (§11.3 delta persistence, ingest v4): the mono
-    // eyebrow above the digest page's per-arc previously/now lines — see
+    // "What changed" block (§11.3 delta persistence, ingest v4): the small
+    // uppercase label above the digest page's per-arc previously/now lines — see
     // renderDeltas. Reuses the SAME .archivelabel eyebrow recipe as
     // arcTimelineLabel/archiveResults/nowLabel above, so this is a plain
     // one-off string, not a template.
@@ -210,8 +209,8 @@ export const STRINGS = {
     // design guidance's "evidence over certainty" / "calm urgency" register
     // applies to interface labels too, not just status text.
     arcContextLabel: "Background",
-    // Big edition masthead issue line (Front Page redesign — the issue line
-    // renders on pages that pass pageChrome a non-empty issueLineText; see
+    // Issue line (shown in the phone head under Spatial Glass, and on
+    // pages that pass pageChrome a non-empty issueLineText; see
     // renderIndexPage's buildIssueLine): "No. {n}" reuses the digest's own numeric `id` as
     // the edition number (an existing column, not new plumbing) — a
     // placeholder template, same {n} convention as arcRepeat/weekLabel
@@ -317,7 +316,6 @@ export const STRINGS = {
     viewsNavLabel: "Nézetek",
     sidebarLabel: "Oldalsáv",
     heroRead: "A kiadás elolvasása",
-    tldrCardLabel: "Harminc másodpercben",
     sectionsNavLabel: "Fejezetek",
     expandAll: "Összes kinyitása",
     collapseAll: "Összes összecsukása",
@@ -406,8 +404,8 @@ export const STRINGS = {
     // (PLAN.md §11.6 context mode), mirrors the EN block's pattern. "Háttér"
     // ("Background/context") — a plain, calm noun, no verb/CTA framing.
     arcContextLabel: "Háttér",
-    // Owner: please review — new HU strings, big edition masthead issue
-    // line (Front Page redesign), mirror the EN block's pattern. Hungarian
+    // Owner: please review — new HU strings, the issue line
+    // (Front Page redesign), mirror the EN block's pattern. Hungarian
     // does not pluralize a noun after a numeral (same reasoning as
     // searchResultsOne above), so issueEditionsTodayOne is deliberately
     // identical to its plural twin.

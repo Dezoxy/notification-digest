@@ -1099,7 +1099,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       // The index page's own filter input is the only .filter with no form.
       if (input.form) return;
       // Digest/arc pages carry the same bar search bubble as the index
-      // (consistent-masthead follow-up) but have no ledger to filter — bail
+      // (the bar renders it on every page) but have no ledger to filter — bail
       // BEFORE the reveal, so their bubble shows only the archive search
       // link and this input never surfaces as a dead control.
       var section = document.querySelector("section[data-empty-filtered]");
@@ -1450,7 +1450,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         // graceful-disappearance behavior every other optional command here
         // already relies on (compare searchLink/langLink/latest just above and
         // below). Left in place rather than deleted: harmless dead code that
-        // documents its own absence, and a future masthead Archive link (if
+        // documents its own absence, and a future bar Archive link (if
         // one ever comes back) would only need its class restored, not this.
         var archiveLink = document.querySelector(".archivelink");
         if (archiveLink) items.push({ label: config.getAttribute("data-cmd-archive"), el: archiveLink });

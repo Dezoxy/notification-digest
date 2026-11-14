@@ -326,8 +326,8 @@ export function renderDigestPage(
   // is older/next, not scroll-to-top (roadmap step 2) — mirror the nav below
   // the article rather than making the reader travel back to the header.
   // Built once here, wrapped twice below; the bottom copy carries the extra
-  // digestnav-bottom class (own CSS: top hairline + spacing, same as
-  // .closing, since it follows the article's closing line).
+  // digestnav-bottom class (own CSS: extra top spacing, since it follows
+  // the article's closing line).
   const digestNavLinksHtml = navLinks.join("\n");
 
   // Source key (roadmap 2 step 8 follow-up): one row of the article's

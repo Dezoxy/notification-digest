@@ -2,7 +2,7 @@
 --   wrangler d1 execute news-digests --local --file schema.sql
 --   wrangler d1 execute news-digests --local --file test/fixtures.sql
 --   wrangler dev   (SITE_TOKEN=goldentesttoken INGEST_KEY=goldeningestkey in .dev.vars)
--- Keep in lockstep with fixtures.mjs — the CSS-matrix and client-JS browser
+-- Keep in lockstep with fixtures.mjs — the client-JS browser
 -- checks in later refactor PRs drive wrangler dev against THIS data.
 INSERT INTO digests (id, created_at, tldr, item_count, section_count, has_attention, body_html, body_md, tldr_hu, body_html_hu, body_md_hu, kind, source_counts, failed_sources, topics, deltas, provenance) VALUES (235, '2026-08-25T14:00:00Z', 'Markets slid for a second day while the EU package landed.', 12, 3, 0, '<p class="banner" style="background-color:#fff3cd;color:#664d03;padding:0.75em 1em;border-radius:10px;margin:0 0 1em 0;">⚠ polymarket collection failed this run</p>
 <div class="tldr" style="background-color:#eef2ff;color:#262a49;padding:0.85em 1em;border-radius:10px;margin:0 0 1em 0;"><span class="tldr-label" style="display:block;font-size:0.72em;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.35em;color:#4f46e5;">TL;DR</span>Markets slid for a second day while the EU package landed.</div>

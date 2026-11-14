@@ -40,7 +40,7 @@ export function brandFirst(host) {
 //
 // `prefetchHref` defaults to null, same contract again (roadmap 2 step 7):
 // only renderIndexPage ever passes a value, and only when the index is
-// non-empty — the lead card's digest is the reader's most likely next tap,
+// non-empty — the hero's digest is the reader's most likely next tap,
 // so hint the browser to fetch it early. Digest pages never pass this
 // (deliberate restraint — prev/next COULD be prefetched too, but that's 2
 // extra fetches per read × 8 reads/day for what the roadmap scoped as
@@ -54,11 +54,11 @@ export function brandFirst(host) {
 // — that's the deal with speculative loading in general, not a bug here, so
 // neither mechanism is load-bearing for anything. Privacy-wise this adds
 // nothing new: the JSON embeds the same capability-token URL that's already
-// sitting in the lead card's own href on the same page (same-document
+// sitting in the hero's own href on the same page (same-document
 // exposure), and the speculation rules processor doesn't send that URL
 // anywhere the visible link wouldn't already send it on a click.
 // The shell is ONE layout on every page: a single header.bar (brand, view
-// tabs, search, settings gear) that CSS renders as the desktop top bar AND
+// tabs, search, settings button) that CSS renders as the desktop top bar AND
 // the phone bottom dock — never a second nav in the markup — a phone-only
 // .phonehead row (brand + issue line), and a <main class="layout"> holding an
 // optional full-width `heroHtml`, then .maincol and an optional .side column.
@@ -191,9 +191,8 @@ export function pageChrome({
 <!-- theme-color must track the CSS palette blocks' page background (light
      #eceff6 / dark #0b0d14 — Spatial Glass) so mobile browser chrome (URL
      bar/status bar tint) melts into the page instead of showing a stock
-     color. NOTE: client.js THEME_COLORS (the manual-override path) and
-     pwa.js (offline page, manifest colors) still hold the old values until
-     their packages land. The prefers-color-scheme media attrs cover the
+     color. client.js THEME_COLORS (the manual-override path) and pwa.js
+     (offline page, manifest colors) carry the same values. The prefers-color-scheme media attrs cover the
      automatic (Auto) case; a manual Light/Dark override from the theme
      miniseg (see the bottom script) updates both metas' content directly,
      since a media-query meta can't react to a data-theme attribute switch
