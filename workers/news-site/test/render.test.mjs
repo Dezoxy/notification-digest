@@ -432,7 +432,7 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
     const { html } = await page(path);
     assert.match(
       html,
-      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>\s*<\/div><\/details>\s*<details class="sec"><summary class="sechead"><h2 id="s2">/,
+      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>[\s\S]*?<\/div><\/details>\s*<details class="sec"><summary class="sechead"><h2 id="s2">/,
       `${path}: section 1 has two paragraphs then a list`,
     );
     assert.match(
@@ -1701,7 +1701,7 @@ test("the density miniseg is index-only and replaces the old toggle", async () =
 
 const stripTags = (h) => h.replace(/<[^>]*>/g, "");
 
-test("digest hero: chip, headline, thread pills; subline differs from the headline", async () => {
+test("digest hero: chip and headline, followed by summary and thread disclosure", async () => {
   const { html } = await page("d/235");
   const hero = html.match(/<header class="hero hero-digest">[\s\S]*?<\/header>/)?.[0];
   assert.ok(hero, "hero header present");
@@ -1710,7 +1710,7 @@ test("digest hero: chip, headline, thread pills; subline differs from the headli
   assert.match(hero, /<span class="herochip">[^<]*12 items · 3 sections<\/span>/, "chip counts");
   assert.match(hero, /<h1 class="herotitle">[^<]+<\/h1>/, "headline");
   assert.match(
-    hero,
+    html,
     /<a class="threadpill" href="\/t\/goldentesttoken\/a\/markets-slide">[^<]*<span class="pillcount">×2 this week<\/span><\/a>/,
     "thread pill links to the arc page and keeps the repeat count",
   );
@@ -1729,19 +1729,21 @@ test("digest sections: section nav, expand-all button, folded details", async ()
     assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
     assert.match(
       html,
-      /<div class="tocrow"><nav class="toc"[^>]*>[\s\S]*?<\/nav>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
-      `${path}: expand-all is a sibling of nav.toc inside div.tocrow`,
+      /<div class="tocrow"><details class="tocpicker"><summary>[^<]*<\/summary><nav class="toc"[^>]*>[\s\S]*?<\/nav><\/details>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
+      `${path}: expand-all remains available when the picker is closed`,
     );
     const toc = html.match(/<nav class="toc"[^>]*>([\s\S]*?)<\/nav>/)[1];
-    assert.ok(!toc.includes("expandall"), `${path}: button is not inside the scrolling nav`);
-    const pills = [
+    const links = [
       ...toc.matchAll(
-        /<a href="#s\d+" title="([^"]+)"><span class="tocnum">\d\d<\/span><span class="toctitle">([^<]+)<\/span><\/a>/g,
+        /<a href="#(s\d+)"><span class="tocnum" aria-hidden="true">\d\d<\/span><span class="toctitle">([^<]+)<\/span><\/a>/g,
       ),
     ];
-    assert.equal(pills.length, 3, `${path}: three pills with title + .toctitle`);
-    for (const [, title, text] of pills)
-      assert.equal(title, text, `${path}: pill title is the full heading`);
+    assert.equal(links.length, 3, `${path}: one link per section`);
+    for (const [, id, title] of links)
+      assert.ok(
+        html.includes(`<h2 id="${id}">${title}</h2>`),
+        `${path}: each link has the full heading and targets its anchor`,
+      );
     assert.equal(
       (html.match(/<details class="sec"/g) ?? []).length,
       3,
@@ -1759,7 +1761,6 @@ test("digest sections: section nav, expand-all button, folded details", async ()
         new RegExp(`<summary class="sechead"><h2 id="s${n}">`),
         `${path}: s${n} in summary`,
       );
-      assert.match(html, new RegExp(`<a href="#s${n}" title=`), `${path}: toc link s${n}`);
     }
     const summaries = html.match(/<summary class="sechead">[\s\S]*?<\/summary>/g);
     assert.ok(
@@ -1773,7 +1774,7 @@ test("digest sections: section nav, expand-all button, folded details", async ()
     // Outside the folds: banner, tldr, attention before the first <details>; foot after the last.
     const art = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
     const firstFold = art.indexOf('<details class="sec"');
-    const lastFold = art.lastIndexOf("</details>");
+    const lastFold = art.lastIndexOf("</div></details>");
     for (const marker of ['class="banner"', 'class="tldr"', 'class="attention"']) {
       const at = art.indexOf(marker);
       assert.ok(at > -1 && at < firstFold, `${path}: ${marker} before the folds`);
@@ -1873,9 +1874,9 @@ test("hero is a direct child of main.layout on index and digest; digest body sta
   );
   const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
   assert.ok(!main.includes("hero-digest"), "hero left the column");
-  const toc = main.indexOf('<div class="tocrow"><nav class="toc"');
+  const toc = main.indexOf('<div class="tocrow"><details class="tocpicker"');
   assert.ok(toc > -1, ".tocrow (nav.toc + expand-all) stays in .maincol");
-  assert.ok(toc < main.indexOf('<article class="digest">'), ".toc precedes the article");
+  assert.ok(toc < main.indexOf('class="tldr"'), "section picker precedes the summary");
   assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
   assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");
 });
@@ -1914,4 +1915,35 @@ test("exactly one h1 on every golden page and on an archive-week index", async (
   assert.match(week, /<h2 class="headline">/, "archive entries are h2");
   const empty = markupOf((await page("w/2026-W20/")).html);
   assert.equal(count(empty, /<h1[\s>]/g), 1, "empty archive week: one h1");
+});
+
+test("digest reading controls and sources preserve their contracts", async () => {
+  const html = (await page("d/235")).html;
+  const article = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
+  assert.match(article, /<details class="tocpicker"><summary>Jump to section · 3<\/summary>/);
+  assert.ok(article.indexOf('class="tocpicker"') < article.indexOf('class="tldr"'));
+  assert.ok(article.indexOf('class="tldr"') < article.indexOf('class="storythreads"'));
+  assert.equal((article.match(/class="tldr"/g) ?? []).length, 1);
+  assert.ok(article.indexOf('class="banner"') < article.indexOf('class="tldr"'));
+  assert.ok(!markupOf(html).includes('class="herosub"'), "digest omits the truncated preview");
+  assert.match(
+    article,
+    /class="storysources"[\s\S]*?rel="noopener noreferrer" referrerpolicy="no-referrer"/,
+  );
+  const { foldSections, buildSectionToc } = await import("../src/sections.js");
+  const { STRINGS } = await import("../src/strings.js");
+  const input =
+    '<h2>Test</h2><p><a class="cite" href="https://www.example.com/?a=1&amp;b=2">¹</a><a class="cite" href="javascript:alert(1)">²</a><a class="cite" href="https://t.me/example/3">³</a></p>';
+  const { html: body, sections } = buildSectionToc(input);
+  const folded = foldSections(body, sections.length, STRINGS.en);
+  assert.match(
+    folded,
+    /href="https:\/\/www\.example\.com\/\?a=1&amp;b=2" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">¹<\/span> <span>example\.com<\/span>/,
+  );
+  assert.match(folded, /<span class="sourcenum">³<\/span> <span>Telegram<\/span>/);
+  assert.equal(
+    (folded.match(/javascript:alert/g) ?? []).length,
+    1,
+    "unsafe URL is not copied into source list",
+  );
 });

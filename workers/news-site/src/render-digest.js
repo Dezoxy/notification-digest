@@ -15,7 +15,6 @@ import { deltasRenderableIn, kindBadge, renderDeltaLine } from "./render-shared.
 import { pageChrome } from "./chrome.js";
 import {
   deriveHeadline,
-  deriveSubline,
   renderDegradedBadge,
   renderExcerpt,
   renderProvenance,
@@ -93,21 +92,16 @@ export function renderToc(sections, strings) {
   const chips = sections
     .map(
       (s, i) =>
-        `<a href="#${s.id}" title="${esc(s.title)}"><span class="tocnum">${String(i + 1).padStart(2, "0")}</span><span class="toctitle">${esc(s.title)}</span></a>`,
+        `<a href="#${s.id}"><span class="tocnum" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="toctitle">${esc(s.title)}</span></a>`,
     )
     .join("\n");
-  // The expand/collapse-all button acts on the folded sections the pills point
-  // at, but sits NEXT to the nav, not inside it: inside the phone's scrolling
-  // row it had to be sticky and covered the pills running underneath it. The
-  // pill's `title` carries the full text for pointer users (the visible one
-  // is ellipsised by CSS; assistive tech reads the span in full).
-  // `hidden` until the client behaviour un-hides it: without JS a button that
-  // does nothing must not show.
-  return `<div class="tocrow"><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav>
+  // Keep Expand all outside the picker so it is available when closed.
+  // The client reveals the button only when it can control the folded sections.
+  return `<div class="tocrow"><details class="tocpicker"><summary>${esc(strings.jumpToSection)} · ${sections.length}</summary><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav></details>
 <button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></div>\n`;
 }
 
-// Story-thread pills (ingest v3, roadmap 4 step 8; now the hero's pill row):
+// Story-thread disclosure (ingest v3, roadmap 4 step 8):
 // the digest page's per-topic thread summary, built from handleDigestPage's
 // topicArcs — null (no topics on this digest, query never ran), an empty
 // array, or no recurring topic all render "", same absent-data contract as
@@ -137,7 +131,7 @@ export function renderArcs(topicArcs, strings, token, lang) {
         `<a class="threadpill" href="${arcHref(token, lang, identity)}">${esc(label)} <span class="pillcount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
     )
     .join("");
-  return `<nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pills}</nav>`;
+  return `<details class="storythreads"><summary>${esc(strings.arcsLabel)} · ${recurring.length}</summary><nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pills}</nav></details>`;
 }
 
 export function renderDeltas(deltas, topicArcs, strings, token, lang) {
@@ -215,13 +209,7 @@ export function renderDigestPage(
       : digest.kind === "weekly"
         ? strings.weeklyBrief
         : "digest";
-  // Edition eyebrow (Front Page redesign): kind · time · items · sections —
-  // the full weekday/date is already visible in the phone head's own
-  // issue line above (see pageChrome), so it's dropped here rather
-  // than repeated twice on the same page.
-  // Spatial Glass: the hero chip carries the day too (the header's issue
-  // line sits in the bar, the chip is what a screenshot shows), and the
-  // "digest" placeholder kind is left out rather than printed as a label.
+  // The chip carries edition metadata, including the day for screenshots.
   const chip = [
     digest.kind === "daily" || digest.kind === "weekly" ? kindLabel : null,
     formatShortDate(date, strings.locale),
@@ -231,17 +219,12 @@ export function renderDigestPage(
   ]
     .filter(Boolean)
     .join(" · ");
-  // Derived h1 headline (Front Page redesign): digest.tldr is an already-
-  // selected column that renderDigestPage never rendered directly before
-  // this — the article's own embedded TL;DR paragraph (body_html's
-  // `.tldr` div, restyled as the leader right below this headline, see the
-  // CSS) already carries the full text, so deriving a short title from the
-  // SAME source here adds a headline without duplicating any content.
+  // The headline comes from the stored TL;DR. The article keeps the full
+  // summary and any formatting supplied by the publisher.
   // HU page: the translated TL;DR when the app sent one, same choice the
   // body makes (a HU page that fell back to the English body keeps English).
   const tldrText = lang === "hu" && digest.tldr_hu ? digest.tldr_hu : digest.tldr;
   const headline = deriveHeadline(tldrText);
-  const subline = deriveSubline(tldrText);
   // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
   // browser tab/history width is tight, and the token never appears here.
   // pageChrome esc()s the whole composed string before inserting it.
@@ -387,24 +370,16 @@ export function renderDigestPage(
     ? `<section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">${esc(strings.earlierLabel)}</h2>${earlierRows}</section>`
     : "";
 
-  // The top nav and hero ride in pageChrome's `heroHtml` (full layout width,
-  // above .maincol); the rest stays in .maincol in this order.
-  // Order: nav pills -> hero (chip, h1, subline, thread pills) -> what-
-  // changed block -> en-only note -> section nav -> article (banner, TL;DR
-  // card, attention, folded sections) -> colophon -> bottom nav. The section
-  // nav can't sit inside the article, AFTER the TL;DR: that callout is itself
-  // the FIRST element of body_html (see the .tldr CSS comment), and
-  // repositioning it would mean rewriting arbitrary pre-sanitized HTML for a
-  // purely cosmetic win — so the nav keeps rendering above <article>.
+  // Keep the section picker above long summaries. The stored article owns
+  // the order of its callouts; related reading follows the article.
   const heroHtml = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <header class="hero hero-digest">
   <span class="herochip">${esc(chip)}</span>
   <h1 class="herotitle">${esc(headline)}</h1>
-  ${subline ? `<p class="herosub">${esc(subline)}</p>` : ""}
-  ${arcsHtml}
 </header>`;
-  const body = `${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
-${articleHtmlFinal}
+  const body = `<article class="digest">
+${enOnlyNoteHtml}${tocHtml}${articleHtmlFinal}
+${arcsHtml}${deltasHtml}
 </article>
 ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>`;
 

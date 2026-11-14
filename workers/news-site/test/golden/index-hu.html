@@ -630,41 +630,37 @@
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Section index: pills in .toc, "Expand all" beside it in .tocrow. The button
-     is a SIBLING of the scroller, not a sticky child: a sticky button inside
-     the scrolling row sat on top of the pills passing under it. */
-  .tocrow { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-4); }
-  .toc {
-    display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0;
-    margin: 0; padding: 4px; scroll-padding-inline: 4px;
-    overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity;
-  }
-  .toc::-webkit-scrollbar { display: none; }
-  .toc a {
-    display: inline-flex; align-items: center; gap: 8px; flex: none; scroll-snap-align: start;
-    max-width: min(72vw, 320px, 100%);
-    min-height: 40px; padding: 0 16px;
+  /* Native section picker remains usable without JavaScript. */
+  .tocrow { display: flex; align-items: flex-start; gap: var(--sp-2); }
+  .tocpicker { flex: 1; min-width: 0; }
+  .tocpicker > summary, .storythreads > summary {
+    display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
-    background: var(--panel); color: var(--text); font-size: var(--fs-ui); text-decoration: none; white-space: nowrap;
+    background: var(--panel); cursor: pointer; font-size: var(--fs-ui); font-weight: 600;
   }
-  .toc a:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+  .tocpicker > summary::after, .storythreads > summary::after { content: "+"; margin-left: auto; }
+  .tocpicker[open] > summary::after, .storythreads[open] > summary::after { content: "−"; }
+  .toc { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; }
+  .toc a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 16px; border-radius: var(--r-in); color: var(--text); text-decoration: none; }
+  .toc a:hover { background: var(--accent-soft); }
   .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
-  /* One long title must not fill the row (the 100% cap keeps a lone pill inside the scroller instead of clipped at its edge): it ellipsises, the number stays. */
-  .toctitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toctitle { overflow-wrap: anywhere; }
   .expandall {
-    flex: none; min-height: 40px; padding: 0 16px;
+    flex: none; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border-strong); border-radius: var(--r-pill);
     background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
   }
   .expandall:hover { border-color: var(--accent); }
-  /* From tablet width up the pills WRAP instead of scrolling: there is room.
-     The button stays at the end of the row, level with the first line of
-     pills. The width cap is a phone thing. */
-  @media (min-width: 700px) {
-    .tocrow { align-items: flex-start; }
-    .toc { flex-wrap: wrap; overflow: visible; }
-    .toc a { max-width: none; }
+  .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
+  .storysources { margin-top: var(--sp-4); font-size: var(--fs-meta); color: var(--muted); }
+  .storysources ul { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+  .storysources li { margin: 0; min-width: 0; }
+  .storysources a {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; padding: 0 12px;
+    border: 1px solid var(--border); border-radius: var(--r-pill); text-decoration: none; overflow-wrap: anywhere;
   }
+  .storysources a:hover { background: var(--accent-soft); }
+  .sourcenum { font-weight: 600; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -893,6 +889,8 @@
       animation: rise var(--dur-enter) var(--ease-out) both;
     }
     @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+    html.enter .layout > .hero, html.enter .maincol > .digest { animation-name: rise-visible; }
+    @keyframes rise-visible { from { transform: translateY(14px); } }
     html.enter :is(.hero, .maincol > :nth-child(1), .ledger > :nth-child(1), .side > :nth-child(1)) { animation-delay: 60ms; }
     html.enter :is(.maincol > :nth-child(2), .ledger > :nth-child(2), .side > :nth-child(2)) { animation-delay: 120ms; }
     html.enter :is(.maincol > :nth-child(3), .ledger > :nth-child(3)) { animation-delay: 180ms; }
@@ -1009,6 +1007,8 @@
 
     .hero { padding: 36px 0 28px; }
     header.hero { padding: var(--sp-5) 0 var(--sp-4); }
+    header.hero-digest { padding: var(--sp-2) 0; }
+    .hero-digest .herotitle { margin: 4px auto 0; font-size: 28px; }
     .herosub, .hero .herosub.excerpt { font-size: calc(17px * var(--read-scale)); }
     .entry { padding: var(--sp-4); }
     .tldr, .attention, .aboutcard { padding: 18px var(--sp-4); }
@@ -1067,7 +1067,7 @@
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .toc, .expandall, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .storythreads, .storysources, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
