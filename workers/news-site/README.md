@@ -99,9 +99,9 @@ file there falls through to the Worker, whose uniform 404 is unchanged
   fonts are SIL OFL 1.1 (`OFL.txt`).
 - **Tokenless by design**, like `/favicon.svg`: fonts carry no private data,
   and a stylesheet cannot send a path token for them anyway.
-- `public/_headers` sets `Cache-Control: public, max-age=31536000, immutable`
-  and `X-Content-Type-Options: nosniff` on `/fonts/*`. That is only safe
-  because filenames are versioned.
+- `public/_headers` sets `Cache-Control: public, max-age=31536000, immutable`,
+  `X-Content-Type-Options: nosniff` and `X-Robots-Tag: noindex` on `/fonts/*`.
+  The immutable cache is only safe because filenames are versioned.
 - **Bumping a font:** never edit a file in place. Add the new binary under a
   new name (`...v2.woff2`), update `SOURCES.md` (package version, size,
   sha256, ranges), the `test/fonts.test.mjs` file list and the `@font-face`

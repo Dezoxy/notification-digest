@@ -195,7 +195,12 @@ export const CSS = `
   }
 
   /* ── Shell: the bar ───────────────────────────────────────────────── */
-  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 12px var(--gutter) var(--sp-8); }
+  /* max() with the side insets: viewport-fit=cover lets a landscape iPhone
+     (tablet layout, 32px gutter) draw under the notch otherwise. */
+  .wrap {
+    max-width: var(--maxw); margin: 0 auto;
+    padding: 12px max(var(--gutter), env(safe-area-inset-right)) var(--sp-8) max(var(--gutter), env(safe-area-inset-left));
+  }
   .bar {
     position: sticky; top: 12px; z-index: var(--z-bar);
     display: flex; align-items: center; gap: var(--sp-3);
@@ -587,10 +592,6 @@ export const CSS = `
     display: flex; align-items: center; gap: var(--sp-2);
     margin: 0 -4px var(--sp-4); padding: 4px;
     overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity;
-    /* Fade the trailing edge so it reads as scrollable. currentColor is only
-       the opaque half of the mask; the colour itself is never painted. */
-    -webkit-mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent);
   }
   .toc::-webkit-scrollbar { display: none; }
   .toc a {
@@ -611,7 +612,7 @@ export const CSS = `
      and a sticky "Expand all" over a scrolling row covers the last pill. The
      scrolling row (with its sticky button and edge fade) is a phone thing. */
   @media (min-width: 700px) {
-    .toc { flex-wrap: wrap; overflow: visible; -webkit-mask-image: none; mask-image: none; }
+    .toc { flex-wrap: wrap; overflow: visible; }
     .expandall { position: static; }
   }
 
@@ -905,7 +906,7 @@ export const CSS = `
     .settingspanel:popover-open {
       position: fixed;
       top: calc(12px + var(--bar-h) + var(--sp-2));
-      right: max(var(--gutter), calc((100vw - var(--maxw)) / 2 + var(--gutter)));
+      right: max(var(--gutter), env(safe-area-inset-right), calc((100vw - var(--maxw)) / 2 + var(--gutter)));
       width: 340px; border-radius: var(--r-card);
     }
   }
@@ -943,6 +944,15 @@ export const CSS = `
     .searchpop { position: static; }
     summary.searchtoggle { padding: 0; }
     .searchpanel { top: auto; bottom: calc(100% + var(--sp-3)); left: 0; right: 0; width: auto; }
+    /* Typing in the dock's search field: iOS does not shrink the layout
+       viewport for the keyboard, so a bottom-anchored field would start under
+       it. While the field has focus the dock moves to the top and the panel
+       opens downward. */
+    html:has(.bar .filter:focus) .bar { top: calc(12px + env(safe-area-inset-top)); bottom: auto; }
+    html:has(.bar .filter:focus) .searchpanel { top: calc(100% + var(--sp-3)); bottom: auto; }
+    /* No top bar on phones (the dock is at the bottom): a #sN jump needs only
+       a little air above the heading. */
+    .sechead h2[id] { scroll-margin-top: 16px; }
 
     .hero { padding: 36px 0 28px; }
     header.hero { padding: var(--sp-5) 0 var(--sp-4); }
