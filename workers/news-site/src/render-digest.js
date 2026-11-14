@@ -14,11 +14,42 @@ import { deltasRenderableIn, kindBadge, renderDeltaLine } from "./render-shared.
 import { pageChrome } from "./chrome.js";
 import {
   deriveHeadline,
-  renderDegradedBadge,
+  parseFailedSources,
   renderExcerpt,
   renderProvenance,
   renderSourceKey,
 } from "./render-index.js";
+
+// The publisher styles the first warning paragraph. A following warning may
+// still be plain HTML, including in translated editions. Stop at the first
+// non-warning so editorial content farther down stays in the article.
+function extractRunWarnings(html) {
+  const warnings = [];
+  let rest = html;
+  const paragraph = /^\s*(<p(?: class="([^"]*)")?>([\s\S]*?)<\/p>)/;
+  while (true) {
+    const match = rest.match(paragraph);
+    if (!match) break;
+    const banner = (match[2] ?? "").split(/\s+/).includes("banner");
+    if (banner) {
+      warnings.push(match[1]);
+    } else {
+      if (match[2] !== undefined) break;
+      const lines = match[3].trim().split(/<br\s*\/?>|\r?\n/);
+      const isWarning = warnings.length
+        ? lines.every((line) => /^⚠\s/.test(line.trim()))
+        : lines.every((line) =>
+            /^⚠ (?:verification unavailable this run|\S+ collection failed this run)$/.test(
+              line.trim(),
+            ),
+          );
+      if (!isWarning) break;
+      warnings.push(`<p class="banner">${lines.join("<br>")}</p>`);
+    }
+    rest = rest.slice(match[0].length);
+  }
+  return { warnings, html: rest };
+}
 
 // Inline per-section arc links (this feature): complements renderArcs' own
 // top-of-page "Story threads" chip line by putting a small link right at
@@ -267,7 +298,7 @@ export function renderDigestPage(
   // styles, so stripping the attributes hands presentation fully to the
   // site's own themed CSS. The markup is nh3-normalized and its attributes
   // are double-quoted.
-  const articleHtmlThemed = stripInlineStyles(articleHtml);
+  const { warnings, html: articleHtmlThemed } = extractRunWarnings(stripInlineStyles(articleHtml));
 
   // TOC ids are injected into the themed html (see buildSectionToc), so
   // the <article> below renders the id-bearing version, not the original.
@@ -307,20 +338,14 @@ export function renderDigestPage(
   // forever).
   const provenanceHtml = renderProvenance(digest.provenance, strings);
 
-  // Colophon wrapper (this feature): a divider between the article and its
-  // two record-keeping rows, only when at least one of them actually has
-  // something to say — an old digest with neither source_counts nor
-  // provenance must render no colophon div at all, exactly as it rendered
-  // nothing before this feature (see the .colophon CSS comment).
-  // Collapsed by default (owner request): the whole colophon sits behind one
-  // native <details> disclosure — same "no JS needed" contract as
-  // renderArcContext's primer — so the record-keeping rows are one tap away
-  // instead of always on screen. Both rows share ONE summary on purpose: they
-  // answer the same "how was this page made" question, so splitting them
-  // would cost a second tap for one kind of curiosity.
+  // Native disclosure keeps run warnings and provenance available without JS.
+  const hasRunWarning = warnings.length > 0 || Boolean(parseFailedSources(digest.failed_sources));
+  const warningMarker = hasRunWarning
+    ? ` <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, ${esc(strings.runWarning)}</span>`
+    : "";
   const colophonHtml =
-    sourceKeyHtml || provenanceHtml
-      ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}</summary><div class="colophonbody">${sourceKeyHtml}${provenanceHtml}</div></details>`
+    sourceKeyHtml || provenanceHtml || warnings.length
+      ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}${warningMarker}</summary><div class="colophonbody">${warnings.join("")}${sourceKeyHtml}${provenanceHtml}</div></details>`
       : "";
 
   // Story-thread pills (roadmap 4 step 8): "" on a digest with no recurring

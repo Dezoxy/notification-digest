@@ -397,7 +397,7 @@ test("digest 235 EN: thread pills, what-changed block, source key, stripped styl
   // ONE collapsed details.colophon, in source-key-then-provenance order.
   assert.match(
     html,
-    /<details class="colophon"><summary>How this was made<\/summary><div class="colophonbody"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
+    /<details class="colophon"><summary>How this was made[\s\S]*?<\/summary><div class="colophonbody">[\s\S]*?<div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
     "colophon wraps both the source key and the provenance row",
   );
   // Model provenance (ingest v5): "Written by"/"Translated with" rows
@@ -634,6 +634,58 @@ test("colophon: absent from both fields renders no wrapper div at all", async ()
   assert.ok(!html.includes('class="colophon"'), "no colophon wrapper when neither row has data");
   assert.ok(!html.includes('class="sourcekey"'), "no source key either");
   assert.ok(!html.includes('class="provenance"'), "no provenance row either");
+});
+
+test("run warnings belong in the colophon", async () => {
+  const { renderDigestPage } = await import("../src/render-digest.js");
+  const digest = {
+    id: 999,
+    created_at: "2026-08-25T12:00:00Z",
+    kind: "window",
+    item_count: 1,
+    section_count: 1,
+    tldr: "Test",
+    source_counts: null,
+    failed_sources: null,
+    provenance: null,
+    body_html:
+      '<p class="banner" style="color:red">⚠ verification unavailable this run</p>\n<p>⚠ telegram collection failed this run\n⚠ x collection failed this run</p><div class="attention"><p>Needs attention</p></div><h2>One</h2><p>⚠ editorial warning</p>',
+  };
+  const render = (row, lang = "en") =>
+    renderDigestPage(row, null, null, "tok", "example.com", lang, "all", [], null);
+  const html = render(digest);
+  const article = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
+  assert.doesNotMatch(article, /verification unavailable|collection failed/);
+  assert.match(article, /Needs attention/);
+  assert.match(article, /<h2 id="s1">One<\/h2>/);
+  assert.match(article, /⚠ editorial warning/);
+  assert.match(
+    html,
+    /<details class="colophon"><summary>How this was made[\s\S]*?Run warnings[\s\S]*?<div class="colophonbody"><p class="banner">⚠ verification unavailable this run<\/p><p class="banner">⚠ telegram collection failed this run<br>⚠ x collection failed this run<\/p>/,
+  );
+  const translated = render(
+    {
+      ...digest,
+      body_html_hu:
+        '<p class="banner">⚠ Az ellenőrzés nem érhető el</p><p>⚠ Az RSS begyűjtése sikertelen</p><h2>Hír</h2>',
+    },
+    "hu",
+  );
+  assert.match(
+    translated,
+    /class="colophonbody"><p class="banner">⚠ Az ellenőrzés nem érhető el<\/p><p class="banner">⚠ Az RSS begyűjtése sikertelen<\/p>/,
+  );
+  const metadata = render({ ...digest, body_html: "<p>Body</p>", failed_sources: '["rss"]' }, "hu");
+  assert.match(metadata, /Hogyan készült[\s\S]*?Futtatási figyelmeztetések/);
+  assert.match(metadata, /class="sk sk-failed">⚠ rss/);
+  assert.doesNotMatch(
+    render({ ...digest, body_html: "<p>Body</p>", source_counts: '{"rss":1}' }),
+    /class="colophon-warning"/,
+  );
+  assert.match(
+    render({ ...digest, body_html: "<p>Intro</p><p>⚠ verification unavailable this run</p>" }),
+    /<article class="digest">[\s\S]*?⚠ verification unavailable this run/,
+  );
 });
 
 test("digest 234 HU: falls back to EN body with the note", async () => {
@@ -1787,11 +1839,11 @@ test("digest sections: section nav, expand-all button, folded details", async ()
       !html.includes('<summary class="sechead"><h2 id="s1">Markets slide continues</h2><a'),
       "secarc not adjacent",
     );
-    // Outside the folds: banner, tldr, attention before the first <details>; foot after the last.
+    // Outside the folds: tldr and attention precede the first section; foot follows the last.
     const art = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
     const firstFold = art.indexOf('<details class="sec"');
     const lastFold = art.lastIndexOf("</div></details>");
-    for (const marker of ['class="banner"', 'class="tldr"', 'class="attention"']) {
+    for (const marker of ['class="tldr"', 'class="attention"']) {
       const at = art.indexOf(marker);
       assert.ok(at > -1 && at < firstFold, `${path}: ${marker} before the folds`);
     }
@@ -1923,7 +1975,7 @@ test("digest reading controls and sources preserve their contracts", async () =>
   assert.ok(article.indexOf('class="tocpicker"') < article.indexOf('class="tldr"'));
   assert.ok(article.indexOf('class="tldr"') < article.indexOf('class="storythreads"'));
   assert.equal((article.match(/class="tldr"/g) ?? []).length, 1);
-  assert.ok(article.indexOf('class="banner"') < article.indexOf('class="tldr"'));
+  assert.doesNotMatch(article, /class="banner"/);
   assert.ok(!markupOf(html).includes('class="herosub"'), "digest omits the truncated preview");
   assert.doesNotMatch(article, /class="storysources"/);
   assert.match(

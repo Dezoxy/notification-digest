@@ -17,6 +17,8 @@ repo root).
 
 Digest pages show an open native section picker before the complete summary.
 Stories are expanded by default and retain numbered inline citation links.
+Verification and collection warnings appear under **How this was made**.
+An exclamation mark next to that label signals a warning.
 Related story threads are available after the article when relevant. The picker
 and story disclosures work without JavaScript; Expand all / Collapse all is
 available when JavaScript is enabled.

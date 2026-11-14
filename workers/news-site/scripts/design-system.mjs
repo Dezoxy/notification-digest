@@ -1013,13 +1013,12 @@ Source: \`render-index.js\`; styles \`.weekrail\`, \`.railspark\`.
     stage(`<article class="digest">
   <div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
   <div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The council vote on the package closes at 18:00 CEST; two of your groups are organising around it.</p></div>
-  <p class="banner">⚠ Polymarket could not be collected this run; its items are missing.</p>
 </article>`),
     `# Callouts
 
-The digest's three blocks above the sections are the TL;DR, the attention callout, and the collection-failed banner. The TL;DR uses a card in Cards mode and an accent rule in Compact mode. The two notices use amber in both modes.
+The digest's blocks above the sections are the TL;DR and the attention callout. The TL;DR uses a card in Cards mode and an accent rule in Compact mode. Run warnings appear in the colophon.
 
-**Provide** them inside \`article.digest\`: \`div.tldr\` first with a \`.tldr-label\`, an optional \`div.attention\` with \`.attention-label\` and a \`p\`, and \`p.banner\` when a source failed. These arrive in the summarizer's HTML; the site strips its inline email styles and these classes take over.
+**Provide** them inside \`article.digest\` using \`div.tldr\` with a \`.tldr-label\` and an optional \`div.attention\` with \`.attention-label\` and a paragraph. The site strips the inline email styles and applies its own theme.
 
 - Do keep exactly one TL;DR per digest; it is also the headline's source.
 - Do reserve \`attention\` for something the reader may act on.
@@ -1162,11 +1161,11 @@ Source: \`render-arc.js\`; styles \`.timeline\`, \`.tlitem\`.
     "Article",
     230,
     stage(
-      `<details class="colophon" open><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
+      `<details class="colophon" open><summary>How this was made <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, Run warnings</span></summary><div class="colophonbody"><p class="banner">⚠ polymarket collection failed this run</p><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
     ),
     `# Colophon
 
-The collapsible "How this was made" footer of a digest: per-source item counts with colour keys, failed sources, and which model wrote and translated it.
+The collapsible "How this was made" footer of a digest holds run warnings, per-source item counts, and which model wrote and translated it. Add an amber \`!\` beside the label when an edition has run warnings or recorded collector failures.
 
 **Provide** \`details.colophon\` with a \`.sourcekey\` (\`.sklabel\`, then \`.sk\` per source with an \`i\` swatch; \`.sk-failed\` for a source that failed) and a \`.provenance\` of \`.provline\`s; \`.sk-fallback\` with ↻ marks a fallback model.
 
