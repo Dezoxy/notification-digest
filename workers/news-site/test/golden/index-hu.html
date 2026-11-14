@@ -1052,8 +1052,18 @@
     html[data-density="compact"] .digest { gap: var(--sp-2); }
     html[data-density="compact"] .toc { gap: 0; padding: 4px 0; }
     html[data-density="compact"] :is(.tldr, .attention, .aboutcard) { padding: 14px var(--sp-4); }
+    html[data-density="compact"] article.digest > .sec {
+      border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none;
+    }
+    html[data-density="compact"] article.digest > .tldr {
+      padding: var(--sp-1) 0 var(--sp-1) var(--sp-3);
+      border: 0; border-inline-start: 3px solid var(--accent-line); border-radius: 0; background: none;
+    }
+    html[data-density="compact"] article.digest > .tldr .tldr-label { margin-bottom: var(--sp-1); }
     html[data-density="compact"] .sechead { padding: 12px var(--sp-4); min-height: 44px; }
     html[data-density="compact"] .secbody { padding: 0 var(--sp-4) var(--sp-4); }
+    html[data-density="compact"] article.digest .sechead { padding-inline: 0; border-radius: 0; }
+    html[data-density="compact"] article.digest .secbody { padding-inline: 0; }
     html[data-density="compact"] .secbody > :is(p, ul, ol):not(:last-child) { margin-bottom: 0.7em; }
     html[data-density="compact"] .secbody li { margin-bottom: 0.2em; }
     html[data-density="compact"] .deltas { margin-bottom: var(--sp-3); }
