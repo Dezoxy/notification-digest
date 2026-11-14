@@ -1074,6 +1074,12 @@
   }
 
   @media screen and (max-width: 699.98px) {
+    .toc a { padding-inline: var(--sp-2); font-size: var(--fs-meta); line-height: 1.35; }
+    /* Size the list to the whole row while the summary shares it with Collapse all. */
+    @supports (container-type: inline-size) and (width: 100cqi) {
+      .tocrow { container-type: inline-size; }
+      .toc { width: 100cqi; }
+    }
     html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
     html[data-density="compact"] header.hero-digest { padding: var(--sp-1) 0; }
   }
