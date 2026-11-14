@@ -1700,13 +1700,18 @@ test("the density miniseg appears on every page and replaces the old toggle", as
 
 const stripTags = (h) => h.replace(/<[^>]*>/g, "");
 
-test("digest hero: chip and headline, followed by summary and thread disclosure", async () => {
+test("digest hero: dateline and headline, followed by summary and thread disclosure", async () => {
   const { html } = await page("d/235");
   const hero = html.match(/<header class="hero hero-digest">[\s\S]*?<\/header>/)?.[0];
   assert.ok(hero, "hero header present");
   assert.ok(!html.includes('class="edhead"'), "old edhead is gone");
   assert.ok(!html.includes('<nav class="arcs"'), "old arcs line is gone");
-  assert.match(hero, /<span class="herochip">[^<]*12 items · 3 sections<\/span>/, "chip counts");
+  assert.match(
+    hero,
+    /<p class="digest-dateline">digest · <time datetime="[^"]+"><span class="digest-dateline-date">[^<]+ · <\/span>[^<]+<\/time><\/p>/,
+    "semantic dateline",
+  );
+  assert.doesNotMatch(hero, /items|sections|herochip/, "counts and capsule stay out of the hero");
   assert.match(hero, /<h1 class="herotitle">[^<]+<\/h1>/, "headline");
   assert.match(
     html,
@@ -1720,6 +1725,18 @@ test("digest hero: chip and headline, followed by summary and thread disclosure"
   const tldr = "Markets slid for a second day. The EU package landed overnight, gated on reforms.";
   assert.equal(deriveHeadline(tldr), "Markets slid for a second day.");
   assert.equal(deriveSubline(tldr), "The EU package landed overnight, gated on reforms.");
+});
+
+test("digest dateline labels daily and weekly editions in both languages", async () => {
+  for (const [path, label] of [
+    ["d/233", "daily brief"],
+    ["d/232", "weekly report"],
+    ["hu/d/233", "napi összefoglaló"],
+    ["hu/d/232", "heti összefoglaló"],
+  ]) {
+    const { html } = await page(path);
+    assert.ok(html.includes(`<p class="digest-dateline">${label} · <time datetime=`), path);
+  }
 });
 
 test("digest sections: section nav, expand-all button, folded details", async () => {

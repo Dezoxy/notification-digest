@@ -844,19 +844,19 @@ Source: \`render-index.js\`; styles \`.hero\`, \`.herotitle\`, \`.herochip\`, \`
     330,
     stage(`<nav class="digestnav"><a href="#">← All digests</a><span class="spacer"></span><a class="nav-older" href="#">← 10:00</a></nav>
 <header class="hero hero-digest">
-  <span class="herochip">Digest · Tue 25 Aug · 16:00 CEST · 12 items · 3 sections</span>
+  <p class="digest-dateline">Daily brief · <time datetime="2026-08-25T14:00:00Z"><span class="digest-dateline-date">Tue 25 Aug · </span>16:00 CEST</time></p>
   <h1 class="herotitle">Markets slid for a second day while the EU package landed.</h1>
 </header>`),
     `# DigestHero
 
-The top of a digest page has back and older/newer links, a centred metadata chip (kind, date, time, counts), and a headline.
+The top of a digest page has back and older/newer links, a headline, and a plain dateline with the edition type and local time. The dateline also shows a short date on desktop and in print. On phones the masthead shows the date.
 
-**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`span.herochip\`, \`h1.herotitle\`. The headline is derived from the TL;DR.
+**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`p.digest-dateline\` and \`h1.herotitle\`. The headline is derived from the TL;DR.
 
 - Do repeat \`nav.digestnav.digestnav-bottom\` after the colophon.
 - Do omit the older or newer link at either end instead of showing a disabled one.
 
-Source: \`render-digest.js\`; styles \`.digestnav\`, \`.hero-digest\`, \`.herochip\`.
+Source: \`render-digest.js\`; styles \`.digestnav\`, \`.hero-digest\`, \`.digest-dateline\`.
 `,
   );
 
