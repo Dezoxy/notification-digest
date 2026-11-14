@@ -27,6 +27,7 @@ export const JS_ONLY_HOOKS = {
   "miniseg-theme":
     "client.js wires the group via querySelector('.miniseg-' + name); styling is the shared .miniseg",
   "miniseg-size": "same: JS lookup key for the text-size group, styled by the shared .miniseg",
+  "miniseg-density": "same: JS lookup key for the density group, styled by the shared .miniseg",
   pushrow: "client.js querySelector('.pushrow') to unhide the row; layout comes from .settingsrow",
   paletteconfig: "hidden data-* carrier read by the command palette (client.js); never rendered",
   "nav-older":

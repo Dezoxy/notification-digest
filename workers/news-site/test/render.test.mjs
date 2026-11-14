@@ -119,24 +119,124 @@ test("digest section ids are sequential and agree with the TOC", async () => {
 
 // ── branch markers (one per fixture-covered branch) ───────────────────────
 
-test("hover-to-open is wired for both popovers and gated to hovering pointers", async () => {
+test("search popover hover-to-open is gated to hovering pointers", async () => {
   // Marker test, not a behaviour test: the client script is inlined as TEXT
   // and never executed here, so there is no DOM to dispatch mouseenter on.
   // What this pins is the part whose loss would be silent and bad -- the
   // pointer gate. Without it a touch device synthesises mouseenter on tap,
-  // opening a panel that then has no pointer to move away from it.
+  // opening a panel that then has no pointer to move away from it. The
+  // settings panel is a native popover now and has no hover machinery.
   const { CLIENT_SCRIPT } = await import("../src/client.js");
   assert.match(CLIENT_SCRIPT, /hover: hover\) and \(pointer: fine/, "pointer gate present");
-  assert.match(CLIENT_SCRIPT, /hoverPopovers\(\s*settings/, "settings wired");
-  assert.match(CLIENT_SCRIPT, /hoverPopovers\(\s*pop/, "search popover wired");
-  // Settings must close through its animated close() helper, never by
-  // assigning open = false, or the pointer path skips the animation every
-  // other close path runs.
+  assert.match(CLIENT_SCRIPT, /pop\.addEventListener\(\s*"mouseenter"/, "search popover wired");
+  for (const gone of [
+    "hoverPopovers",
+    "details.settings",
+    "summary.gear",
+    "panelclosing",
+    "settingsOpen",
+  ]) {
+    assert.ok(!CLIENT_SCRIPT.includes(gone), `client.js no longer carries ${gone}`);
+  }
+});
+
+test("client.js: dead masthead/FAB/serif behaviour is gone", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  for (const gone of [
+    "masthid",
+    "--mast-h",
+    "header.mast",
+    "backfab",
+    "densitytoggle",
+    '"font"',
+    ".digest > h2",
+  ]) {
+    assert.ok(!CLIENT_SCRIPT.includes(gone), `client.js no longer carries ${gone}`);
+  }
+  assert.ok(!/setProperty\(/.test(CLIENT_SCRIPT), "the client sets no CSS custom properties");
+});
+
+test("client.js: theme colours, density miniseg mapping, theming window", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
   assert.match(
     CLIENT_SCRIPT,
-    /hoverPopovers\(\s*settings,[\s\S]*?\n\s*close,\n/,
-    "settings closes via close()",
+    /THEME_COLORS = \{ light: "#eceff6", dark: "#0b0d14" \}/,
+    "THEME_COLORS match the Spatial Glass --bg values",
   );
+  // cards <-> absence of data-density, compact <-> "compact", same storage key.
+  assert.match(CLIENT_SCRIPT, /wireMiniseg\(\s*"density"/, "density wired as a miniseg");
+  assert.match(
+    CLIENT_SCRIPT,
+    /=== "compact" \? "compact" : "cards"/,
+    "reflect: cards is the default",
+  );
+  assert.match(
+    CLIENT_SCRIPT,
+    /setPref\("density", "density", v === "compact" \? "compact" : "", ""\)/,
+    "apply: compact stored, cards is absence",
+  );
+  assert.match(CLIENT_SCRIPT, /classList\.add\("theming"\)/, "theming class added");
+  assert.match(
+    CLIENT_SCRIPT,
+    /clearTimeout\(themingTimer\)/,
+    "rapid clicks clear the pending timer",
+  );
+  assert.match(CLIENT_SCRIPT, /\}, 350\)/, "theming window is 350ms");
+});
+
+test("client.js: settings popover is closed by hidePopover only, never opened", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  assert.match(CLIENT_SCRIPT, /matchMedia\("\(min-width: 1040px\)"\)/, "sidebar-mode listener");
+  assert.match(CLIENT_SCRIPT, /typeof panel\.hidePopover !== "function"/, "hidePopover is guarded");
+  assert.match(
+    CLIENT_SCRIPT,
+    /panel\.closest\("\.side"\)/,
+    "only the sidebar copy is closed on widen",
+  );
+  assert.match(
+    CLIENT_SCRIPT,
+    /closeSettingsPopover\(\);\s*withPageTransition/,
+    "closed before the soft-nav swap",
+  );
+  assert.ok(!/\.showPopover\(/.test(CLIENT_SCRIPT), "the client never calls showPopover()");
+});
+
+test("client.js: folded sections, expand-all, print, entrance, typing state", async () => {
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  // Folded sections.
+  assert.match(
+    CLIENT_SCRIPT,
+    /closest\('a\[href\^="#s"\]'\)/,
+    "in-page #sN clicks open their section",
+  );
+  assert.match(CLIENT_SCRIPT, /addEventListener\(\s*"hashchange"/, "hashchange reveals a section");
+  assert.match(CLIENT_SCRIPT, /revealHash\(location\.hash\);\s*$/, "boot-time hash reveal");
+  assert.match(CLIENT_SCRIPT, /querySelector\("button\.expandall"\)/, "expand-all wired");
+  assert.match(CLIENT_SCRIPT, /setAttribute\("aria-expanded"/, "expand-all reflects aria-expanded");
+  assert.match(
+    CLIENT_SCRIPT,
+    /btn\.dataset\.collapse : btn\.dataset\.expand/,
+    "label from data-expand/data-collapse",
+  );
+  // Print.
+  assert.match(CLIENT_SCRIPT, /addEventListener\("beforeprint"/, "beforeprint");
+  assert.match(CLIENT_SCRIPT, /addEventListener\("afterprint"/, "afterprint");
+  for (const sel of ["details.sec", "details.colophon", "details.arccontext"]) {
+    assert.ok(CLIENT_SCRIPT.includes(sel + ":not([open])"), `print opens ${sel}`);
+  }
+  // Entrance: removed once at boot, immediately on a bfcache restore.
+  assert.match(
+    CLIENT_SCRIPT,
+    /classList\.remove\("enter"\);\s*\}, 1200\)/,
+    "enter removed after 1200ms",
+  );
+  assert.match(CLIENT_SCRIPT, /e\.persisted/, "bfcache restore drops enter at once");
+  assert.ok(!CLIENT_SCRIPT.includes('add("enter")'), "the client never adds html.enter");
+  // Typing state, phone only.
+  assert.match(CLIENT_SCRIPT, /\(max-width: 699\.98px\)/, "phone breakpoint");
+  assert.match(CLIENT_SCRIPT, /toggle\("typing", on\)/, "html.typing");
+  assert.match(CLIENT_SCRIPT, /addEventListener\("focusin"/, "focusin");
+  assert.match(CLIENT_SCRIPT, /addEventListener\("focusout"/, "focusout");
 });
 
 test("day headers are an ALL-view affordance; daily/weekly flow flat", async () => {
@@ -233,7 +333,7 @@ test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail afte
 test("index hero: daily view fetches the lead's threads; HU hero uses HU text", async () => {
   const daily = (await page("daily/")).html;
   assert.match(daily, /<section class="hero"/, "daily view has a hero");
-  assert.ok(!daily.includes("threadpill"), "daily lead (233) has no topics: CTA only");
+  assert.ok(!markupOf(daily).includes("threadpill"), "daily lead (233) has no topics: CTA only");
   assert.match(daily, /class="herocta"/);
 
   const hu = (await page("hu/")).html;
@@ -552,10 +652,14 @@ test("arc page: centred hero, timeline newest-first, primer kept", async () => {
     const items = [...html.matchAll(/<li class="tlitem( tlitem-latest)?">/g)];
     assert.ok(items.length >= 2);
     assert.ok(items[0][1], "newest appearance carries tlitem-latest");
-    assert.equal(countMatches(html, /tlitem-latest/g), 1, "only one latest item");
+    const markup = markupOf(html);
+    assert.equal(countMatches(markup, /tlitem-latest/g), 1, "only one latest item");
     const latestAt = html.indexOf("Markets slide continues");
     const olderAt = html.indexOf("Markets slide, day two");
-    assert.ok(html.indexOf("tlitem-latest") < olderAt && latestAt < olderAt, "newest first");
+    assert.ok(
+      html.indexOf('<li class="tlitem tlitem-latest">') < olderAt && latestAt < olderAt,
+      "newest first",
+    );
   }
 });
 
