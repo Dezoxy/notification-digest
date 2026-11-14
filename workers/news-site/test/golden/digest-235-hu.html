@@ -860,7 +860,8 @@
   .cmdpalette-group { font-size: var(--fs-micro); color: var(--muted); }
   .cmdpalette-empty { padding: 14px 16px; font-size: var(--fs-ui); color: var(--muted); }
 
-  /* ── Reading size: M is the absence of data-fontsize ──────────────── */
+  /* ── Reading size (XS/S/L): M is the absence of data-fontsize ─────── */
+  html[data-fontsize="xs"] { --read-scale: 0.86; }
   html[data-fontsize="s"] { --read-scale: 0.94; }
   html[data-fontsize="l"] { --read-scale: 1.12; }
 
@@ -1156,7 +1157,7 @@
 <details class="colophon"><summary>Hogyan készült</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Források</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Írta</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Fordította</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div></details><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/hu/">← Minden hírlevél</a>
 <span class="spacer"></span>
 <a class="nav-older" href="/t/goldentesttoken/hu/d/234">← 10:00</a></nav></div>
-    <aside class="side" aria-label="Oldalsáv"><section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">Korábban</h2><a class="earlierrow" href="/t/goldentesttoken/hu/d/234"><span class="earliermeta">aug. 25., K 10:00 · 9 elem</span><span class="earliertitle">The sell-off began; two sections follow.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/233"><span class="earliermeta">aug. 24., H 22:00 · 6 elem<span class="flag flag-daily">napi összefoglaló</span></span><span class="earliertitle">Hétfői napi összefoglaló.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/232"><span class="earliermeta">aug. 23., V 21:00 · 40 elem<span class="flag flag-daily">heti összefoglaló</span></span><span class="earliertitle">A hét egy oldalon.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/231"><span class="earliermeta">aug. 18., K 12:00 · 7 elem</span><span class="earliertitle">From the previous week.</span></a></section><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Beállítások</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Beállítások bezárása">×</button></div><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/d/235">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow pushrow" hidden
+    <aside class="side" aria-label="Oldalsáv"><section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">Korábban</h2><a class="earlierrow" href="/t/goldentesttoken/hu/d/234"><span class="earliermeta">aug. 25., K 10:00 · 9 elem</span><span class="earliertitle">The sell-off began; two sections follow.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/233"><span class="earliermeta">aug. 24., H 22:00 · 6 elem<span class="flag flag-daily">napi összefoglaló</span></span><span class="earliertitle">Hétfői napi összefoglaló.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/232"><span class="earliermeta">aug. 23., V 21:00 · 40 elem<span class="flag flag-daily">heti összefoglaló</span></span><span class="earliertitle">A hét egy oldalon.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/231"><span class="earliermeta">aug. 18., K 12:00 · 7 elem</span><span class="earliertitle">From the previous week.</span></a></section><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Beállítások</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Beállítások bezárása">×</button></div><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/d/235">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow pushrow" hidden
     data-label="Értesítések"
     data-enable="Bekapcsolás"
     data-enabled="Bekapcsolva"
@@ -1621,14 +1622,14 @@
       },
     );
 
-    // Text size miniseg: S/M/L. M is the default expressed as the ABSENCE
-    // of data-fontsize (see the CSS + setPref), so only s/l touch storage.
+    // Text size miniseg: XS/S/M/L. M is the default expressed as the ABSENCE
+    // of data-fontsize (see the CSS + setPref), so only xs/s/l touch storage.
     wireMiniseg(
       "size",
       signal,
       function () {
         var stored = document.documentElement.dataset.fontsize;
-        return stored === "s" || stored === "l" ? stored : "m";
+        return stored === "xs" || stored === "s" || stored === "l" ? stored : "m";
       },
       function (v) {
         setPref("fontsize", "fontsize", v, "m");

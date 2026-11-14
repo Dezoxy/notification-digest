@@ -456,14 +456,14 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       },
     );
 
-    // Text size miniseg: S/M/L. M is the default expressed as the ABSENCE
-    // of data-fontsize (see the CSS + setPref), so only s/l touch storage.
+    // Text size miniseg: XS/S/M/L. M is the default expressed as the ABSENCE
+    // of data-fontsize (see the CSS + setPref), so only xs/s/l touch storage.
     wireMiniseg(
       "size",
       signal,
       function () {
         var stored = document.documentElement.dataset.fontsize;
-        return stored === "s" || stored === "l" ? stored : "m";
+        return stored === "xs" || stored === "s" || stored === "l" ? stored : "m";
       },
       function (v) {
         setPref("fontsize", "fontsize", v, "m");

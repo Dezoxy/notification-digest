@@ -1616,6 +1616,23 @@ test("font preloads: latin always, latin-ext only on Hungarian pages; the body-f
   }
 });
 
+test("the size miniseg offers xs/s/m/l in that order and the client accepts xs", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    const group = html.match(/miniseg-size[\s\S]*?<\/span>/);
+    assert.ok(group, `${name}: size miniseg present`);
+    const sets = [...group[0].matchAll(/data-set="([a-z]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(sets, ["xs", "s", "m", "l"], `${name}: size order`);
+    assert.match(group[0], /data-set="xs" hidden>XS</, `${name}: literal XS label`);
+  }
+  const { CLIENT_SCRIPT } = await import("../src/client.js");
+  assert.match(
+    CLIENT_SCRIPT,
+    /stored === "xs" \|\| stored === "s" \|\| stored === "l"/,
+    "client restores xs like s and l",
+  );
+});
+
 test("the density miniseg is index-only and replaces the old toggle", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const html = markupOf((await page(path)).html);

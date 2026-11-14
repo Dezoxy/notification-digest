@@ -829,7 +829,7 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   palette, j/k list navigation, and an Archive nav link.
 - **Settings and reading** — a settings panel (a popover opened from the bar's
   sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
-  language, the three-state theme, text size (S/M/L) and a Cards | Compact
+  language, the three-state theme, text size (XS/S/M/L) and a Cards | Compact
   ledger density; a plain black-on-white print stylesheet; an About page for
   anyone the capability link gets shared with. The Sans | Serif body-font
   toggle was retired by the Spatial Glass redesign (below).

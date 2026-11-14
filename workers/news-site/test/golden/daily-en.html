@@ -858,7 +858,8 @@
   .cmdpalette-group { font-size: var(--fs-micro); color: var(--muted); }
   .cmdpalette-empty { padding: 14px 16px; font-size: var(--fs-ui); color: var(--muted); }
 
-  /* ── Reading size: M is the absence of data-fontsize ──────────────── */
+  /* ── Reading size (XS/S/L): M is the absence of data-fontsize ─────── */
+  html[data-fontsize="xs"] { --read-scale: 0.86; }
   html[data-fontsize="s"] { --read-scale: 0.94; }
   html[data-fontsize="l"] { --read-scale: 1.12; }
 
@@ -1125,7 +1126,7 @@
     <div class="heropills"><a class="herocta" href="/t/goldentesttoken/daily/d/233">Read the edition →</a></div>
   </section>
     <div class="maincol"><section class="ledger" data-unread-label="new since your last visit" data-empty-filtered="Nothing matches."></section><div class="archiveresults" data-search-href="/t/goldentesttoken/search" hidden></div></div>
-    <aside class="side" aria-label="Edition panel"><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Settings</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Close settings">×</button></div><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/daily/">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Density</span><span class="miniseg miniseg-density" role="group" aria-label="Density"><button class="minisegbtn" data-set="cards" hidden>Cards</button><button class="minisegbtn" data-set="compact" hidden>Compact</button></span></div><div class="settingsrow pushrow" hidden
+    <aside class="side" aria-label="Edition panel"><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Settings</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Close settings">×</button></div><div class="settingsrow"><span class="settingslabel">Language</span><span class="langswitch"><strong>EN</strong> | <a href="/t/goldentesttoken/hu/daily/">HU</a></span></div><div class="settingsrow"><span class="settingslabel">Theme</span><span class="miniseg miniseg-theme" role="group" aria-label="Toggle light/dark"><button class="minisegbtn" data-set="light" hidden>Light</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Dark</button></span></div><div class="settingsrow"><span class="settingslabel">Text size</span><span class="miniseg miniseg-size" role="group" aria-label="Text size"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Density</span><span class="miniseg miniseg-density" role="group" aria-label="Density"><button class="minisegbtn" data-set="cards" hidden>Cards</button><button class="minisegbtn" data-set="compact" hidden>Compact</button></span></div><div class="settingsrow pushrow" hidden
     data-label="Notifications"
     data-enable="Turn on"
     data-enabled="On"
@@ -1590,14 +1591,14 @@
       },
     );
 
-    // Text size miniseg: S/M/L. M is the default expressed as the ABSENCE
-    // of data-fontsize (see the CSS + setPref), so only s/l touch storage.
+    // Text size miniseg: XS/S/M/L. M is the default expressed as the ABSENCE
+    // of data-fontsize (see the CSS + setPref), so only xs/s/l touch storage.
     wireMiniseg(
       "size",
       signal,
       function () {
         var stored = document.documentElement.dataset.fontsize;
-        return stored === "s" || stored === "l" ? stored : "m";
+        return stored === "xs" || stored === "s" || stored === "l" ? stored : "m";
       },
       function (v) {
         setPref("fontsize", "fontsize", v, "m");

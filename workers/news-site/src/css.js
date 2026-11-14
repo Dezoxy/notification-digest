@@ -823,7 +823,8 @@ export const CSS = `
   .cmdpalette-group { font-size: var(--fs-micro); color: var(--muted); }
   .cmdpalette-empty { padding: 14px 16px; font-size: var(--fs-ui); color: var(--muted); }
 
-  /* ── Reading size: M is the absence of data-fontsize ──────────────── */
+  /* ── Reading size (XS/S/L): M is the absence of data-fontsize ─────── */
+  html[data-fontsize="xs"] { --read-scale: 0.86; }
   html[data-fontsize="s"] { --read-scale: 0.94; }
   html[data-fontsize="l"] { --read-scale: 1.12; }
 
