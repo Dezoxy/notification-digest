@@ -428,7 +428,7 @@ export function renderIndexEntry(row, token, lang, view) {
   // script tell "already in this ledger" from "genuinely archive-only".
   return `<a class="entry" href="${digestHref(token, lang, view, row.id)}" data-created="${esc(row.created_at)}" data-id="${esc(row.id)}">
     <span class="meta"><span class="${timeClass}">${esc(time)}</span><span class="count">${counts}</span>${degradedHtml}${badgeHtml}${langChip}</span>
-    <h3 class="headline">${esc(headline)}</h3>
+    <h2 class="headline">${esc(headline)}</h2>
     <p class="${excerptClass}"><strong>${esc(strings.tldrLabel)}</strong> ${excerptHtml}</p>
   </a>`;
 }
@@ -446,7 +446,10 @@ export function renderIndexEntry(row, token, lang, view) {
 // `.excerpt` (client.js); without them the lead would show up unlabelled.
 //
 // The index has no other <h1> (digest and arc pages carry their own), so the
-// hero headline is the page's h1 — an empty or archive-week index has none.
+// hero headline is the page's h1; an empty or archive-week index gets a plain
+// `header.hero` h1 from renderIndexPage instead. The hero is passed to
+// pageChrome as `heroHtml`, a sibling of .maincol, so it is OUTSIDE the
+// ledger section (the client finds the lead via `.wrap .entry`, not there).
 // `threads` is [{identity, label}] from leadThreadsFrom*; empty omits the pills
 // but keeps the CTA.
 export function renderLeadCard(row, token, lang, view, threads = []) {
@@ -803,6 +806,7 @@ export function renderIndexPage(
   // this function.
   let leadRow = null;
   let body;
+  let heroHtml = "";
   if (rows.length === 0) {
     body = `<p class="empty">${esc(emptyMessage)}</p>`;
   } else if (isCurrent) {
@@ -816,8 +820,8 @@ export function renderIndexPage(
     const ledger = renderLedgerFor(view, rest, strings.locale, (row) =>
       renderIndexEntry(row, token, lang, view),
     );
-    const heroHtml = renderLeadCard(lead, token, lang, view, leadArcs);
-    body = `${heroHtml}\n${ledger}`;
+    heroHtml = renderLeadCard(lead, token, lang, view, leadArcs);
+    body = ledger;
   } else {
     // Archive week (roadmap 3 step 3): no lead card — every row, including
     // rows[0], goes through the plain day-grouped ledger, same as the
@@ -825,6 +829,20 @@ export function renderIndexPage(
     body = renderLedgerFor(view, rows, strings.locale, (row) =>
       renderIndexEntry(row, token, lang, view),
     );
+  }
+
+  // No lead row (empty view, or an archive week) means no lead-card h1, and a
+  // page without an h1 has no document outline. The title reuses a string the
+  // page already shows: an archive week's own "Week N · range" label (the
+  // rail's centre label), otherwise the empty-state message.
+  if (!leadRow) {
+    const title =
+      weekInfo && !isCurrent
+        ? strings.weekLabel
+            .replace("{w}", String(weekInfo.week))
+            .replace("{range}", formatWeekRangeLabel(weekInfo.year, weekInfo.week, strings.locale))
+        : emptyMessage;
+    heroHtml = `<header class="hero"><h1 class="herotitle">${esc(title)}</h1></header>`;
   }
 
   // Unified search (owner UX pass): the container the bottom script's
@@ -921,7 +939,8 @@ export function renderIndexPage(
     archiveWeek: isCurrent ? null : weekInfo,
     showSearch: true,
     appVersion,
-    bodyHtml: `${catchupHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}${railHtml}`,
+    heroHtml,
+    bodyHtml: `${catchupHtml}<section class="ledger" data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}${railHtml}`,
     sidebarHtml: nowHtml || "",
     prefetchHref,
     issueLineText: buildIssueLine(leadRow, rows, view, strings),

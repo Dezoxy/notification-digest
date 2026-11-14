@@ -60,10 +60,16 @@ export function brandFirst(host) {
 // The shell is ONE layout on every page: a single header.bar (brand, view
 // tabs, search, settings gear) that CSS renders as the desktop top bar AND
 // the phone bottom dock — never a second nav in the markup — a phone-only
-// .phonehead row (brand + issue line), and a .layout holding .maincol and an
-// optional .side column. Pages with nothing to put in the sidebar pass
-// `sidebarHtml: null` and the settings panel rides at the end of .wrap
-// instead; with a sidebar it lives inside .side.
+// .phonehead row (brand + issue line), and a <main class="layout"> holding an
+// optional full-width `heroHtml`, then .maincol and an optional .side column.
+// The hero is a layout child rather than part of .maincol so it can span both
+// columns; the page's h1 must still sit inside <main>, hence <main> IS the
+// layout. Pages with nothing to put in the sidebar pass `sidebarHtml: null`
+// and the settings panel rides after </main> at the end of .wrap instead;
+// with a sidebar it lives inside .side. Single-column pages keep their hero
+// in `bodyHtml`.
+// The phone brand is a real link (CSS shows one of the two brands per
+// breakpoint), so the hidden one is display:none, not aria-hidden.
 // `issueLineText` is the RAW (unescaped) issue-line string, shown in
 // .phonehead; pageChrome esc()s it once here, same convention as `title`.
 // `backHref` is the digest page's "back to index" href: it adds the bar's
@@ -80,6 +86,7 @@ export function pageChrome({
   showSearch,
   appVersion,
   bodyHtml,
+  heroHtml = "",
   sidebarHtml = null,
   title = null,
   prefetchHref = null,
@@ -224,14 +231,15 @@ ${prefetchScriptHtml}
     </div>
   </header>
   <div class="phonehead">
-    <a class="brand" href="${homeHref}" tabindex="-1" aria-hidden="true">${esc(first)}<span class="brandmark">.</span></a>
+    <a class="brand" href="${homeHref}">${esc(first)}<span class="brandmark" aria-hidden="true">.</span></a>
     ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
   </div>
   ${paletteConfigHtml}
-  <div class="layout${hasSide ? " has-side" : ""}">
-    <main class="maincol" id="main">${bodyHtml}</main>
+  <main class="layout${hasSide ? " has-side" : ""}" id="main">
+    ${heroHtml}
+    <div class="maincol">${bodyHtml}</div>
     ${hasSide ? `<aside class="side" aria-label="${esc(strings.sidebarLabel)}">${sidebarHtml}${settingsPanelHtml}</aside>` : ""}
-  </div>
+  </main>
   ${hasSide ? "" : settingsPanelHtml}
 </div>
 <script>

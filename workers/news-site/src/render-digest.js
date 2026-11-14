@@ -383,6 +383,8 @@ export function renderDigestPage(
     ? `<section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">${esc(strings.earlierLabel)}</h2>${earlierRows}</section>`
     : "";
 
+  // The top nav and hero ride in pageChrome's `heroHtml` (full layout width,
+  // above .maincol); the rest stays in .maincol in this order.
   // Order: nav pills -> hero (chip, h1, subline, thread pills) -> what-
   // changed block -> en-only note -> section nav -> article (banner, TL;DR
   // card, attention, folded sections) -> colophon -> bottom nav. The section
@@ -390,14 +392,14 @@ export function renderDigestPage(
   // the FIRST element of body_html (see the .tldr CSS comment), and
   // repositioning it would mean rewriting arbitrary pre-sanitized HTML for a
   // purely cosmetic win — so the nav keeps rendering above <article>.
-  const body = `<nav class="digestnav">${digestNavLinksHtml}</nav>
+  const heroHtml = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <header class="hero hero-digest">
   <span class="herochip">${esc(chip)}</span>
   <h1 class="herotitle">${esc(headline)}</h1>
   ${subline ? `<p class="herosub">${esc(subline)}</p>` : ""}
   ${arcsHtml}
-</header>
-${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
+</header>`;
+  const body = `${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
 ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>`;
@@ -416,6 +418,7 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     // so the popover offers just the archive search link.
     showSearch: true,
     appVersion,
+    heroHtml,
     bodyHtml: body,
     sidebarHtml,
     title: pageTitle,

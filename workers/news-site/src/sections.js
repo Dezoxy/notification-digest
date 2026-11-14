@@ -185,7 +185,7 @@ export function foldSections(html, sectionCount, strings) {
     const cites = (chunks[i].match(/<a class="cite"/g) ?? []).length;
     return (
       `<details class="sec"${i === 0 ? " open" : ""}><summary class="sechead">${h[0]}` +
-      (preview ? `<span class="secpreview">${preview}</span>` : "") +
+      (preview ? `<span class="secpreview" aria-hidden="true">${preview}</span>` : "") +
       (cites
         ? `<span class="seccount">${esc((cites === 1 ? strings.sourceCountOne : strings.sourceCount).replace("{n}", String(cites)))}</span>`
         : "") +

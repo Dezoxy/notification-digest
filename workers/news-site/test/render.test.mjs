@@ -209,6 +209,20 @@ test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail afte
   assert.ok(!/<main[^>]*>[\s\S]*class="now"[\s\S]*<\/main>/.test(html), "NOW left the main column");
 
   const ledgerEnd = html.indexOf("</section>", html.indexOf("data-unread-label"));
+  // WP2e: the hero is a direct child of main.layout (before .maincol), so it
+  // sits OUTSIDE the ledger section; the ledger carries the .ledger class.
+  assert.match(
+    html,
+    /<main class="layout has-side" id="main">\s*<section class="hero" aria-label="[^"]*">[\s\S]*?<\/section>\s*<div class="maincol">/,
+    "hero is a direct child of main.layout, before .maincol",
+  );
+  const ledger = html.match(
+    /<section class="ledger" data-unread-label="[^"]*"[^>]*>[\s\S]*?<\/section>/,
+  )?.[0];
+  assert.ok(ledger, "ledger section carries class=ledger and keeps data-unread-label");
+  assert.ok(!ledger.includes("entry-lead"), "lead entry is outside the ledger section");
+  assert.ok(!html.includes('<h3 class="headline">'), "ledger headlines are not h3");
+  assert.match(ledger, /<h2 class="headline">/, "ledger headlines are h2 under the h1 hero");
   assert.ok(html.indexOf('class="weekrail"') > ledgerEnd, "week rail follows the ledger");
   assert.ok(
     html.indexOf('class="weekrail"') < html.indexOf("</main>"),
@@ -1379,7 +1393,11 @@ test("every page has exactly one header.bar, one phonehead, one main and one set
     const html = markupOf((await page(path)).html);
     assert.equal(count(html, /<header class="bar">/g), 1, `${name}: one header.bar`);
     assert.equal(count(html, /<div class="phonehead">/g), 1, `${name}: one phonehead`);
-    assert.equal(count(html, /<main class="maincol" id="main">/g), 1, `${name}: one main`);
+    assert.equal(
+      count(html, /<main class="layout(?: has-side)?" id="main">/g),
+      1,
+      `${name}: one main`,
+    );
     assert.equal(
       count(html, /<section id="settings" class="settingspanel" popover /g),
       1,
@@ -1531,9 +1549,9 @@ test("digest sections: section nav, expand-all button, folded details", async ()
       assert.ok(at > -1 && at < firstFold, `${path}: ${marker} before the folds`);
     }
     assert.ok(art.indexOf('class="foot"') > lastFold, `${path}: foot after the folds`);
-    const previews = [...art.matchAll(/<span class="secpreview">([^<]*)<\/span>/g)].map(
-      (m) => m[1],
-    );
+    const previews = [
+      ...art.matchAll(/<span class="secpreview" aria-hidden="true">([^<]*)<\/span>/g),
+    ].map((m) => m[1]);
     assert.equal(previews.length, 3, `${path}: preview per section`);
     assert.ok(
       previews.every((t) => t.length > 0 && t.length <= 141),
@@ -1584,7 +1602,7 @@ test("foldSections: folds a normal body, refuses unbalanced or miscounted ones",
   assert.match(folded, /<span class="seccount">1 source<\/span>/);
   assert.match(
     folded,
-    /<span class="secpreview">Hello &amp; welcome word[^<]*…<\/span>/,
+    /<span class="secpreview" aria-hidden="true">Hello &amp; welcome word[^<]*…<\/span>/,
     "entity kept, clamped",
   );
   assert.ok(!/&[a-z]*…/.test(folded), "never cut inside an entity");
@@ -1610,4 +1628,60 @@ test("digest sidebar: Earlier card from the widened older query; nav link unchan
   const older = html.match(/<a class="nav-older" href="([^"]+)"/)[1];
   assert.ok(card.includes(`href="${older}"`), "row 0 is the same edition the older link targets");
   assert.ok(stripTags(card).length > 0);
+});
+
+// ── WP2e: hero spans the layout, heading order, accessible names ─────────
+
+test("hero is a direct child of main.layout on index and digest; digest body stays in .maincol", async () => {
+  const idx = (await page("")).html;
+  assert.match(idx, /<main class="layout has-side" id="main">\s*<section class="hero"/);
+  const dig = (await page("d/235")).html;
+  assert.match(
+    dig,
+    /<main class="layout has-side" id="main">\s*<nav class="digestnav">[\s\S]*?<\/nav>\s*<header class="hero hero-digest">[\s\S]*?<\/header>\s*<div class="maincol">/,
+    "digest top nav + hero precede .maincol",
+  );
+  const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
+  assert.ok(!main.includes("hero-digest"), "hero left the column");
+  const toc = main.indexOf('<nav class="toc"');
+  assert.ok(toc > -1, ".toc stays in .maincol");
+  assert.ok(toc < main.indexOf('<article class="digest">'), ".toc precedes the article");
+  assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
+  assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");
+});
+
+test("phone brand is a focusable link; the decorative dot is what is hidden", async () => {
+  const { html } = await page("");
+  const head = html.match(/<div class="phonehead">[\s\S]*?<\/a>/)?.[0] ?? "";
+  assert.match(
+    head,
+    /<a class="brand" href="[^"]*">\w+<span class="brandmark" aria-hidden="true">\.<\/span><\/a>/,
+  );
+  assert.ok(!/tabindex|<a[^>]*aria-hidden/.test(head), "no tabindex/aria-hidden on the link");
+});
+
+test("section previews are aria-hidden; the count stays readable", async () => {
+  const { html } = await page("d/235");
+  assert.match(html, /<span class="secpreview" aria-hidden="true">/);
+  assert.ok(!/<span class="secpreview">/.test(html));
+  assert.match(html, /<span class="seccount">/);
+});
+
+test("exactly one h1 on every golden page and on an archive-week index", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    assert.equal(count(html, /<h1[\s>]/g), 1, `${name}: exactly one h1`);
+    assert.equal(count(html, /<main[\s>]/g), 1, `${name}: h1 lives in the one main`);
+    const mainHtml = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
+    assert.equal(count(mainHtml, /<h1[\s>]/g), 1, `${name}: h1 inside main`);
+  }
+  const week = markupOf((await page("w/2026-W34/")).html);
+  assert.equal(count(week, /<h1[\s>]/g), 1, "archive week: one h1");
+  assert.ok(
+    week.includes('<header class="hero"><h1 class="herotitle">Week 34 · 17–23 Aug</h1></header>'),
+    "archive week h1 is the week label",
+  );
+  assert.match(week, /<h2 class="headline">/, "archive entries are h2");
+  const empty = markupOf((await page("w/2026-W20/")).html);
+  assert.equal(count(empty, /<h1[\s>]/g), 1, "empty archive week: one h1");
 });
