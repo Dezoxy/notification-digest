@@ -11,6 +11,7 @@ import {
   swHref,
 } from "./hrefs.js";
 import { CLIENT_SCRIPT } from "./client.js";
+import { APPLE_TOUCH_ICON_HREF, FAVICON_HREF } from "./icons.js";
 
 // ── page chrome (shared bar/layout/CSS — one template, every page) ──────
 
@@ -219,10 +220,10 @@ export function pageChrome({
      media-appropriate value. -->
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#eceff6">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0d14">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="${FAVICON_HREF}">
 <!-- PWA shell — see src/chrome.js for why each line is shaped this way. -->
 <link rel="manifest" href="${manifestHref(token, lang)}">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="apple-touch-icon" href="${APPLE_TOUCH_ICON_HREF}">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="${esc(appName(host))}">
 ${prefetchLinkHtml}

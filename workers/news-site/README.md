@@ -253,18 +253,25 @@ worker only ever knows the EN scope (its own script URL), and a subscription's
 language is a stored FIELD rather than a URL segment — a `/hu/` page subscribes
 through these same paths and says `{"lang":"hu"}` in the body.
 
-Four routes need no token: `robots.txt` and the three icons. That is not a gap —
+Four routes need no token: `robots.txt` and the icons. That is not a gap —
 an icon reveals nothing about the site's content (`robots.txt` already concedes
 something is served here), browsers fetch them before any page-level auth context
 exists, and keeping them off the token path means an INSTALLED app's stored record
 embeds the capability token once, in the manifest's `start_url`/`scope`/`id`,
 instead of in four more icon URLs beside it.
 
+**Icon cache-busting.** iOS/Safari cache an icon by URL, so a changed icon at an
+unchanged URL keeps showing the old one on the Home Screen. Every reference is
+therefore built from `ICON_VERSION` in `src/icons.js` (`/icon-512.v2.png` and
+so on) and the versioned paths are served `immutable`. Whenever an icon's bytes
+change (favicon geometry too), bump `ICON_VERSION`; the golden pages then change
+only in the two `<link>` hrefs.
+
 | Route | Serves |
 | --- | --- |
 | `GET /robots.txt` | Disallow-everything. |
-| `GET /favicon.svg` | Tab icon (the "n." monogram, rounded ground). |
-| `GET /icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png` | PWA icons. |
+| `GET /favicon.v2.svg`, `/favicon.svg` | Tab icon (the "n." monogram, rounded ground). The versioned path is what pages reference (`immutable`, 1 year); the unversioned one serves the same bytes with `max-age=86400`. |
+| `GET /icon-512.v2.png`, `/icon-maskable-512.v2.png`, `/apple-touch-icon.v2.png` (and the unversioned `/icon-512.png` etc.) | PWA icons, same split: pages, the manifest and the notification icon reference only the `.v2` paths; the unversioned ones stay for installed apps and old manifests. |
 | `GET /fonts/*` | Self-hosted font files from `public/`, served by Cloudflare before the Worker runs; tokenless. |
 | `PUT /ingest/:id` | Upsert a digest. Requires the `x-ingest-key` header. |
 | `GET /t/:token/` | Index, all kinds, newest first, grouped by day. `hu/` prefix for Hungarian chrome throughout. |

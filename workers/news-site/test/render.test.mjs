@@ -20,6 +20,15 @@ import {
   INGEST_KEY,
 } from "./env.mjs";
 import { VALID_INGEST_PAYLOAD } from "./fixtures.mjs";
+import {
+  APPLE_TOUCH_ICON_HREF,
+  FAVICON_HREF,
+  ICON_512_HREF,
+  ICON_MASKABLE_512_HREF,
+  ICON_VERSION,
+  versionedIconPath,
+} from "../src/icons.js";
+import { buildManifest, buildServiceWorker } from "../src/pwa.js";
 import { VAPID_PUBLIC_KEY } from "./env.mjs";
 
 const TRUST_HEADERS = {
@@ -905,7 +914,7 @@ test("icons: real PNGs, tokenless, long-cached", async () => {
     const res = await fetchPath(path);
     assert.equal(res.status, 200, `${path} status`);
     assert.equal(res.headers.get("content-type"), "image/png", `${path} content-type`);
-    assert.equal(res.headers.get("cache-control"), "public, max-age=86400", `${path} cache`);
+    assert.equal(res.headers.get("cache-control"), "public, max-age=86400", `${path} cache`); // legacy path
     const bytes = new Uint8Array(await res.arrayBuffer());
     // PNG magic number — proves the base64 survived source formatting.
     assert.deepEqual([...bytes.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47], `${path} is a PNG`);
@@ -917,6 +926,52 @@ test("icons: real PNGs, tokenless, long-cached", async () => {
     assert.equal(view.getUint32(20), side, `${path} height`);
     assert.ok(bytes.length < 60_000, `${path} stays small (${bytes.length} bytes)`);
   }
+});
+
+test("icons: versioned + legacy paths serve identical bytes; versioned is immutable", async () => {
+  const pairs = [
+    ["/icon-512.png", ICON_512_HREF, "image/png"],
+    ["/icon-maskable-512.png", ICON_MASKABLE_512_HREF, "image/png"],
+    ["/apple-touch-icon.png", APPLE_TOUCH_ICON_HREF, "image/png"],
+    ["/favicon.svg", FAVICON_HREF, "image/svg+xml"],
+  ];
+  for (const [legacy, versioned, type] of pairs) {
+    assert.equal(versioned, versionedIconPath(legacy), `${legacy} href builder`);
+    assert.notEqual(versioned, legacy);
+    assert.ok(versioned.includes(`.${ICON_VERSION}.`), `${versioned} carries the version`);
+    const old = await fetchPath(legacy);
+    const cur = await fetchPath(versioned);
+    assert.equal(old.status, 200, legacy);
+    assert.equal(cur.status, 200, versioned);
+    assert.equal(old.headers.get("content-type"), type);
+    assert.equal(cur.headers.get("content-type"), type);
+    assert.equal(old.headers.get("cache-control"), "public, max-age=86400");
+    assert.equal(
+      cur.headers.get("cache-control"),
+      "public, max-age=31536000, immutable",
+      `${versioned} cache`,
+    );
+    assert.deepEqual(
+      new Uint8Array(await cur.arrayBuffer()),
+      new Uint8Array(await old.arrayBuffer()),
+      `${versioned} bytes match ${legacy}`,
+    );
+  }
+});
+
+test("pages and manifest reference only the versioned icon URLs", async () => {
+  const legacy = /\/(?:icon-512|icon-maskable-512|apple-touch-icon|favicon)\.(?:png|svg)/;
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = await (await fetchPath(path)).text();
+    assert.ok(html.includes(`href="${FAVICON_HREF}"`), `${name} favicon link`);
+    assert.ok(html.includes(`href="${APPLE_TOUCH_ICON_HREF}"`), `${name} touch icon link`);
+    assert.ok(!legacy.test(html), `${name} has no unversioned icon URL`);
+  }
+  const manifest = buildManifest("news.example", "tok", "en");
+  const srcs = JSON.parse(manifest).icons.map((i) => i.src);
+  assert.deepEqual(srcs, [ICON_512_HREF, ICON_MASKABLE_512_HREF]);
+  assert.ok(!legacy.test(manifest), "manifest has no unversioned icon URL");
+  assert.ok(!legacy.test(buildServiceWorker("tok")), "service worker has no unversioned icon URL");
 });
 
 test("favicon is the n. monogram with its periwinkle dot", async () => {
