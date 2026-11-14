@@ -31,6 +31,9 @@
  * segment is the ALL view (every digest, mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
  *   GET  /favicon.svg             -> tab icon, no token needed
+ *   GET  /fonts/*                 -> NOT this Worker: Workers Static Assets serves
+ *                                    public/fonts before the Worker runs (tokenless,
+ *                                    immutable); unknown paths still reach the 404 below
  *   GET  /icon-512.png            -> PWA icon (purpose "any"), no token needed
  *   GET  /icon-maskable-512.png   -> PWA icon (purpose "maskable"), no token needed
  *   GET  /apple-touch-icon.png    -> iOS Home Screen icon, no token needed

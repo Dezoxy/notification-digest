@@ -17,11 +17,13 @@ repo root).
 
 ## Source layout
 
-One deployed script, several source files. `worker.js` is the entry —
+One deployed script, several source files, plus a small `public/` directory
+of static files (see "Static assets" below). `worker.js` is the entry —
 the authoritative file-header doc, the route patterns, the dispatch — and
 everything else lives in `src/`, which wrangler's bundler folds back into a
 single self-contained script at deploy time. **No build step and no build
-configuration**: `wrangler.jsonc` still just names `worker.js` as `main`.
+configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
+`./public` as the static-assets directory).
 
 | | |
 | --- | --- |
@@ -76,6 +78,30 @@ regenerates the goldens, and that diff is the review artifact.
 See `test/README.md` for the fixture/branch contract and the verification
 recipes (bundled-artifact check, the CSS computed-style matrix, driving the
 real router in a browser).
+
+## Static assets (`public/`)
+
+Files in `public/` are served by Cloudflare Workers Static Assets *before* the
+Worker runs (`"assets": {"directory": "./public"}` in `wrangler.jsonc`). Only
+`public/` is exposed; never point that setting at `.`. A path that is not a
+file there falls through to the Worker, whose uniform 404 is unchanged
+(`not_found_handling` stays at its default).
+
+- `public/fonts/` holds Inter and Sora (variable `wght`, woff2, latin +
+  latin-ext; Hungarian ő/ű need latin-ext), copied once from pinned
+  `@fontsource-variable/*` packages. No npm dependency is added.
+  `SOURCES.md` records each file's package, original name, size, sha256 and
+  `unicode-range`; `test/fonts.test.mjs` checks the bytes against it. Both
+  fonts are SIL OFL 1.1 (`OFL.txt`).
+- **Tokenless by design**, like `/favicon.svg`: fonts carry no private data,
+  and a stylesheet cannot send a path token for them anyway.
+- `public/_headers` sets `Cache-Control: public, max-age=31536000, immutable`
+  and `X-Content-Type-Options: nosniff` on `/fonts/*`. That is only safe
+  because filenames are versioned.
+- **Bumping a font:** never edit a file in place. Add the new binary under a
+  new name (`...v2.woff2`), update `SOURCES.md` (package version, size,
+  sha256, ranges), the `test/fonts.test.mjs` file list and the `@font-face`
+  `src` in `src/css.js`, then drop the old file.
 
 ## Design system
 
@@ -230,6 +256,7 @@ instead of in four more icon URLs beside it.
 | `GET /robots.txt` | Disallow-everything. |
 | `GET /favicon.svg` | Tab icon. |
 | `GET /icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png` | PWA icons. |
+| `GET /fonts/*` | Self-hosted font files from `public/`, served by Cloudflare before the Worker runs; tokenless. |
 | `PUT /ingest/:id` | Upsert a digest. Requires the `x-ingest-key` header. |
 | `GET /t/:token/` | Index, all kinds, newest first, grouped by day. `hu/` prefix for Hungarian chrome throughout. |
 | `GET /t/:token/daily/`, `/weekly/` | Same index filtered to that `kind` only; prev/next on digest pages stays within the kind. |
