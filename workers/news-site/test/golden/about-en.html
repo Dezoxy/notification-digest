@@ -517,9 +517,9 @@
     border: 1px solid var(--border); border-radius: var(--r-card);
     background: var(--panel); color: var(--text); text-decoration: none;
   }
-  /* Daily and weekly briefs carry the amber trio, the one place amber means
-     "a different kind of edition" rather than "attention". */
-  .entry:has(.time-accent, .flag-daily) { background: var(--daily-soft); border-color: var(--daily-line); }
+  /* Daily and weekly entry cards carry the amber trio; the hero keeps its
+     transparent surface even when its badge marks a brief. */
+  .entry:not(:where(.herolink)):has(.time-accent, .flag-daily) { background: var(--daily-soft); border-color: var(--daily-line); }
   .maincol > .entry { margin-top: var(--sp-3); }
   .entry .meta {
     display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px;
