@@ -15,12 +15,11 @@ Live at: `https://news.toomhorvath.com/t/<SITE_TOKEN>/` and
 D1 database via Cloudflare Workers Custom Domains — see `news_site.tf` at the
 repo root).
 
-Digest pages show a native section picker before the complete summary. Related
-story threads are available after the article when relevant. Each expanded
-story gives its numbered citations a separate source list with larger links
-and readable labels. The inline citation markers remain links. The picker and
-story disclosures work without JavaScript. Expand all is available when
-JavaScript is enabled.
+Digest pages show an open native section picker before the complete summary.
+Stories are expanded by default and retain numbered inline citation links.
+Related story threads are available after the article when relevant. The picker
+and story disclosures work without JavaScript; Expand all / Collapse all is
+available when JavaScript is enabled.
 
 ## Source layout
 
@@ -741,6 +740,7 @@ so this pass contains no motion/lang work.
   reusing the `title` attribute addCiteTitles already sets — the hover
   affordance doesn't exist on the phone the site is mostly read on (print
   already does exactly this with `.cite[title]::after`).
+  Later, destination names were removed from citation chips; numbered links remain.
 - [x] **Resume chip** — the unread fence is passive; a small floating "↓
   new since your last visit" chip appears when the fence exists below the
   viewport and scrolls to it on tap. Progressive enhancement like the

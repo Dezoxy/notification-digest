@@ -4,7 +4,6 @@ import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import { formatDayHeader, formatShortDate, formatTime, tzAbbr } from "./dates.js";
 import {
-  addCiteTitles,
   buildSectionToc,
   findArcSectionAnchor,
   foldSections,
@@ -97,7 +96,7 @@ export function renderToc(sections, strings) {
     .join("\n");
   // Keep Expand all outside the picker so it is available when closed.
   // The client reveals the button only when it can control the folded sections.
-  return `<div class="tocrow"><details class="tocpicker"><summary>${esc(strings.jumpToSection)} · ${sections.length}</summary><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav></details>
+  return `<div class="tocrow"><details class="tocpicker" open><summary>${esc(strings.jumpToSection)} · ${sections.length}</summary><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav></details>
 <button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></div>\n`;
 }
 
@@ -277,14 +276,8 @@ export function renderDigestPage(
   // and its citation chips went white-on-white. The classes (.tldr,
   // .attention, .banner, .cite, .tldr-label, …) arrive alongside the
   // styles, so stripping the attributes hands presentation fully to the
-  // site's own themed CSS. Order matters: the email's cite pills are
-  // `<a class="cite" style="…" href="…">`, and addCiteTitles' exact-shape
-  // regex below never matched that — hover domains (and the print
-  // stylesheet's cite[title] domains) were silently missing on real
-  // digests; stripping first restores the exact shape every downstream
-  // pass expects. The regex is safe here because this markup is
-  // nh3-normalized + emailer-generated: attributes are always
-  // double-quoted, never single-quoted or bare.
+  // site's own themed CSS. The markup is nh3-normalized and its attributes
+  // are double-quoted.
   const articleHtmlThemed = stripInlineStyles(articleHtml);
 
   // TOC ids are injected into the themed html (see buildSectionToc), so
@@ -301,13 +294,9 @@ export function renderDigestPage(
     ? addInlineArcLinks(articleHtmlWithIds, sections, topicArcs, strings, token, lang)
     : articleHtmlWithIds;
 
-  // Separate pass, one job each (see addCiteTitles): citation chips gain a
-  // hover title naming their destination hostname.
-  const articleHtmlTitled = addCiteTitles(articleHtmlWithArcs);
-
   // Last: fold each section into a <details> (fail-safe, returns its input
   // untouched on any shape surprise — see foldSections).
-  const articleHtmlFinal = foldSections(articleHtmlTitled, sections.length, strings);
+  const articleHtmlFinal = foldSections(articleHtmlWithArcs, sections.length, strings);
 
   // Same links, top and bottom: after an ~900-word read the natural gesture
   // is older/next, not scroll-to-top (roadmap step 2) — mirror the nav below

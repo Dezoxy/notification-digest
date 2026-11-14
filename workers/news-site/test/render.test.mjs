@@ -372,7 +372,7 @@ test("deriveSubline: text after the first sentence, clamped at a word boundary",
   assert.ok(!out.slice(0, -1).endsWith("wor"), "clipped on a word boundary");
 });
 
-test("digest 235 EN: thread pills, what-changed block, source key, stripped styles, cite titles", async () => {
+test("digest 235 EN: thread pills, what-changed block, source key, stripped styles, citations", async () => {
   const { html } = await page("d/235");
   assert.match(html, /class="threadpill"/, "story-thread pill (recurring topic)");
   assert.match(html, /class="deltas"/, "what-changed block from deltas");
@@ -432,7 +432,7 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
     const { html } = await page(path);
     assert.match(
       html,
-      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>[\s\S]*?<\/div><\/details>\s*<details class="sec"><summary class="sechead"><h2 id="s2">/,
+      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>[\s\S]*?<\/div><\/details>\s*<details class="sec" open><summary class="sechead"><h2 id="s2">/,
       `${path}: section 1 has two paragraphs then a list`,
     );
     assert.match(
@@ -446,10 +446,10 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
       `${path}: failure banner`,
     );
     assert.match(html, /<span class="tldr-label">[^<]+<\/span>/, `${path}: tldr-label span`);
-    // Production shape: nh3 puts `rel` AFTER `href`; addCiteTitles must still title it.
+    // Production shape: nh3 puts `rel` AFTER `href`.
     assert.match(
       html,
-      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer" title="example\.com">²<\/a>/,
+      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer">²<\/a>/,
       `${path}: cite chip rendered, inline style stripped`,
     );
     assert.ok(!/<h2 id="s4"/.test(html), `${path}: callout is not numbered as a section`);
@@ -1729,7 +1729,7 @@ test("digest sections: section nav, expand-all button, folded details", async ()
     assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
     assert.match(
       html,
-      /<div class="tocrow"><details class="tocpicker"><summary>[^<]*<\/summary><nav class="toc"[^>]*>[\s\S]*?<\/nav><\/details>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
+      /<div class="tocrow"><details class="tocpicker" open><summary>[^<]*<\/summary><nav class="toc"[^>]*>[\s\S]*?<\/nav><\/details>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
       `${path}: expand-all remains available when the picker is closed`,
     );
     const toc = html.match(/<nav class="toc"[^>]*>([\s\S]*?)<\/nav>/)[1];
@@ -1749,7 +1749,7 @@ test("digest sections: section nav, expand-all button, folded details", async ()
       3,
       `${path}: 3 folded sections`,
     );
-    assert.equal((html.match(/<details class="sec" open>/g) ?? []).length, 1, `${path}: one open`);
+    assert.equal((html.match(/<details class="sec" open>/g) ?? []).length, 3, `${path}: all open`);
     assert.match(
       html,
       /<details class="sec" open><summary class="sechead"><h2 id="s1">/,
@@ -1794,22 +1794,6 @@ test("digest sections: section nav, expand-all button, folded details", async ()
   assert.ok(secarc, "secarc leads the section body");
 });
 
-test("addCiteTitles: production shape (rel after href) gets a title; bad href untouched", async () => {
-  const { addCiteTitles } = await import("../src/sections.js");
-  assert.equal(
-    addCiteTitles(
-      '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer">¹</a>',
-    ),
-    '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer" title="example.com">¹</a>',
-  );
-  assert.equal(
-    addCiteTitles('<a class="cite" href="https://example.org/y">²</a>'),
-    '<a class="cite" href="https://example.org/y" title="example.org">²</a>',
-  );
-  const bad = '<a class="cite" href="not a url" rel="noopener">³</a>';
-  assert.equal(addCiteTitles(bad), bad, "unparseable href fails safe");
-});
-
 test("foldSections: folds a normal body, refuses unbalanced or miscounted ones", async () => {
   const { foldSections, buildSectionToc } = await import("../src/sections.js");
   const { STRINGS } = await import("../src/strings.js");
@@ -1821,8 +1805,7 @@ test("foldSections: folds a normal body, refuses unbalanced or miscounted ones",
   const { html, sections } = buildSectionToc(body);
   const folded = foldSections(html, sections.length, strings);
   assert.notEqual(folded, html);
-  assert.equal(folded.match(/<details class="sec" open>/g).length, 1);
-  assert.equal(folded.match(/<details class="sec">/g).length, 1);
+  assert.equal(folded.match(/<details class="sec" open>/g).length, 2);
   assert.deepEqual(
     folded.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
     html.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
@@ -1920,30 +1903,16 @@ test("exactly one h1 on every golden page and on an archive-week index", async (
 test("digest reading controls and sources preserve their contracts", async () => {
   const html = (await page("d/235")).html;
   const article = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
-  assert.match(article, /<details class="tocpicker"><summary>Jump to section · 3<\/summary>/);
+  assert.match(article, /<details class="tocpicker" open><summary>Jump to section · 3<\/summary>/);
   assert.ok(article.indexOf('class="tocpicker"') < article.indexOf('class="tldr"'));
   assert.ok(article.indexOf('class="tldr"') < article.indexOf('class="storythreads"'));
   assert.equal((article.match(/class="tldr"/g) ?? []).length, 1);
   assert.ok(article.indexOf('class="banner"') < article.indexOf('class="tldr"'));
   assert.ok(!markupOf(html).includes('class="herosub"'), "digest omits the truncated preview");
+  assert.doesNotMatch(article, /class="storysources"/);
   assert.match(
     article,
-    /class="storysources"[\s\S]*?rel="noopener noreferrer" referrerpolicy="no-referrer"/,
+    /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer">²<\/a>/,
   );
-  const { foldSections, buildSectionToc } = await import("../src/sections.js");
-  const { STRINGS } = await import("../src/strings.js");
-  const input =
-    '<h2>Test</h2><p><a class="cite" href="https://www.example.com/?a=1&amp;b=2">¹</a><a class="cite" href="javascript:alert(1)">²</a><a class="cite" href="https://t.me/example/3">³</a></p>';
-  const { html: body, sections } = buildSectionToc(input);
-  const folded = foldSections(body, sections.length, STRINGS.en);
-  assert.match(
-    folded,
-    /href="https:\/\/www\.example\.com\/\?a=1&amp;b=2" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">¹<\/span> <span>example\.com<\/span>/,
-  );
-  assert.match(folded, /<span class="sourcenum">³<\/span> <span>Telegram<\/span>/);
-  assert.equal(
-    (folded.match(/javascript:alert/g) ?? []).length,
-    1,
-    "unsafe URL is not copied into source list",
-  );
+  assert.doesNotMatch(article, /<a class="cite"[^>]* title=/);
 });

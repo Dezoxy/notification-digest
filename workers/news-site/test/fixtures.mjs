@@ -22,7 +22,7 @@
 //   - NULL _hu fields (234) -> the /hu/ EN-fallback note
 //   - arc_context row -> the arc page's context primer disclosure
 //   - a body with an inline style attr (235 s2) -> stripInlineStyles
-//   - a body with an external citation link (235 s1) -> addCiteTitles
+//   - a body with an external citation link (235 s1) -> inline citation
 //   - a closing .foot paragraph with an inline style attr (235, both
 //     languages) -> stripInlineStyles + the .closing, .foot CSS rule, and
 //     the colophon div wrapping source key + provenance

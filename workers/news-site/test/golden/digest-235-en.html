@@ -650,15 +650,6 @@
   }
   .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
-  .storysources { margin-top: var(--sp-4); font-size: var(--fs-meta); color: var(--muted); }
-  .storysources ul { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
-  .storysources li { margin: 0; min-width: 0; }
-  .storysources a {
-    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; padding: 0 12px;
-    border: 1px solid var(--border); border-radius: var(--r-pill); text-decoration: none; overflow-wrap: anywhere;
-  }
-  .storysources a:hover { background: var(--accent-soft); }
-  .sourcenum { font-weight: 600; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -740,13 +731,6 @@
     font-size: 0.72em; font-weight: 700; text-decoration: none; vertical-align: super; line-height: 1;
   }
   .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--on-accent); }
-  /* No hover on touch, so the title attribute's domain never surfaces:
-     print it on the chip. A chip with no title (href failed to parse)
-     shows nothing extra. The domain must never be auto-hyphenated. */
-  @media (hover: none) {
-    .cite[title]::after { content: attr(title); margin-left: 0.35em; font-weight: 500; hyphens: none; -webkit-hyphens: none; }
-  }
-
   .arccontext { margin: 0 0 var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-in); background: var(--panel-2); }
   .arccontext summary {
     display: flex; align-items: center; min-height: 44px; padding: 0 18px; cursor: pointer;
@@ -1065,7 +1049,7 @@
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .storythreads, .storysources, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
@@ -1083,7 +1067,6 @@
     details.sec::details-content, .colophon::details-content { content-visibility: visible; }
     .colophon summary { display: none; }
     .cite { background: none; color: #000; }
-    .cite[title]::after { content: " (" attr(title) ")"; font-size: 0.85em; color: #333; }
   }
 </style>
 </head>
@@ -1125,29 +1108,29 @@
   <h1 class="herotitle">Markets slid for a second day while the EU package landed.</h1>
 </header>
     <div class="maincol"><article class="digest">
-<div class="tocrow"><details class="tocpicker"><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a>
+<div class="tocrow"><details class="tocpicker" open><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a>
 <a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a>
 <a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details>
 <button type="button" class="expandall" hidden data-expand="Expand all" data-collapse="Collapse all">Expand all</button></div>
 <p class="banner">⚠ polymarket collection failed this run</p>
 <div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
-<div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The reform deadline falls on Friday, so check the filing window before then<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer" title="example.com">¹</a>.</p></div>
+<div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The reform deadline falls on Friday, so check the filing window before then<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer">¹</a>.</p></div>
 <details class="sec" open><summary class="sechead"><h2 id="s1">Markets slide continues</h2><span class="secpreview" aria-hidden="true">Equities extended losses. Reuters puts the drawdown at four percent.</span><span class="seccount">1 source</span></summary><div class="secbody"><a class="secarc" href="/t/goldentesttoken/a/markets-slide">story so far ×2</a>
 <p>Equities extended losses. <a href="https://example.com/markets-report">Reuters</a> puts the drawdown at four percent.</p>
-<p>Traders pointed to thin liquidity and a stronger dollar. A desk note expects volatility to persist into the weekend<a class="cite" href="https://example.com/liquidity-note" rel="noopener noreferrer" title="example.com">²</a>.</p>
+<p>Traders pointed to thin liquidity and a stronger dollar. A desk note expects volatility to persist into the weekend<a class="cite" href="https://example.com/liquidity-note" rel="noopener noreferrer">²</a>.</p>
 <ul>
 <li>Index futures pointed lower again before the open.</li>
 <li>Bond yields eased as investors sought safety.</li>
 <li>Currency desks reported the widest spreads this month.</li>
 </ul>
-<div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="https://example.com/liquidity-note" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">²</span> <span>example.com</span></a></li></ul></div></div></details>
-<details class="sec"><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview" aria-hidden="true">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody">
+</div></details>
+<details class="sec" open><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview" aria-hidden="true">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody">
 <p>The council signed off <span>overnight</span>, with disbursement gated on reforms.</p>
-<p>Several members asked for a review clause. The council statement sets a first checkpoint in the spring<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer" title="example.com">³</a>.</p>
-<div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="https://example.com/council-statement" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">³</span> <span>example.com</span></a></li></ul></div></div></details>
-<details class="sec"><summary class="sechead"><h2 id="s3">Chip export rules tighten</h2><span class="secpreview" aria-hidden="true">New licensing requirements take effect next quarter.</span><span class="seccount">1 source</span></summary><div class="secbody">
+<p>Several members asked for a review clause. The council statement sets a first checkpoint in the spring<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer">³</a>.</p>
+</div></details>
+<details class="sec" open><summary class="sechead"><h2 id="s3">Chip export rules tighten</h2><span class="secpreview" aria-hidden="true">New licensing requirements take effect next quarter.</span><span class="seccount">1 source</span></summary><div class="secbody">
 <p>New licensing requirements take effect next quarter.</p>
-<p>Exporters have ninety days to file. The ministry notice lists the affected product classes<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer" title="example.com">⁴</a>.</p><div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="https://example.com/export-rules" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">⁴</span> <span>example.com</span></a></li></ul></div></div></details>
+<p>Exporters have ninety days to file. The ministry notice lists the affected product classes<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer">⁴</a>.</p></div></details>
 <p class="foot"><em>From 12 items; 5 informed this briefing, while 4 were chatter.</em></p>
 <details class="storythreads"><summary>Story threads · 1</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="/t/goldentesttoken/a/markets-slide">Markets slide continues <span class="pillcount">×2 this week</span></a></nav></details><div class="archivelabel">What changed</div><nav class="deltas" aria-label="What changed"><a class="delta" href="/t/goldentesttoken/a/markets-slide-continues">
     <span class="deltalabel">Markets slide continues</span>

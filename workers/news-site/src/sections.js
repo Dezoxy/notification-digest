@@ -80,69 +80,6 @@ export function buildSectionToc(articleHtml) {
   return { html, sections };
 }
 
-// Citation-chip hover titles (roadmap step 7 — polish): a bare `<a
-// class="cite" href="...">¹</a>` chip tells the reader "there's a citation
-// here" but not where it goes. Add a `title` naming the destination
-// hostname so hover answers that without a click. Separate pass from
-// buildSectionToc (one job each), run right after it in renderDigestPage —
-// not folded into that function even though both walk the same articleHtml.
-//
-// The regex matches the shape body_html's citation chips arrive in
-// (nh3-sanitized upstream, hrefs are exact copies of allowlisted item
-// URLs); anything that doesn't match that shape is left alone. `new URL()`
-// inside try/catch fails safe: an unparseable href leaves the tag
-// untouched rather than emitting a broken title. The hostname is esc()'d
-// before insertion — it derives from an attribute nh3 already sanitized as
-// a URL, but escaping again is free. A leading "www." is stripped for a
-// slightly cleaner display string.
-export function addCiteTitles(html) {
-  // `([^>]*)` after the href: production chips are `<a class="cite"
-  // href="…" rel="noopener noreferrer">` (nh3 appends rel), and the old
-  // closing-`">`-only shape never matched them, so no title ever appeared.
-  // The trailing attributes are re-emitted untouched, title goes after them.
-  return html.replace(/<a class="cite" href="([^"]*)"([^>]*)>/g, (match, href, rest) => {
-    if (/\stitle=/.test(rest)) return match; // already titled: never duplicate
-    let hostname;
-    try {
-      hostname = new URL(href).hostname;
-    } catch {
-      return match; // unparseable href: leave the tag untouched, fail safe
-    }
-    const display = hostname.replace(/^www\./, "");
-    return `<a class="cite" href="${href}"${rest} title="${esc(display)}">`;
-  });
-}
-
-const SOURCE_NAMES = new Map([
-  ["bbc.co.uk", "BBC"],
-  ["bbc.com", "BBC"],
-  ["t.me", "Telegram"],
-]);
-
-// Reuse the sanitized href byte-for-byte so query strings keep their HTML
-// escaping. The allowlist below matches the publisher's numbered markers.
-function renderStorySources(chunk, strings) {
-  const links = [];
-  for (const [, href, marker] of chunk.matchAll(
-    /<a class="cite" href="([^"]*)"[^>]*>([⁰¹²³⁴⁵⁶⁷⁸⁹]+)<\/a>/g,
-  )) {
-    try {
-      const url = new URL(href);
-      if (url.protocol !== "https:" && url.protocol !== "http:") continue;
-      const host = url.hostname.replace(/^www\./, "");
-      const label = SOURCE_NAMES.get(host) ?? host;
-      links.push(
-        `<li><a href="${href}" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">${marker}</span> <span>${esc(label)}</span></a></li>`,
-      );
-    } catch {
-      // Leave unusual citations usable inline without inventing a destination.
-    }
-  }
-  return links.length
-    ? `<div class="storysources"><span>${esc(strings.storySources)}</span><ul role="list" aria-label="${esc(strings.storySources)}">${links.join("")}</ul></div>`
-    : "";
-}
-
 const FOLD_BLOCK_TAGS = ["p", "ul", "ol", "div", "blockquote", "table"];
 
 // True when every block tag opens and closes equally often in `segment`.
@@ -179,12 +116,9 @@ function sectionPreview(chunk, max = 140) {
   return `${cut.replace(/[\s,;:.\-–—]+$/, "")}…`;
 }
 
-// Folded sections (Spatial Glass digest page): each `<h2 id="sN">` + its
-// content becomes a native <details class="sec"> — first one open, the rest
-// collapsed to title + teaser + source count. Last pass, after
-// addInlineArcLinks/addCiteTitles, so it only re-wraps markup those passes
-// finished; the h2 elements (and their #sN ids) are carried over byte-for-
-// byte, so buildSectionToc's anchors and the arc deep links still resolve.
+// Each section starts as an open native disclosure. A reader who collapses
+// it still sees the heading, teaser and citation count. Preserve the h2 and
+// its #sN id so section navigation and deep links keep their targets.
 //
 // `.secarc` (inserted right after an h2) needs no special move: the h2 goes
 // into <summary>, the link stays first in .secbody — interactive content
@@ -214,12 +148,12 @@ export function foldSections(html, sectionCount, strings) {
     const preview = sectionPreview(chunks[i]);
     const cites = (chunks[i].match(/<a class="cite"/g) ?? []).length;
     return (
-      `<details class="sec"${i === 0 ? " open" : ""}><summary class="sechead">${h[0]}` +
+      `<details class="sec" open><summary class="sechead">${h[0]}` +
       (preview ? `<span class="secpreview" aria-hidden="true">${preview}</span>` : "") +
       (cites
         ? `<span class="seccount">${esc((cites === 1 ? strings.sourceCountOne : strings.sourceCount).replace("{n}", String(cites)))}</span>`
         : "") +
-      `</summary><div class="secbody">${chunks[i]}${renderStorySources(chunks[i], strings)}</div></details>`
+      `</summary><div class="secbody">${chunks[i]}</div></details>`
     );
   });
   return `${pre}${secs.join("\n")}${tail}`;
