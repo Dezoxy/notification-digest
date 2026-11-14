@@ -841,10 +841,9 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   map does not recognise renders unchanged. The colophon (source key and
   provenance together) is collapsed by default behind one native `<details>`
   disclosure, "How this was made" / "Hogyan készült", and print forces it
-  open. A hairline separates it from the article, except when Story threads
-  sits directly above it. The article's closing coverage
-  line (`p.foot`, "From N items; …" / "Synthesized from …") is hidden on the
-  site: the source key already carries those numbers per source.
+  open. On screen, spacing separates it from the article. The site's source
+  key shows the counts by source and supersedes the article's hidden closing
+  coverage line (`p.foot`, "From N items; …" / "Synthesized from …").
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
