@@ -98,7 +98,7 @@
  * map_deltas_to_slugs matches a delta to a heading WITHIN one digest, never
  * across the arc.
  *
- * Hungarian support (EN | HU switcher in the masthead): this Worker only
+ * Hungarian support (EN | HU switcher in the settings panel): this Worker only
  * STORES and SERVES translations — it never translates anything itself.
  * The digest app optionally sends tldr_hu/body_html_hu/body_md_hu alongside
  * the English fields on PUT /ingest/:id; all three are NULL together when
@@ -108,7 +108,7 @@
  * handlers, same token check, same headers, same 404 philosophy — a wrong
  * token on a /hu/ path 404s byte-identically to a wrong token anywhere else.
  *
- * Daily-brief view (All | Daily | Weekly switcher in the masthead, next to
+ * Daily-brief view (All | Daily | Weekly tabs in the top bar, next to
  * EN | HU): every digest carries a `kind` column, 'window' (the regular
  * 3-hourly digest, the default), 'daily' (the once-daily 20:00 synthesis),
  * or 'weekly' (the once-a-week Sunday-evening synthesis of the week's daily

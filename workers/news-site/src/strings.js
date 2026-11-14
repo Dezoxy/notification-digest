@@ -22,10 +22,7 @@ export const STRINGS = {
     noWeeklyBriefs: "No weekly briefs yet — the first one lands Sunday at 21:00.",
     tldrLabel: "TL;DR:",
     backFabLabel: "Back to all digests",
-    // The digest page's FAB goes BACK to the index; every other page has
-    // nowhere to go back to, so its FAB scrolls UP instead. Two labels,
-    // one button shape — see .backfab in the CSS.
-    topFabLabel: "Back to top",
+    // Accessible name of the bar's back arrow (.barback), digest pages only.
     enOnlyNote: null,
     dailyBrief: "daily brief",
     weeklyBrief: "weekly report",
@@ -36,28 +33,35 @@ export const STRINGS = {
     filterPlaceholder: "Filter briefings…",
     emptyFiltered: "Nothing matches.",
     themeToggle: "Toggle light/dark",
-    densityToggle: "Toggle compact list",
-    // Settings bubble (owner redesign): the gear button that collapses the
+    // Settings panel (owner redesign): the bar button that opens the
     // language/theme/size/density cluster, plus its panel row labels.
     settingsLabel: "Settings",
     settingsLanguage: "Language",
     settingsTheme: "Theme",
     // Three-state theme miniseg labels (owner redesign: light/auto/dark
-    // replaces the old two-state ◐ toggle) — see renderSwitchers.
+    // replaces the old two-state ◐ toggle) — see renderSettingsPanel.
     themeLight: "Light",
     themeAuto: "Auto",
     themeDark: "Dark",
     settingsTextSize: "Text size",
-    // Body-font miniseg (owner-requested serif toggle — a friend argued
-    // for the retired serif body; now both camps get their way). The
-    // captions describe the reading register, not the letterform (owner:
-    // no font jargon in the UI) — the INTERNAL values stay sans/serif
-    // (data-set, data-font, the localStorage `font` key), so shipped
-    // preferences survive any future caption rewording.
-    settingsFont: "Body font",
-    fontModern: "Modern",
-    fontClassic: "Classic",
     settingsDensity: "Density",
+    densityCards: "Cards",
+    densityCompact: "Compact",
+    // Settings popover close button, bar views nav, and the labels the
+    // later Spatial Glass packages (sidebar, hero, sections, search, thread)
+    // render. Added together here so those packages never edit this file
+    // in parallel.
+    settingsClose: "Close settings",
+    viewsNavLabel: "Views",
+    sidebarLabel: "Edition panel",
+    heroRead: "Read the edition",
+    tldrCardLabel: "In thirty seconds",
+    sectionsNavLabel: "Sections",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    earlierLabel: "Earlier",
+    searchHeading: "Search every edition",
+    threadKicker: "Story thread",
     unreadFence: "new since your last visit",
     degraded: "partial",
     // Week rail (roadmap 3 step 2). weekLabel is a placeholder template
@@ -218,7 +222,7 @@ export const STRINGS = {
     // About page: a short static page explaining what the site is, for the
     // friends the owner shares a capability link with (see
     // renderAboutPage). aboutLabel does double duty as the page <title> and
-    // as the link text in the settings panel (renderSwitchers) — both
+    // as the link text in the settings panel (renderSettingsPanel) — both
     // surfaces want the exact same word, so one string covers both rather
     // than two identical keys.
     aboutLabel: "About",
@@ -281,8 +285,6 @@ export const STRINGS = {
     noWeeklyBriefs: "Még nincs heti összefoglaló — az első vasárnap 21:00-kor érkezik.",
     tldrLabel: "Röviden:",
     backFabLabel: "Vissza a hírlevelekhez",
-    // Owner: please review — new HU string.
-    topFabLabel: "Vissza az elejére",
     enOnlyNote: "Csak angolul elérhető",
     dailyBrief: "napi összefoglaló",
     // Owner: please review — new HU string, mirrors dailyBrief's pattern.
@@ -295,8 +297,7 @@ export const STRINGS = {
     filterPlaceholder: "Szűrés…",
     emptyFiltered: "Nincs találat.",
     themeToggle: "Világos/sötét váltás",
-    densityToggle: "Kompakt lista be/ki",
-    // Owner: please review — new HU strings, settings bubble (gear button +
+    // Owner: please review — new HU strings, settings panel (bar button +
     // panel row labels), mirrors the EN block's pattern.
     settingsLabel: "Beállítások",
     settingsLanguage: "Nyelv",
@@ -305,13 +306,22 @@ export const STRINGS = {
     themeAuto: "Auto",
     themeDark: "Sötét",
     settingsTextSize: "Betűméret",
-    // Owner: please review — new HU strings, body-font toggle row label +
-    // register captions ("Klasszikus" is the longest miniseg caption on
-    // the site; checked at phone width, the panel accommodates it).
-    settingsFont: "Betűtípus",
-    fontModern: "Modern",
-    fontClassic: "Klasszikus",
     settingsDensity: "Sűrűség",
+    // Owner: please review — new HU strings for the Spatial Glass shell
+    // (mirror the EN block above).
+    densityCards: "Kártyák",
+    densityCompact: "Kompakt",
+    settingsClose: "Beállítások bezárása",
+    viewsNavLabel: "Nézetek",
+    sidebarLabel: "Oldalsáv",
+    heroRead: "A kiadás elolvasása",
+    tldrCardLabel: "Harminc másodpercben",
+    sectionsNavLabel: "Fejezetek",
+    expandAll: "Összes kinyitása",
+    collapseAll: "Összes összecsukása",
+    earlierLabel: "Korábban",
+    searchHeading: "Keresés minden kiadásban",
+    threadKicker: "Történetszál",
     unreadFence: "új a legutóbbi látogatásod óta",
     degraded: "hiányos",
     weekRailLabel: "Heti navigáció",

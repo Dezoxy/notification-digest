@@ -3,7 +3,7 @@ import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import { formatRelativeTime, formatShortDate, formatTime } from "./dates.js";
 import { findArcSectionAnchor } from "./sections.js";
-import { digestHref, indexHref, renderSwitchers } from "./hrefs.js";
+import { digestHref, indexHref } from "./hrefs.js";
 import {
   computeArcMomentum,
   deltasRenderableIn,
@@ -121,7 +121,7 @@ export function renderArcPage(
     .filter(Boolean)
     .join(" · ");
 
-  // Title (H1, the site's first — every other page uses the masthead brand
+  // Title (H1, the site's first — every other page uses the bar brand
   // link instead): the arc's MOST RECENT label, not the first — labels can
   // drift across digests as headings get rephrased run to run, and the
   // latest phrasing is the freshest editorial framing of the story.
@@ -160,13 +160,17 @@ ${timelineHtml}`;
   // view "all": an arc has no view of its own (see the file-header comment)
   // — the view tabs/brand link just need SOME valid view to target, same
   // reasoning as renderSearchPage's own "all" choice.
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
-    "all",
-    renderSwitchers(token, lang, "all", "arc", identity, null, true, appVersion),
-    body,
+    view: "all",
+    pageKind: "arc",
+    id: identity,
+    archiveWeek: null,
+    showSearch: true,
+    appVersion,
+    bodyHtml: body,
     title,
-  );
+  });
 }

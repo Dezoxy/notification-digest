@@ -9,7 +9,7 @@ import {
   findArcSectionAnchor,
   stripInlineStyles,
 } from "./sections.js";
-import { arcHref, digestHref, indexHref, renderSwitchers } from "./hrefs.js";
+import { arcHref, digestHref, indexHref } from "./hrefs.js";
 import { deltasRenderableIn, renderDeltaLine } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
 import {
@@ -208,8 +208,8 @@ export function renderDigestPage(
         ? strings.weeklyBrief
         : "digest";
   // Edition eyebrow (Front Page redesign): kind · time · items · sections —
-  // the full weekday/date is already visible in the compact masthead's own
-  // issue line right above (see pageChrome), so it's dropped here rather
+  // the full weekday/date is already visible in the phone head's own
+  // issue line above (see pageChrome), so it's dropped here rather
   // than repeated twice on the same page.
   const stamp = `${kindLabel} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${digest.item_count} ${strings.itemsWord} · ${digest.section_count} ${strings.sectionsWord}`;
   // Derived h1 headline (Front Page redesign): digest.tldr is an already-
@@ -361,29 +361,30 @@ export function renderDigestPage(
 ${arcsHtml}${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
-${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>
-<a class="backfab" href="${indexHref(token, lang, view)}" aria-label="${esc(strings.backFabLabel)}">←</a>`;
+${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>`;
 
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
     view,
-    // showSearch true (consistent-masthead follow-up): the digest page
-    // carries the same search bubble as the index; its client-side filter
-    // input stays hidden here (the filter IIFE bails without a ledger
-    // section), so the bubble offers just the archive search link.
-    renderSwitchers(token, lang, view, "digest", digest.id, null, true, appVersion),
-    body,
-    pageTitle,
-    null,
+    pageKind: "digest",
+    id: digest.id,
+    archiveWeek: null,
+    // showSearch true (consistent-bar follow-up): the digest page carries
+    // the same search popover as the index; its client-side filter input
+    // stays hidden here (the filter IIFE bails without a ledger section),
+    // so the popover offers just the archive search link.
+    showSearch: true,
+    appVersion,
+    bodyHtml: body,
+    title: pageTitle,
+    // The bar's .barback arrow replaces the old floating .backfab: same
+    // target (this view's index), same label.
+    backHref: indexHref(token, lang, view),
     // Same issue-line slot the index fills — the digest's own edition
     // number and full date (the date the edhead eyebrow deliberately
     // dropped lives here now, one line, one place).
-    `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
-    // showTopFab false — the ONLY page that opts out: it renders its own
-    // .backfab above (← to the index, the more useful action here), and two
-    // floating buttons would stack in the same corner.
-    false,
-  );
+    issueLineText: `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
+  });
 }

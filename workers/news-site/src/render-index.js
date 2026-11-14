@@ -14,15 +14,7 @@ import {
   mondayOfIsoWeek,
   tzAbbr,
 } from "./dates.js";
-import {
-  arcHref,
-  digestHref,
-  indexHref,
-  renderSearchBubble,
-  renderSwitchers,
-  searchHref,
-  weekHref,
-} from "./hrefs.js";
+import { arcHref, digestHref, indexHref, searchHref, weekHref } from "./hrefs.js";
 import { computeArcMomentum, groupByDay, kindBadge, renderDayLedger } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
 
@@ -432,12 +424,8 @@ export function renderLeadCard(row, token, lang, view) {
 // that function). Absent older/newer render as empty (but still flex:1)
 // spacer spans, via the shared .rail-older/.rail-newer classes, so the
 // center label stays visually centered either way (see the .weekrail CSS).
-// The search bubble (see renderSearchBubble just above) rides as a fourth,
-// non-growing flex child after rail-newer — the two flex:1 spacer spans
-// still grow to equal widths regardless, so the center label stays centered
-// between them; the search control just sits further right, clear of the
-// rail-newer "→" link on an archive week (§11 index-cleanup spec: "must not
-// collide with the rail-newer link").
+// The search control no longer rides in the rail: pageChrome renders it
+// once, in the bar's .baractions, on every page.
 //
 // Archive sparkline (roadmap 4 step 6): `rows` is null on every page except
 // an archive week (see the call site in renderIndexPage, which passes null
@@ -635,13 +623,6 @@ export function renderLedgerFor(view, rows, locale, renderRow) {
 // getting quieter. Reuses .archivelabel for the eyebrow, same mono-eyebrow
 // recipe already shared by the arc timeline and archive-search labels (see
 // there) rather than a fourth near-identical class.
-// `searchHtml` (owner-requested placement): the search control rides in
-// THIS section's head row, right-aligned — the same right edge the arc
-// rows' own relative-time meta aligns to, so the icon reads as belonging
-// to the top of the page rather than to the week rail below it. Empty
-// string on any page where the caller placed the control elsewhere (see
-// renderIndexPage: the week rail keeps it whenever this section is
-// absent, so the control never disappears with the section).
 export function renderNowSection(nowArcs, strings, token, lang, nowMs) {
   if (!nowArcs || nowArcs.length === 0) return "";
   const rowsHtml = nowArcs
@@ -677,7 +658,7 @@ export function renderNowSection(nowArcs, strings, token, lang, nowMs) {
   return `<div class="now"><div class="archivelabel">${esc(strings.nowLabel)}</div><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></div>\n`;
 }
 
-// Big masthead issue line (Front Page redesign, index pages only): "No.
+// Issue line (shown in pageChrome's .phonehead) (Front Page redesign, index pages only): "No.
 // {n} · {full date} · {n} editions today" — every piece is derived from
 // data the page already has, no new plumbing (per the task spec):
 //   - edition number: the lead digest's own `id` (an existing, already-
@@ -797,24 +778,15 @@ export function renderIndexPage(
   // removed in the owner-requested index cleanup; the current-week rail was
   // deliberately left as-is rather than backfilling a sparkline onto it —
   // out of scope for that pass).
-  // Owner-requested placement: whenever the NOW section renders, IT carries
-  // the search control (in its own head row, right-aligned) and the rail
-  // below goes without — exactly one search control per page, always.
   const railHtml =
     view === "all" && weekInfo
       ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows)
       : "";
 
-  // Search row (owner-requested index cleanup): the daily/weekly views have
-  // no week rail to carry the search bubble (see railHtml just above), so
-  // they get a minimal standalone row instead — same renderSearchBubble
-  // markup, just without the week-nav spans around it, in the same
-  // between-tabs-and-ledger slot the old filterrow occupied. Skipped
-  // whenever railHtml is truthy (the ALL view) so the bubble never renders
-  // twice on the same page. This keeps the ⌘K palette's "Search" command
-  // (which reads `.searchlink` off the DOM, see collectPaletteItems)
-  // available on every view, not just ALL — losing it silently on daily/
-  // weekly would have been a real regression, not just a cosmetic one.
+  // The search control is not rendered here: pageChrome puts the one search
+  // popover in the bar's .baractions (which also keeps the ⌘K palette's
+  // "Search" command, reading `.searchlink` off the DOM, available on every
+  // view).
 
   // data-week-archive (roadmap 3 step 3): marks the <section> on any
   // non-current week so the bottom script's unread-fence IIFE can bail out
@@ -862,24 +834,18 @@ export function renderIndexPage(
     ? `<div class="catchup" hidden data-prefix="${esc(strings.catchupPrefix)}" data-tmpl-briefings="${esc(strings.catchupBriefings)}" data-tmpl-briefings-one="${esc(strings.catchupBriefingsOne)}" data-tmpl-arcs="${esc(strings.catchupArcUpdates)}" data-tmpl-arcs-one="${esc(strings.catchupArcUpdatesOne)}" data-tmpl-more="${esc(strings.catchupArcMore)}"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="${esc(strings.catchupJumpLabel)}">↓</button><button type="button" class="catchupdismiss" aria-label="${esc(strings.catchupDismissLabel)}">×</button></div>`
     : "";
 
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
     view,
-    renderSwitchers(
-      token,
-      lang,
-      view,
-      "index",
-      undefined,
-      isCurrent ? null : weekInfo,
-      true,
-      appVersion,
-    ),
-    `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
-    null,
+    pageKind: "index",
+    id: undefined,
+    archiveWeek: isCurrent ? null : weekInfo,
+    showSearch: true,
+    appVersion,
+    bodyHtml: `${catchupHtml}${nowHtml}${railHtml}<section data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}`,
     prefetchHref,
-    buildIssueLine(leadRow, rows, view, strings),
-  );
+    issueLineText: buildIssueLine(leadRow, rows, view, strings),
+  });
 }

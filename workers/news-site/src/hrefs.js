@@ -109,7 +109,7 @@ export function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek 
     // "plain" = the ledger-less pages (search, about): their language hop
     // targets the other language's root index, exactly like "index" — the
     // deliberate lose-the-query simplification documented at their call
-    // sites. The kinds differ only in what renderSwitchers gates on them.
+    // sites. The kinds differ only in what renderSettingsPanel gates on them.
     if (pageKind === "index" || pageKind === "plain") return otherLangIndexHref(otherLang);
     if (pageKind === "arc") return arcHref(token, otherLang, id);
     return digestHref(token, otherLang, view, id);
@@ -128,11 +128,9 @@ export function renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek 
 // index and digest pages — see the file-header comment ("Daily-brief view")
 // for why a digest page can't link into another view's own digest.
 // The view selector is the site's PRIMARY navigation (owner decision) —
-// rendered as a pill capsule that rides in the masthead row itself, beside
-// the brand (owner-requested masthead compaction: this used to be its own
-// centered band below the masthead; see pageChrome's .mastleft, which now
-// groups the two together, and the .mast/.mastleft/.viewtabs CSS for the
-// layout). Active tab = filled accent pill (plain text, not a link);
+// rendered as a pill capsule inside the single header.bar (the desktop top
+// bar and the phone bottom dock are the same element, CSS moves it; see
+// pageChrome). Active tab = filled accent pill (plain text, not a link);
 // inactive = outlined link. On a digest page the inactive tab targets that
 // view's INDEX (a window digest has no address in the daily or weekly view
 // — long-standing design choice).
@@ -152,38 +150,28 @@ export function renderViewTabs(token, lang, view) {
     view === v
       ? `<span class="viewtab active" data-view="${v}">${esc(label)}</span>`
       : `<a class="viewtab" data-view="${v}" href="${indexHref(token, lang, v)}">${esc(label)}</a>`;
-  return `<nav class="viewtabs">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}${tab("weekly", strings.viewWeekly)}</nav>`;
+  return `<nav class="viewtabs" aria-label="${esc(strings.viewsNavLabel)}">${tab("all", strings.viewAll)}${tab("daily", strings.viewDaily)}${tab("weekly", strings.viewWeekly)}</nav>`;
 }
 
-// The masthead's top-right cluster (language, theme, size, density)
-// collapses into one gear button that opens a floating settings bubble
-// (owner redesign) — a native <details>/<summary> disclosure, so the panel
-// opens with NO JS. The language links inside keep working for no-JS
-// readers exactly as before; the density button keeps its existing class
-// and hidden-until-JS contract untouched. Theme and size are miniseg button
-// groups (owner upgrade: three-state theme, S/M/L text size) — same
-// hidden-until-JS contract, wired by their own IIFEs below in pageChrome.
-// The masthead Archive link this row used to also carry (§11.1 PR C,
-// `showArchive` param) was removed in the index-cleanup pass — archive weeks
-// are reachable via the week rail's own ← link now (see renderWeekRail), so
-// there's nothing left to gate a link on here.
-// `showSearch` (owner-requested): renders the search control immediately
-// LEFT of the settings gear in the masthead. An explicit flag rather than
-// `pageKind === "index"` for the same reason the archive link needed one —
-// renderSearchPage also passes "index" (for its density row) and must not
-// get it. Index pages only, because the popover's `.filter` input drives
-// the LEDGER: on a digest or arc page it would be a dead control, and the
-// ⌘K palette already carries search everywhere.
-export function renderSwitchers(
+// The settings panel (language, theme, text size, density, push, About): a
+// native popover (`popover` attribute) opened by the bar's gear button via
+// `popovertarget="settings"`, so it opens and light-dismisses with NO JS and
+// no <details> bookkeeping. The language links inside keep working for
+// no-JS readers exactly as before; theme, size and density are miniseg
+// button groups with the hidden-until-JS contract (the client script
+// unhides and wires them). The body-font row is gone with the retired
+// serif/sans preference. The search control is NOT here any more — it lives
+// in the bar's .baractions (see pageChrome), because it is a bar control,
+// not a setting.
+export function renderSettingsPanel({
   token,
   lang,
   view,
   pageKind,
   id,
   archiveWeek = null,
-  showSearch = false,
   appVersion = null,
-) {
+}) {
   const strings = STRINGS[lang];
   const langRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsLanguage)}</span>${renderLangSwitcher(token, lang, view, pageKind, id, archiveWeek)}</div>`;
   // Theme is now a three-state Light/Auto/Dark miniseg (owner redesign),
@@ -197,24 +185,19 @@ export function renderSwitchers(
   // truth), so only s/l ever get set/stored. Letters are literal, not
   // STRINGS-keyed — "S"/"M"/"L" read the same in both languages.
   const sizeRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsTextSize)}</span><span class="miniseg miniseg-size" role="group" aria-label="${esc(strings.settingsTextSize)}"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div>`;
-  // Body-font toggle (owner-requested): Sans (default, = absence of
-  // data-font) | Serif (the retired wire-desk prose stack, resurrected
-  // behind :root[data-font="serif"] — see the CSS). Same hidden-until-JS
-  // contract as every miniseg above.
-  const fontRow = `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsFont)}</span><span class="miniseg miniseg-font" role="group" aria-label="${esc(strings.settingsFont)}"><button class="minisegbtn" data-set="sans" hidden>${esc(strings.fontModern)}</button><button class="minisegbtn" data-set="serif" hidden>${esc(strings.fontClassic)}</button></span></div>`;
-  // Density toggle (roadmap 4 step 4): index pages only — it governs the
-  // ledger's .entry padding/clamp, which a digest page has none of, so the
-  // row would be a dead control there.
-  // Index only: density compacts the .entry ledger, and the index is the
-  // only pageKind that has one — "plain" (search/about) used to ride in as
-  // "index" for the lang-hop and got a working toggle that affected nothing.
+  // Density: index pages only — it governs the ledger's .entry
+  // padding/clamp, which a digest page has none of, so the row would be a
+  // dead control there. "plain" (search/about) rides as its own kind for the
+  // language hop and so gets no row either. A miniseg like theme and size
+  // (same hidden-until-JS contract); data-set values are the stored
+  // preference values, the captions are display only.
   const densityRow =
     pageKind === "index"
-      ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><button class="densitytoggle" aria-label="${esc(strings.densityToggle)}" hidden>▤</button></div>`
+      ? `<div class="settingsrow"><span class="settingslabel">${esc(strings.settingsDensity)}</span><span class="miniseg miniseg-density" role="group" aria-label="${esc(strings.settingsDensity)}"><button class="minisegbtn" data-set="cards" hidden>${esc(strings.densityCards)}</button><button class="minisegbtn" data-set="compact" hidden>${esc(strings.densityCompact)}</button></span></div>`
       : "";
   // About link (discoverability for friends the owner shares the capability
   // link with): lives in this same settings panel, not a dedicated footer —
-  // the site has no <footer> element (chrome is masthead + this popover
+  // the site has no <footer> element (chrome is the bar + this popover
   // only, see pageChrome), and this panel is already the one place every
   // page (index, digest, search, arc) renders identically, so one row here
   // makes the link reachable everywhere, not just the index. A single link,
@@ -260,47 +243,31 @@ export function renderSwitchers(
     data-lang="${esc(lang)}"
     data-base="${esc(indexHref(token, "en", "all"))}"
   ><span class="settingslabel">${esc(strings.pushLabel)}</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div>`;
-  // The settings trigger is TEXT-ONLY on desktop and ICON-ONLY on the phone
-  // (owner follow-up: no gear glyph next to the label; the phone button
-  // matches the search icon's size). Both halves live in their own spans so
-  // each breakpoint hides one — .gearicon desktop-hidden, .gearlabel
-  // phone-hidden (see the CSS) — and the aria-label covers it everywhere.
-  const searchHtml = showSearch ? renderSearchBubble(token, lang, strings) : "";
-  return `${searchHtml}<details class="settings"><summary class="gear" aria-label="${esc(strings.settingsLabel)}"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">${esc(strings.settingsLabel)}</span></summary><div class="settingspanel">${langRow}${themeRow}${sizeRow}${fontRow}${densityRow}${pushRow}${aboutRow}</div></details>`;
+  return `<section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">${esc(strings.settingsLabel)}</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="${esc(strings.settingsClose)}">×</button></div>${langRow}${themeRow}${sizeRow}${densityRow}${pushRow}${aboutRow}</section>`;
 }
 
-// Search bubble (owner-requested index cleanup): replaces the old
-// always-visible filterrow (a standalone "Filter briefings…" input row plus
-// a "Search ↗" link) with ONE compact control, matching the masthead's own
-// settings-gear disclosure (see renderSwitchers/the .settings*/summary.gear
-// CSS pattern, extended by the .searchpop/.searchpanel/summary.searchtoggle
-// rules alongside it) — a native <details>/<summary> popover that opens
-// with no JS, so a no-JS reader still reaches the "Search ↗" fallback link
-// inside. Carries the exact SAME .filter input (same class, same
-// hidden-until-JS default, same placeholder) and the exact SAME .searchlink
-// no-JS fallback the old filterrow had — only their DOM position moved, so
-// the filter IIFE and the archive-search integration in pageChrome's bottom
-// script (both `document.querySelector(".filter")`/`.searchlink`, neither
-// scoped to a particular ancestor) keep working unchanged. Called from
-// renderWeekRail (the ALL view, where it rides as a fourth flex child in the
-// week-rail row itself) and directly from renderIndexPage on the daily/
-// weekly views, which have no week rail to live in — see that call site.
+// Search popover for the bar's .baractions (index, digest and arc pages —
+// the pages that pass showSearch; see pageChrome). A native <details>/
+// <summary> popover that opens with no JS, so a no-JS reader still reaches
+// the "Search ↗" fallback link inside. It carries the .filter input (hidden
+// until the filter IIFE reveals it, and forever on pages with no ledger) and
+// the .searchlink no-JS fallback; the filter IIFE and the archive-search
+// integration in client.js both `document.querySelector(".filter")`/
+// `.searchlink` without scoping to an ancestor, so they find them wherever
+// the markup sits. Rendered exactly once per page, by pageChrome.
 export function renderSearchBubble(token, lang, strings) {
-  // BOTH halves ship, and CSS hides one per breakpoint — the same
-  // icon/label half-swap summary.gear already uses (.gearicon/.gearlabel).
-  // Desktop shows the WORD ("SEARCH"/"KERESÉS"), matching the SETTINGS chip
-  // beside it (owner-requested); the phone shows the bare magnifier, where
-  // the masthead has no room for two words. See summary.searchtoggle in the
-  // CSS for which half wins where.
+  // BOTH halves ship, and CSS hides one per breakpoint: the WORD
+  // ("SEARCH"/"KERESÉS") where there is room, the bare magnifier where there
+  // is not.
   //
   // The icon is an inline SVG rather than a glyph character: U+2315/U+26B2
   // render inconsistently across platforms and the emoji magnifier drags its
   // own colour into a deliberately muted palette. currentColor + the stroke
-  // keeps it in the same weight register as the ⚙ gear beside it.
+  // keeps it in the same weight register as the settings icon beside it.
   //
   // aria-label stays on the summary even now that a visible label exists: it
-  // is the ONLY accessible name at the phone breakpoint, and on the desktop
-  // it is the same string as the visible text, so the two never disagree.
+  // is the ONLY accessible name where the label is hidden, and elsewhere it
+  // is the same string as the visible text, so the two never disagree.
   // The ⌘K palette's own DOM scrape reads it too.
   const icon = `<svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
   // The same magnifier again, inside the panel this time, under its own
@@ -313,4 +280,12 @@ export function renderSearchBubble(token, lang, strings) {
   // would be a dead control. See the .searchpanel:has(.filter[hidden]) rule.
   const fieldIcon = `<svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
   return `<details class="searchpop"><summary class="searchtoggle" aria-label="${esc(strings.searchToggleLabel)}" title="${esc(strings.searchToggleLabel)}">${icon}<span class="searchlabel">${esc(strings.searchToggleLabel)}</span></summary><div class="searchpanel"><div class="searchfield">${fieldIcon}<input class="filter" type="search" placeholder="${esc(strings.filterPlaceholder)}" aria-label="${esc(strings.filterPlaceholder)}" hidden></div><a class="searchlink" href="${searchHref(token, lang)}">${esc(strings.searchLink)}</a></div></details>`;
+}
+
+// The bar's plain search link, for pages whose search popover would be a dead
+// control (the standalone search and about pages: no ledger to filter, and
+// the search page IS the destination). Same magnifier as the popover's
+// toggle so the control reads identically wherever it appears.
+export function renderSearchButton(token, lang, strings) {
+  return `<a class="barsearch" href="${searchHref(token, lang)}" aria-label="${esc(strings.searchToggleLabel)}"><svg class="searchicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></a>`;
 }

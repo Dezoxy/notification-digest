@@ -1237,3 +1237,101 @@ test("a D1 error in the version query does not fail the page", async () => {
     assert.ok(!(await res.text()).includes('appversion"'), `${name}: no label`);
   }
 });
+
+// ── Spatial Glass shell: one bar, one popover settings panel ──────────────
+
+const count = (html, re) => (html.match(re) || []).length;
+
+// Server markup only: css.js and client.js still carry the old shell's names
+// until their packages land, and a text search over the whole page would
+// trip on them.
+const markupOf = (html) =>
+  html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<style[\s\S]*?<\/style>/g, "")
+    .replace(/<script[\s\S]*?<\/script>/g, "");
+
+test("every page has exactly one header.bar, one phonehead, one main and one settings popover", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    assert.equal(count(html, /<header class="bar">/g), 1, `${name}: one header.bar`);
+    assert.equal(count(html, /<div class="phonehead">/g), 1, `${name}: one phonehead`);
+    assert.equal(count(html, /<main class="maincol" id="main">/g), 1, `${name}: one main`);
+    assert.equal(
+      count(html, /<section id="settings" class="settingspanel" popover /g),
+      1,
+      `${name}: #settings[popover] exactly once`,
+    );
+    assert.equal(count(html, /\bid="settings"/g), 1, `${name}: settings id unique`);
+    assert.match(
+      html,
+      /<button type="button" class="settingsbtn" popovertarget="settings" aria-label="[^"]+">/,
+      `${name}: gear button targets the popover`,
+    );
+    assert.ok(!/class="mast[ "]|mastleft|mastright|<details class="settings"/.test(html), name);
+  }
+});
+
+test("the search control renders exactly once, in .baractions", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    const bar = html.match(/<div class="baractions">([\s\S]*?)<\/header>/)[1];
+    const popovers = count(html, /class="searchpop"/g);
+    // The bar link is .barsearch (distinct from the search page form's own .searchbtn).
+    const buttons = count(html, /<a class="barsearch"/g);
+    assert.equal(popovers + buttons, 1, `${name}: one search control`);
+    assert.ok(bar.includes('class="searchpop"') || bar.includes('class="barsearch"'), name);
+  }
+  // Pages without a ledger to filter link to the search page instead.
+  for (const name of ["about-en", "search-en"]) {
+    const html = markupOf((await page(GOLDEN_PAGES.find((p) => p.name === name).path)).html);
+    assert.ok(html.includes('<a class="barsearch" href="/t/'), `${name}: plain search link`);
+  }
+});
+
+test("no floating FABs: .backfab is gone and .barback is digest-only", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    assert.ok(!html.includes("backfab"), `${name}: no backfab`);
+    assert.ok(!html.includes("<noscript>"), `${name}: no noscript block`);
+    const isDigest = name.startsWith("digest-");
+    assert.equal(count(html, /class="barback"/g), isDigest ? 1 : 0, `${name}: barback`);
+  }
+});
+
+test("font preloads: latin always, latin-ext only on Hungarian pages; the body-font pref is retired", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const raw = (await page(path)).html;
+    const html = markupOf(raw);
+    for (const f of ["inter-latin", "sora-latin"]) {
+      assert.ok(
+        html.includes(
+          `<link rel="preload" href="/fonts/${f}-wght.v1.woff2" as="font" type="font/woff2" crossorigin>`,
+        ),
+        `${name}: ${f} preload`,
+      );
+    }
+    const ext = count(html, /<link rel="preload" href="\/fonts\/[a-z]+-latin-ext-wght/g);
+    assert.equal(ext, name.endsWith("-hu") ? 2 : 0, `${name}: latin-ext preloads`);
+    assert.ok(html.includes("viewport-fit=cover"), `${name}: viewport-fit`);
+    assert.ok(
+      !html.includes("data-font") && !html.includes("dataset.font="),
+      `${name}: no data-font`,
+    );
+    assert.ok(!html.includes("miniseg-font"), `${name}: no font row`);
+    // The early head script is stripped from markupOf, so check the raw page.
+    assert.ok(
+      raw.includes('localStorage.removeItem("font")') && raw.includes('classList.add("enter")'),
+      `${name}: retired pref cleanup + entrance hook`,
+    );
+  }
+});
+
+test("the density miniseg is index-only and replaces the old toggle", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = markupOf((await page(path)).html);
+    const isIndex = ["index-en", "index-hu", "daily-en", "weekly-en"].includes(name);
+    assert.equal(count(html, /miniseg-density/g), isIndex ? 1 : 0, `${name}: density miniseg`);
+    assert.ok(!html.includes("densitytoggle"), `${name}: no densitytoggle`);
+  }
+});

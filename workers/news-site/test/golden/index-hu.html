@@ -2,18 +2,20 @@
 <html lang="hu">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- theme-color must track the CSS palette blocks' --bg values above (light
-     #ffffff / dark #131418 — "print poster" redesign) so mobile browser
-     chrome (URL bar/status bar tint) melts into the page instead of showing
-     a stock color. The prefers-color-scheme media attrs cover the automatic
-     (Auto) case; a manual Light/Dark override from the theme miniseg (see
-     the bottom script) updates both metas' content directly, since a
-     media-query meta can't react to a data-theme attribute switch on its
-     own — and clicking back to Auto restores each meta to its own
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- theme-color must track the CSS palette blocks' page background (light
+     #eceff6 / dark #0b0d14 — Spatial Glass) so mobile browser chrome (URL
+     bar/status bar tint) melts into the page instead of showing a stock
+     color. NOTE: client.js THEME_COLORS (the manual-override path) and
+     pwa.js (offline page, manifest colors) still hold the old values until
+     their packages land. The prefers-color-scheme media attrs cover the
+     automatic (Auto) case; a manual Light/Dark override from the theme
+     miniseg (see the bottom script) updates both metas' content directly,
+     since a media-query meta can't react to a data-theme attribute switch
+     on its own — and clicking back to Auto restores each meta to its own
      media-appropriate value. -->
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131418">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#eceff6">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0d14">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <!-- PWA shell — see src/chrome.js for why each line is shaped this way. -->
 <link rel="manifest" href="/t/goldentesttoken/hu/manifest.webmanifest">
@@ -22,7 +24,16 @@
 <meta name="apple-mobile-web-app-title" content="NEWS">
 <link rel="prefetch" href="/t/goldentesttoken/hu/d/235">
 <title>news.toomhorvath.com</title>
-<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.font=localStorage.getItem("font")||"";document.documentElement.dataset.density=localStorage.getItem("density")||""}catch(e){}</script>
+<!-- Font preloads sit ahead of the stylesheet so the fetch starts while the CSS
+     is still being parsed. crossorigin is REQUIRED even though the files are
+     same-origin: fonts are always fetched in CORS mode, and a preload
+     without it is made in a different mode, never matches the later
+     @font-face request, and downloads the file twice. -->
+<link rel="preload" href="/fonts/inter-latin-wght.v1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/sora-latin-wght.v1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/inter-latin-ext-wght.v1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/sora-latin-ext-wght.v1.woff2" as="font" type="font/woff2" crossorigin>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.density=localStorage.getItem("density")||"";localStorage.removeItem("font");document.documentElement.classList.add("enter")}catch(e){}</script>
 <style>
   /* Two type roles, both zero-byte system stacks ("print poster" redesign):
      PROSE for the sit-back-and-read register (article body, TL;DR/leader,
@@ -1950,26 +1961,19 @@
 <body>
 <script type="speculationrules">{"prefetch":[{"urls":["/t/goldentesttoken/hu/d/235"]}]}</script>
 <div class="wrap">
-  <div class="issueline">235. szám · 2026. augusztus 25., kedd · 2 kiadás ma</div>
-  <header class="mast mast-big">
-    <div class="mastleft">
-      <a class="brand" href="/t/goldentesttoken/hu/">news</a>
-    </div>
-    <nav class="viewtabs"><span class="viewtab active" data-view="all">Minden</span><a class="viewtab" data-view="daily" href="/t/goldentesttoken/hu/daily/">Napi</a><a class="viewtab" data-view="weekly" href="/t/goldentesttoken/hu/weekly/">Heti</a></nav>
-    <div class="mastright">
-      <details class="searchpop"><summary class="searchtoggle" aria-label="Keresés" title="Keresés"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Keresés</span></summary><div class="searchpanel"><div class="searchfield"><svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input class="filter" type="search" placeholder="Szűrés…" aria-label="Szűrés…" hidden></div><a class="searchlink" href="/t/goldentesttoken/hu/search">Keresés ↗</a></div></details><details class="settings"><summary class="gear" aria-label="Beállítások"><span class="gearicon" aria-hidden="true">⚙</span><span class="gearlabel">Beállítások</span></summary><div class="settingspanel"><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Betűtípus</span><span class="miniseg miniseg-font" role="group" aria-label="Betűtípus"><button class="minisegbtn" data-set="sans" hidden>Modern</button><button class="minisegbtn" data-set="serif" hidden>Klasszikus</button></span></div><div class="settingsrow"><span class="settingslabel">Sűrűség</span><button class="densitytoggle" aria-label="Kompakt lista be/ki" hidden>▤</button></div><div class="settingsrow pushrow" hidden
-    data-label="Értesítések"
-    data-enable="Bekapcsolás"
-    data-enabled="Bekapcsolva"
-    data-disable="Kikapcsolás"
-    data-blocked="A böngésző letiltotta"
-    data-ioshint="Előbb add hozzá a kezdőképernyőhöz"
-    data-failed="Nem sikerült bekapcsolni"
-    data-lang="hu"
-    data-base="/t/goldentesttoken/"
-  ><span class="settingslabel">Értesítések</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div><div class="settingsrow"><a href="/t/goldentesttoken/hu/about">Névjegy</a><span class="settingslabel appversion" title="Telepített digest-verzió">v0.29.21</span></div></div></details>
+  <header class="bar">
+    <a class="brand" href="/t/goldentesttoken/hu/">news<span class="brandmark" aria-hidden="true">.</span></a>
+    
+    <nav class="viewtabs" aria-label="Nézetek"><span class="viewtab active" data-view="all">Minden</span><a class="viewtab" data-view="daily" href="/t/goldentesttoken/hu/daily/">Napi</a><a class="viewtab" data-view="weekly" href="/t/goldentesttoken/hu/weekly/">Heti</a></nav>
+    <div class="baractions">
+      <details class="searchpop"><summary class="searchtoggle" aria-label="Keresés" title="Keresés"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Keresés</span></summary><div class="searchpanel"><div class="searchfield"><svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input class="filter" type="search" placeholder="Szűrés…" aria-label="Szűrés…" hidden></div><a class="searchlink" href="/t/goldentesttoken/hu/search">Keresés ↗</a></div></details>
+      <button type="button" class="settingsbtn" popovertarget="settings" aria-label="Beállítások"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 6h9M16 6h1M3 14h1M8 14h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="14" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
     </div>
   </header>
+  <div class="phonehead">
+    <a class="brand" href="/t/goldentesttoken/hu/" tabindex="-1" aria-hidden="true">news<span class="brandmark">.</span></a>
+    <div class="issueline">235. szám · 2026. augusztus 25., kedd · 2 kiadás ma</div>
+  </div>
   <span class="paletteconfig" hidden
     data-label="Parancspaletta"
     data-placeholder="Parancs vagy keresés…"
@@ -1983,7 +1987,8 @@
     data-cmd-switchlang="Nyelv váltása"
     data-cmd-latest="Legfrissebb hírlevél"
   ></span>
-  <div class="catchup" hidden data-prefix="Legutóbbi látogatásod óta:" data-tmpl-briefings="{n} hírlevél" data-tmpl-briefings-one="{n} hírlevél" data-tmpl-arcs="{m} történetfrissítés" data-tmpl-arcs-one="{m} történetfrissítés" data-tmpl-more="+{n} további"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="Ugrás oda, ahol abbahagytad">↓</button><button type="button" class="catchupdismiss" aria-label="Elrejtés">×</button></div><div class="now"><div class="archivelabel">Most</div><nav class="nowlist" aria-label="Most"><a class="nowrow" href="/t/goldentesttoken/hu/a/markets-slide" data-arc-slug="markets-slide" data-last-seen="2026-08-25T14:00:00Z"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">Markets slide continues</span><span class="nowmeta">4 órával ezelőtt</span></a></nav></div>
+  <div class="layout">
+    <main class="maincol" id="main"><div class="catchup" hidden data-prefix="Legutóbbi látogatásod óta:" data-tmpl-briefings="{n} hírlevél" data-tmpl-briefings-one="{n} hírlevél" data-tmpl-arcs="{m} történetfrissítés" data-tmpl-arcs-one="{m} történetfrissítés" data-tmpl-more="+{n} további"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="Ugrás oda, ahol abbahagytad">↓</button><button type="button" class="catchupdismiss" aria-label="Elrejtés">×</button></div><div class="now"><div class="archivelabel">Most</div><nav class="nowlist" aria-label="Most"><a class="nowrow" href="/t/goldentesttoken/hu/a/markets-slide" data-arc-slug="markets-slide" data-last-seen="2026-08-25T14:00:00Z"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">Markets slide continues</span><span class="nowmeta">4 órával ezelőtt</span></a></nav></div>
 <nav class="weekrail" aria-label="Heti navigáció"><span class="rail-older"><a href="/t/goldentesttoken/hu/w/2026-W34/">← W34</a></span><span class="rail-center">35. hét · aug. 24–30.</span><span class="rail-newer"></span></nav><section data-unread-label="új a legutóbbi látogatásod óta" data-empty-filtered="Nincs találat."><a class="entry entry-lead" href="/t/goldentesttoken/hu/d/235" data-created="2026-08-25T14:00:00Z" data-id="235">
     <div class="leadmain">
       <span class="meta"><span class="eyebrow-text">Legfrissebb · aug. 25., K · 16:00 CEST · 12 elem</span><span class="flag flag-degraded" title="polymarket">⚠ hiányos</span></span>
@@ -2006,14 +2011,21 @@
     <span class="meta"><span class="time time-accent">22:00</span><span class="count">6 elem · 1 szakasz</span><span class="flag flag-daily">napi összefoglaló</span></span>
     <h3 class="headline">Hétfői napi összefoglaló.</h3>
     <p class="excerpt excerpt-daily"><strong>Röviden:</strong> Hétfői napi összefoglaló.</p>
-  </a></section><div class="archiveresults" data-search-href="/t/goldentesttoken/hu/search" hidden></div>
-  <a class="backfab" href="#top" aria-label="Vissza az elejére">↑</a>
+  </a></section><div class="archiveresults" data-search-href="/t/goldentesttoken/hu/search" hidden></div></main>
+    
+  </div>
+  <section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Beállítások</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Beállítások bezárása">×</button></div><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Sűrűség</span><span class="miniseg miniseg-density" role="group" aria-label="Sűrűség"><button class="minisegbtn" data-set="cards" hidden>Kártyák</button><button class="minisegbtn" data-set="compact" hidden>Kompakt</button></span></div><div class="settingsrow pushrow" hidden
+    data-label="Értesítések"
+    data-enable="Bekapcsolás"
+    data-enabled="Bekapcsolva"
+    data-disable="Kikapcsolás"
+    data-blocked="A böngésző letiltotta"
+    data-ioshint="Előbb add hozzá a kezdőképernyőhöz"
+    data-failed="Nem sikerült bekapcsolni"
+    data-lang="hu"
+    data-base="/t/goldentesttoken/"
+  ><span class="settingslabel">Értesítések</span><button class="pushtoggle" hidden></button><span class="pushnote" hidden></span></div><div class="settingsrow"><a href="/t/goldentesttoken/hu/about">Névjegy</a><span class="settingslabel appversion" title="Telepített digest-verzió">v0.29.21</span></div></section>
 </div>
-<noscript><style>.backfab { opacity: 1; pointer-events: auto; }
-  /* The sticky section headings need wirePage's push loop to stop them
-     stacking on top of one another; with no script they go back to being
-     ordinary headings rather than a pile at the top of the viewport. */
-  .digest > h2 { position: static; }</style></noscript>
 <script>
   // Animated preference swap (owner-requested), shared by the theme and
   // text-size minisegs below: run a page-state mutation inside a

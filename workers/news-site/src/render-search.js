@@ -2,7 +2,7 @@ import { STRINGS } from "./strings.js";
 import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import { formatShortDate, formatTime } from "./dates.js";
-import { aboutHref, digestHref, renderLangSwitcher, renderSwitchers, searchHref } from "./hrefs.js";
+import { aboutHref, digestHref, renderLangSwitcher, searchHref } from "./hrefs.js";
 import { kindBadge } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
 import { renderExcerpt, renderIndexEntry, renderLeadCard } from "./render-index.js";
@@ -120,7 +120,7 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
     }
   }
 
-  // Switchers: pageKind "plain" (index-style language hop, no ledger) — the
+  // Settings panel: pageKind "plain" (index-style language hop, no ledger) — the
   // language switch on this page goes to the OTHER language's root index,
   // not to that language's own search results for the same query. Losing
   // the query string on a language hop is an accepted, deliberate
@@ -133,21 +133,25 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
   // need SOME valid view to render against, and "all" is the closest
   // meaning — clicking "Daily" from here goes to the daily index, not to a
   // (nonexistent) daily-scoped search.
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
-    "all",
-    renderSwitchers(token, lang, "all", "plain", undefined, null, false, appVersion),
-    `${formHtml}${resultsHtml}`,
-    strings.searchLabel,
-  );
+    view: "all",
+    pageKind: "plain",
+    id: undefined,
+    archiveWeek: null,
+    showSearch: false,
+    appVersion,
+    bodyHtml: `${formHtml}${resultsHtml}`,
+    title: strings.searchLabel,
+  });
 }
 
 // About page: short, static, no D1 data at all — the simplest page this
 // file renders. Reuses the site's existing chrome/typography wholesale
 // rather than inventing anything new:
-//   - pageChrome for the masthead/CSS/settings popover, same as every other
+//   - pageChrome for the bar/CSS/settings popover, same as every other
 //     page (see renderSearchPage just above for the closest example).
 //   - `.digest` (the article-body class the digest pages use for their own
 //     prose — see the CSS) for the h2/p typography, including its numbered-
@@ -173,13 +177,17 @@ export function renderAboutPage(token, host, lang, appVersion = null) {
   // just above, and for the same reason — the about page has no
   // daily/weekly/week variant of its own (see aboutHref), so the view tabs
   // just need some valid view to render against.
-  return pageChrome(
+  return pageChrome({
     host,
     token,
     lang,
-    "all",
-    renderSwitchers(token, lang, "all", "plain", undefined, null, false, appVersion),
+    view: "all",
+    pageKind: "plain",
+    id: undefined,
+    archiveWeek: null,
+    showSearch: false,
+    appVersion,
     bodyHtml,
-    strings.aboutLabel,
-  );
+    title: strings.aboutLabel,
+  });
 }
