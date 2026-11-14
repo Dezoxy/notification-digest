@@ -1034,11 +1034,11 @@ Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`,
     "Article",
     170,
     stage(
-      `<div class="tocrow"><details class="tocpicker" open><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details><button type="button" class="expandall">Expand all</button></div>`,
+      `<div class="tocrow"><details class="tocpicker" open><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details><button type="button" class="expandall">Collapse all</button></div>`,
     ),
     `# Toc
 
-The section index uses a native disclosure with full section titles and an Expand all / Collapse all button. It precedes the complete summary so it remains accessible even when the summary is long.
+The section index starts as an open disclosure with full section titles and a Collapse all button for the stories. It sits before the complete summary.
 
 **Provide** \`div.tocrow\` holding \`details.tocpicker\`, its summary and \`nav.toc\` with numbered \`#sN\` links. The sibling \`button.expandall\` carries \`data-expand\` / \`data-collapse\` labels and is rendered \`hidden\`; the client reveals it.
 
@@ -1056,16 +1056,15 @@ Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.to
     stage(`<article class="digest">
   <details class="sec" open><summary class="sechead"><h2 id="s1">Markets slide continues</h2><span class="seccount">2 sources</span></summary><div class="secbody">
     <a class="secarc" href="#">story so far ×2</a>
-    <p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#" title="reuters.com">1</a></p>
-    <div class="storysources"><span>Sources</span><ul role="list" aria-label="Sources"><li><a href="#"><span class="sourcenum">¹</span> <span>reuters.com</span></a></li></ul></div>
+    <p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#">¹</a></p>
   </div></details>
   <details class="sec"><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody"><p>The council signed off overnight.</p></div></details>
 </article>`),
     `# Section
 
-One story in a digest, a native \`details\` card: a heading with a two-line preview and a source count when closed, a chevron, and the \`body\`-coloured article text when open. The first section ships open.
+One story in a digest, a native \`details\` card: a heading with a two-line preview and a source count when closed, a chevron, and the \`body\`-coloured article text when open. Every section ships open.
 
-**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` chips and a \`div.storysources\` list of destination hostnames.
+**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` numbered links.
 
 - Do keep it a native \`details\`: it works without JavaScript, and print forces every section open.
 - Do bold the figure that matters; \`strong\` snaps to \`strong\` ink against \`body\`.
@@ -1080,13 +1079,13 @@ Source: \`sections.js\`; styles \`.sec\`, \`.sechead\`, \`.secbody\`, \`.secarc\
     "Article",
     90,
     stage(
-      `<p style="font-size:17px;margin:0">Drawdown at four percent<a class="cite" href="#" title="reuters.com">1</a> and widening<a class="cite" href="#" title="ft.com">2</a>. Hits: <mark>Markets</mark> extended losses.</p>`,
+      `<p style="font-size:17px;margin:0">Drawdown at four percent<a class="cite" href="#">¹</a> and widening<a class="cite" href="#">²</a>. Hits: <mark>Markets</mark> extended losses.</p>`,
     ),
     `# Cite
 
 A superscript citation chip: an \`accent-soft\` rounded chip with the source number in \`accent-text\`, filling solid \`accent\` on hover or focus.
 
-**Provide** \`a.cite\` linking to the source with the source domain in \`title\` (\`sections.js\` adds it); on touch screens CSS prints the domain after the number.
+**Provide** \`a.cite\` linking to the source, with the superscript number as its label.
 
 - Do place it directly after the claim, with no space.
 - Don't use it for anything but sources; search hits use plain \`mark\`.

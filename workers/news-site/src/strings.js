@@ -57,7 +57,6 @@ export const STRINGS = {
     heroRead: "Read the edition",
     sectionsNavLabel: "Sections",
     jumpToSection: "Jump to section",
-    storySources: "Sources",
     expandAll: "Expand all",
     collapseAll: "Collapse all",
     earlierLabel: "Earlier",
@@ -238,7 +237,7 @@ export const STRINGS = {
       "A window briefing lands four times a day, covering whatever's new since the last one. Every evening, a daily brief re-checks the day's stories against the open web and writes a verified summary. On Sundays, a weekly report ties the week together.",
     aboutReadingTitle: "How to read it",
     aboutReadingBody:
-      "Each briefing is organized under story headings. The small numbers next to a claim are citations — hover or tap one to see where it came from. Stories that keep developing get their own story-arc page, reachable from a “story so far” link, so you can catch up without re-reading every briefing. To read in Hungarian, use the EN/HU switcher in the settings menu.",
+      "Each briefing is organized under story headings. The small numbers next to a claim are citations — follow one to see where it came from. Stories that keep developing get their own story-arc page, reachable from a “story so far” link, so you can catch up without re-reading every briefing. To read in Hungarian, use the EN/HU switcher in the settings menu.",
     aboutCaveat:
       "Everything on this site is written by an AI, working only from the sources listed above — it can misread a source or miss context. If something matters, follow the citation and check it yourself.",
     // PWA shell (PLAN.md §11.7). Two audiences, both reached without a
@@ -320,7 +319,6 @@ export const STRINGS = {
     heroRead: "A kiadás elolvasása",
     sectionsNavLabel: "Fejezetek",
     jumpToSection: "Ugrás a fejezethez",
-    storySources: "Források",
     expandAll: "Összes kinyitása",
     collapseAll: "Összes összecsukása",
     earlierLabel: "Korábban",
@@ -429,7 +427,7 @@ export const STRINGS = {
       "Naponta négyszer érkezik egy ablak-összefoglaló, amely az előző óta történteket gyűjti össze. Minden este egy napi összefoglaló újra ellenőrzi a nap híreit a nyílt weben, és egy hitelesített összegzést ír. Vasárnaponként egy heti jelentés fogja össze a hetet.",
     aboutReadingTitle: "Hogyan olvasd",
     aboutReadingBody:
-      "Minden összefoglaló témák szerinti címsorok alá van rendezve. Az állítások melletti kis számok hivatkozások — vidd rájuk az egeret, vagy koppints rájuk, hogy lásd, honnan származnak. A tovább fejlődő történeteknek saját sztori-oldaluk van, egy „eddig történt” hivatkozással elérve, hogy ne kelljen minden korábbi összefoglalót újraolvasnod. Ha inkább magyarul olvasnál, használd az EN/HU váltót a beállítások menüben.",
+      "Minden összefoglaló témák szerinti címsorok alá van rendezve. Az állítások melletti kis számok hivatkozások — kövesd őket, hogy lásd, honnan származnak. A tovább fejlődő történeteknek saját sztori-oldaluk van, egy „eddig történt” hivatkozással elérve, hogy ne kelljen minden korábbi összefoglalót újraolvasnod. Ha inkább magyarul olvasnál, használd az EN/HU váltót a beállítások menüben.",
     aboutCaveat:
       "Ezen az oldalon minden szöveget egy AI ír, kizárólag a fent felsorolt forrásokból dolgozva — előfordulhat, hogy félreért egy forrást, vagy kihagy egy összefüggést. Ha valami fontos, kövesd a hivatkozást, és nézd meg magad.",
     // Owner: please review — new HU strings, PWA shell (this feature),

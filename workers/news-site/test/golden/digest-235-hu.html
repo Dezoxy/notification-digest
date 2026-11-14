@@ -652,15 +652,6 @@
   }
   .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
-  .storysources { margin-top: var(--sp-4); font-size: var(--fs-meta); color: var(--muted); }
-  .storysources ul { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
-  .storysources li { margin: 0; min-width: 0; }
-  .storysources a {
-    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 100%; padding: 0 12px;
-    border: 1px solid var(--border); border-radius: var(--r-pill); text-decoration: none; overflow-wrap: anywhere;
-  }
-  .storysources a:hover { background: var(--accent-soft); }
-  .sourcenum { font-weight: 600; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -742,13 +733,6 @@
     font-size: 0.72em; font-weight: 700; text-decoration: none; vertical-align: super; line-height: 1;
   }
   .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--on-accent); }
-  /* No hover on touch, so the title attribute's domain never surfaces:
-     print it on the chip. A chip with no title (href failed to parse)
-     shows nothing extra. The domain must never be auto-hyphenated. */
-  @media (hover: none) {
-    .cite[title]::after { content: attr(title); margin-left: 0.35em; font-weight: 500; hyphens: none; -webkit-hyphens: none; }
-  }
-
   .arccontext { margin: 0 0 var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-in); background: var(--panel-2); }
   .arccontext summary {
     display: flex; align-items: center; min-height: 44px; padding: 0 18px; cursor: pointer;
@@ -1067,7 +1051,7 @@
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .storythreads, .storysources, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
@@ -1085,7 +1069,6 @@
     details.sec::details-content, .colophon::details-content { content-visibility: visible; }
     .colophon summary { display: none; }
     .cite { background: none; color: #000; }
-    .cite[title]::after { content: " (" attr(title) ")"; font-size: 0.85em; color: #333; }
   }
 </style>
 </head>
@@ -1127,29 +1110,29 @@
   <h1 class="herotitle">A piacok második napja estek, az EU-csomag megszületett.</h1>
 </header>
     <div class="maincol"><article class="digest">
-<div class="tocrow"><details class="tocpicker"><summary>Ugrás a fejezethez · 3</summary><nav class="toc" aria-label="Fejezetek"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Folytatódik a piaci esés</span></a>
+<div class="tocrow"><details class="tocpicker" open><summary>Ugrás a fejezethez · 3</summary><nav class="toc" aria-label="Fejezetek"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Folytatódik a piaci esés</span></a>
 <a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">Az EU új csomagot fogadott el</span></a>
 <a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Szigorodnak a chipexport-szabályok</span></a></nav></details>
 <button type="button" class="expandall" hidden data-expand="Összes kinyitása" data-collapse="Összes összecsukása">Összes kinyitása</button></div>
 <p class="banner">⚠ polymarket collection failed this run</p>
 <div class="tldr"><span class="tldr-label">Röviden</span>A piacok második napja estek, az EU-csomag megszületett.</div>
-<div class="attention"><span class="attention-label">⚑ Figyelmet igényel</span><p>A reformhatáridő pénteken jár le, ezért előtte ellenőrizd a benyújtási időszakot<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer" title="example.com">¹</a>.</p></div>
+<div class="attention"><span class="attention-label">⚑ Figyelmet igényel</span><p>A reformhatáridő pénteken jár le, ezért előtte ellenőrizd a benyújtási időszakot<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer">¹</a>.</p></div>
 <details class="sec" open><summary class="sechead"><h2 id="s1">Folytatódik a piaci esés</h2><span class="secpreview" aria-hidden="true">A részvények tovább estek. Reuters négy százalékra teszi a visszaesést.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
 <p>A részvények tovább estek. <a href="https://example.com/markets-report">Reuters</a> négy százalékra teszi a visszaesést.</p>
-<p>A kereskedők a szűk likviditásra és az erősebb dollárra mutattak. Egy elemzői jegyzet a hétvégére is ingadozást vár<a class="cite" href="https://example.com/liquidity-note" rel="noopener noreferrer" title="example.com">²</a>.</p>
+<p>A kereskedők a szűk likviditásra és az erősebb dollárra mutattak. Egy elemzői jegyzet a hétvégére is ingadozást vár<a class="cite" href="https://example.com/liquidity-note" rel="noopener noreferrer">²</a>.</p>
 <ul>
 <li>Az indexfutures ismét lejjebb nyitott.</li>
 <li>A kötvényhozamok csökkentek, mert a befektetők biztonságot kerestek.</li>
 <li>A devizapultoknál e hónapban a legnagyobb a felár.</li>
 </ul>
-<div class="storysources"><span>Források</span><ul role="list" aria-label="Források"><li><a href="https://example.com/liquidity-note" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">²</span> <span>example.com</span></a></li></ul></div></div></details>
-<details class="sec"><summary class="sechead"><h2 id="s2">Az EU új csomagot fogadott el</h2><span class="secpreview" aria-hidden="true">A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
+</div></details>
+<details class="sec" open><summary class="sechead"><h2 id="s2">Az EU új csomagot fogadott el</h2><span class="secpreview" aria-hidden="true">A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
 <p>A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</p>
-<p>Több tag felülvizsgálati záradékot kért. A tanácsi közlemény tavaszra tűzi ki az első ellenőrzési pontot<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer" title="example.com">³</a>.</p>
-<div class="storysources"><span>Források</span><ul role="list" aria-label="Források"><li><a href="https://example.com/council-statement" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">³</span> <span>example.com</span></a></li></ul></div></div></details>
-<details class="sec"><summary class="sechead"><h2 id="s3">Szigorodnak a chipexport-szabályok</h2><span class="secpreview" aria-hidden="true">Az új engedélyezési követelmények a következő negyedévtől élnek.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
+<p>Több tag felülvizsgálati záradékot kért. A tanácsi közlemény tavaszra tűzi ki az első ellenőrzési pontot<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer">³</a>.</p>
+</div></details>
+<details class="sec" open><summary class="sechead"><h2 id="s3">Szigorodnak a chipexport-szabályok</h2><span class="secpreview" aria-hidden="true">Az új engedélyezési követelmények a következő negyedévtől élnek.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
 <p>Az új engedélyezési követelmények a következő negyedévtől élnek.</p>
-<p>Az exportőröknek kilencven napjuk van a bejelentésre. A minisztériumi közlemény felsorolja az érintett termékcsoportokat<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer" title="example.com">⁴</a>.</p><div class="storysources"><span>Források</span><ul role="list" aria-label="Források"><li><a href="https://example.com/export-rules" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="sourcenum">⁴</span> <span>example.com</span></a></li></ul></div></div></details>
+<p>Az exportőröknek kilencven napjuk van a bejelentésre. A minisztériumi közlemény felsorolja az érintett termékcsoportokat<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer">⁴</a>.</p></div></details>
 <p class="foot"><em>12 elemből 5 formálta ezt az összefoglalót, 4 pedig háttérzaj volt.</em></p>
 <details class="storythreads"><summary>Történetszálak · 1</summary><nav class="heropills" aria-label="Történetszálak"><a class="threadpill" href="/t/goldentesttoken/hu/a/markets-slide">Markets slide continues <span class="pillcount">×2 ezen a héten</span></a></nav></details>
 </article>
