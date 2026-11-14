@@ -7,14 +7,17 @@ import {
   addCiteTitles,
   buildSectionToc,
   findArcSectionAnchor,
+  foldSections,
   stripInlineStyles,
 } from "./sections.js";
 import { arcHref, digestHref, indexHref } from "./hrefs.js";
-import { deltasRenderableIn, renderDeltaLine } from "./render-shared.js";
+import { deltasRenderableIn, kindBadge, renderDeltaLine } from "./render-shared.js";
 import { pageChrome } from "./chrome.js";
 import {
   deriveHeadline,
+  deriveSubline,
   renderDegradedBadge,
+  renderExcerpt,
   renderProvenance,
   renderSourceKey,
 } from "./render-index.js";
@@ -85,7 +88,7 @@ export function addInlineArcLinks(html, sections, topicArcs, strings, token, lan
 // the article) — the SAME order .digest > h2's own CSS-counter badges will
 // number the actual sections in, so the two numberings always agree without
 // sharing any markup.
-export function renderToc(sections) {
+export function renderToc(sections, strings) {
   if (sections.length < 2) return "";
   const chips = sections
     .map(
@@ -93,44 +96,44 @@ export function renderToc(sections) {
         `<a href="#${s.id}"><span class="tocnum">${String(i + 1).padStart(2, "0")}</span>${esc(s.title)}</a>`,
     )
     .join("\n");
-  return `<nav class="toc">${chips}</nav>\n`;
+  // The expand/collapse-all button rides inside the nav (it acts on the
+  // folded sections the pills point at). `hidden` until the client behaviour
+  // un-hides it: without JS a button that does nothing must not show.
+  return `<nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}
+<button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></nav>\n`;
 }
 
-// Story-arc line (ingest v3, roadmap 4 step 8): the digest page's per-topic
-// thread summary, built from handleDigestPage's topicArcs — null (no topics
-// on this digest, query never ran) or an empty array both render "", same
-// absent-data contract as renderDegradedBadge/renderSourceKey. A topic with
-// count 1 (seen only in this digest) renders as the bare label; count >= 2
-// appends the "×N this week" suffix via strings.arcRepeat's template
-// replace — see the STRINGS comment for why that's a whole-string template,
-// not hand-composed pieces.
+// Story-thread pills (ingest v3, roadmap 4 step 8; now the hero's pill row):
+// the digest page's per-topic thread summary, built from handleDigestPage's
+// topicArcs — null (no topics on this digest, query never ran), an empty
+// array, or no recurring topic all render "", same absent-data contract as
+// renderDegradedBadge/renderSourceKey. Only count >= 2 topics get a pill,
+// each carrying the "×N this week" suffix as a .pillcount span via
+// strings.arcRepeat's template replace — see the STRINGS comment for why
+// that's a whole-string template, not hand-composed pieces.
 //
-// Each recurring chip is now a LINK to that slug's arc page (§11.1 PR A) —
+// Each recurring pill is a LINK to that slug's arc page (§11.1 PR A) —
 // `token`/`lang` are needed for arcHref, alongside the strings this function
 // already took. Each topic entry carries its own `slug` since handleDigestPage
 // started threading it through (see there) specifically so this could link.
 export function renderArcs(topicArcs, strings, token, lang) {
   if (!topicArcs || topicArcs.length === 0) return "";
-  // RECURRING topics only (count >= 2) — this is what the roadmap 4 step 8
-  // spec always said ("topics that ALSO appeared in the prior 7 days"), and
-  // the first live digest showed why (owner-reported, 2026-08-09): topics
-  // derive from section headings, so a single-appearance topic's chip is a
-  // shouted duplicate of the TOC chip right below it. A digest whose topics
-  // are all first appearances gets no arc line at all — nothing is
-  // continuing, so there is no thread to point at.
+  // RECURRING topics only (count >= 2): a single-appearance topic's pill
+  // would just echo a section title the section nav already shows. A digest
+  // whose topics are all first appearances gets no pill row at all.
   const recurring = topicArcs.filter(({ count }) => count >= 2);
   if (recurring.length === 0) return "";
   // href targets arc IDENTITY (key when present, else slug — see
-  // arcIdentity), never the raw per-digest slug: the chip must link to the
+  // arcIdentity), never the raw per-digest slug: the pill must link to the
   // SAME arc page every appearance of this story links to, regardless of
   // how this digest's own heading happened to be worded.
-  const chips = recurring
+  const pills = recurring
     .map(
       ({ identity, label, count }) =>
-        `<a class="arc" href="${arcHref(token, lang, identity)}"><span class="arclabel">${esc(label)}</span><span class="arccount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
+        `<a class="threadpill" href="${arcHref(token, lang, identity)}">${esc(label)} <span class="pillcount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
     )
     .join("");
-  return `<nav class="arcs" aria-label="${esc(strings.arcsLabel)}">${chips}</nav>\n`;
+  return `<nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pills}</nav>`;
 }
 
 export function renderDeltas(deltas, topicArcs, strings, token, lang) {
@@ -195,6 +198,7 @@ export function renderDigestPage(
   topicArcs,
   deltas,
   appVersion = null,
+  earlierEditions = [],
 ) {
   const strings = STRINGS[lang];
   const date = new Date(digest.created_at);
@@ -211,14 +215,29 @@ export function renderDigestPage(
   // the full weekday/date is already visible in the phone head's own
   // issue line above (see pageChrome), so it's dropped here rather
   // than repeated twice on the same page.
-  const stamp = `${kindLabel} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${digest.item_count} ${strings.itemsWord} · ${digest.section_count} ${strings.sectionsWord}`;
+  // Spatial Glass: the hero chip carries the day too (the header's issue
+  // line sits in the bar, the chip is what a screenshot shows), and the
+  // "digest" placeholder kind is left out rather than printed as a label.
+  const chip = [
+    digest.kind === "daily" || digest.kind === "weekly" ? kindLabel : null,
+    formatShortDate(date, strings.locale),
+    `${formatTime(date, strings.locale)} ${tzAbbr(date)}`,
+    `${digest.item_count} ${strings.itemsWord}`,
+    `${digest.section_count} ${strings.sectionsWord}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // Derived h1 headline (Front Page redesign): digest.tldr is an already-
   // selected column that renderDigestPage never rendered directly before
   // this — the article's own embedded TL;DR paragraph (body_html's
   // `.tldr` div, restyled as the leader right below this headline, see the
   // CSS) already carries the full text, so deriving a short title from the
   // SAME source here adds a headline without duplicating any content.
-  const headline = deriveHeadline(digest.tldr);
+  // HU page: the translated TL;DR when the app sent one, same choice the
+  // body makes (a HU page that fell back to the English body keeps English).
+  const tldrText = lang === "hu" && digest.tldr_hu ? digest.tldr_hu : digest.tldr;
+  const headline = deriveHeadline(tldrText);
+  const subline = deriveSubline(tldrText);
   // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
   // browser tab/history width is tight, and the token never appears here.
   // pageChrome esc()s the whole composed string before inserting it.
@@ -284,7 +303,7 @@ export function renderDigestPage(
   // TOC ids are injected into the themed html (see buildSectionToc), so
   // the <article> below renders the id-bearing version, not the original.
   const { html: articleHtmlWithIds, sections } = buildSectionToc(articleHtmlThemed);
-  const tocHtml = renderToc(sections);
+  const tocHtml = renderToc(sections, strings);
 
   // Inline per-section arc links (this feature, addInlineArcLinks): only
   // when `sections` is actually the English heading text topics.label was
@@ -297,7 +316,11 @@ export function renderDigestPage(
 
   // Separate pass, one job each (see addCiteTitles): citation chips gain a
   // hover title naming their destination hostname.
-  const articleHtmlFinal = addCiteTitles(articleHtmlWithArcs);
+  const articleHtmlTitled = addCiteTitles(articleHtmlWithArcs);
+
+  // Last: fold each section into a <details> (fail-safe, returns its input
+  // untouched on any shape surprise — see foldSections).
+  const articleHtmlFinal = foldSections(articleHtmlTitled, sections.length, strings);
 
   // Same links, top and bottom: after an ~900-word read the natural gesture
   // is older/next, not scroll-to-top (roadmap step 2) — mirror the nav below
@@ -335,30 +358,46 @@ export function renderDigestPage(
       ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}</summary><div class="colophonbody">${sourceKeyHtml}${provenanceHtml}</div></details>`
       : "";
 
-  // Story-arc line (roadmap 4 step 8): renders "" on a digest with no topics
-  // — see renderArcs and the topicArcs computation in handleDigestPage. Each
-  // recurring chip links to that slug's arc page (§11.1 PR A).
+  // Story-thread pills (roadmap 4 step 8): "" on a digest with no recurring
+  // topics — see renderArcs and the topicArcs computation in
+  // handleDigestPage. Each pill links to that arc's page (§11.1 PR A).
   const arcsHtml = renderArcs(topicArcs, strings, token, lang);
 
   // "What changed" block (§11.3 delta persistence, ingest v4): renders "" on
   // a digest with no deltas — see renderDeltas.
   const deltasHtml = renderDeltas(deltas, topicArcs, strings, token, lang);
 
-  // Order: crumbs -> edition header (eyebrow + derived h1) -> arc line ->
-  // what-changed block -> en-only note -> TOC -> article. The numbered TOC
-  // can't sit inside the article, AFTER the TL;DR-bearing leader paragraph,
-  // as the detail prototype has it — the TL;DR callout is itself the FIRST
-  // element of body_html (see the .tldr CSS comment), and repositioning it
-  // relative to the rest of the article would mean parsing/rewriting
-  // arbitrary pre-sanitized HTML, real risk for a purely cosmetic ordering
-  // win — so the TOC keeps rendering above <article>, same position as
-  // before this redesign; deviation noted in the PR description.
+  // "Earlier" sidebar card: the editions just before this one (handler
+  // hands up to 4, newest first), headline-only so a reader can hop back
+  // without leaving the page. No rows -> no card, but the sidebar itself is
+  // still passed so the settings panel sits in the desktop column.
+  const earlierRows = (earlierEditions ?? [])
+    .map((row) => {
+      const { rawText } = renderExcerpt(row, lang);
+      const d = new Date(row.created_at);
+      const meta = `${formatShortDate(d, strings.locale)} ${formatTime(d, strings.locale)} · ${row.item_count} ${strings.itemsWord}`;
+      return `<a class="earlierrow" href="${digestHref(token, lang, view, row.id)}"><span class="earliermeta">${esc(meta)}${kindBadge(row, view, strings)}</span><span class="earliertitle">${esc(deriveHeadline(rawText))}</span></a>`;
+    })
+    .join("");
+  const sidebarHtml = earlierRows
+    ? `<section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">${esc(strings.earlierLabel)}</h2>${earlierRows}</section>`
+    : "";
+
+  // Order: nav pills -> hero (chip, h1, subline, thread pills) -> what-
+  // changed block -> en-only note -> section nav -> article (banner, TL;DR
+  // card, attention, folded sections) -> colophon -> bottom nav. The section
+  // nav can't sit inside the article, AFTER the TL;DR: that callout is itself
+  // the FIRST element of body_html (see the .tldr CSS comment), and
+  // repositioning it would mean rewriting arbitrary pre-sanitized HTML for a
+  // purely cosmetic win — so the nav keeps rendering above <article>.
   const body = `<nav class="digestnav">${digestNavLinksHtml}</nav>
-<header class="edhead">
-  <p class="stamp">${esc(stamp)}</p>
-  <h1>${esc(headline)}</h1>
+<header class="hero hero-digest">
+  <span class="herochip">${esc(chip)}</span>
+  <h1 class="herotitle">${esc(headline)}</h1>
+  ${subline ? `<p class="herosub">${esc(subline)}</p>` : ""}
+  ${arcsHtml}
 </header>
-${arcsHtml}${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
+${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
 ${articleHtmlFinal}
 </article>
 ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>`;
@@ -378,13 +417,13 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     showSearch: true,
     appVersion,
     bodyHtml: body,
+    sidebarHtml,
     title: pageTitle,
     // The bar's .barback arrow replaces the old floating .backfab: same
     // target (this view's index), same label.
     backHref: indexHref(token, lang, view),
     // Same issue-line slot the index fills — the digest's own edition
-    // number and full date (the date the edhead eyebrow deliberately
-    // dropped lives here now, one line, one place).
+    // number and full date (the hero chip repeats only the short date).
     issueLineText: `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
   });
 }

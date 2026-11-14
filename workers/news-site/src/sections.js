@@ -87,7 +87,7 @@ export function buildSectionToc(articleHtml) {
 // buildSectionToc (one job each), run right after it in renderDigestPage —
 // not folded into that function even though both walk the same articleHtml.
 //
-// The regex matches the exact shape body_html's citation chips arrive in
+// The regex matches the shape body_html's citation chips arrive in
 // (nh3-sanitized upstream, hrefs are exact copies of allowlisted item
 // URLs); anything that doesn't match that shape is left alone. `new URL()`
 // inside try/catch fails safe: an unparseable href leaves the tag
@@ -96,7 +96,12 @@ export function buildSectionToc(articleHtml) {
 // a URL, but escaping again is free. A leading "www." is stripped for a
 // slightly cleaner display string.
 export function addCiteTitles(html) {
-  return html.replace(/<a class="cite" href="([^"]*)">/g, (match, href) => {
+  // `([^>]*)` after the href: production chips are `<a class="cite"
+  // href="…" rel="noopener noreferrer">` (nh3 appends rel), and the old
+  // closing-`">`-only shape never matched them, so no title ever appeared.
+  // The trailing attributes are re-emitted untouched, title goes after them.
+  return html.replace(/<a class="cite" href="([^"]*)"([^>]*)>/g, (match, href, rest) => {
+    if (/\stitle=/.test(rest)) return match; // already titled: never duplicate
     let hostname;
     try {
       hostname = new URL(href).hostname;
@@ -104,8 +109,90 @@ export function addCiteTitles(html) {
       return match; // unparseable href: leave the tag untouched, fail safe
     }
     const display = hostname.replace(/^www\./, "");
-    return `<a class="cite" href="${href}" title="${esc(display)}">`;
+    return `<a class="cite" href="${href}"${rest} title="${esc(display)}">`;
   });
+}
+
+const FOLD_BLOCK_TAGS = ["p", "ul", "ol", "div", "blockquote", "table"];
+
+// True when every block tag opens and closes equally often in `segment`.
+// Fold wraps segments in new containers, so a stray unclosed <p>/<div> would
+// swallow the next section's chrome; counting is crude but errs toward
+// refusing, which is the safe direction.
+function blocksBalanced(segment) {
+  return FOLD_BLOCK_TAGS.every((tag) => {
+    const open = (segment.match(new RegExp(`<${tag}(?=[\\s>])`, "g")) ?? []).length;
+    const close = (segment.match(new RegExp(`</${tag}>`, "g")) ?? []).length;
+    return open === close;
+  });
+}
+
+// One-line teaser for a folded section: first paragraph's text, citation
+// chips dropped (their superscript digits read as noise), tags stripped but
+// entities left escaped — the source is already-sanitized html, so the text
+// stays valid to re-insert as-is. Cut at a word boundary, never inside an
+// `&entity;`.
+function sectionPreview(chunk, max = 140) {
+  const p = chunk.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/);
+  if (!p) return "";
+  const text = p[1]
+    .replace(/<a class="cite"[^>]*>[\s\S]*?<\/a>/g, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max);
+  const amp = cut.lastIndexOf("&");
+  if (amp > cut.lastIndexOf(";")) cut = cut.slice(0, amp);
+  const space = cut.lastIndexOf(" ");
+  if (space > 0) cut = cut.slice(0, space);
+  return `${cut.replace(/[\s,;:.\-–—]+$/, "")}…`;
+}
+
+// Folded sections (Spatial Glass digest page): each `<h2 id="sN">` + its
+// content becomes a native <details class="sec"> — first one open, the rest
+// collapsed to title + teaser + source count. Last pass, after
+// addInlineArcLinks/addCiteTitles, so it only re-wraps markup those passes
+// finished; the h2 elements (and their #sN ids) are carried over byte-for-
+// byte, so buildSectionToc's anchors and the arc deep links still resolve.
+//
+// `.secarc` (inserted right after an h2) needs no special move: the h2 goes
+// into <summary>, the link stays first in .secbody — interactive content
+// inside <summary> is an accessibility problem.
+//
+// Everything before the first h2 (banner, .tldr, .attention) and the closing
+// p.foot stay outside any <details>. Fail-safe: any unbalanced segment, any
+// stray <h2>, or a count differing from the TOC's returns `html` unchanged.
+export function foldSections(html, sectionCount, strings) {
+  const heads = [...html.matchAll(/<h2 id="s\d+">[^<]*<\/h2>/g)];
+  if (heads.length === 0 || heads.length !== sectionCount) return html;
+  if ((html.match(/<h2[\s>]/g) ?? []).length !== heads.length) return html;
+
+  const pre = html.slice(0, heads[0].index);
+  const chunks = heads.map((h, i) =>
+    html.slice(h.index + h[0].length, i + 1 < heads.length ? heads[i + 1].index : html.length),
+  );
+  let tail = "";
+  const foot = chunks[chunks.length - 1].match(/\s*<p class="foot">[\s\S]*?<\/p>\s*$/);
+  if (foot) {
+    tail = foot[0];
+    chunks[chunks.length - 1] = chunks[chunks.length - 1].slice(0, foot.index);
+  }
+  if (![pre, tail, ...chunks].every(blocksBalanced)) return html;
+
+  const secs = heads.map((h, i) => {
+    const preview = sectionPreview(chunks[i]);
+    const cites = (chunks[i].match(/<a class="cite"/g) ?? []).length;
+    return (
+      `<details class="sec"${i === 0 ? " open" : ""}><summary class="sechead">${h[0]}` +
+      (preview ? `<span class="secpreview">${preview}</span>` : "") +
+      (cites
+        ? `<span class="seccount">${esc((cites === 1 ? strings.sourceCountOne : strings.sourceCount).replace("{n}", String(cites)))}</span>`
+        : "") +
+      `</summary><div class="secbody">${chunks[i]}</div></details>`
+    );
+  });
+  return `${pre}${secs.join("\n")}${tail}`;
 }
 
 // Remove every style="…" attribute from the article html — see the call

@@ -73,6 +73,8 @@ export const STRINGS = {
     weekLabel: "Week {w} · {range}",
     // Digest-page source key label (rendered uppercase via .sklabel's CSS).
     sourcesLabel: "Sources",
+    sourceCount: "{n} sources",
+    sourceCountOne: "{n} source",
     // Model-provenance row ("Written by"/"Translated with" byline, both
     // rendered uppercase via the same .sklabel CSS as sourcesLabel above):
     // two lines, one label each — see renderProvenance. provenanceLabel
@@ -327,6 +329,8 @@ export const STRINGS = {
     weekRailLabel: "Heti navigáció",
     weekLabel: "{w}. hét · {range}",
     sourcesLabel: "Források",
+    sourceCount: "{n} forrás",
+    sourceCountOne: "{n} forrás",
     // Owner: please review — new HU strings, model-provenance row, mirrors
     // sourcesLabel's pattern. provenanceLabel ("Írta") already meant
     // "written by" and needed no change for the two-line redesign.

@@ -166,15 +166,81 @@ test("day headers are an ALL-view affordance; daily/weekly flow flat", async () 
 
 test("index EN: NOW section, week rail, degraded badge, kind badges", async () => {
   const { html } = await page("");
-  assert.match(html, /class="now"/, "NOW section (2-appearance arc via stable key)");
+  assert.match(html, /class="sidecard now"/, "NOW card (2-appearance arc via stable key)");
   assert.match(html, /class="weekrail"/, "week rail");
   assert.match(html, /flag-degraded/, "degraded badge from failed_sources");
   assert.match(html, /flag-daily/, "daily/weekly kind badge");
 });
 
-test("digest 235 EN: arcs line, what-changed block, source key, stripped styles, cite titles", async () => {
+test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail after ledger", async () => {
+  const { html } = await page("");
+  const hero = html.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0] ?? "";
+  assert.ok(hero, "hero section");
+  const lead = hero.match(/<a class="entry entry-lead herolink"[^>]*>/)?.[0] ?? "";
+  assert.match(lead, /data-id="235"/, "lead keeps the client hooks (data-id)");
+  assert.match(lead, /data-created="2026-08-25T14:00:00Z"/, "lead keeps data-created");
+  assert.match(
+    hero,
+    /<h1 class="herotitle headline-lead">Markets slid[^<]*<\/h1>/,
+    "headline is h1",
+  );
+  const sub = hero.match(/<p class="herosub[^"]*">([^<]*)<\/p>/)?.[1];
+  assert.ok(sub && !sub.startsWith("Markets slid"), "subline is present and not the headline");
+  assert.equal(sub, "12 items · 3 sections", "single-sentence TL;DR falls back to the counts");
+  assert.ok(!html.includes('class="leadfacts"'), "old facts column is gone");
+  assert.match(hero, /class="livedot" aria-hidden="true"/, "live dot");
+  assert.match(hero, /<a class="herocta" href="[^"]*\/d\/235[^"]*">Read the edition →<\/a>/, "CTA");
+  // Fixture lead 235 has topics: the keyed arc (key markets-slide) and a slug-only one.
+  assert.match(
+    hero,
+    /<a class="threadpill" href="[^"]*markets-slide[^"]*">Markets slide continues<\/a>/,
+  );
+  assert.match(
+    hero,
+    /<a class="threadpill" href="[^"]*eu-agrees-new-package[^"]*">EU agrees new package<\/a>/,
+  );
+
+  const aside = html.match(/<aside class="side"[\s\S]*?<\/aside>/)?.[0] ?? "";
+  assert.match(
+    aside,
+    /<section class="sidecard now"[^>]*><h2 id="nowhead" class="sidehead">Now<\/h2>/,
+  );
+  assert.match(aside, /id="settings"/, "settings panel rides in the sidebar");
+  assert.ok(!/<main[^>]*>[\s\S]*class="now"[\s\S]*<\/main>/.test(html), "NOW left the main column");
+
+  const ledgerEnd = html.indexOf("</section>", html.indexOf("data-unread-label"));
+  assert.ok(html.indexOf('class="weekrail"') > ledgerEnd, "week rail follows the ledger");
+  assert.ok(
+    html.indexOf('class="weekrail"') < html.indexOf("</main>"),
+    "rail ends the main column",
+  );
+});
+
+test("index hero: daily view fetches the lead's threads; HU hero uses HU text", async () => {
+  const daily = (await page("daily/")).html;
+  assert.match(daily, /<section class="hero"/, "daily view has a hero");
+  assert.ok(!daily.includes("threadpill"), "daily lead (233) has no topics: CTA only");
+  assert.match(daily, /class="herocta"/);
+
+  const hu = (await page("hu/")).html;
+  assert.match(hu, /<h1 class="herotitle headline-lead">A piacok második napja estek/);
+  assert.match(hu, /<p class="herosub[^"]*">12 elem · 3 szakasz<\/p>/, "HU subline");
+  assert.match(hu, /class="herocta"[^>]*>A kiadás elolvasása →/);
+});
+
+test("deriveSubline: text after the first sentence, clamped at a word boundary", async () => {
+  const { deriveSubline } = await import("../src/render-index.js");
+  assert.equal(deriveSubline("One sentence only."), "");
+  assert.equal(deriveSubline("TL;DR: First. Second part here."), "Second part here.");
+  const long = `Head. ${"word ".repeat(80)}`;
+  const out = deriveSubline(long);
+  assert.ok(out.endsWith("…") && out.length <= 221, "clamped with an ellipsis");
+  assert.ok(!out.slice(0, -1).endsWith("wor"), "clipped on a word boundary");
+});
+
+test("digest 235 EN: thread pills, what-changed block, source key, stripped styles, cite titles", async () => {
   const { html } = await page("d/235");
-  assert.match(html, /class="arc"/, "story-arc chip (recurring topic)");
+  assert.match(html, /class="threadpill"/, "story-thread pill (recurring topic)");
   assert.match(html, /class="deltas"/, "what-changed block from deltas");
   assert.match(html, /class="sourcekey"/, "source key colophon");
   assert.match(html, /sk-failed/, "failed source pill in the source key");
@@ -232,7 +298,7 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
     const { html } = await page(path);
     assert.match(
       html,
-      /<h2 id="s1">[^<]*<\/h2>(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>\s*<h2 id="s2">/,
+      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>\s*<\/div><\/details>\s*<details class="sec"><summary class="sechead"><h2 id="s2">/,
       `${path}: section 1 has two paragraphs then a list`,
     );
     assert.match(
@@ -246,13 +312,10 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
       `${path}: failure banner`,
     );
     assert.match(html, /<span class="tldr-label">[^<]+<\/span>/, `${path}: tldr-label span`);
-    // Production shape: nh3 puts `rel` AFTER `href`. NOTE addCiteTitles only
-    // matches `<a class="cite" href="…">` (no rel), so on this shape it adds NO
-    // title today — this asserts the chip as emitted, and must be revisited
-    // when that regex is fixed (the title would then appear here).
+    // Production shape: nh3 puts `rel` AFTER `href`; addCiteTitles must still title it.
     assert.match(
       html,
-      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer">²<\/a>/,
+      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer" title="example\.com">²<\/a>/,
       `${path}: cite chip rendered, inline style stripped`,
     );
     assert.ok(!/<h2 id="s4"/.test(html), `${path}: callout is not numbered as a section`);
@@ -452,6 +515,66 @@ test("arc page: chain of 2, momentum, context primer, per-appearance delta", asy
   assert.match(html, /Markets slide, day two/, "earlier appearance (different slug, same key)");
   assert.match(html, /class="arccontext"/, "context primer disclosure");
   assert.match(html, /deltaprev/, "appearance-level delta markup");
+});
+
+function countMatches(html, re) {
+  return (html.match(re) || []).length;
+}
+
+test("arc page: centred hero, timeline newest-first, primer kept", async () => {
+  for (const [path, kicker] of [
+    ["a/markets-slide", "Story thread"],
+    ["hu/a/markets-slide", "Történetszál"],
+  ]) {
+    const { html } = await page(path);
+    assert.equal(countMatches(html, /<h1[\s>]/g), 1, `${path}: exactly one h1`);
+    assert.match(
+      html,
+      /<header class="hero archead"><span class="herochip">[^<]*<\/span><h1 class="herotitle arctitle" data-arc-slug="[^"]+"/,
+    );
+    assert.ok(html.includes(`<span class="herochip">${kicker} · `), `${path}: chip kicker`);
+    assert.match(html, /class="arccontext"/, "background primer still rendered");
+    assert.equal(countMatches(html, /<ol class="timeline">/g), 1);
+    const items = [...html.matchAll(/<li class="tlitem( tlitem-latest)?">/g)];
+    assert.ok(items.length >= 2);
+    assert.ok(items[0][1], "newest appearance carries tlitem-latest");
+    assert.equal(countMatches(html, /tlitem-latest/g), 1, "only one latest item");
+    const latestAt = html.indexOf("Markets slide continues");
+    const olderAt = html.indexOf("Markets slide, day two");
+    assert.ok(html.indexOf("tlitem-latest") < olderAt && latestAt < olderAt, "newest first");
+  }
+});
+
+test("search page: hero h1, form intact, marked results", async () => {
+  for (const [path, heading] of [
+    ["search?q=markets", "Search every edition"],
+    ["hu/search?q=markets", "Keresés minden kiadásban"],
+  ]) {
+    const { html } = await page(path);
+    assert.equal(countMatches(html, /<h1[\s>]/g), 1, `${path}: exactly one h1`);
+    assert.ok(html.includes(`<h1 class="herotitle">${heading}</h1>`), `${path}: heading`);
+    assert.match(
+      html,
+      /<form class="searchform"[\s\S]*?name="q"[\s\S]*?<button class="searchbtn" type="submit">/,
+    );
+    assert.match(html, /<mark>/, "matched terms highlighted");
+  }
+  const empty = (await page("search")).html;
+  assert.equal(countMatches(empty, /<h1[\s>]/g), 1);
+  assert.match(empty, /class="searchbtn"/);
+});
+
+test("about page: one h1 and one card per section", async () => {
+  for (const [path, label] of [
+    ["about", "About"],
+    ["hu/about", "Névjegy"],
+  ]) {
+    const { html } = await page(path);
+    assert.equal(countMatches(html, /<h1[\s>]/g), 1, `${path}: exactly one h1`);
+    assert.ok(html.includes(`<h1 class="herotitle">${label}</h1>`));
+    // what / rhythm / reading + the caveat
+    assert.equal(countMatches(html, /<section class="aboutcard">/g), 4);
+  }
 });
 
 test("unknown arc identity 404s indistinguishably", async () => {
@@ -1334,4 +1457,157 @@ test("the density miniseg is index-only and replaces the old toggle", async () =
     assert.equal(count(html, /miniseg-density/g), isIndex ? 1 : 0, `${name}: density miniseg`);
     assert.ok(!html.includes("densitytoggle"), `${name}: no densitytoggle`);
   }
+});
+
+// ── Spatial Glass digest page: hero, folded sections, sidebar ─────────────
+
+const stripTags = (h) => h.replace(/<[^>]*>/g, "");
+
+test("digest hero: chip, headline, thread pills; subline differs from the headline", async () => {
+  const { html } = await page("d/235");
+  const hero = html.match(/<header class="hero hero-digest">[\s\S]*?<\/header>/)?.[0];
+  assert.ok(hero, "hero header present");
+  assert.ok(!html.includes('class="edhead"'), "old edhead is gone");
+  assert.ok(!html.includes('<nav class="arcs"'), "old arcs line is gone");
+  assert.match(hero, /<span class="herochip">[^<]*12 items · 3 sections<\/span>/, "chip counts");
+  assert.match(hero, /<h1 class="herotitle">[^<]+<\/h1>/, "headline");
+  assert.match(
+    hero,
+    /<a class="threadpill" href="\/t\/goldentesttoken\/a\/markets-slide">[^<]*<span class="pillcount">×2 this week<\/span><\/a>/,
+    "thread pill links to the arc page and keeps the repeat count",
+  );
+  assert.match(html, /aria-label="Story threads"/, "pills nav is labelled");
+  // Subline (HU digest has a multi-sentence-free fixture, so assert the
+  // helper contract directly).
+  const { deriveSubline, deriveHeadline } = await import("../src/render-index.js");
+  const tldr = "Markets slid for a second day. The EU package landed overnight, gated on reforms.";
+  assert.equal(deriveHeadline(tldr), "Markets slid for a second day.");
+  assert.equal(deriveSubline(tldr), "The EU package landed overnight, gated on reforms.");
+});
+
+test("digest sections: section nav, expand-all button, folded details", async () => {
+  for (const path of ["d/235", "hu/d/235"]) {
+    const { html } = await page(path);
+    assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
+    assert.match(
+      html,
+      /<button type="button" class="expandall" hidden data-expand="[^"]+"/,
+      `${path}: expand-all`,
+    );
+    assert.equal(
+      (html.match(/<details class="sec"/g) ?? []).length,
+      3,
+      `${path}: 3 folded sections`,
+    );
+    assert.equal((html.match(/<details class="sec" open>/g) ?? []).length, 1, `${path}: one open`);
+    assert.match(
+      html,
+      /<details class="sec" open><summary class="sechead"><h2 id="s1">/,
+      `${path}: first is open`,
+    );
+    for (const n of [1, 2, 3]) {
+      assert.match(
+        html,
+        new RegExp(`<summary class="sechead"><h2 id="s${n}">`),
+        `${path}: s${n} in summary`,
+      );
+      assert.match(html, new RegExp(`<a href="#s${n}">`), `${path}: toc link s${n}`);
+    }
+    const summaries = html.match(/<summary class="sechead">[\s\S]*?<\/summary>/g);
+    assert.ok(
+      summaries.every((x) => !x.includes("<a ")),
+      `${path}: no links inside summaries`,
+    );
+    assert.ok(
+      !html.includes('<summary class="sechead"><h2 id="s1">Markets slide continues</h2><a'),
+      "secarc not adjacent",
+    );
+    // Outside the folds: banner, tldr, attention before the first <details>; foot after the last.
+    const art = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
+    const firstFold = art.indexOf('<details class="sec"');
+    const lastFold = art.lastIndexOf("</details>");
+    for (const marker of ['class="banner"', 'class="tldr"', 'class="attention"']) {
+      const at = art.indexOf(marker);
+      assert.ok(at > -1 && at < firstFold, `${path}: ${marker} before the folds`);
+    }
+    assert.ok(art.indexOf('class="foot"') > lastFold, `${path}: foot after the folds`);
+    const previews = [...art.matchAll(/<span class="secpreview">([^<]*)<\/span>/g)].map(
+      (m) => m[1],
+    );
+    assert.equal(previews.length, 3, `${path}: preview per section`);
+    assert.ok(
+      previews.every((t) => t.length > 0 && t.length <= 141),
+      `${path}: previews clamped`,
+    );
+  }
+  const { html } = await page("d/235");
+  const secarc = html.match(/<div class="secbody"><a class="secarc"[^>]*>/);
+  assert.ok(secarc, "secarc leads the section body");
+});
+
+test("addCiteTitles: production shape (rel after href) gets a title; bad href untouched", async () => {
+  const { addCiteTitles } = await import("../src/sections.js");
+  assert.equal(
+    addCiteTitles(
+      '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer">¹</a>',
+    ),
+    '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer" title="example.com">¹</a>',
+  );
+  assert.equal(
+    addCiteTitles('<a class="cite" href="https://example.org/y">²</a>'),
+    '<a class="cite" href="https://example.org/y" title="example.org">²</a>',
+  );
+  const bad = '<a class="cite" href="not a url" rel="noopener">³</a>';
+  assert.equal(addCiteTitles(bad), bad, "unparseable href fails safe");
+});
+
+test("foldSections: folds a normal body, refuses unbalanced or miscounted ones", async () => {
+  const { foldSections, buildSectionToc } = await import("../src/sections.js");
+  const { STRINGS } = await import("../src/strings.js");
+  const strings = STRINGS.en;
+  const body =
+    '<p class="banner">b</p><div class="tldr">t</div><h2>One</h2><a class="secarc" href="/x">arc</a><p>Hello &amp; welcome ' +
+    "word ".repeat(60) +
+    '<a class="cite" href="https://e.com/">¹</a></p><h2>Two</h2><p>Second.</p><p class="foot">f</p>';
+  const { html, sections } = buildSectionToc(body);
+  const folded = foldSections(html, sections.length, strings);
+  assert.notEqual(folded, html);
+  assert.equal(folded.match(/<details class="sec" open>/g).length, 1);
+  assert.equal(folded.match(/<details class="sec">/g).length, 1);
+  assert.deepEqual(
+    folded.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
+    html.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
+    "h2 ids identical",
+  );
+  assert.ok(folded.indexOf('class="tldr"') < folded.indexOf("<details"), "tldr outside");
+  assert.ok(folded.indexOf('class="foot"') > folded.lastIndexOf("</details>"), "foot outside");
+  assert.match(folded, /<span class="seccount">1 source<\/span>/);
+  assert.match(
+    folded,
+    /<span class="secpreview">Hello &amp; welcome word[^<]*…<\/span>/,
+    "entity kept, clamped",
+  );
+  assert.ok(!/&[a-z]*…/.test(folded), "never cut inside an entity");
+  assert.ok(
+    !/<summary[^>]*>[^]*?<a /.test(folded.match(/<summary[\s\S]*?<\/summary>/)[0]),
+    "no link in summary",
+  );
+
+  const unbalanced = html.replace("<p>Second.</p>", "<p>Second.");
+  assert.equal(foldSections(unbalanced, sections.length, strings), unbalanced);
+  assert.equal(foldSections(html, sections.length + 1, strings), html, "count mismatch refuses");
+});
+
+test("digest sidebar: Earlier card from the widened older query; nav link unchanged", async () => {
+  const { html } = await page("d/235");
+  const card = html.match(/<section class="sidecard earlier"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(card, "earlier card");
+  assert.match(card, /<h2 id="earlierhead" class="sidehead">Earlier<\/h2>/);
+  const rows = card.match(/<a class="earlierrow"/g);
+  assert.ok(rows.length >= 1 && rows.length <= 4, "1..4 rows");
+  assert.match(card, /<span class="earliermeta">[^<]*items/, "meta line");
+  assert.match(card, /<span class="earliertitle">[^<]+<\/span>/, "derived headline");
+  const older = html.match(/<a class="nav-older" href="([^"]+)"/)[1];
+  assert.ok(card.includes(`href="${older}"`), "row 0 is the same edition the older link targets");
+  assert.ok(stripTags(card).length > 0);
 });

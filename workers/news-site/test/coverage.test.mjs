@@ -35,10 +35,6 @@ export const JS_ONLY_HOOKS = {
     "deliberately no override: muted stays muted, the warning glyph is the marker (see css.js comment)",
   "sk-fallback":
     "deliberately no override: muted stays muted, the arrow glyph is the marker (see css.js comment)",
-  // Structural wrapper inside the lead card with no rule of its own today.
-  // Not a JS hook: the redesign may want to style it (or drop it).
-  leadmain:
-    "plain wrapper div around meta/headline/excerpt in the lead card; unstyled by design today",
 };
 
 const CLASS_RE = /^[A-Za-z_][\w-]*$/;

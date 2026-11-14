@@ -16,6 +16,8 @@ import { pageChrome } from "./chrome.js";
 import {
   computeNowArcs,
   renderDegradedBadge,
+  leadThreadsFromNowRows,
+  leadThreadsFromTopicsJson,
   renderIndexPage,
   renderSourceKey,
 } from "./render-index.js";
@@ -169,6 +171,8 @@ export async function handleIndexPage(env, token, url, lang, view, weekParam) {
   // from nowArcs.length would wrongly suppress the banner shell then.
   const showCatchup = view === "all" && weekParam === null;
   let nowArcs = [];
+  let nowRows = null;
+  let nowWindowStartIso = null;
   const nowMs = Date.now();
   if (view === "all" && weekParam === null) {
     // One query, JS-side aggregation (see computeNowArcs's comment for why
@@ -178,13 +182,13 @@ export async function handleIndexPage(env, token, url, lang, view, weekParam) {
     // expected to re-rank on every visit, unlike a digest's own reproducible
     // arc line (contrast handleDigestPage's topicArcs windowStartIso, which
     // anchors at the digest's own created_at instead).
-    const nowWindowStartIso = new Date(nowMs - 7 * 24 * 3600000).toISOString();
+    nowWindowStartIso = new Date(nowMs - 7 * 24 * 3600000).toISOString();
     // `identity` (stable arc keys, ARC_IDENTITY_SQL) is what computeNowArcs
     // actually groups by — the fix for the bug this section exists to solve:
     // a story recurring under several differently-worded (and therefore
     // differently-slugged) headings now clusters into ONE arc instead of
     // several never-eligible 1-appearance ones.
-    const { results: nowRows } = await env.DB.prepare(
+    const { results } = await env.DB.prepare(
       `SELECT je.value->>'label' AS label, ${ARC_IDENTITY_SQL} AS identity, d.created_at, d.id
          FROM digests d, json_each(d.topics) je
         WHERE d.topics IS NOT NULL AND d.created_at >= ?1
@@ -192,7 +196,27 @@ export async function handleIndexPage(env, token, url, lang, view, weekParam) {
     )
       .bind(nowWindowStartIso)
       .all();
-    nowArcs = computeNowArcs(nowRows ?? [], nowMs);
+    nowRows = results ?? [];
+    nowArcs = computeNowArcs(nowRows, nowMs);
+  }
+
+  // Hero story-thread pills: the hero is the newest row of a CURRENT view
+  // (renderIndexPage's isCurrent gate — an archive week has no hero, so no
+  // query). When the NOW query above already covers the lead's created_at its
+  // rows ARE the lead's topics (filter by id, free); otherwise (daily/weekly
+  // views, an explicit w/ address for the current week, a lead older than the
+  // window) one extra single-row read fetches them.
+  let leadArcs = [];
+  const lead = results?.[0];
+  if (lead && (weekInfo === null || weekInfo.isCurrentWeek)) {
+    if (nowRows && lead.created_at >= nowWindowStartIso) {
+      leadArcs = leadThreadsFromNowRows(nowRows, lead.id);
+    } else {
+      const leadTopics = await env.DB.prepare("SELECT topics FROM digests WHERE id = ?")
+        .bind(lead.id)
+        .first();
+      leadArcs = leadThreadsFromTopicsJson(leadTopics?.topics);
+    }
   }
 
   return htmlResponse(
@@ -207,6 +231,7 @@ export async function handleIndexPage(env, token, url, lang, view, weekParam) {
       nowMs,
       showCatchup,
       await appVersionP,
+      leadArcs,
     ),
   );
 }
@@ -355,12 +380,15 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
   // D1's SQLite is far newer.
   const kindFilter =
     view === "daily" ? " AND kind = 'daily'" : view === "weekly" ? " AND kind = 'weekly'" : "";
-  const [older, newer] = await Promise.all([
+  // Older side fetches 5: row 0 is the "older" nav link exactly as before,
+  // rows 0..3 feed the "Earlier" sidebar card (the 5th is slack so a future
+  // "more" link needs no second query shape).
+  const [{ results: olderRows }, newer] = await Promise.all([
     env.DB.prepare(
-      `SELECT id, created_at FROM digests WHERE (created_at, id) < (?, ?)${kindFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
+      `SELECT ${DIGEST_LIST_COLUMNS} FROM digests WHERE (created_at, id) < (?, ?)${kindFilter} ORDER BY created_at DESC, id DESC LIMIT 5`,
     )
       .bind(digest.created_at, id)
-      .first(),
+      .all(),
     env.DB.prepare(
       `SELECT id, created_at FROM digests WHERE (created_at, id) > (?, ?)${kindFilter} ORDER BY created_at ASC, id ASC LIMIT 1`,
     )
@@ -372,6 +400,7 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
   // no deltas — see parseDeltas and renderDeltas's own "absent-data"
   // contract, matching topics/source_counts elsewhere on this page.
   const deltas = parseDeltas(digest.deltas);
+  const older = olderRows[0] ?? null;
 
   return htmlResponse(
     renderDigestPage(
@@ -385,6 +414,7 @@ export async function handleDigestPage(env, token, idParam, url, lang, view) {
       topicArcs,
       deltas,
       await appVersionP,
+      olderRows.slice(0, 4),
     ),
   );
 }

@@ -133,6 +133,7 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
   // need SOME valid view to render against, and "all" is the closest
   // meaning — clicking "Daily" from here goes to the daily index, not to a
   // (nonexistent) daily-scoped search.
+  const heroHtml = `<header class="hero"><h1 class="herotitle">${esc(strings.searchHeading)}</h1></header>`;
   return pageChrome({
     host,
     token,
@@ -143,7 +144,7 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
     archiveWeek: null,
     showSearch: false,
     appVersion,
-    bodyHtml: `${formHtml}${resultsHtml}`,
+    bodyHtml: `${heroHtml}\n${formHtml}${resultsHtml}`,
     title: strings.searchLabel,
   });
 }
@@ -161,18 +162,19 @@ export function renderSearchPage(results, q, token, host, lang, appVersion = nul
 //     the honest-caveat paragraph at the end — same register that class
 //     already carries elsewhere, just applied here directly since this page
 //     has no body_html of its own to style through.
-// No new CSS at all, deliberately — every class below already exists.
+// Layout classes (.hero, .aboutcard) come from the shared Spatial Glass CSS.
 export function renderAboutPage(token, host, lang, appVersion = null) {
   const strings = STRINGS[lang];
-  const bodyHtml = `<div class="digest">
-    <h2>${esc(strings.aboutWhatTitle)}</h2>
-    <p>${esc(strings.aboutWhatBody)}</p>
-    <h2>${esc(strings.aboutRhythmTitle)}</h2>
-    <p>${esc(strings.aboutRhythmBody)}</p>
-    <h2>${esc(strings.aboutReadingTitle)}</h2>
-    <p>${esc(strings.aboutReadingBody)}</p>
-    <p class="closing">${esc(strings.aboutCaveat)}</p>
-  </div>`;
+  // One h1 (the hero); each section is a glass card whose heading stays an
+  // h2 inside .digest so the numbered-section styling still applies. The
+  // caveat has no heading of its own and gets its own card.
+  const bodyHtml = `<header class="hero"><h1 class="herotitle">${esc(strings.aboutLabel)}</h1></header>
+<div class="digest">
+  <section class="aboutcard"><h2>${esc(strings.aboutWhatTitle)}</h2><p>${esc(strings.aboutWhatBody)}</p></section>
+  <section class="aboutcard"><h2>${esc(strings.aboutRhythmTitle)}</h2><p>${esc(strings.aboutRhythmBody)}</p></section>
+  <section class="aboutcard"><h2>${esc(strings.aboutReadingTitle)}</h2><p>${esc(strings.aboutReadingBody)}</p></section>
+  <section class="aboutcard"><p class="closing">${esc(strings.aboutCaveat)}</p></section>
+</div>`;
   // Switchers/view: same "all"/"index" pageKind choice as renderSearchPage
   // just above, and for the same reason — the about page has no
   // daily/weekly/week variant of its own (see aboutHref), so the view tabs

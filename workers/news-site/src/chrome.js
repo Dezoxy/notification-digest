@@ -92,6 +92,11 @@ export function pageChrome({
   const first = brandFirst(host);
   const strings = STRINGS[lang];
   const homeHref = indexHref(token, lang, view);
+  // A page HAS a sidebar when it passes any string, empty included: the
+  // index and digest pages always want the settings panel in the sidebar on
+  // desktop, even when their own card (NOW / Earlier) has nothing to show.
+  // null (arc, search, about) means single-column, panel after the layout.
+  const hasSide = sidebarHtml !== null && sidebarHtml !== undefined;
   const settingsPanelHtml = renderSettingsPanel({
     token,
     lang,
@@ -223,11 +228,11 @@ ${prefetchScriptHtml}
     ${issueLineText ? `<div class="issueline">${esc(issueLineText)}</div>` : ""}
   </div>
   ${paletteConfigHtml}
-  <div class="layout${sidebarHtml ? " has-side" : ""}">
+  <div class="layout${hasSide ? " has-side" : ""}">
     <main class="maincol" id="main">${bodyHtml}</main>
-    ${sidebarHtml ? `<aside class="side" aria-label="${esc(strings.sidebarLabel)}">${sidebarHtml}${settingsPanelHtml}</aside>` : ""}
+    ${hasSide ? `<aside class="side" aria-label="${esc(strings.sidebarLabel)}">${sidebarHtml}${settingsPanelHtml}</aside>` : ""}
   </div>
-  ${sidebarHtml ? "" : settingsPanelHtml}
+  ${hasSide ? "" : settingsPanelHtml}
 </div>
 <script>
 ${CLIENT_SCRIPT}

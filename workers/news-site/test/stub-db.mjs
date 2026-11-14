@@ -10,6 +10,7 @@
 // comparison stands in for D1's TEXT ordering, which is the same trick the
 // real queries rely on).
 
+import assert from "node:assert/strict";
 import { DIGESTS, ARC_CONTEXTS, ARC_IDENTITY } from "./fixtures.mjs";
 
 const LIST_COLUMNS = [
@@ -259,6 +260,12 @@ export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {}, version
       return { all: async () => ({ results: rows }) };
     }
 
+    if (/SELECT topics FROM digests WHERE id = \?/.test(s)) {
+      // Hero thread pills for a lead outside the NOW window / on daily+weekly.
+      const row = DIGESTS.find((d) => d.id === Number(binds[0])) ?? null;
+      return { first: async () => (row ? { topics: row.topics } : null) };
+    }
+
     if (/SELECT topics FROM digests/.test(s)) {
       const [startIso, endIso, excludeId] = binds;
       const rows = DIGESTS.filter(
@@ -294,7 +301,16 @@ export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {}, version
         const cmp = d.created_at === ca ? d.id - id : d.created_at < ca ? -1 : 1;
         return older ? cmp < 0 : cmp > 0;
       }).sort(byCreatedDesc);
-      const row = older ? candidates[0] : candidates[candidates.length - 1];
+      if (older) {
+        // Widened older query: DIGEST_LIST_COLUMNS rows, newest-first, LIMIT 5.
+        // Strict on the contract: the handler must ask for the list columns.
+        assert.match(s, /SELECT id, created_at, tldr, tldr_hu, item_count,/);
+        assert.match(s, /LIMIT 5\s*$/);
+        return {
+          all: async () => ({ results: candidates.slice(0, 5).map((r) => pick(r, LIST_COLUMNS)) }),
+        };
+      }
+      const row = candidates[candidates.length - 1];
       return { first: async () => (row ? { id: row.id, created_at: row.created_at } : null) };
     }
 
