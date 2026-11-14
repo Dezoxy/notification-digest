@@ -30,11 +30,14 @@
  * outside, the whole archive rather than belonging to one view). No view
  * segment is the ALL view (every digest, mixed).
  *   GET  /robots.txt              -> disallow everything, no token needed
- *   GET  /favicon.svg             -> tab icon, no token needed
+ *   GET  /favicon.svg             -> tab icon, no token needed (legacy path, 1 day)
+ *   GET  /favicon.v2.svg          -> same bytes, versioned + immutable (ICON_VERSION)
  *   GET  /fonts/*                 -> NOT this Worker: Workers Static Assets serves
  *                                    public/fonts before the Worker runs (tokenless,
  *                                    immutable); unknown paths still reach the 404 below
  *   GET  /icon-512.png            -> PWA icon (purpose "any"), no token needed
+ *                                    (each icon below also at /NAME.v2.png: versioned,
+ *                                    immutable; pages reference only those)
  *   GET  /icon-maskable-512.png   -> PWA icon (purpose "maskable"), no token needed
  *   GET  /apple-touch-icon.png    -> iOS Home Screen icon, no token needed
  *   PUT  /ingest/:id              -> upsert a digest (x-ingest-key required)
@@ -176,7 +179,7 @@ import { notFound } from "./src/http.js";
 import { isoWeeksInYear } from "./src/dates.js";
 import { viewSeg } from "./src/hrefs.js";
 import { FAVICON_SVG } from "./src/chrome.js";
-import { APPLE_TOUCH_ICON, ICON_512, ICON_MASKABLE_512 } from "./src/icons.js";
+import { APPLE_TOUCH_ICON, ICON_512, ICON_MASKABLE_512, versionedIconPath } from "./src/icons.js";
 import { buildManifest, buildServiceWorker } from "./src/pwa.js";
 import {
   handlePushKey,
@@ -206,10 +209,26 @@ function viewFromSeg(seg) {
   return seg === "daily/" ? "daily" : seg === "weekly/" ? "weekly" : "all";
 }
 
-const PNG_ASSETS = {
+// Each icon is served at its legacy unversioned path (installed apps and old
+// manifests still request it; 86400s) AND at the versioned path the pages
+// reference (immutable: the URL changes whenever the bytes do, see
+// ICON_VERSION in src/icons.js).
+const CACHE_LEGACY = "public, max-age=86400";
+const CACHE_VERSIONED = "public, max-age=31536000, immutable";
+
+const PNG_ASSETS = {};
+const ICON_BASES = {
   "/icon-512.png": ICON_512,
   "/icon-maskable-512.png": ICON_MASKABLE_512,
   "/apple-touch-icon.png": APPLE_TOUCH_ICON,
+};
+for (const [base, bytes] of Object.entries(ICON_BASES)) {
+  PNG_ASSETS[base] = { bytes, cache: CACHE_LEGACY };
+  PNG_ASSETS[versionedIconPath(base)] = { bytes, cache: CACHE_VERSIONED };
+}
+const FAVICON_ROUTES = {
+  "/favicon.svg": CACHE_LEGACY,
+  [versionedIconPath("/favicon.svg")]: CACHE_VERSIONED,
 };
 
 const ROUTE_INGEST = /^\/ingest\/(\d+)$/;
@@ -249,13 +268,14 @@ export default {
     // Tokenless like robots.txt: an icon reveals nothing about the site's
     // content (robots.txt already concedes "something is served here"), and
     // browsers fetch favicons before any page-level auth context exists.
-    if (request.method === "GET" && path === "/favicon.svg") {
+    if (request.method === "GET" && Object.hasOwn(FAVICON_ROUTES, path)) {
       return new Response(FAVICON_SVG, {
         headers: {
           "content-type": "image/svg+xml",
-          // Icons are immutable-ish and requested constantly — long cache,
-          // unlike the no-store pages (the icon carries no private data).
-          "cache-control": "public, max-age=86400",
+          // Icons are requested constantly — long cache, unlike the
+          // no-store pages (the icon carries no private data). The
+          // versioned path is immutable, the legacy one revalidates daily.
+          "cache-control": FAVICON_ROUTES[path],
         },
       });
     }
@@ -265,12 +285,12 @@ export default {
     // icon URLs get persisted into the installed app record — keeping them
     // off the token path means that record embeds the capability token
     // once (in start_url/scope/id) instead of three times more beside it.
-    const icon = PNG_ASSETS[path];
+    const icon = Object.hasOwn(PNG_ASSETS, path) ? PNG_ASSETS[path] : null;
     if (icon && request.method === "GET") {
-      return new Response(icon, {
+      return new Response(icon.bytes, {
         headers: {
           "content-type": "image/png",
-          "cache-control": "public, max-age=86400",
+          "cache-control": icon.cache,
         },
       });
     }

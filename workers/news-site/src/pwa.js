@@ -1,6 +1,7 @@
 import { STRINGS } from "./strings.js";
 import { appName } from "./chrome.js";
 import { indexHref } from "./hrefs.js";
+import { ICON_512_HREF, ICON_MASKABLE_512_HREF } from "./icons.js";
 
 // ── PWA shell: web app manifest + service worker (PLAN.md §11.7) ────────
 //
@@ -25,7 +26,8 @@ import { indexHref } from "./hrefs.js";
 // deferred feature, and it needs its own privacy think first.
 
 // The manifest's icons, and the <link rel="apple-touch-icon"> in pageChrome,
-// point at TOKENLESS root paths (/icon-512.png etc, same as /favicon.svg).
+// point at TOKENLESS, VERSIONED root paths (/icon-512.v2.png etc, see
+// ICON_VERSION in icons.js; same tokenless precedent as /favicon.svg).
 // Deliberate, and it cuts both ways in this trust model's favor: an icon
 // reveals nothing about the site's content (robots.txt already concedes
 // something is served here), and keeping them tokenless means the installed
@@ -65,9 +67,9 @@ export function buildManifest(host, token, lang) {
       background_color: "#0b0d14",
       theme_color: "#0b0d14",
       icons: [
-        { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+        { src: ICON_512_HREF, sizes: "512x512", type: "image/png", purpose: "any" },
         {
-          src: "/icon-maskable-512.png",
+          src: ICON_MASKABLE_512_HREF,
           sizes: "512x512",
           type: "image/png",
           purpose: "maskable",
@@ -82,7 +84,7 @@ export function buildManifest(host, token, lang) {
 export function buildServiceWorker(token) {
   const config = {
     scope: indexHref(token, "en", "all"),
-    icon: "/icon-512.png",
+    icon: ICON_512_HREF,
     offline: {
       en: {
         title: STRINGS.en.offlineTitle,

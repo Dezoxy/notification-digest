@@ -41,10 +41,31 @@
 // full-colour render (~14KB), since it is small anyway. Regenerating: render
 // the SVG geometry above in headless Chromium at the exact pixel size
 // (deviceScaleFactor 1, omitBackground for the transparent-corner one), then
-// quantize the two 512px renders (sharp: palette, 256 colours, dither 0).
+// quantize the two 512px renders (sharp: palette, 256 colours, dither 0),
+// then bump ICON_VERSION (see CACHE-BUSTING below).
 // Deliberately no generator script in this subtree — it is a Node/prettier
 // subtree (see the repo CLAUDE.md), and a one-off rasterizer does not get to
 // live here.
+//
+// CACHE-BUSTING: iOS/Safari cache an icon by its URL, so a changed icon
+// served at an unchanged URL keeps showing the OLD one on a Home Screen.
+// Every reference (chrome.js <link>s, the manifest, the notification icon)
+// therefore uses the versioned path built here, and worker.js serves the
+// same bytes at both the versioned (immutable) and the legacy unversioned
+// (86400s) path. WHEN ANY ICON'S BYTES CHANGE (favicon geometry included),
+// BUMP ICON_VERSION below, otherwise iOS keeps showing the old icon.
+
+export const ICON_VERSION = "v2";
+
+/** "/icon-512.png" + "v2" -> "/icon-512.v2.png". */
+export function versionedIconPath(path, version = ICON_VERSION) {
+  return path.replace(/\.([a-z]+)$/, `.${version}.$1`);
+}
+
+export const FAVICON_HREF = versionedIconPath("/favicon.svg");
+export const ICON_512_HREF = versionedIconPath("/icon-512.png");
+export const ICON_MASKABLE_512_HREF = versionedIconPath("/icon-maskable-512.png");
+export const APPLE_TOUCH_ICON_HREF = versionedIconPath("/apple-touch-icon.png");
 
 export const ICON_512_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAMAAADDpiTIAAADAFBMVEVMaXENDxwSFS0QFCkLDRQQFCUQEykPESwQFCkRFSwMDhcL" +
