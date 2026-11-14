@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS digests (
   -- Optional ingest v5 field (model-provenance byline), app-produced. NULL
   -- when the digest app didn't send provenance for this digest (older app
   -- version). JSON object of {summarize, translate?} legs, each carrying
-  -- {model, effort, fallback} -- see validateProvenance in src/ingest.js for
+  -- {model, effort, fallback}, plus an optional top-level app_version
+  -- ("X.Y.Z", read by latestAppVersion in src/handlers.js for the settings
+  -- panel's version label) -- see validateProvenance in src/ingest.js for
   -- the shape rules, and renderProvenance for how it turns into the digest
   -- page's "WRITTEN" colophon row, directly below the source key.
   provenance TEXT
