@@ -1006,6 +1006,8 @@ export const CSS = `
 
   /* Compact spacing is screen-only; reading text and touch targets retain their size. */
   @media screen {
+    /* Story threads has its own border; omit adjacent separators. */
+    article.digest:has(> .storythreads:last-child) + .colophon { border-top: 0; }
     html[data-density="compact"] .ledger { gap: 0; }
     html[data-density="compact"] :is(.ledger, .archiveresults) .entry,
     html[data-density="compact"] .maincol > .entry {
@@ -1023,6 +1025,9 @@ export const CSS = `
     html[data-density="compact"] :is(.tldr, .attention, .aboutcard) { padding: 14px var(--sp-4); }
     html[data-density="compact"] article.digest > .sec {
       border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none;
+    }
+    html[data-density="compact"] article.digest > .sec:has(+ .storythreads, + p.foot + .storythreads) {
+      border-bottom: 0;
     }
     html[data-density="compact"] article.digest > .tldr {
       padding: var(--sp-1) 0 var(--sp-1) var(--sp-3);
