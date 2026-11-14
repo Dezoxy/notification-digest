@@ -223,6 +223,43 @@ test("digest 235 EN: arcs line, what-changed block, source key, stripped styles,
   );
 });
 
+test("digest 235: multi-paragraph sections, list and attention callout render in both languages", async () => {
+  // Realistic section shapes (the redesign folds each h2-section into a
+  // <details>): the first section carries two paragraphs and a <ul>, the
+  // attention callout is the emailer's div.attention (label span + <p>, no
+  // nested h2) and must stay out of the section numbering.
+  for (const path of ["d/235", "hu/d/235"]) {
+    const { html } = await page(path);
+    assert.match(
+      html,
+      /<h2 id="s1">[^<]*<\/h2>(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>\s*<h2 id="s2">/,
+      `${path}: section 1 has two paragraphs then a list`,
+    );
+    assert.match(
+      html,
+      /<div class="attention"><span class="attention-label">[^<]+<\/span><p>[\s\S]*?<\/p><\/div>/,
+      `${path}: attention callout`,
+    );
+    assert.match(
+      html,
+      /<p class="banner">⚠ polymarket collection failed this run<\/p>/,
+      `${path}: failure banner`,
+    );
+    assert.match(html, /<span class="tldr-label">[^<]+<\/span>/, `${path}: tldr-label span`);
+    // Production shape: nh3 puts `rel` AFTER `href`. NOTE addCiteTitles only
+    // matches `<a class="cite" href="…">` (no rel), so on this shape it adds NO
+    // title today — this asserts the chip as emitted, and must be revisited
+    // when that regex is fixed (the title would then appear here).
+    assert.match(
+      html,
+      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer">²<\/a>/,
+      `${path}: cite chip rendered, inline style stripped`,
+    );
+    assert.ok(!/<h2 id="s4"/.test(html), `${path}: callout is not numbered as a section`);
+    assert.match(html, /example\.com\/export-rules/, `${path}: last section citation link`);
+  }
+});
+
 test("digest 235 HU: deltas suppressed, translated body used", async () => {
   const { html } = await page("hu/d/235");
   assert.ok(!html.includes('class="deltas"'), "what-changed suppressed on /hu/ (EN-only prose)");

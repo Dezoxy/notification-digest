@@ -42,8 +42,10 @@ not mean to.
 | `fixtures.sql` | The same rows for a real local D1 (browser-based checks). |
 | `render.test.mjs` | The invariant suite. |
 | `design-system.test.mjs` | The design-system export (`scripts/design-system.mjs`): builds against the real `css.js` and fails when a palette variable has no usage note. |
+| `coverage.test.mjs` | Class-coverage guard: every class in the goldens or created by `client.js` must have a selector in `css.js` (or sit on the commented `JS_ONLY_HOOKS` list). `COVERAGE_REPORT=1` also lists dead-rule candidates. |
 | `golden.mjs` | Golden renderer/checker (`--update` / `--check` / `--bundle`). |
 | `golden/*.html` | Committed expected output (~1.2MB). |
+| `tools/screens.mjs` | Playwright screenshot harness (not in `npm test`): page × viewport × theme × language matrix plus JS-created UI states, to `tools/screens-out/<label>/`. |
 | `tools/css-matrix.html` | Computed-style regression matrix for CSS refactors. |
 
 ### Two things that are load-bearing, not incidental
@@ -138,6 +140,24 @@ Zero diffs means the change is computationally inert for everything covered.
 It does **not** cover `:hover`, `:focus`, or print — check those by hand, or
 confirm (as the phone-block consolidation did) that the moved ranges contain
 no such selectors.
+
+### Screenshots
+
+`tools/screens.mjs` is for looking, not asserting. It serves the real router
+over the fixture DB (frozen clock; `public/` files win over the worker, like
+Workers Static Assets) and drives the pre-installed Playwright Chromium:
+every page type at phone and desktop, light and dark, EN and HU, then the
+states the goldens never show (settings, search bubble, command palette,
+compact density, catch-up banner + unread fence, resume chip, scrolled
+digest), a reduced-motion pass, a print PDF of the digest, and a soft
+navigation round trip. It exits non-zero on page errors, console errors or
+HTTP errors.
+
+```bash
+node test/tools/screens.mjs before   # PNGs in test/tools/screens-out/before/ (gitignored)
+# …make the change…
+node test/tools/screens.mjs after    # then compare the two folders by eye
+```
 
 ### Service workers: the browser pane cannot test them
 

@@ -8,3 +8,6 @@
 .ingest-key.local
 node_modules/
 dist/
+
+# screenshot harness output (test/tools/screens.mjs)
+test/tools/screens-out/
