@@ -81,7 +81,9 @@ CREATE TABLE IF NOT EXISTS digests (
     -- this column and never drops it, but a comment that breaks the TEST
     -- harness simulating an old database is still worth avoiding.
     --
-    -- digest/main.py's `_provenance` helper owns the exact shape;
+    -- digest/main.py's `_provenance` helper owns the exact shape; besides the
+    -- per-leg objects it may carry an optional top-level `app_version` string
+    -- (the creating build's release version, absent for dev builds);
     -- digest/summarize.py's `ModelRun` is what each leg's own sub-object is
     -- built from. One JSON TEXT column rather than several plain columns,
     -- for the same reason this table already prefers it elsewhere:

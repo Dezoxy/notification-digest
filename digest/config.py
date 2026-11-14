@@ -589,6 +589,11 @@ class Config:
     # same "catch a typo/misconfiguration at startup, not deep inside a
     # scheduled run" reason as POLYMARKET_TOP_N.
     hackernews_top_n: int = 15
+    # Release version of this build (the git tag without "v"). Baked into the
+    # image as DIGEST_APP_VERSION by the Dockerfile, not operator-set; None
+    # for local/dev builds. digest/main.py's `_provenance` stamps it into each
+    # digest's provenance so the site can show the deployed version.
+    app_version: str | None = None
 
     @classmethod
     def from_env(cls) -> Config:
@@ -816,6 +821,7 @@ class Config:
             telegram_relay_thread_id=telegram_relay_thread_id,
             patreon_campaign_id=patreon_campaign_id,
             patreon_session_cookie=patreon_session_cookie,
+            app_version=_optional_str_or_none("DIGEST_APP_VERSION"),
         )
 
 

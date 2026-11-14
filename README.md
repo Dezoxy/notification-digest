@@ -242,7 +242,9 @@ runs as Azure Container Apps jobs (see Deployment below). Releases are git tags
 changes shipped files (`Dockerfile`, `digest/`, `prompts/`, `pyproject.toml`,
 `uv.lock`) is tagged as the next patch version by
 `.github/workflows/auto-release.yml`, and minor/major tags are pushed by hand.
-`.github/workflows/release.yml` builds and pushes the image to GHCR.
+`.github/workflows/release.yml` builds and pushes the image to GHCR, baking
+the release version into it (`APP_VERSION` build-arg -> `DIGEST_APP_VERSION`),
+which the app stamps into each digest's `provenance.app_version`.
 
 To inspect the archive without a shell in the running container:
 

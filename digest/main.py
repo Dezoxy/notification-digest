@@ -277,15 +277,16 @@ def _fallback_legs(cfg: Config, *, light: bool) -> tuple[FallbackLeg, ...]:
 
 
 def _provenance(
-    summarize_run: ModelRun, translate_run: ModelRun | None
-) -> dict[str, dict[str, object]]:
+    summarize_run: ModelRun, translate_run: ModelRun | None, app_version: str | None
+) -> dict[str, dict[str, object] | str]:
     """Build the `create_digest(..., provenance=...)` object from this digest's ModelRuns.
 
     Shape (see `_SCHEMA`'s `digests.provenance` comment in digest/state.py
     for the full storage rationale):
 
         {"summarize": {"model": ..., "effort": ..., "fallback": ...},
-         "translate": {"model": ..., "effort": ..., "fallback": ...}}
+         "translate": {"model": ..., "effort": ..., "fallback": ...},
+         "app_version": "1.2.3"}
 
     `summarize_run` is required -- every digest this codebase ever stores
     with a `provenance` object went through `summarize()`/`summarize_daily()`
@@ -304,6 +305,13 @@ def _provenance(
     `publish_to_site`'s own `source_counts`/`topics`/`deltas`/`arc_contexts`
     fields already establish (digest/publish.py).
 
+    `app_version` is the release version of the app that CREATED this digest
+    (`cfg.app_version`, baked into the image at release time). Provenance is
+    stored at creation and resent verbatim on publish retries, so the value is
+    the creating build's, not the retrying one's; the site reads the newest
+    digest's value to display the deployed version. Same absent-key rule as
+    `translate`: a falsy value (local/dev build) omits the key.
+
     Each `ModelRun` is turned into a plain dict (`dataclasses.asdict`,
     keying on the SAME field names `ModelRun` itself declares --
     `model`/`effort`/`fallback` -- so this function's output shape and
@@ -312,9 +320,11 @@ def _provenance(
     this straight to `json.dumps`, which has no idea how to serialize a
     dataclass on its own.
     """
-    provenance: dict[str, dict[str, object]] = {"summarize": asdict(summarize_run)}
+    provenance: dict[str, dict[str, object] | str] = {"summarize": asdict(summarize_run)}
     if translate_run is not None:
         provenance["translate"] = asdict(translate_run)
+    if app_version:
+        provenance["app_version"] = app_version
     return provenance
 
 
@@ -558,7 +568,7 @@ def _deliver(
         body_md,
         items,
         body_md_hu=body_md_hu,
-        provenance=_provenance(summarize_run, translate_run),
+        provenance=_provenance(summarize_run, translate_run, cfg.app_version),
     )
     # PLAN.md §11.3 fencing guardrail: this is the ONLY call to write_deltas
     # in this codebase -- deltas are a WINDOW-digest-only concept (they
@@ -1363,7 +1373,7 @@ def run_daily(cfg: Config, *, force: bool = False) -> bool:
             body_md_hu=body_md_hu,
             kind="daily",
             item_count=total_items,
-            provenance=_provenance(summarize_run, translate_run),
+            provenance=_provenance(summarize_run, translate_run, cfg.app_version),
         )
         archive(body_md, cfg.archive_dir, digest_id)
 
@@ -1611,7 +1621,7 @@ def run_weekly(cfg: Config) -> bool:
             body_md_hu=body_md_hu,
             kind="weekly",
             item_count=total_items,
-            provenance=_provenance(summarize_run, translate_run),
+            provenance=_provenance(summarize_run, translate_run, cfg.app_version),
         )
         archive(body_md, cfg.archive_dir, digest_id)
 
