@@ -71,7 +71,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // ── Token parsing ───────────────────────────────────────────────────────────
 const TOKENS_START = "/* tokens:start */";
 const TOKENS_END = "/* tokens:end */";
-const BRAND_MARK = "#4f46e5";
+const BRAND_MARK = "#9db0ff";
 
 const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -336,7 +336,9 @@ function parseDesignTokens(css, faviconSvg) {
     }
   }
   if (!faviconSvg.includes(`fill="${BRAND_MARK}"`)) {
-    throw new Error(`design-system: FAVICON_SVG no longer uses ${BRAND_MARK}; update brand-mark`);
+    throw new Error(
+      `design-system: FAVICON_SVG no longer draws the ${BRAND_MARK} dot; update brand-mark`,
+    );
   }
 
   // Usage notes <-> CSS, both directions, per kind. A token that moved kind
@@ -448,14 +450,15 @@ body:has(> .ds-stage) { padding: 16px; }
     "assets/Logos/README.md",
     `# Logos
 
-The mark is an indigo (\`brand-mark\`, ${BRAND_MARK}) rounded tile carrying three white bars of falling length and opacity: a stack of headlines, longest first. It is a 64-unit grid: tile rx 14, bars 6 high with rx 3, at widths 36 / 28 / 20 and opacity 1 / 0.85 / 0.70.
+The mark is the "n." monogram: a bold white lowercase n with a periwinkle dot (\`brand-mark\`, ${BRAND_MARK}) at its lower right, on a deep-ink rounded tile with a soft indigo glow from the top. It is drawn on a 512-unit grid: the n is one 62-wide round-capped stroke, the dot is r34, and the pair is shifted (-16,-20) so it is visually centred.
 
 - \`favicon.svg\` is the source geometry. The three PNGs are renders of it, and each differs only in framing:
-  - \`icon-512.png\`: corners rounded, transparent outside. The manifest's \`purpose: "any"\` icon.
-  - \`icon-maskable-512.png\`: full-bleed tile, art inset 10%. Android crops it to its own mask.
+  - \`icon-512.png\`: corners rounded (rx 112), transparent outside. The manifest's \`purpose: "any"\` icon.
+  - \`icon-maskable-512.png\`: full-bleed ground, mark scaled to 80% so it sits inside Android's circular safe zone (radius 40%).
   - \`apple-touch-icon.png\`: 180×180, square, full bleed. iOS applies its own squircle.
+- The installed app is named **news.** (lowercase, with the full stop), matching the page wordmark.
 - Use the mark for the tab, Home Screen and push notifications only. Inside the page the brand is the word **news** in Sora with an \`accent\` full stop, set by the \`brand\` style; never place the tile in the bar.
-- Never recolor the tile to \`accent\`. Indigo is the app-icon colour; the page's accent is a different, lighter indigo-blue, and they are deliberately not the same.
+- The dot is the dark theme's \`accent\` colour on purpose: the mark and the page glow in the same periwinkle. Do not recolour the tile or the dot per theme; the icon is one fixed image.
 `,
   );
   put(
@@ -475,7 +478,7 @@ Every other glyph is a text character in the font stack, never an icon file: ←
     name: "brand-mark",
     value: BRAND_MARK,
     usage:
-      "App-icon indigo (favicon, Home Screen and notification icons). Not a page colour; never use it in the UI.",
+      "App-icon dot periwinkle (favicon, Home Screen and notification icons); equals the dark accent. Not a page colour; never use it in the UI.",
   });
   const group = (g) =>
     Object.entries(PLAIN_USAGE)
@@ -714,7 +717,7 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 ## Iconography
 
-The mark is the indigo tile with three falling bars (\`assets/Logos\`, colour \`brand-mark\`), used for the tab, Home Screen and push notifications only. In the page the brand is the word "news" in Sora with an accent full stop. Two inline SVG glyphs, the search magnifier and the settings sliders, take \`currentColor\`. All other glyphs are Unicode characters in the current font: ← → ↑ ↓ × ⚠ ↻ ☆ ★. No icon font, no emoji.
+The mark is the "n." monogram, a white n and a periwinkle dot on a deep-ink tile (\`assets/Logos\`, colour \`brand-mark\`), used for the tab, Home Screen and push notifications only. In the page the brand is the word "news" in Sora with an accent full stop. Two inline SVG glyphs, the search magnifier and the settings sliders, take \`currentColor\`. All other glyphs are Unicode characters in the current font: ← → ↑ ↓ × ⚠ ↻ ☆ ★. No icon font, no emoji.
 `,
   );
 

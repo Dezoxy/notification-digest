@@ -37,7 +37,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
 | `src/css.js` | the stylesheet, one static string |
 | `src/client.js` | the client-side script, one static string |
 | `src/chrome.js` | `pageChrome` — the shell every page renders into |
-| `src/icons.js` | the three base64 PWA PNGs — same mark as `FAVICON_SVG` |
+| `src/icons.js` | the three base64 PWA PNGs — same "n." monogram as `FAVICON_SVG` |
 | `src/pwa.js` | `buildManifest` + `buildServiceWorker` (PLAN.md §11.7) |
 | `src/push.js` | the `push/*` endpoints and their validators |
 | `src/vapid.js` | ES256 JWT signing for the push services (RFC 8292) |
@@ -263,7 +263,7 @@ instead of in four more icon URLs beside it.
 | Route | Serves |
 | --- | --- |
 | `GET /robots.txt` | Disallow-everything. |
-| `GET /favicon.svg` | Tab icon. |
+| `GET /favicon.svg` | Tab icon (the "n." monogram, rounded ground). |
 | `GET /icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png` | PWA icons. |
 | `GET /fonts/*` | Self-hosted font files from `public/`, served by Cloudflare before the Worker runs; tokenless. |
 | `PUT /ingest/:id` | Upsert a digest. Requires the `x-ingest-key` header. |
@@ -274,7 +274,7 @@ instead of in four more icon URLs beside it.
 | `GET /t/:token/search?q=` | FTS5 full-text search over the whole archive. Also backs the index filter box via `?fragment=1`. |
 | `GET /t/:token/a/:slug` | Story-arc page — every digest carrying that arc identity, reconstructed at request time. |
 | `GET /t/:token/about` | Static explainer for anyone the capability link is shared with. |
-| `GET /t/:token/manifest.webmanifest` | Web app manifest; `hu/` variant differs only in `start_url`. |
+| `GET /t/:token/manifest.webmanifest` | Web app manifest, installed as **news.** (first host label + a full stop, also the iOS Home Screen title); `hu/` variant differs only in `start_url`. |
 | `GET /t/:token/sw.js` | The service worker. Its URL is its scope. |
 | `GET /t/:token/push/key` | The VAPID public key. Token-gated, though the key itself is public. |
 | `POST /t/:token/push/subscribe` | Store or refresh one device's push subscription. |

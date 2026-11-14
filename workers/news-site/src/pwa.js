@@ -1,5 +1,5 @@
 import { STRINGS } from "./strings.js";
-import { brandFirst } from "./chrome.js";
+import { appName } from "./chrome.js";
 import { indexHref } from "./hrefs.js";
 
 // ── PWA shell: web app manifest + service worker (PLAN.md §11.7) ────────
@@ -33,12 +33,10 @@ import { indexHref } from "./hrefs.js";
 // place — start_url/scope/id — instead of in four more icon URLs beside it.
 
 export function buildManifest(host, token, lang) {
-  // Uppercased because a Home Screen label sits directly under an icon and
-  // reads better as a short uppercase word. The on-page wordmark is
-  // `brandFirst(host)` in lowercase with an accent full stop (`.brand` in
-  // src/css.js, Spatial Glass), so this is a deliberate choice, not a
-  // mirror of the page.
-  const name = brandFirst(host).toUpperCase();
+  // "news." — the on-page wordmark (`brandFirst(host)` plus the accent full
+  // stop, `.brand`/`.brandmark` in src/css.js) as plain text, so the Home
+  // Screen label matches the page and the "n." icon above it.
+  const name = appName(host);
   return JSON.stringify(
     {
       // Fixed to the EN root in BOTH language variants, deliberately: `id`

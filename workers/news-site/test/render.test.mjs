@@ -829,6 +829,12 @@ test("manifest: token-scoped, one app id across both languages", async () => {
   assert.equal(m.start_url, `/t/${SITE_TOKEN}/`);
   assert.equal(m.scope, `/t/${SITE_TOKEN}/`);
   assert.equal(m.display, "standalone");
+  // The installed app is "news." (brand label + full stop), not the old
+  // uppercased host label.
+  assert.equal(m.name, "news.");
+  assert.equal(m.short_name, "news.");
+  assert.equal(m.background_color, "#0b0d14");
+  assert.equal(m.theme_color, "#0b0d14");
   assert.ok(m.icons.length >= 1, "declares icons");
   assert.ok(
     m.icons.some((i) => i.purpose === "maskable"),
@@ -903,6 +909,33 @@ test("icons: real PNGs, tokenless, long-cached", async () => {
     const bytes = new Uint8Array(await res.arrayBuffer());
     // PNG magic number — proves the base64 survived source formatting.
     assert.deepEqual([...bytes.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47], `${path} is a PNG`);
+    // IHDR width/height (big-endian u32 at bytes 16 and 20): the manifest
+    // promises 512x512, and iOS wants exactly 180x180.
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    const side = path === "/apple-touch-icon.png" ? 180 : 512;
+    assert.equal(view.getUint32(16), side, `${path} width`);
+    assert.equal(view.getUint32(20), side, `${path} height`);
+    assert.ok(bytes.length < 60_000, `${path} stays small (${bytes.length} bytes)`);
+  }
+});
+
+test("favicon is the n. monogram with its periwinkle dot", async () => {
+  const res = await fetchPath("/favicon.svg");
+  assert.equal(res.status, 200);
+  const svg = await res.text();
+  assert.ok(svg.includes("M150 380V258a86 86 0 0 1 172 0V380"), "the n path");
+  assert.ok(svg.includes('fill="#9db0ff"'), "the periwinkle dot");
+  assert.ok(svg.includes('rx="112"'), "rounded ground: favicons get no OS mask");
+  assert.ok(!/href=|<filter|<image/.test(svg), "no external refs or filters");
+});
+
+test("every page titles the iOS Home Screen app 'news.'", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const html = await (await fetchPath(path)).text();
+    assert.ok(
+      html.includes('<meta name="apple-mobile-web-app-title" content="news.">'),
+      `${name} apple title`,
+    );
   }
 });
 

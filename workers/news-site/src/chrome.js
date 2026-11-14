@@ -14,22 +14,33 @@ import { CLIENT_SCRIPT } from "./client.js";
 
 // ── page chrome (shared bar/layout/CSS — one template, every page) ──────
 
-// The tab icon: the site's indigo accent as a rounded square, three white
-// "digest lines" of tapering width — reads as a summary/list at 16px, and
-// the indigo works against both light and dark browser chrome.
-export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-<rect width="64" height="64" rx="14" fill="#4f46e5"/>
-<rect x="14" y="18" width="36" height="6" rx="3" fill="#ffffff"/>
-<rect x="14" y="30" width="28" height="6" rx="3" fill="#ffffff" opacity="0.85"/>
-<rect x="14" y="42" width="20" height="6" rx="3" fill="#ffffff" opacity="0.7"/>
+// The tab icon: the "n." monogram — a bold white n with a periwinkle dot at
+// its lower right, on a deep-ink ground with a soft indigo glow from the top.
+// Shown RAW by the browser (no OS mask), so the ground carries its own
+// rounded corners (rx 112 = 22% of 512); src/icons.js renders the same mark
+// full-bleed where the OS does the rounding. The group is shifted (-16,-20)
+// so the n + dot pair is visually centred. Gradient only: no filters, no
+// external refs, so it stays small and survives 16px rendering.
+export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs><radialGradient id="g" cx="50%" cy="8%" r="75%"><stop offset="0" stop-color="#3a42a8"/><stop offset=".55" stop-color="#151a3a"/><stop offset="1" stop-color="#0b0d14"/></radialGradient></defs>
+<rect width="512" height="512" rx="112" fill="url(#g)"/>
+<g transform="translate(-16 -20)"><path d="M150 380V258a86 86 0 0 1 172 0V380" fill="none" stroke="#ffffff" stroke-width="62" stroke-linecap="round" stroke-linejoin="round"/><circle cx="392" cy="364" r="34" fill="#9db0ff"/></g>
 </svg>`;
 
-// The first host label is the whole brand ("NEWS") — the .tld tail this
+// The first host label is the whole brand ("news") — the .tld tail this
 // used to also return died with the two-tone wordmark and nothing ever
-// consumed it since.
+// consumed it since. The installed app's name is this plus a literal "."
+// (appName below), mirroring the wordmark's accent full stop.
 export function brandFirst(host) {
   const idx = host.indexOf(".");
   return idx === -1 ? host : host.slice(0, idx);
+}
+
+// The name the OS shows for the installed app ("news."): lowercase like the
+// on-page wordmark, with the full stop the wordmark draws as `.brandmark`.
+// One function so the manifest and the iOS Home Screen title cannot drift.
+export function appName(host) {
+  return `${brandFirst(host)}.`;
 }
 
 // `title` defaults to null, falling back to the bare host — that default IS
@@ -94,7 +105,7 @@ export function pageChrome({
   backHref = null,
 }) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
-  // Only the first host label renders — the brand is just "NEWS" (owner
+  // Only the first host label renders — the brand is just "news" (owner
   // follow-up; see brandFirst).
   const first = brandFirst(host);
   const strings = STRINGS[lang];
@@ -213,7 +224,7 @@ export function pageChrome({
 <link rel="manifest" href="${manifestHref(token, lang)}">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="${esc(first.toUpperCase())}">
+<meta name="apple-mobile-web-app-title" content="${esc(appName(host))}">
 ${prefetchLinkHtml}
 <title>${esc(title ?? host)}</title>
 <!-- Font preloads sit ahead of the stylesheet so the fetch starts while the CSS
