@@ -93,13 +93,12 @@ from digest.weekly import summarize_weekly
 # How far back _deliver looks for prior digests when building the
 # {{RECENT_COVERAGE}} prompt block (digest/summarize.py's
 # format_recent_coverage) -- the "running story memory" that lets the
-# summarizer write delta-only updates for stories it already covered instead
-# of re-explaining them every 6 hours. 24 hours is a full day's worth of
-# briefings (4 runs at the 6-hourly cadence) -- long enough that a story
-# spanning a slow news day is still recognized as "already covered" on its
-# second or third mention, short enough that genuinely stale coverage
-# eventually ages out and stops suppressing a fresh full write-up.
-_RECENT_COVERAGE_WINDOW = timedelta(hours=24)
+# summarizer write only what changed for stories it already covered. 72 hours,
+# not 24: stories were being re-reported for days (one reappeared four times
+# over 54h), so the memory has to span a news cycle, not a day. The block also
+# carries "in passing" lines from each window's `## Also this window`, since
+# that is where delta updates land.
+_RECENT_COVERAGE_WINDOW = timedelta(hours=72)
 
 # How far back _deliver looks for prior digests' story-arc keys when
 # building the {{RECENT_ARCS}} prompt block (digest/summarize.py's

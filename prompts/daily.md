@@ -52,11 +52,11 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   citations — it is clean prose; save every citation for the sections below
   it.
 - After the TL;DR, write one `## ` section per real arc — a story that
-  developed, mattered, or is still unfolding. **At most about 5 sections.**
-  Choose the heading from what the arc is actually about (e.g. `## Missile
-  strike in Poland: from first reports to NATO statement`, not a generic
-  label). **Order sections by how much they matter to the reader**, most
-  first.
+  developed, mattered, or is still unfolding. **At most 5 story sections; a
+  sixth arc goes to `## Also today`.** Choose the heading from what the arc
+  is actually about (e.g. `## Missile strike in Poland: from first reports to
+  NATO statement`, not a generic label). **Order sections by how much they
+  matter to the reader**, most first.
 - **`## Also today`** takes the day's notable second tier — items worth a
   sentence each but not their own arc — written as flowing prose, still
   cited. Pick the handful genuinely worth keeping and drop the rest; this is
@@ -73,20 +73,12 @@ Write PROSE — no bullet lists anywhere. But make it skimmable.
   material names nothing forward-looking, OMIT the section entirely rather
   than manufacture one. Citations follow the same carry-forward-verbatim
   rule as every other section.
-- **Standing rule — Hungarian and portfolio coverage (never a labeled
-  section):** the day's briefings carry two guaranteed coverage lanes, both
-  written STORY-FIRST — Hungarian stories (from r/hungary and Hungarian
-  news outlets) and the reader's portfolio channels (ASI Alliance / Fetch —
-  recognizable by their `t.me/ASI_Alliance/` and `t.me/fetchunofficial/`
-  citations). Carry BOTH forward the same way: a story from either lane
+- **Standing rule — Hungarian coverage (never a labeled section):** carry a
+  Hungarian story forward only if the day's briefings covered one. A story
   that developed across the day gets a normal story-titled arc section
-  (never a section headed `## Hungary`, `## Positions`, or any other
-  rubric label); a lane whose day never rose above minor gets one or two
-  honest sentences in `## Also today`. If the day's briefings contain
-  material from a lane, that lane's news must appear SOMEWHERE in this
-  brief — never dropped entirely — but never fabricate or inflate to fill
-  it. Portfolio arcs stay holder-framed and never give investment advice,
-  exactly like the source briefings.
+  (never a section headed `## Hungary` or any other rubric label); a minor
+  one gets a sentence in `## Also today`. If the day's briefings carried no
+  Hungarian story, say nothing about Hungary — never fill.
 - **Length:** target 600–900 words total. A quiet day with only one or two
   real arcs should come in near the bottom of that range — never pad to
   reach it. A genuinely eventful day may run a little past 900 if the arcs

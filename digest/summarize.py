@@ -101,7 +101,11 @@ def truncate_item_text(text: str) -> str:
 
 
 def build_prompt(
-    items: list[Item], failed_sources: list[str], recent_coverage: str, recent_arcs: str = ""
+    items: list[Item],
+    failed_sources: list[str],
+    recent_coverage: str,
+    recent_arcs: str = "",
+    template: str | None = None,
 ) -> str:
     """Load prompts/digest.md and substitute the coverage/arcs/status/items-JSON placeholders.
 
@@ -116,8 +120,13 @@ def build_prompt(
     only so callers that don't care about the feature (most of this module's
     own byte-budget tests) don't have to pass it; digest/main.py's real
     caller always threads through the actual rendered block.
+
+    `template` (default None = read prompts/digest.md) lets a replay script
+    substitute into an older prompt version; the substitution itself is
+    identical either way.
     """
-    template = _PROMPT_PATH.read_text()
+    if template is None:
+        template = _PROMPT_PATH.read_text()
 
     payload = [
         {
@@ -1209,21 +1218,12 @@ _NEEDS_ATTENTION_HEADING = "needs attention"
 _STANDING_RUBRIC_HEADINGS = frozenset({_NEEDS_ATTENTION_HEADING})
 
 # format_recent_coverage caps the number of "recently covered" lines it will
-# ever render, regardless of how many digests or headings are available.
-# This is a hard ceiling on how much of the prompt budget the coverage block
-# can consume: at 24h of history and a ~10-section briefing every 6 hours, a
-# healthy run produces on the order of 4 runs * ~10 headings = ~40 candidate
-# lines even before the "Needs attention" skip -- under this cap, though not
-# by much. It was NOT comfortable while the timer ran 3-hourly: the same math
-# gave 8 runs * ~8 = ~64, which pressed against the cap on any ordinary day.
-# The cap deliberately stays 50 anyway, because what it defends against did
-# not get any rarer with the cadence -- an unusually busy day, or a
-# pathological run that emits far more headings than the prompt's own
-# ~10-section budget asks for, could still make this block grow open-endedly. 50 keeps the
-# coverage block bounded and cheap relative to _MAX_PROMPT_BYTES's other
-# consumers (items, collector status) without needing to special-case why a
-# particular day's history was unusually large.
-_MAX_RECENT_COVERAGE_LINES = 50
+# ever render, regardless of how many digests or headings are available. At
+# the 72h lookback that is ~12 windows x ~7 headings plus the "in passing"
+# lines from each window's `## Also this window`, so 160 leaves room for an
+# unusually busy stretch while bounding the block to ~20 KB worst case against
+# _MAX_PROMPT_BYTES (300 KB).
+_MAX_RECENT_COVERAGE_LINES = 160
 
 # format_recent_coverage truncates any single sanitized heading longer than
 # this many characters. A real `## ` heading (prompts/digest.md's own
@@ -1235,7 +1235,7 @@ _MAX_RECENT_COVERAGE_LINES = 50
 # not expected to ever trigger on a well-formed heading.
 _MAX_RECENT_COVERAGE_HEADING_CHARS = 160
 
-_NO_RECENT_COVERAGE = "(no prior briefings in the last 24 hours)"
+_NO_RECENT_COVERAGE = "(no prior briefings in the lookback window)"
 
 
 def _sanitize_recent_coverage_heading(heading: str) -> str:
@@ -1326,78 +1326,171 @@ def _format_digest_age(created_at: str, now: datetime) -> str:
     return f"{age_hours}h ago"
 
 
-def format_recent_coverage(digests: list[tuple[str, str]], now: datetime) -> str:
-    """Render the last 24h of prior digests' headings into the {{RECENT_COVERAGE}} prompt block.
+# Sentence handling shared by the "in passing" coverage lines and the soft
+# TL;DR checks. Decimals ("5.21") and a fixed abbreviation list are masked so
+# their dots never read as a sentence end; _DOT_MASK stands in for the dot
+# while splitting and is restored afterwards.
+_DOT_MASK = "\x00"
+_DECIMAL_DOT_RE = re.compile(r"(?<=\d)\.(?=\d)")
+_ABBREVIATION_RE = re.compile(
+    r"(?<![\w.])(?:U\.S\.|U\.K\.|E\.U\.|vs\.|Dr\.|Mr\.|Mrs\.|Ms\.|St\.|No\.|e\.g\.|i\.e\."
+    r"|a\.m\.|p\.m\.|Inc\.|Ltd\.|Jr\.|Sr\.)"
+)
+_SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]?(?=\s|$)")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split prose into sentences: a terminator (`.!?` plus an optional closing
+    quote/bracket) followed by whitespace or the end of the text ends one.
+
+    Decimals and a fixed abbreviation list (U.S., e.g., Dr., ...) do not end a
+    sentence. Text left after the last terminator counts as a sentence of its
+    own, so a non-empty text with no terminator is one sentence.
+    """
+    masked = _DECIMAL_DOT_RE.sub(_DOT_MASK, text)
+    masked = _ABBREVIATION_RE.sub(lambda m: m.group(0).replace(".", _DOT_MASK), masked)
+    sentences: list[str] = []
+    start = 0
+    for match in _SENTENCE_END_RE.finditer(masked):
+        sentences.append(masked[start : match.end()])
+        start = match.end()
+    sentences.append(masked[start:])
+    return [s.replace(_DOT_MASK, ".").strip() for s in sentences if s.strip()]
+
+
+def count_sentences(text: str) -> int:
+    """Number of sentences in `text` (see split_sentences)."""
+    return len(split_sentences(text))
+
+
+# Words of an "in passing" coverage mention kept: enough to recognize the
+# story, short enough that ~7 mentions per window stay cheap.
+_IN_PASSING_MAX_WORDS = 15
+
+
+def _also_this_window_body(markdown_text: str) -> str:
+    """Return the body of the `## Also this window` section ("" when absent).
+
+    Heading match is case-insensitive; fenced blocks and indented code are
+    skipped like _real_heading_lines, and the section ends at the next
+    heading of any level.
+    """
+    body: list[str] = []
+    capturing = False
+    fence: str | None = None
+    for line in markdown_text.splitlines():
+        if _leading_whitespace_column(line) >= 4:
+            if capturing:
+                body.append(line)
+            continue
+        stripped = line.strip()
+        if fence is not None:
+            if stripped.startswith(fence) and not stripped.strip(fence[0]):
+                fence = None
+            continue
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence = stripped[:3]
+            continue
+        if stripped.startswith("#"):
+            capturing = stripped.startswith("## ") and (
+                stripped[3:].strip().lower() == "also this window"
+            )
+            continue
+        if capturing:
+            body.append(line)
+    return "\n".join(body)
+
+
+def _in_passing_mentions(markdown_text: str) -> list[str]:
+    """One short plain-text mention per sentence of `## Also this window`.
+
+    Citation links are dropped, other links reduced to their text, emphasis
+    markers removed, then each sentence is cut to its first
+    _IN_PASSING_MAX_WORDS words.
+    """
+    body = _also_this_window_body(markdown_text)
+    if not body.strip():
+        return []
+    text = _CITATION_LINK_RE.sub("", body)
+    text = _MARKDOWN_LINK_RE.sub(lambda m: m.group(1), text)
+    text = " ".join(text.replace("*", "").split())
+    mentions: list[str] = []
+    for sentence in split_sentences(text):
+        words = sentence.split()
+        mention = " ".join(words[:_IN_PASSING_MAX_WORDS])
+        if len(words) > _IN_PASSING_MAX_WORDS:
+            mention += "…"
+        mentions.append(mention)
+    return mentions
+
+
+def format_recent_coverage(
+    digests: list[tuple[str, str]],
+    now: datetime,
+    *,
+    include_also: bool = True,
+    max_lines: int = _MAX_RECENT_COVERAGE_LINES,
+) -> str:
+    """Render prior digests into the {{RECENT_COVERAGE}} prompt block.
 
     This is the "running story memory" feature: without it, the summarizer
     has zero awareness of what a previous digest already told the reader,
     and re-explains the same story in full every 6 hours. `digests` is the
     output of digest/state.py's get_recent_digests -- (created_at, body_md)
-    pairs for every digest created in roughly the last 24 hours, newest
+    pairs for the lookback window (main.py's _RECENT_COVERAGE_WINDOW), newest
     first, INCLUDING unsent ones (see that function's docstring for why
-    email_sent is deliberately ignored). This function extracts each past
-    digest's `## ` section headings (via _real_heading_lines -- the exact
+    email_sent is deliberately ignored). Two kinds of line are rendered per
+    digest: its `## ` section headings (via _real_heading_lines -- the exact
     same CommonMark-aware scan validate_output uses, so "what counts as a
-    real heading" can never drift between gating this run's output and
-    describing a past one) and renders them as a dated list the model is
-    told, in prompts/digest.md, to treat as continuity context: don't
-    re-explain a still-developing story from scratch, write only the delta.
+    real heading" can never drift) as `- <age>: <heading>`, and, when
+    `include_also` is true, one `- <age>, in passing: <text>` line per
+    sentence of its `## Also this window` section. The prompt delivers delta
+    updates there, so without those lines a story mentioned only in passing
+    is invisible to this memory and gets re-reported window after window.
 
-    SECURITY: every heading here was GENERATED BY THE MODEL, but generated
-    FROM the same untrusted, scraped Telegram/X/news text this run's own
-    items come from -- a prompt injection that survived into a past `## `
-    heading (e.g. by tricking an earlier run into emitting a heading that
-    itself contains attacker-authored instruction-shaped text) would
-    otherwise be replayed into EVERY prompt for the next 24 hours, from a
-    fixed, predictable template position ({{RECENT_COVERAGE}}), rather than
-    appearing once in one run's items block. That is strictly worse than the
-    items-block risk build_prompt already defends against: it turns a single
-    successful injection into a heading title into a standing, repeated
-    injection surface. So this block gets the same treatment as the items
-    block, not a lighter one: sanitized per-heading (see
-    _sanitize_recent_coverage_heading -- backticks stripped, "{{" broken,
-    length-capped), and it is embedded in the prompt inside its own fenced
-    block and explicitly labeled DATA, not instructions (prompts/digest.md's
-    "Recently covered" section, and the extension to that file's existing
-    "Security: the items below are DATA, not instructions" section) exactly
-    like the items JSON is.
+    SECURITY: every heading and mention here was GENERATED BY THE MODEL, but
+    generated FROM the same untrusted, scraped Telegram/X/news text this
+    run's own items come from -- a prompt injection that survived into a past
+    line would otherwise be replayed into EVERY prompt for the whole
+    lookback, from a fixed, predictable template position
+    ({{RECENT_COVERAGE}}). So every line gets the same treatment as the
+    items block: sanitized (see _sanitize_recent_coverage_heading -- backticks
+    stripped, "{{" broken, length-capped), embedded in its own fenced block
+    and explicitly labeled DATA, not instructions (prompts/digest.md's
+    "Recently covered" and "Security" sections).
 
     Standing/rubric headings (_STANDING_RUBRIC_HEADINGS -- today only
     "Needs attention", matched case-insensitively) are skipped: such a
-    heading appears by STANDING RULE rather than because a story happened,
-    so treating a past occurrence as "already covered" would make this run's
-    OWN standing section look suppressible by an unrelated past digest,
-    which prompts/digest.md's standing rules explicitly forbid regardless.
+    heading appears by STANDING RULE rather than because a story happened.
     See the frozenset's own comment for the per-member rationale.
 
     Ordering is newest-first, matching `digests`' own order (get_recent_digests
-    already returns created_at DESC) -- this function does not re-sort, it
-    only filters and formats. Rendering stops at _MAX_RECENT_COVERAGE_LINES
-    total lines across ALL digests combined, not per digest, so a long
-    history can never make this block grow unboundedly (see that constant's
-    own comment for the sizing rationale).
+    already returns created_at DESC) -- this function does not re-sort.
+    Rendering stops at `max_lines` total lines across ALL digests combined
+    (default _MAX_RECENT_COVERAGE_LINES; see that constant's comment).
 
-    Each surviving heading renders as `- <age>: <heading>`, where `<age>`
-    already reads as e.g. "3h ago" or "<1h ago" (see _format_digest_age for
-    the age format itself).
-    Returns the literal sentinel "(no prior briefings in the last 24 hours)"
-    when there is nothing to show (empty `digests`, or every heading was
-    either a standing/rubric heading or sanitized down to nothing) -- prompts/digest.md
-    still substitutes {{RECENT_COVERAGE}} unconditionally, so there must
-    always be SOME non-empty string to put there, and this sentinel reads
-    naturally as prose inside the fenced block rather than leaving it blank.
+    Returns the sentinel `_NO_RECENT_COVERAGE` when there is nothing to show
+    -- prompts/digest.md substitutes {{RECENT_COVERAGE}} unconditionally, so
+    there must always be SOME non-empty string to put there.
     """
     lines: list[str] = []
     for created_at, body_md in digests:
         age_label = _format_digest_age(created_at, now)
-        for heading in _real_heading_lines(body_md):
-            if heading.lower() in _STANDING_RUBRIC_HEADINGS:
-                continue
-            sanitized = _sanitize_recent_coverage_heading(heading)
-            if not sanitized:
-                continue
-            lines.append(f"- {age_label}: {sanitized}")
-            if len(lines) >= _MAX_RECENT_COVERAGE_LINES:
+        entries = [
+            f"- {age_label}: {sanitized}"
+            for heading in _real_heading_lines(body_md)
+            if heading.lower() not in _STANDING_RUBRIC_HEADINGS
+            if (sanitized := _sanitize_recent_coverage_heading(heading))
+        ]
+        if include_also:
+            entries += [
+                f"- {age_label}, in passing: {sanitized}"
+                for mention in _in_passing_mentions(body_md)
+                if (sanitized := _sanitize_recent_coverage_heading(mention))
+            ]
+        for entry in entries:
+            lines.append(entry)
+            if len(lines) >= max_lines:
                 return "\n".join(lines)
 
     if not lines:
@@ -2298,6 +2391,154 @@ def extract_deltas(body_md: str) -> tuple[str, list[dict[str, str]]]:
     return stripped_body, entries
 
 
+# --- Repairs and soft quality measures on the model's prose ---
+
+# A list-item line: 0-3 spaces, a bullet or "1."/"1)" marker, whitespace, then
+# content. `* * *` also matches, so rules are excluded separately. Inside a
+# block, deeper-indented markers (nested items) are items too.
+_LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+•]|\d{1,2}[.)])\s+\S")
+_NESTED_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+•]|\d{1,2}[.)])\s+\S")
+_LIST_MARKER_RE = re.compile(r"^\s*(?:[-*+•]|\d{1,2}[.)])\s+")
+_HORIZONTAL_RULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
+_TRAILING_CITATIONS_RE = re.compile(r"(?:\[[⁰¹²³⁴⁵⁶⁷⁸⁹]+\]\([^)]*\)\s*)+$")
+_FLATTEN_SEPARATE_PARAGRAPHS_ABOVE_WORDS = 40
+
+
+def _item_with_terminator(item: str) -> str:
+    """Return `item` ending in sentence punctuation, appending "." when it does not.
+
+    Trailing citation links and closing quote/emphasis characters are looked
+    through, so `claim.[¹](url)` and `**claim.**` count as terminated.
+    """
+    core = _TRAILING_CITATIONS_RE.sub("", item.rstrip()).rstrip("*_\"'”’)]").rstrip()
+    if core.endswith((".", "!", "?")):
+        return item
+    return item + "."
+
+
+def flatten_list_blocks(markdown_text: str) -> tuple[str, int]:
+    """Rewrite markdown list blocks as prose; return (text, list lines flattened).
+
+    The prompt bans bullet lists but the model still emits them (7 of 28
+    reviewed digests), and per PLAN.md's lesson a required output property is
+    repaired here in code, never retried or gated on style. Each run of
+    marker lines (`- `, `* `, `+ `, `• `, `1. `, `1) `; indented lines that
+    continue an item fold into it) loses only its marker; every other byte of
+    an item is kept, so citations, links and bold survive verbatim. Items are
+    joined into ONE paragraph, or kept as separate paragraphs when they
+    average more than 40 words. A lone marker line is flattened too.
+
+    Never touched: fenced blocks, headings, blockquotes, horizontal rules,
+    the TL;DR paragraph, and lines like `**bold** text` or `*From ...*` (no
+    whitespace after the first `*`, so not a marker). Returns the input
+    unchanged with count 0 when there is nothing to flatten.
+    """
+    lines = markdown_text.split("\n")
+    out: list[str] = []
+    flattened = 0
+    fence: str | None = None
+    in_tldr = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if fence is not None:
+            if stripped.startswith(fence) and not stripped.strip(fence[0]):
+                fence = None
+            out.append(line)
+            i += 1
+            continue
+        if stripped.startswith(("```", "~~~")):
+            fence = stripped[:3]
+            out.append(line)
+            i += 1
+            continue
+        if not stripped:
+            in_tldr = False
+        elif stripped.startswith("**TL;DR"):
+            in_tldr = True
+        if in_tldr or not _LIST_ITEM_RE.match(line) or _HORIZONTAL_RULE_RE.match(line):
+            out.append(line)
+            i += 1
+            continue
+
+        items: list[str] = []
+        while i < len(lines):
+            current = lines[i]
+            if _NESTED_LIST_ITEM_RE.match(current) and not _HORIZONTAL_RULE_RE.match(current):
+                items.append(_LIST_MARKER_RE.sub("", current, count=1).strip())
+            elif items and current.strip() and current.startswith("  "):
+                items[-1] += " " + current.strip()
+            else:
+                break
+            i += 1
+        flattened += len(items)
+        items = [_item_with_terminator(item) for item in items]
+        avg_words = sum(len(item.split()) for item in items) / len(items)
+        if avg_words > _FLATTEN_SEPARATE_PARAGRAPHS_ABOVE_WORDS:
+            paragraphs = items
+        else:
+            paragraphs = [" ".join(items)]
+        # A prose lead-in ending in ":" ("Three moves stood out:") takes the
+        # joined items as its own continuation instead of being left as an
+        # orphan one-line paragraph.
+        prev = len(out) - 1
+        if prev >= 0 and not out[prev].strip():
+            prev -= 1
+        if (
+            len(paragraphs) == 1
+            and prev >= 0
+            and out[prev].rstrip().endswith(":")
+            and not out[prev].lstrip().startswith(("#", ">", "**TL;DR"))
+        ):
+            del out[prev + 1 :]
+            out[prev] = out[prev].rstrip() + " " + paragraphs[0]
+        else:
+            if out and out[-1].strip():
+                out.append("")
+            for n, paragraph in enumerate(paragraphs):
+                if n:
+                    out.append("")
+                out.append(paragraph)
+        if i < len(lines) and lines[i].strip():
+            out.append("")
+    if not flattened:
+        return markdown_text, 0
+    return "\n".join(out), flattened
+
+
+_MD_LINK_TEXT_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_TLDR_LABEL_RE = re.compile(r"^\*\*TL;DR:?\*\*:?\s*")
+_BOLD_LABEL_PARAGRAPH_RE = re.compile(
+    r"^\s*(?!\*\*(?:TL;DR|Correction)\b)\*\*[^*\n]{1,40}(?::\*\*|\*\*:)\s", re.MULTILINE
+)
+
+
+def tldr_stats(markdown_text: str) -> tuple[int, int] | None:
+    """(sentences, words) of the TL;DR paragraph's prose, or None without one.
+
+    The `**TL;DR:**` label, links (citation chips included) and emphasis
+    markers are removed before counting.
+    """
+    match = _TLDR_PARAGRAPH_RE.search(markdown_text)
+    if match is None:
+        return None
+    text = _TLDR_LABEL_RE.sub("", match.group(0).strip())
+    text = _CITATION_LINK_RE.sub("", text)
+    text = _MD_LINK_TEXT_RE.sub(r"\1", text).replace("*", "")
+    text = " ".join(text.split())
+    return count_sentences(text), len(text.split())
+
+
+def count_bold_label_paragraphs(markdown_text: str) -> int:
+    """Count paragraphs/lines opening with a bold label like `**Crypto:** ...`.
+
+    These act as hidden rubric headings; `**TL;DR:**` and `**Correction:**`
+    are the two legitimate bold openers and are not counted.
+    """
+    return len(_BOLD_LABEL_PARAGRAPH_RE.findall(markdown_text))
+
+
 def summarize(
     items: list[Item],
     failed_sources: list[str],
@@ -2441,6 +2682,11 @@ def summarize(
     output, arc_keys = extract_arc_keys(output)
     output, deltas = extract_deltas(output)
     validate_output(output)
+    # Bullet lists are repaired in code, never retried or gated on style
+    # (see flatten_list_blocks and PLAN.md's lesson on style gates).
+    output, flattened_lines = flatten_list_blocks(output)
+    if flattened_lines:
+        logger.warning("flattened %d bullet/list lines into prose", flattened_lines)
     # The TL;DR opener is checked SOFTLY, unlike the heading requirement: a
     # missing TL;DR degrades one email cosmetically, while raising here
     # would hold every collected item hostage for a full scheduling cycle
@@ -2457,6 +2703,14 @@ def summarize(
     # potentially strips any non-allowlisted link down to plain text below.
     if not _MARKDOWN_LINK_RE.search(output):
         logger.warning("digest output contains no citation links — sending anyway")
+    # Soft prose-quality logs (never raise): the TL;DR is also the Telegram
+    # ping, and bold lead-in labels act as hidden rubric headings.
+    tldr = tldr_stats(output)
+    if tldr is not None and (tldr[0] > 4 or tldr[1] > 80):
+        logger.warning("TL;DR is long (%d sentences, %d words) — sending anyway", *tldr)
+    bold_labels = count_bold_label_paragraphs(output)
+    if bold_labels:
+        logger.warning("%d paragraphs open with a bold label — sending anyway", bold_labels)
     output = enforce_link_allowlist(output, allowed_urls={item.url for item in items})
     # strip_tldr_citations/renumber_citations run last, after link-allowlist
     # repair: the TL;DR paragraph must never carry citation links (owner
