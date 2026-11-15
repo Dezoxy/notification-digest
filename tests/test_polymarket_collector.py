@@ -350,3 +350,64 @@ def test_non_json_body_marks_result_failed(monkeypatch: pytest.MonkeyPatch) -> N
     result = collect("https://api.example", None, 30, 0.15, _no_stored_probs)
 
     assert result.failed is True
+
+
+# --- expired markets ---
+
+
+def test_expired_market_is_skipped_future_and_bad_end_dates_are_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markets = [
+        _market(market_id="past", end_date="2020-01-01T00:00:00Z"),
+        _market(market_id="future", end_date="2999-01-01T00:00:00Z"),
+        _market(market_id="none", end_date=None),
+        _market(market_id="garbage", end_date="not-a-date"),
+    ]
+    _patch_urlopen(monkeypatch, json.dumps(markets).encode())
+
+    result = collect("https://api.example", None, 30, 0.15, _no_stored_probs)
+
+    assert set(result.prob_updates) == {"future", "none", "garbage"}
+
+
+def test_expired_market_does_not_consume_top_n_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    markets = [
+        _market(market_id="past", end_date="2020-01-01T00:00:00Z"),
+        _market(market_id="live", end_date="2999-01-01T00:00:00Z"),
+    ]
+    _patch_urlopen(monkeypatch, json.dumps(markets).encode())
+
+    result = collect("https://api.example", None, 1, 0.15, _no_stored_probs)
+
+    assert set(result.prob_updates) == {"live"}
+
+
+# --- resolution-like moves ---
+
+
+@pytest.mark.parametrize(
+    ("price", "prior"), [("0.00", 0.15), ("0.02", 0.30), ("0.98", 0.70), ("1.0", 0.50)]
+)
+def test_resolution_like_move_emits_no_item_but_moves_anchor(
+    monkeypatch: pytest.MonkeyPatch, price: str, prior: float
+) -> None:
+    market = _market(market_id="m1", prices=(price, "0.5"))
+    _patch_urlopen(monkeypatch, json.dumps([market]).encode())
+
+    result = collect("https://api.example", None, 30, 0.10, lambda ids: {"m1": prior})
+
+    assert result.items == []
+    assert result.prob_updates == {"m1": (float(price), "Will X happen?")}
+
+
+def test_normal_swing_near_but_inside_resolution_band_is_still_emitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    market = _market(market_id="m1", prices=("0.05", "0.95"))
+    _patch_urlopen(monkeypatch, json.dumps([market]).encode())
+
+    result = collect("https://api.example", None, 30, 0.15, lambda ids: {"m1": 0.30})
+
+    assert len(result.items) == 1
+    assert result.prob_updates == {"m1": (0.05, "Will X happen?")}

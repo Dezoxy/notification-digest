@@ -548,6 +548,84 @@ def test_feed_title_override_applies_by_host_and_parent_domain(
     assert result.items[0].chat_title == "Financial Times"
 
 
+@pytest.mark.parametrize(
+    ("feed_url", "feed_title", "expected"),
+    [
+        (
+            "https://github.blog/changelog/feed/",
+            "Archive: 2026 - GitHub Changelog",
+            "GitHub Changelog",
+        ),
+        ("https://www.ecb.europa.eu/rss/press.html", "ECB press", "European Central Bank"),
+        (
+            "https://www.federalreserve.gov/feeds/press_all.xml",
+            "FRB: Press Release - All Releases",
+            "Federal Reserve",
+        ),
+        (
+            "https://www.coindesk.com/arc/outboundfeeds/rss/",
+            "CoinDesk - All",
+            "CoinDesk",
+        ),
+        ("https://huggingface.co/blog/feed.xml", "Hugging Face - Blog", "Hugging Face"),
+    ],
+)
+def test_new_feed_title_overrides(
+    monkeypatch: pytest.MonkeyPatch, feed_url: str, feed_title: str, expected: str
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"<item><title>Story</title><link>https://example.com/s</link>"
+        f"<guid>g</guid><pubDate>{recent}</pubDate></item>",
+        feed_title=feed_title,
+    )
+    _patch_urlopen(monkeypatch, {feed_url: body})
+
+    result = collect([feed_url])
+
+    assert result.items[0].chat_title == expected
+
+
+def test_feedx_override_is_gone() -> None:
+    assert "feedx.net" not in rss_module._FEED_TITLE_OVERRIDES
+
+
+def test_aljazeera_video_clips_are_skipped_but_articles_and_liveblogs_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+
+    def item(link: str, guid: str) -> str:
+        return (
+            f"<item><title>T {guid}</title><link>{link}</link>"
+            f"<guid>{guid}</guid><pubDate>{recent}</pubDate></item>"
+        )
+
+    body = _rss(
+        item("https://www.aljazeera.com/video/newsfeed/2026/11/1/clip", "video")
+        + item("https://www.aljazeera.com/news/2026/11/1/article", "article")
+        + item("https://www.aljazeera.com/news/liveblog/2026/11/1/live", "liveblog")
+    )
+    _patch_urlopen(monkeypatch, {"https://www.aljazeera.com/xml/rss/all.xml": body})
+
+    result = collect(["https://www.aljazeera.com/xml/rss/all.xml"])
+
+    assert sorted(i.source_id for i in result.items) == ["article", "liveblog"]
+
+
+def test_video_path_on_another_host_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    recent = _rfc822(_NOW - timedelta(hours=1))
+    body = _rss(
+        f"<item><title>T</title><link>https://example.com/video/x</link>"
+        f"<guid>other</guid><pubDate>{recent}</pubDate></item>"
+    )
+    _patch_urlopen(monkeypatch, {"https://example.com/feed": body})
+
+    result = collect(["https://example.com/feed"])
+
+    assert [i.source_id for i in result.items] == ["other"]
+
+
 def test_feed_without_override_keeps_its_own_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

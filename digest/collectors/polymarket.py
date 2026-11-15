@@ -23,7 +23,16 @@ OBSERVED one:
   compare it against yet.
 - `abs(current - stored) >= threshold` emits an item AND moves the anchor to
   `current`.
+- A swing whose CURRENT probability is within `_RESOLUTION_EPSILON` of 0 or 1
+  (<= 0.02 or >= 0.98) is treated as a market that is effectively resolving
+  ("15% -> 0%"): NO item is emitted, but the anchor still moves to
+  `current`, exactly as for a reported swing, so it does not fire next run.
 - Below threshold: NO item, and the anchor is deliberately left UNCHANGED.
+
+Expired markets: a market whose `endDate` is already in the past can still be
+listed as active by the API and produce a bogus swing. Such markets are
+skipped before the `top_n` cut and counted in the skip tally. A missing or
+unparseable `endDate` is NOT skipped.
 
 That last point is the crux of the design, not an oversight: if the anchor
 moved to `current` on every observation regardless of threshold, a slow,
@@ -150,6 +159,10 @@ _USER_AGENT = "notification-digest/1.0"
 # than `top_n` genuine markets survive filtering even out of 100, the run
 # simply reports fewer candidates this time; that's not a failure).
 _OVERFETCH_LIMIT = 100
+
+# A swing landing at or beyond this distance from 0 or 1 (probability <= 0.02
+# or >= 0.98) is a market resolving, not news: no item, anchor still moves.
+_RESOLUTION_EPSILON = 0.02
 
 
 @dataclass
@@ -287,6 +300,23 @@ def _parse_binary_market(raw: Any) -> _ParsedMarket | None:
     )
 
 
+def _is_expired(end_date: str | None, now: datetime) -> bool:
+    """True iff `end_date` parses as an ISO8601 timestamp strictly before `now`.
+
+    Missing or unparseable values return False (not expired), keeping the
+    pre-existing behaviour for them. A naive timestamp is read as UTC.
+    """
+    if not end_date:
+        return False
+    try:
+        parsed = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed < now
+
+
 def _format_end_date(end_date: str | None) -> str:
     """The date-only portion of a raw `endDate` string, or "unknown".
 
@@ -398,11 +428,13 @@ def collect(
     since `_fetch_markets` itself raises for that case too.
 
     Each raw market is first checked with `_is_sports_market` (excluded,
-    counted, never fatal) and then parsed via `_parse_binary_market`
+    counted, never fatal), then parsed via `_parse_binary_market`
     (anything that isn't a clean binary Yes/No market is likewise skipped
-    and counted) -- both skip categories share one debug-level tally, never
-    logged with the market's own question text (module docstring's "v1
-    scope"). Survivors are kept in the API's own volume24hr-descending
+    and counted), then dropped if its `endDate` is already past
+    (`_is_expired`; a missing/unparseable endDate is kept) -- all these skip
+    categories share one debug-level tally, never logged with the market's
+    own question text (module docstring's "v1 scope").
+    Survivors are kept in the API's own volume24hr-descending
     order and truncated to the first `top_n` -- `top_n` is a POST-filter
     cut, never part of the request itself (module docstring's "Sports/
     esports exclusion", overfetch rationale). An empty survivor set (e.g.
@@ -418,7 +450,9 @@ def collect(
       question)` as the new baseline in `prob_updates`, emit NO item.
     - `abs(current - prior) >= threshold` -> emit an Item (`_build_item`)
       AND record `(current, question)` in `prob_updates` -- the anchor
-      moves to what was just reported.
+      moves to what was just reported. Exception: if `current` is <= 0.02
+      or >= 0.98 (`_RESOLUTION_EPSILON`; the market is effectively
+      resolving) NO item is emitted, but the anchor still moves.
     - Otherwise -> record `(prior, question)` in `prob_updates` -- the
       PRIOR value, unchanged, not `current`. This looks like a no-op on
       `probability` but is not: digest/state.py's `commit_new_items` upserts
@@ -429,7 +463,8 @@ def collect(
       schema comment for this same "probability = last reported, updated_at
       = last observed" split stated from the storage side.
     """
-    fetched_at = datetime.now(UTC).isoformat()
+    now = datetime.now(UTC)
+    fetched_at = now.isoformat()
 
     try:
         raw_markets = _fetch_markets(api_base, proxy_key)
@@ -449,9 +484,12 @@ def collect(
         if market is None:
             skipped += 1
             continue
+        if _is_expired(market.end_date, now):
+            skipped += 1
+            continue
         parsed.append(market)
     if skipped:
-        logger.debug("polymarket: skipped %d sports/non-binary/malformed markets", skipped)
+        logger.debug("polymarket: skipped %d sports/non-binary/malformed/expired markets", skipped)
 
     if not parsed:
         return PolymarketCollectResult()
@@ -465,7 +503,8 @@ def collect(
             result.prob_updates[market.market_id] = (market.probability, market.question)
             continue
         if abs(market.probability - prior) >= threshold:
-            result.items.append(_build_item(market, prior, fetched_at))
+            if _RESOLUTION_EPSILON < market.probability < 1.0 - _RESOLUTION_EPSILON:
+                result.items.append(_build_item(market, prior, fetched_at))
             result.prob_updates[market.market_id] = (market.probability, market.question)
         else:
             result.prob_updates[market.market_id] = (prior, market.question)
