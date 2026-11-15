@@ -1045,8 +1045,8 @@
     .settingsrow { min-height: 44px; }
     .minisegbtn, .langswitch strong, .langswitch a, .pushtoggle { min-height: 40px; }
     @media (prefers-reduced-motion: no-preference) {
-      .bar { transition: transform var(--dur) var(--ease-out); }
-      .resumechip { transition: translate var(--dur) var(--ease-out); }
+      .bar { transition: transform var(--dur-slow) ease-out; }
+      .resumechip { transition: translate var(--dur-slow) ease-out; }
       @starting-style {
         .settingspanel:popover-open { opacity: 0; transform: translateY(32px); }
       }
