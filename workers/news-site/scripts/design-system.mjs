@@ -310,7 +310,7 @@ const PLAIN_USAGE = {
   "dur-drift": ["motion", "One cycle of the background glow drift."],
   "ease-out": ["motion", "Entrances and lifts."],
   "ease-io": ["motion", "The ambient glow drift."],
-  "blur-chrome": ["effects", "Backdrop blur of the bar."],
+  "blur-chrome": ["effects", "Backdrop blur of the top bar. The phone dock uses 8px."],
   "blur-sheet": ["effects", "Backdrop blur of the settings popover and the command palette."],
   "z-bg": ["effects", "Background layers."],
   "z-chip": ["effects", "The resume chip."],
