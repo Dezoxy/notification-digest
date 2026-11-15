@@ -709,7 +709,7 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 **States.** Hover on a card darkens its border and lifts it 2px (hover devices only); on a row or tab it washes to \`accent-soft\` or \`strong\` text. Focus is one 2px \`accent\` ring. Disabled controls are hidden, not greyed.
 
-**Motion.** Only under \`prefers-reduced-motion: no-preference\`, only transform and opacity: the page-load rise (staggered), the drifting background glow, the live-dot ping, card lift, section unfold, the settings popover. No scroll-triggered reveals.
+**Motion.** Only under \`prefers-reduced-motion: no-preference\`, only transform and opacity: the page-load rise (staggered), the phone view-switch content rise, the drifting background glow, the live-dot ping, card lift, section unfold, the settings popover. No scroll-triggered reveals.
 
 **Themes.** Light, dark, or the OS preference, chosen in Settings and pinned through \`data-theme\` on \`<html>\`, which only switches \`color-scheme\`; \`light-dark()\` does the rest.
 

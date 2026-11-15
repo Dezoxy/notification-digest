@@ -203,7 +203,7 @@ test("client.js: settings popover is closed by hidePopover only, never opened", 
   );
   assert.match(
     CLIENT_SCRIPT,
-    /closeSettingsPopover\(\);\s*withPageTransition/,
+    /closeSettingsPopover\(\);\s*function swapPage\(\)/,
     "closed before the soft-nav swap",
   );
   assert.ok(!/\.showPopover\(/.test(CLIENT_SCRIPT), "the client never calls showPopover()");

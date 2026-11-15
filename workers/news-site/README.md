@@ -848,8 +848,10 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   coverage line (`p.foot`, "From N items; …" / "Synthesized from …").
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
-- **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
-  palette, j/k list navigation, and an Archive nav link.
+- **Navigation** — soft navigation swaps internal pages in place. Phone switches
+  between All, Daily, and Weekly animate the incoming content while the dock
+  stays fixed. Reduced motion uses an instant swap. The site also provides a
+  ⌘K command palette, j/k list navigation, and an Archive nav link.
 - **Settings and reading** — a settings panel (a popover opened from the bar's
   sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
   language, the three-state theme, text size (XS/S/M/L) and a Cards | Compact
