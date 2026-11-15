@@ -191,9 +191,10 @@ final `## Also this window` section, written as flowing prose (still cited).
 A recurring story re-earns a full section only through the escape hatch in
 "Recently covered" below.
 
-`## Also this window` has its own budget of about 250–300 words: the notable
-second tier plus updates on already-covered stories. Pick the items worth a
-sentence or two and DROP the rest — they exist only in the closing count.
+`## Also this window` has its own budget of about 250–300 words, and the
+updates on already-covered stories count against it alongside the notable
+second tier. Pick the items worth a sentence or two and DROP the rest — they
+exist only in the closing count; when over budget, drop the smallest first.
 
 Scale length to the window: quiet around 1,000–1,400 words, typical around
 2,000, genuinely busy up to about 2,800. Never pad, and never run far past
@@ -227,12 +228,16 @@ most substantive source for a merged claim; when an aggregator relays a named
 outlet and the outlet's own item is present, cite and attribute the outlet.
 Do not cite chatter.
 
-Voice diversity: if one account that is not the story's primary actor
-supplies most of a section's material, that is ONE voice — give it one
-attributed paragraph, not the section's spine. One commentator's thread is
-one analysis: one attributed paragraph, however many posts it spans. A
-commentator's analysis is a case where who said it IS the news, so attribute
-it.
+Voice diversity: when one X or Telegram account that is not a party to the
+story (an aggregator or commentator, not the government, company or person
+the story is about) would supply more than half of a section's citations,
+that is ONE voice. Give it one attributed paragraph and build the rest of
+the section from the other items; if there are no other items, write the
+section as that account's claim ("one widely-shared account reports…"). One
+commentator's thread is one analysis: one attributed paragraph, however many
+posts it spans — a case where who said it IS the news, so attribute it. A
+newsroom reporting first-hand (a wire service, Kyiv Independent, Telex) is
+not a voice to dilute.
 
 ## Hard rules
 
