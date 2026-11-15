@@ -248,6 +248,99 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     } catch (e) {}
   }
 
+  // Fixed-body locking also works on iOS Safari, where overflow:hidden alone
+  // can leave the background scrollable. Release the lock synchronously as
+  // the popover closes so soft navigation can set the next page position.
+  (function () {
+    if (!window.matchMedia) return;
+    var phone = matchMedia("(max-width: 699.98px)");
+    var lockedY = null;
+    var drag = null;
+    var releaseAnimation = null;
+    function lock() {
+      if (lockedY !== null) return;
+      lockedY = window.scrollY;
+      document.documentElement.style.setProperty("--settings-scroll-top", -lockedY + "px");
+      document.documentElement.classList.add("settingslocked");
+    }
+    function unlock() {
+      if (lockedY === null) return;
+      var y = lockedY;
+      lockedY = null;
+      document.documentElement.classList.remove("settingslocked");
+      document.documentElement.style.removeProperty("--settings-scroll-top");
+      window.scrollTo({ top: y, behavior: "instant" });
+    }
+    function resetDrag() {
+      if (releaseAnimation) {
+        releaseAnimation.cancel();
+        releaseAnimation = null;
+      }
+      if (!drag) return;
+      var previous = drag;
+      drag = null;
+      previous.panel.classList.remove("settings-dragging");
+      previous.panel.style.removeProperty("transform");
+      if (previous.head.hasPointerCapture(previous.id)) previous.head.releasePointerCapture(previous.id);
+    }
+    document.addEventListener("beforetoggle", function (event) {
+      if (event.target.id !== "settings") return;
+      resetDrag();
+      if (event.newState === "open" && phone.matches) lock();
+      else unlock();
+    }, true);
+    phone.addEventListener("change", function () {
+      resetDrag();
+      var panel = document.getElementById("settings");
+      if (phone.matches && panel && panel.matches(":popover-open")) lock();
+      else unlock();
+    });
+    document.addEventListener("pointerdown", function (event) {
+      if (!phone.matches || !event.isPrimary || event.button !== 0 || !(event.target instanceof Element)) return;
+      var head = event.target.closest(".settingshead");
+      if (!head || event.target.closest("button")) return;
+      var panel = head.closest("#settings:popover-open");
+      if (!panel) return;
+      resetDrag();
+      drag = { head: head, panel: panel, id: event.pointerId, start: event.clientY, distance: 0 };
+      panel.classList.add("settings-dragging");
+      head.setPointerCapture(event.pointerId);
+    });
+    document.addEventListener("pointermove", function (event) {
+      if (!drag || event.pointerId !== drag.id) return;
+      drag.distance = Math.max(0, event.clientY - drag.start);
+      drag.panel.style.transform = "translateY(" + drag.distance + "px)";
+    });
+    document.addEventListener("pointerup", function (event) {
+      if (!drag || event.pointerId !== drag.id) return;
+      var panel = drag.panel;
+      var distance = drag.distance;
+      var dismiss = distance >= Math.min(120, panel.offsetHeight * 0.3);
+      resetDrag();
+      var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduced || !panel.animate) {
+        if (dismiss) panel.hidePopover();
+        return;
+      }
+      var animation = panel.animate(
+        [{ transform: "translateY(" + distance + "px)" }, { transform: dismiss ? "translateY(100%)" : "translateY(0)" }],
+        { duration: 200, easing: "ease-out", fill: "both" },
+      );
+      releaseAnimation = animation;
+      animation.onfinish = function () {
+        if (releaseAnimation !== animation) return;
+        if (dismiss && panel.matches(":popover-open")) panel.hidePopover();
+        resetDrag();
+      };
+    });
+    function cancelPointer(event) {
+      if (drag && event.pointerId === drag.id) resetDrag();
+    }
+    document.addEventListener("pointercancel", cancelPointer);
+    document.addEventListener("lostpointercapture", cancelPointer);
+    addEventListener("pagehide", closeSettingsPopover);
+  })();
+
   // ── page-level state that outlives a wirePage() pass ───────────────────
   // Everything in this block is registered ONCE at module init: it either
   // listens on window/document for something unrelated to the swapped DOM
@@ -278,6 +371,7 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
   // is a no-op and afterprint restores exactly what the reader had.
   var printOpened = [];
   addEventListener("beforeprint", function () {
+    closeSettingsPopover();
     var closed = document.querySelectorAll(
       "details.sec:not([open]), details.colophon:not([open]), details.arccontext:not([open])",
     );
@@ -373,7 +467,9 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       }
       function frame() {
         queued = false;
-        if (!phone.matches) {
+        if (!phone.matches || root.classList.contains("settingslocked")) {
+          // The fixed body temporarily sets window.scrollY to zero while
+          // Settings is open. Leave the dock's scroll baseline alone.
           show();
           return;
         }

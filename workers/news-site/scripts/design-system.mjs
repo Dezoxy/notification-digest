@@ -244,7 +244,7 @@ function colorUsage(r) {
       "Accent used as text on a tint or on `bg`: times, eyebrow labels, counts in pills, section numbers.",
     "on-accent": "Text and glyphs on a solid `accent` fill.",
     sheet:
-      "Translucent surface of the three blurred things: the bar, an open settings popover, the command palette.",
+      "Translucent fill for the bar, the tablet settings popover and the command palette. The phone dock mixes it with transparent.",
     "sheet-solid":
       "Opaque twin of `sheet`: the search popover (it sits inside the blurred bar), the phone sheet, the resume chip, and the fallback when blur is unavailable or reduced.",
     link: "Inline links and link-like rows (search link, settings About link).",
@@ -752,7 +752,7 @@ The mark is the "n." monogram, a white n and a periwinkle dot on a deep-ink tile
 </header>`),
     `# Bar
 
-The one floating pill at the top of every page: wordmark, view tabs, Search and Settings. It is the same \`header.bar\` on every breakpoint; below 700px CSS turns it into the bottom dock.
+The one floating pill at the top of every page: wordmark, view tabs, Search and Settings. It is the same \`header.bar\` on every breakpoint; below 700px CSS turns it into a bottom dock with a more translucent fill and an opaque accessibility fallback.
 
 **Provide** \`header.bar\` with the brand link (\`news\` plus \`span.brandmark\` for the accent full stop), a \`nav.viewtabs\`, and \`.baractions\` holding the search control and \`button.settingsbtn\` (\`popovertarget\` the settings panel). A digest page adds \`a.barback\` after the brand; it is shown only on phones.
 
@@ -798,7 +798,7 @@ Source: \`hrefs.js\`; styles \`.viewtabs\`, \`.viewtab\`.
 </section>`),
     `# SettingsPanel
 
-Language, theme, text size, density and notifications, each a labelled row with a segmented pill, plus the About link and app version. One element, three presentations: a card in the desktop sidebar, a popover anchored under the bar on tablets, a bottom sheet on phones.
+Language, theme, text size, density and notifications, each a labelled row with a segmented pill, plus the About link and app version. One element, three presentations: a card in the desktop sidebar, a popover anchored under the bar on tablets, a bottom sheet on phones. The phone sheet locks background scrolling and its grabber header follows a downward drag to dismiss.
 
 **Provide** a \`section.settingspanel[popover]#settings\` with a \`.settingshead\` (title and \`.settingsclose\`) and \`.settingsrow\`s. Each row is a \`.settingslabel\` plus a control: \`.miniseg\` of \`.minisegbtn\` (the chosen one \`.active\`), \`.langswitch\`, \`.pushtoggle\`, or a link. The bar's \`.settingsbtn\` opens it with \`popovertarget\`.
 
@@ -822,14 +822,14 @@ The preview shows the open popover. Source: \`hrefs.js\`, \`client.js\`; styles 
     <h1 class="herotitle headline-lead">Markets slid for a second day while the EU package landed.</h1>
     <p class="herosub excerpt">Equities extended losses into the close; two sections follow on the council vote and chip export rules.</p>
   </a>
-  <div class="heropills"><a class="herocta" href="#">Read the edition →</a></div>
-  <details class="storythreads hero-threads"><summary>Story threads · 2</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues</a><a class="threadpill" href="#">EU agrees new package</a></nav></details>
+  <div class="hero-actions"><a class="herocta" href="#">Read the edition →</a>
+  <details class="storythreads hero-threads"><summary>Story threads · 2</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues</a><a class="threadpill" href="#">EU agrees new package</a></nav></details></div>
 </section>`),
     `# HeroLead
 
 The newest briefing at the top of the index, centred and large: a chip with a live dot and the dateline, the headline, a subline, a primary CTA and the threads it belongs to.
 
-**Provide** \`section.hero\` with an \`a.entry.entry-lead.herolink\` linking to the digest (containing \`span.herochip\` with \`.livedot\`, \`.eyebrow-text\` and optional \`.flag\`s, an \`h1.herotitle.headline-lead\`, and \`p.herosub.excerpt\`), then \`.heropills\` holding \`a.herocta\`. Follow it with a closed \`details.storythreads.hero-threads\` when threads exist. Use a localized summary and a \`nav.heropills\` holding one \`a.threadpill\` per thread.
+**Provide** \`section.hero\` with an \`a.entry.entry-lead.herolink\` linking to the digest (containing \`span.herochip\` with \`.livedot\`, \`.eyebrow-text\` and optional \`.flag\`s, an \`h1.herotitle.headline-lead\`, and \`p.herosub.excerpt\`), then \`.hero-actions\` holding \`a.herocta\` and a closed \`details.storythreads.hero-threads\` when threads exist. The two controls share a row, including on phones; the expanded links span that row. Use a localized summary and a \`nav.heropills\` holding one \`a.threadpill\` per thread.
 
 - Do use exactly one per index page, above the ledger; it is the page's h1.
 - Do let the live dot's ping run only under no-preference motion.
@@ -1106,7 +1106,7 @@ Source: \`sections.js\`; styles \`.cite\`, \`mark\`.
 
 The related-reading controls after a digest article pair recurring story threads with a "What changed" list when a previous and current value are available.
 
-**Provide** a \`details.storythreads\` disclosure containing \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the pills sit in a closed hero disclosure below the edition CTA, without counts on individual pills.
+**Provide** a \`details.storythreads\` disclosure containing \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the pills sit in a closed hero disclosure beside the edition CTA, without counts on individual pills.
 
 - Do show a delta only when both values are known.
 - Don't colour deltas red or green; the previous value is \`muted\`, the current one \`strong\`.

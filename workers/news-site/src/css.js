@@ -618,9 +618,17 @@ export const CSS = `
   }
   .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
-  .hero-threads { margin-top: var(--sp-3); }
-  .hero-threads > summary { width: fit-content; max-width: 100%; margin-inline: auto; }
-  .hero-threads .heropills { justify-content: center; }
+  .hero-actions { display: flex; justify-content: center; margin-top: 26px; }
+  .hero-actions:has(> .hero-threads) {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); align-items: start;
+  }
+  .hero-actions > .herocta { justify-self: end; text-align: center; }
+  .hero-threads { min-width: 0; }
+  .hero-threads > summary { width: fit-content; max-width: 100%; }
+  /* The disclosure is in the second column. Its links span both columns. */
+  .hero-threads .heropills {
+    justify-content: center; width: calc(200% + var(--sp-2)); margin-inline-start: calc(-100% - var(--sp-2));
+  }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -926,6 +934,7 @@ export const CSS = `
       position: fixed; top: auto; left: 12px; right: 12px;
       bottom: calc(10px + env(safe-area-inset-bottom));
       gap: 6px; padding: 0 4px 0 4px;
+      background: color-mix(in srgb, var(--sheet) 75%, transparent);
     }
     /* The on-screen keyboard must never push the dock over the field. */
     html.typing .bar { display: none; }
@@ -951,6 +960,7 @@ export const CSS = `
        a little air above the heading. */
     .sechead h2[id] { scroll-margin-top: 16px; }
 
+    .hero-actions > .herocta, .hero-threads > summary { padding: 4px 10px; font-size: var(--fs-ui); line-height: 1.2; }
     .hero { padding: 36px 0 28px; }
     header.hero { padding: var(--sp-5) 0 var(--sp-4); }
     header.hero-digest { padding: var(--sp-2) 0; }
@@ -976,14 +986,22 @@ export const CSS = `
     .pushnote { max-width: 55%; }
 
     .settingspanel:popover-open {
-      position: fixed; inset: auto 0 0 0; width: auto; max-height: 85dvh; overflow: auto;
+      position: fixed; inset: auto 0 0 0; width: auto; max-height: 85dvh; overflow: auto; overscroll-behavior: contain;
       padding-bottom: calc(22px + env(safe-area-inset-bottom));
       border-radius: var(--r-lg) var(--r-lg) 0 0;
       /* Opaque on the phone: the sheet covers the dock and the page's text,
          and a translucent sheet lets both show through its lower half. */
       background: var(--sheet-solid);
     }
+    html:has(#settings:popover-open) { overflow-y: hidden; overscroll-behavior: none; }
+    html.settingslocked body { position: fixed; top: var(--settings-scroll-top); inset-inline: 0; }
     .settingspanel::backdrop { background: var(--scrim); }
+    .settingshead { position: relative; padding-top: 18px; touch-action: none; }
+    .settingshead::before {
+      content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      width: 36px; height: 4px; border-radius: var(--r-pill); background: var(--muted);
+    }
+    .settingspanel.settings-dragging { transition: none; }
     .settingsrow { min-height: 44px; }
     .minisegbtn, .langswitch strong, .langswitch a, .pushtoggle { min-height: 40px; }
     @media (prefers-reduced-motion: no-preference) {
@@ -1021,7 +1039,7 @@ export const CSS = `
     html[data-density="compact"] .ledger > .dayhead { margin-top: var(--sp-5); }
     html[data-density="compact"] .archiveresults { gap: 0; margin-top: var(--sp-3); }
     html[data-density="compact"] .hero { padding: var(--sp-5) 0 var(--sp-4); }
-    html[data-density="compact"] .hero .heropills { margin-top: var(--sp-3); }
+    html[data-density="compact"] .hero-actions { margin-top: var(--sp-3); }
     html[data-density="compact"] .digest { gap: var(--sp-2); }
     html[data-density="compact"] .toc { gap: 0; padding: 4px 0; }
     html[data-density="compact"] :is(.tldr, .attention, .aboutcard) { padding: 14px var(--sp-4); }
@@ -1068,7 +1086,7 @@ export const CSS = `
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .hero-actions, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }

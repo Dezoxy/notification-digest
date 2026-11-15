@@ -484,12 +484,12 @@ export function renderLeadCard(row, token, lang, view, threads = []) {
       <h1 class="herotitle headline-lead">${esc(headline)}</h1>
       <p class="herosub excerpt">${esc(subline)}</p>
     </a>
-    <div class="heropills"><a class="herocta" href="${href}">${esc(strings.heroRead)} →</a></div>${
+    <div class="hero-actions"><a class="herocta" href="${href}">${esc(strings.heroRead)} →</a>${
       pillsHtml
         ? `
     <details class="storythreads hero-threads"><summary>${esc(strings.arcsLabel)} · ${threads.length}</summary><nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pillsHtml}</nav></details>`
         : ""
-    }
+    }</div>
   </section>`;
 }
 
