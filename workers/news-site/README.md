@@ -19,9 +19,11 @@ Digest pages show an open native section picker before the complete summary.
 Stories are expanded by default and retain numbered inline citation links.
 Verification and collection warnings appear under **How this was made**.
 An exclamation mark next to that label signals a warning.
-Related story threads are available after the article when relevant. The picker
-and story disclosures work without JavaScript; Expand all / Collapse all is
-available when JavaScript is enabled.
+The homepage lead keeps the edition link visible and puts related story threads
+in a collapsed disclosure when present. On digest pages, related story threads
+are available after the article when relevant. The picker and story disclosures
+work without JavaScript; Expand all / Collapse all is available when JavaScript
+is enabled.
 
 The Density setting applies throughout the site. Compact digest stories
 use dividers between sections and a simple accent rule beside the TL;DR.

@@ -292,6 +292,19 @@ test("index EN: NOW section, week rail, degraded badge, kind badges", async () =
   assert.match(html, /flag-daily/, "daily/weekly kind badge");
 });
 
+test("index hero: localized disclosure and no empty disclosure", async () => {
+  const { html: hu } = await page("hu/");
+  const hero = hu.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0] ?? "";
+  assert.match(
+    hero,
+    /<details class="storythreads hero-threads"><summary>Történetszálak · 2<\/summary>/,
+  );
+  const { html: daily } = await page("daily/");
+  const dailyHero = daily.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0] ?? "";
+  assert.match(dailyHero, /class="herocta"/);
+  assert.doesNotMatch(dailyHero, /class="storythreads/);
+});
+
 test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail after ledger", async () => {
   const { html } = await page("");
   const hero = html.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0] ?? "";
@@ -310,6 +323,15 @@ test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail afte
   assert.ok(!html.includes('class="leadfacts"'), "old facts column is gone");
   assert.match(hero, /class="livedot" aria-hidden="true"/, "live dot");
   assert.match(hero, /<a class="herocta" href="[^"]*\/d\/235[^"]*">Read the edition →<\/a>/, "CTA");
+  assert.match(
+    hero,
+    /<details class="storythreads hero-threads"><summary>Story threads · 2<\/summary>/,
+    "threads start closed",
+  );
+  assert.ok(
+    hero.indexOf('class="herocta"') < hero.indexOf('<details class="storythreads'),
+    "CTA remains visible",
+  );
   // Fixture lead 235 has topics: the keyed arc (key markets-slide) and a slug-only one.
   assert.match(
     hero,
