@@ -498,10 +498,22 @@ Thing happened here. [⁵]({also.url}) Another **bold** [link](https://q.example
     assert m["sections"] == 6  # six story sections, "Also this window" excluded
     assert m["max_share_raw"] == 1.0
     assert m["max_share_exempt"] == 0.75
+    # X/Telegram only: news hosts (ECB, acme) never count, and BobCorp is exempt in
+    # its own launch section, so Bob's 3/4 in "Market chatter" is the maximum.
+    assert m["max_share_social"] == 0.75
     assert (m["max_share_heading"], m["max_share_account"]) == ("Market chatter", "x:@bob")
     assert m["expired_market_citations"] == 1
     assert m["resolved_market_citations"] == 1
     assert m["repeats_no_new_fact"] == 1
+
+
+def test_social_share_ignores_a_dominant_newsroom() -> None:
+    kyiv = [make_item("news", n, url=f"https://kyivindependent.com/a{n}") for n in range(7)]
+    nexta = make_item("x", 10, author="nexta_tv", url="https://x.com/nexta_tv/status/1")
+    body = f"**TL;DR:** x.\n\n## Zelensky blames Starshield limits\n\n{cites([*kyiv, nexta])}\n"
+    m = replay.compute_metrics(None, body, [*kyiv, nexta], [], None, T)
+    assert m["max_share_exempt"] == 0.875  # the newsroom trips the all-accounts metric
+    assert m["max_share_social"] == 0.125  # but not the commentator/aggregator one
 
 
 def test_account_mapping() -> None:

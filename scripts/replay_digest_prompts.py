@@ -88,6 +88,7 @@ TARGETS: dict[str, str] = {
     "also_words": "<=300",
     "max_share_raw": "info",
     "max_share_exempt": "<=0.5",
+    "max_share_social": "<=0.5",
     "expired_market_citations": "0",
     "resolved_market_citations": "0",
     "repeats_no_new_fact": "0",
@@ -566,7 +567,7 @@ def voice_metrics(
     shipped: str, items_by_url: dict[str, Item], arcs: list[dict[str, str]]
 ) -> dict[str, object]:
     keys = {_normalize(a.get("heading", "")): a.get("key", "") for a in arcs}
-    max_raw = max_exempt = 0.0
+    max_raw = max_exempt = max_social = 0.0
     offender = ("", "")
     for heading, body in split_sections(shipped):
         if _is_also(heading):
@@ -582,6 +583,17 @@ def voice_metrics(
         tally = Counter(a for a, _ in counted)
         top, top_count = tally.most_common(1)[0]
         max_raw = max(max_raw, top_count / len(counted))
+        # The voice rule targets commentators and aggregators: a newsroom with
+        # first-hand reporting (e.g. Kyiv Independent on Ukraine) may carry a
+        # section. So also track the top non-exempt X/Telegram account alone.
+        arc_key = keys.get(_normalize(heading), "")
+        first_item = {a: i for a, i in reversed(counted)}
+        social = [
+            c
+            for a, c in tally.items()
+            if a.startswith(("x:", "tg:")) and not _is_exempt(first_item[a], heading, arc_key)
+        ]
+        max_social = max(max_social, max(social, default=0) / len(counted))
         top_item = next(i for a, i in counted if a == top)
         if _is_exempt(top_item, heading, keys.get(_normalize(heading), "")):
             rest = [(a, c) for a, c in tally.items() if a != top]
@@ -594,6 +606,7 @@ def voice_metrics(
     return {
         "max_share_raw": round(max_raw, 3),
         "max_share_exempt": round(max_exempt, 3),
+        "max_share_social": round(max_social, 3),
         "max_share_heading": offender[0],
         "max_share_account": offender[1],
     }
