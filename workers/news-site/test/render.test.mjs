@@ -105,6 +105,14 @@ test("CSS and CLIENT_SCRIPT literals stay embeddable", async () => {
 
 // ── self-containment ──────────────────────────────────────────────────────
 
+test("each page identifies its inline navigation assets", async () => {
+  for (const { name, path } of GOLDEN_PAGES) {
+    const { html } = await page(path);
+    assert.equal((html.match(/<style id="site-css">/g) ?? []).length, 1, `${name}: stylesheet`);
+    assert.equal((html.match(/<script id="site-client">/g) ?? []).length, 1, `${name}: client`);
+  }
+});
+
 test("no external URLs outside the article body", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const { html } = await page(path);

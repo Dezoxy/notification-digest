@@ -235,7 +235,7 @@ ${prefetchLinkHtml}
      @font-face request, and downloads the file twice. -->
 ${fontPreloadHtml}
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.density=localStorage.getItem("density")||"";localStorage.removeItem("font");document.documentElement.classList.add("enter")}catch(e){}</script>
-<style>${CSS}</style>
+<style id="site-css">${CSS}</style>
 </head>
 <body>
 ${prefetchScriptHtml}
@@ -261,7 +261,7 @@ ${prefetchScriptHtml}
   </main>
   ${hasSide ? "" : settingsPanelHtml}
 </div>
-<script>
+<script id="site-client">
 ${CLIENT_SCRIPT}
 </script>
 <script>if("serviceWorker" in navigator)addEventListener("load",function(){navigator.serviceWorker.register(${JSON.stringify(swHref(token))}).catch(function(){})});</script>
