@@ -93,7 +93,7 @@ export const CSS = `
     --fs-ui: 14px;
     --fs-meta: 13px;
     --fs-micro: 12px;
-    --read-scale: 1;
+    --read-scale: 0.96;
 
     --sp-1: 4px;
     --sp-2: 8px;
@@ -813,9 +813,9 @@ export const CSS = `
   .cmdpalette-empty { padding: 14px 16px; font-size: var(--fs-ui); color: var(--muted); }
 
   /* ── Reading size (XS/S/L): M is the absence of data-fontsize ─────── */
-  html[data-fontsize="xs"] { --read-scale: 0.86; }
-  html[data-fontsize="s"] { --read-scale: 0.94; }
-  html[data-fontsize="l"] { --read-scale: 1.12; }
+  html[data-fontsize="xs"] { --read-scale: 0.82; }
+  html[data-fontsize="s"] { --read-scale: 0.90; }
+  html[data-fontsize="l"] { --read-scale: 1.08; }
 
   /* ── Motion: the only place anything animates ─────────────────────── */
   @media (prefers-reduced-motion: no-preference) {
