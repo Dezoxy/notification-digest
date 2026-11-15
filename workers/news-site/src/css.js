@@ -843,6 +843,9 @@ export const CSS = `
       animation: rise var(--dur-enter) var(--ease-out) both;
     }
     @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+    /* Phone view switches animate the incoming content, never the dock. */
+    .layout.view-switch-enter { animation: view-switch-enter var(--dur) var(--ease-out); }
+    @keyframes view-switch-enter { from { opacity: 0.9; transform: translateY(4px); } }
     html.enter .layout > .hero, html.enter .maincol > .digest { animation-name: rise-visible; }
     @keyframes rise-visible { from { transform: translateY(14px); } }
     html.enter :is(.hero, .maincol > :nth-child(1), .ledger > :nth-child(1), .side > :nth-child(1)) { animation-delay: 60ms; }

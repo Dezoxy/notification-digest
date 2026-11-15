@@ -1797,6 +1797,8 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
   // CURRENT page stays fully visible, then swap the new content into the
   // live document inside a same-document View Transition (withPageTransition,
   // above) instead of letting the browser tear down and rebuild everything.
+  // On phones, changing the active view swaps immediately and animates only
+  // the incoming layout so the fixed dock is never blended with its old state.
   // Nothing here is ever persisted — in-memory fetch only, gone on reload —
   // and a JS-off reader simply never gets this listener, so every link keeps
   // working as a plain navigation for them.
@@ -1856,12 +1858,18 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
           var newWrap = doc.querySelector(".wrap");
           var curWrap = document.querySelector(".wrap");
           if (!newWrap || !curWrap) throw new Error("soft-nav: .wrap missing");
+          var oldView = curWrap.querySelector(".viewtab.active[data-view]");
+          var newView = newWrap.querySelector(".viewtab.active[data-view]");
+          var phoneViewChange = Boolean(
+            phoneMq && phoneMq.matches && oldView && newView &&
+            oldView.getAttribute("data-view") !== newView.getAttribute("data-view")
+          );
           // An open settings popover sits in the TOP LAYER: leave it open and
           // the swap would strand a detached node there (and its backdrop
           // would hang over the new page). Close it before the transition
           // snapshots anything.
           closeSettingsPopover();
-          withPageTransition(function () {
+          function swapPage() {
             // .wrap is the ENTIRE page body except the script tag and the
             // palette/resume-chip nodes (all live outside it) — see
             // pageChrome's document skeleton above — so swapping just its
@@ -1915,7 +1923,15 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
             if (target) openSectionContaining(target);
             if (target) target.scrollIntoView({ behavior: "instant", block: "start" });
             else window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-          });
+          }
+          if (phoneViewChange) {
+            // A tap during the startup animation must not replay it on the
+            // replacement content. Position the new page before its motion.
+            document.documentElement.classList.remove("enter");
+            swapPage();
+            var layout = curWrap.querySelector("main.layout");
+            if (layout) layout.classList.add("view-switch-enter");
+          } else withPageTransition(swapPage);
           // Committed: this address is now what's on screen. Set for BOTH
           // directions (forward soft-nav and popstate soft-load), and only
           // once the swap has actually happened — an aborted or superseded
