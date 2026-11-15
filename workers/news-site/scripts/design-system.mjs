@@ -269,7 +269,7 @@ const PLAIN_USAGE = {
     "Sora with a system fallback. Brand, hero and section headings, entry times, day heads.",
   ],
   "font-body": ["font", "Inter with a system fallback. Everything else, including article prose."],
-  "fs-hero": ["type", "Index hero headline. Fluid, 34px to 60px."],
+  "fs-hero": ["type", "Index hero headline. Fluid, 25.5px to 45px."],
   "fs-hero-sm": ["type", "Digest, thread and page titles. Fluid, 28px to 44px."],
   "fs-h2": ["type", "Section heading in a digest."],
   "fs-card": ["type", "Entry headline and the About card title."],
