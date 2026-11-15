@@ -305,7 +305,7 @@ const PLAIN_USAGE = {
   "r-pill": ["radius", "Every control: bar, tabs, buttons, chips, flags, inputs."],
   "dur-fast": ["motion", "Hover border colour."],
   dur: ["motion", "Hover lift, popover and section unfold."],
-  "dur-slow": ["motion", "Slower fades. Reserved."],
+  "dur-slow": ["motion", "Phone dock and resume chip transitions."],
   "dur-enter": ["motion", "The page-load rise of hero, columns and cards, staggered 60ms apart."],
   "dur-drift": ["motion", "One cycle of the background glow drift."],
   "ease-out": ["motion", "Entrances and lifts."],
