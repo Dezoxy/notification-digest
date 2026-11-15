@@ -52,10 +52,10 @@ _FEED_TIMEOUT_SECONDS = 15
 # one `collect()` call -- see `collect`'s per-host pacing block. It exists
 # because some hosts rate-limit rapid repeat requests (live-verified against
 # a host serving several feeds: 3s spacing drew 429s on most requests, 45s
-# spacing mostly succeeded). A host that appears only once in NEWS_FEEDS --
-# true of every ordinary news feed today -- never triggers a wait at all;
-# this only fires on a REPEAT of the same host later in the same feed_urls
-# list.
+# spacing mostly succeeded). A host that appears only once in NEWS_FEEDS
+# never triggers a wait at all; this only fires on a REPEAT of the same host
+# later in the same feed_urls list. Today that is arstechnica.com (its AI
+# and science feeds), so one 45s pause happens per run -- accepted.
 _MIN_SECONDS_BETWEEN_SAME_HOST = 45
 
 # Entries published within this many hours of "now" are candidates. This
@@ -100,20 +100,37 @@ _WHITESPACE_RE = re.compile(r"\s+")
 # citation links). Exists because several publishers ship <title> values
 # that are useless as a source identity -- live-verified 2026-08-17:
 # ft.com's world feed titles itself literally "World", telex.hu says
-# "Telex RSS: Legfrissebb", feedx.net (an AP mirror) needs to read as AP
-# since its entry links point at apnews.com. A feed whose host has no
-# entry here keeps its own <title>, which is fine for most publishers
-# ("The Verge", "Ars Technica", ...).
+# "Telex RSS: Legfrissebb", github.blog's changelog is "Archive: 2026 -
+# GitHub Changelog" and the Federal Reserve's is "FRB: Press Release - All
+# Releases". A feed whose host has no entry here keeps its own <title>,
+# which is fine for most publishers ("The Verge", "Ars Technica", ...).
 _FEED_TITLE_OVERRIDES: dict[str, str] = {
     "ft.com": "Financial Times",
     "telex.hu": "Telex",
     "portfolio.hu": "Portfolio",
-    "feedx.net": "Associated Press",
     "bbci.co.uk": "BBC World",
     "bbc.co.uk": "BBC World",
     "aljazeera.com": "Al Jazeera",
     "politico.eu": "POLITICO Europe",
+    "github.blog": "GitHub Changelog",
+    "ecb.europa.eu": "European Central Bank",
+    "federalreserve.gov": "Federal Reserve",
+    "coindesk.com": "CoinDesk",
+    "huggingface.co": "Hugging Face",
 }
+
+
+def _is_aljazeera_video_clip(link: str) -> bool:
+    """True for an Al Jazeera /video/ URL: a short clip duplicating an article.
+
+    Host-specific on purpose (aljazeera.com or a subdomain). Liveblogs
+    (/liveblog/...) and ordinary articles are kept.
+    """
+    parts = urlsplit(link)
+    host = (parts.hostname or "").lower()
+    if host != "aljazeera.com" and not host.endswith(".aljazeera.com"):
+        return False
+    return parts.path.startswith("/video/")
 
 
 def _feed_display_title(feed_url: str, feed_title: str | None) -> str | None:
@@ -230,6 +247,8 @@ def _entries_from_feed(parsed: Any, feed_url: str) -> list[Item]:
         link = _entry_link(entry)
         if link is None:
             continue
+        if _is_aljazeera_video_clip(link):
+            continue
 
         title = entry.get("title") or ""
         summary = _clean_summary(entry.get("summary"))
@@ -315,8 +334,8 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
     time, and that must not trip the digest's ⚠ collection-failed banner,
     non-zero exit, or Loki alert. The majority threshold (rather than the
     original ALL-failed rule) exists because the list grew from 8 niche
-    AI/robotics feeds to 15 desks the briefing structurally depends on
-    (world wires, Hungary, business): with ALL-failed semantics, 14 of 15
+    AI/robotics feeds to 30 feeds the briefing structurally depends on
+    (world wires, Hungary, business): with ALL-failed semantics, 29 of 30
     feeds could die and the run would still report healthy, the briefing
     just quietly gutted. Every run also emits one `rss_health` log line
     with the ok/failed counts, so a Loki query can watch per-feed rot long
@@ -335,8 +354,9 @@ def collect(feed_urls: Sequence[str]) -> CollectResult:
     dict of per-host last-fetch `time.monotonic()` readings -- deliberately
     NOT module state, so nothing leaks between collect() calls or between
     test runs. A host that appears only once in `feed_urls` never sleeps at
-    all, so today's ordinary (one-feed-per-host) news list is unaffected;
-    this only matters once multiple feed URLs share a host.
+    all, so almost every feed is unaffected;
+    this only matters once multiple feed URLs share a host (today only
+    arstechnica.com, so one pause per run).
     """
     result = CollectResult()
 
