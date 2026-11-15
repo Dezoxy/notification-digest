@@ -655,6 +655,9 @@
   }
   .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
+  .hero-threads { margin-top: var(--sp-3); }
+  .hero-threads > summary { width: fit-content; max-width: 100%; margin-inline: auto; }
+  .hero-threads .heropills { justify-content: center; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -1092,7 +1095,8 @@
       .toc { width: 100cqi; }
     }
     html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
-    html[data-density="compact"] header.hero-digest { padding: var(--sp-1) 0; }
+    header.hero-digest, html[data-density="compact"] header.hero-digest { padding: var(--sp-4) 0; }
+    .hero-digest .herotitle { margin-top: var(--sp-3); }
   }
 
   /* ── Print: a briefing as a plain black-on-white document ─────────── */
@@ -1158,7 +1162,8 @@
       <h1 class="herotitle headline-lead">A piacok második napja estek, az EU-csomag megszületett.</h1>
       <p class="herosub excerpt">12 elem · 3 szakasz</p>
     </a>
-    <div class="heropills"><a class="herocta" href="/t/goldentesttoken/hu/d/235">A kiadás elolvasása →</a><a class="threadpill" href="/t/goldentesttoken/hu/a/markets-slide">Markets slide continues</a><a class="threadpill" href="/t/goldentesttoken/hu/a/eu-agrees-new-package">EU agrees new package</a></div>
+    <div class="heropills"><a class="herocta" href="/t/goldentesttoken/hu/d/235">A kiadás elolvasása →</a></div>
+    <details class="storythreads hero-threads"><summary>Történetszálak · 2</summary><nav class="heropills" aria-label="Történetszálak"><a class="threadpill" href="/t/goldentesttoken/hu/a/markets-slide">Markets slide continues</a><a class="threadpill" href="/t/goldentesttoken/hu/a/eu-agrees-new-package">EU agrees new package</a></nav></details>
   </section>
     <div class="maincol"><div class="catchup" hidden data-prefix="Legutóbbi látogatásod óta:" data-tmpl-briefings="{n} hírlevél" data-tmpl-briefings-one="{n} hírlevél" data-tmpl-arcs="{m} történetfrissítés" data-tmpl-arcs-one="{m} történetfrissítés" data-tmpl-more="+{n} további"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="Ugrás oda, ahol abbahagytad">↓</button><button type="button" class="catchupdismiss" aria-label="Elrejtés">×</button></div><section class="ledger" data-unread-label="új a legutóbbi látogatásod óta" data-empty-filtered="Nincs találat."><div class="dayhead">2026. augusztus 25., kedd</div>
 <a class="entry" href="/t/goldentesttoken/hu/d/234" data-created="2026-08-25T08:00:00Z" data-id="234">

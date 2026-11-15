@@ -822,13 +822,14 @@ The preview shows the open popover. Source: \`hrefs.js\`, \`client.js\`; styles 
     <h1 class="herotitle headline-lead">Markets slid for a second day while the EU package landed.</h1>
     <p class="herosub excerpt">Equities extended losses into the close; two sections follow on the council vote and chip export rules.</p>
   </a>
-  <div class="heropills"><a class="herocta" href="#">Read the edition →</a><a class="threadpill" href="#">Markets slide continues</a><a class="threadpill" href="#">EU agrees new package</a></div>
+  <div class="heropills"><a class="herocta" href="#">Read the edition →</a></div>
+  <details class="storythreads hero-threads"><summary>Story threads · 2</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues</a><a class="threadpill" href="#">EU agrees new package</a></nav></details>
 </section>`),
     `# HeroLead
 
 The newest briefing at the top of the index, centred and large: a chip with a live dot and the dateline, the headline, a subline, a primary CTA and the threads it belongs to.
 
-**Provide** \`section.hero\` with an \`a.entry.entry-lead.herolink\` linking to the digest (containing \`span.herochip\` with \`.livedot\`, \`.eyebrow-text\` and optional \`.flag\`s, an \`h1.herotitle.headline-lead\`, and \`p.herosub.excerpt\`), then \`.heropills\` holding \`a.herocta\` and one \`a.threadpill\` per thread.
+**Provide** \`section.hero\` with an \`a.entry.entry-lead.herolink\` linking to the digest (containing \`span.herochip\` with \`.livedot\`, \`.eyebrow-text\` and optional \`.flag\`s, an \`h1.herotitle.headline-lead\`, and \`p.herosub.excerpt\`), then \`.heropills\` holding \`a.herocta\`. Follow it with a closed \`details.storythreads.hero-threads\` when threads exist. Use a localized summary and a \`nav.heropills\` holding one \`a.threadpill\` per thread.
 
 - Do use exactly one per index page, above the ledger; it is the page's h1.
 - Do let the live dot's ping run only under no-preference motion.
@@ -1105,7 +1106,7 @@ Source: \`sections.js\`; styles \`.cite\`, \`mark\`.
 
 The related-reading controls after a digest article pair recurring story threads with a "What changed" list when a previous and current value are available.
 
-**Provide** a \`details.storythreads\` disclosure containing \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the same pills sit in the hero.
+**Provide** a \`details.storythreads\` disclosure containing \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the pills sit in a closed hero disclosure below the edition CTA, without counts on individual pills.
 
 - Do show a delta only when both values are known.
 - Don't colour deltas red or green; the previous value is \`muted\`, the current one \`strong\`.

@@ -435,7 +435,7 @@ export function renderIndexEntry(row, token, lang, view) {
 // is still ONE `a.entry.entry-lead` link, because the client script's unread
 // fence, keyboard nav, "latest" palette command and catch-up all find the
 // lead through `.wrap .entry` and read its data-created/data-id. The CTA and
-// thread pills sit OUTSIDE that link (no nested anchors) in `.heropills`.
+// thread disclosure are siblings outside that link (no nested anchors).
 //
 // `.eyebrow-text` and `.excerpt` stay on the chip text and subline because the
 // ⌘K palette builds each briefing's label from `.time, .eyebrow-text` plus
@@ -484,7 +484,12 @@ export function renderLeadCard(row, token, lang, view, threads = []) {
       <h1 class="herotitle headline-lead">${esc(headline)}</h1>
       <p class="herosub excerpt">${esc(subline)}</p>
     </a>
-    <div class="heropills"><a class="herocta" href="${href}">${esc(strings.heroRead)} →</a>${pillsHtml}</div>
+    <div class="heropills"><a class="herocta" href="${href}">${esc(strings.heroRead)} →</a></div>${
+      pillsHtml
+        ? `
+    <details class="storythreads hero-threads"><summary>${esc(strings.arcsLabel)} · ${threads.length}</summary><nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pillsHtml}</nav></details>`
+        : ""
+    }
   </section>`;
 }
 

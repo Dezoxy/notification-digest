@@ -653,6 +653,9 @@
   }
   .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
+  .hero-threads { margin-top: var(--sp-3); }
+  .hero-threads > summary { width: fit-content; max-width: 100%; margin-inline: auto; }
+  .hero-threads .heropills { justify-content: center; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -1090,7 +1093,8 @@
       .toc { width: 100cqi; }
     }
     html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
-    html[data-density="compact"] header.hero-digest { padding: var(--sp-1) 0; }
+    header.hero-digest, html[data-density="compact"] header.hero-digest { padding: var(--sp-4) 0; }
+    .hero-digest .herotitle { margin-top: var(--sp-3); }
   }
 
   /* ── Print: a briefing as a plain black-on-white document ─────────── */
@@ -1156,7 +1160,8 @@
       <h1 class="herotitle headline-lead">Markets slid for a second day while the EU package landed.</h1>
       <p class="herosub excerpt">12 items · 3 sections</p>
     </a>
-    <div class="heropills"><a class="herocta" href="/t/goldentesttoken/d/235">Read the edition →</a><a class="threadpill" href="/t/goldentesttoken/a/markets-slide">Markets slide continues</a><a class="threadpill" href="/t/goldentesttoken/a/eu-agrees-new-package">EU agrees new package</a></div>
+    <div class="heropills"><a class="herocta" href="/t/goldentesttoken/d/235">Read the edition →</a></div>
+    <details class="storythreads hero-threads"><summary>Story threads · 2</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="/t/goldentesttoken/a/markets-slide">Markets slide continues</a><a class="threadpill" href="/t/goldentesttoken/a/eu-agrees-new-package">EU agrees new package</a></nav></details>
   </section>
     <div class="maincol"><div class="catchup" hidden data-prefix="Since your last visit:" data-tmpl-briefings="{n} briefings" data-tmpl-briefings-one="{n} briefing" data-tmpl-arcs="{m} arc updates" data-tmpl-arcs-one="{m} arc update" data-tmpl-more="+{n} more"><span class="catchuptext"></span><button type="button" class="catchupjump" hidden aria-label="Jump to where you left off">↓</button><button type="button" class="catchupdismiss" aria-label="Dismiss">×</button></div><section class="ledger" data-unread-label="new since your last visit" data-empty-filtered="Nothing matches."><div class="dayhead">Tuesday, 25 August 2026</div>
 <a class="entry" href="/t/goldentesttoken/d/234" data-created="2026-08-25T08:00:00Z" data-id="234">

@@ -618,6 +618,9 @@ export const CSS = `
   }
   .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
+  .hero-threads { margin-top: var(--sp-3); }
+  .hero-threads > summary { width: fit-content; max-width: 100%; margin-inline: auto; }
+  .hero-threads .heropills { justify-content: center; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -1055,7 +1058,8 @@ export const CSS = `
       .toc { width: 100cqi; }
     }
     html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
-    html[data-density="compact"] header.hero-digest { padding: var(--sp-1) 0; }
+    header.hero-digest, html[data-density="compact"] header.hero-digest { padding: var(--sp-4) 0; }
+    .hero-digest .herotitle { margin-top: var(--sp-3); }
   }
 
   /* ── Print: a briefing as a plain black-on-white document ─────────── */
