@@ -19,8 +19,8 @@ Digest pages show an open native section picker before the complete summary.
 Stories are expanded by default and retain numbered inline citation links.
 Verification and collection warnings appear under **How this was made**.
 An exclamation mark next to that label signals a warning.
-The homepage lead keeps the edition link visible and puts related story threads
-in a collapsed disclosure when present. On digest pages, related story threads
+On the homepage, the edition link sits beside the collapsed Story threads
+disclosure when threads are present. On digest pages, related story threads
 are available after the article when relevant. The picker and story disclosures
 work without JavaScript; Expand all / Collapse all is available when JavaScript
 is enabled.
@@ -853,9 +853,11 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
 - **Settings and reading** — a settings panel (a popover opened from the bar's
   sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
   language, the three-state theme, text size (XS/S/M/L) and a Cards | Compact
-  density setting; a plain black-on-white print stylesheet; an About page for
-  anyone the capability link gets shared with. The Sans | Serif body-font
-  toggle was retired by the Spatial Glass redesign (below).
+  density setting. The phone dock has a more translucent fill. While Settings
+  is open on phones, the page stays in place and you can drag the sheet down
+  from its header to dismiss it. The site also has a plain black-on-white print
+  stylesheet and an About page for anyone with the capability link. The Sans |
+  Serif body-font toggle was retired by the Spatial Glass redesign (below).
 - **Spatial Glass redesign** (2026-11) — a ground-up visual pass with the same
   routes and data: a dotted page with a drifting glow, flat translucent cards,
   one floating pill bar (a bottom dock on phones), centred hero headlines, a

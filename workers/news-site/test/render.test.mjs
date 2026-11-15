@@ -162,7 +162,6 @@ test("client.js: dead masthead/FAB/serif behaviour is gone", async () => {
   ]) {
     assert.ok(!CLIENT_SCRIPT.includes(gone), `client.js no longer carries ${gone}`);
   }
-  assert.ok(!/setProperty\(/.test(CLIENT_SCRIPT), "the client sets no CSS custom properties");
 });
 
 test("client.js: theme colours, density miniseg mapping, theming window", async () => {
