@@ -995,6 +995,9 @@ export const CSS = `
     }
     html:has(#settings:popover-open) { overflow-y: hidden; overscroll-behavior: none; }
     html.settingslocked body { position: fixed; top: var(--settings-scroll-top); inset-inline: 0; }
+    /* Keep a light-dismiss tap from activating a link beneath the sheet. */
+    html:has(#settings:popover-open) body { pointer-events: none; }
+    .settingspanel:popover-open { pointer-events: auto; }
     .settingspanel::backdrop { background: var(--scrim); }
     .settingshead { position: relative; padding-top: 18px; touch-action: none; }
     .settingshead::before {
