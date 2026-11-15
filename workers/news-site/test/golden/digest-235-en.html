@@ -33,7 +33,7 @@
 <link rel="preload" href="/fonts/inter-latin-wght.v1.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/sora-latin-wght.v1.woff2" as="font" type="font/woff2" crossorigin>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"";document.documentElement.dataset.fontsize=localStorage.getItem("fontsize")||"";document.documentElement.dataset.density=localStorage.getItem("density")||"";localStorage.removeItem("font");document.documentElement.classList.add("enter")}catch(e){}</script>
-<style>
+<style id="site-css">
   /* Fonts: self-hosted variable woff2 from public/fonts (served immutable,
      preloaded by chrome.js). unicode-range is copied from SOURCES.md so the
      latin-ext files only download for pages that use ő/ű. */
@@ -1235,7 +1235,7 @@
   </main>
   
 </div>
-<script>
+<script id="site-client">
   // Animated preference swap (owner-requested), shared by the theme and
   // text-size minisegs below: run a page-state mutation inside a
   // same-document View Transition so the whole page crossfades to the new
@@ -3085,6 +3085,19 @@
         .then(function (html) {
           if (controller !== activeNav) return; // superseded — the newer nav owns the screen
           var doc = new DOMParser().parseFromString(html, "text/html");
+          // A deployment may change markup while this document still runs its
+          // old inline CSS or client code. Reload before mixing versions.
+          var selectors = ["head > style#site-css", "body > script#site-client"];
+          var compatible = selectors.every(function (selector) {
+            var current = document.querySelector(selector);
+            var incoming = doc.querySelector(selector);
+            return current && incoming && current.textContent === incoming.textContent;
+          });
+          if (!compatible) {
+            if (isPopstate) location.reload();
+            else location.href = href + (hash || "");
+            return;
+          }
           var newWrap = doc.querySelector(".wrap");
           var curWrap = document.querySelector(".wrap");
           if (!newWrap || !curWrap) throw new Error("soft-nav: .wrap missing");

@@ -1855,6 +1855,19 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
         .then(function (html) {
           if (controller !== activeNav) return; // superseded — the newer nav owns the screen
           var doc = new DOMParser().parseFromString(html, "text/html");
+          // A deployment may change markup while this document still runs its
+          // old inline CSS or client code. Reload before mixing versions.
+          var selectors = ["head > style#site-css", "body > script#site-client"];
+          var compatible = selectors.every(function (selector) {
+            var current = document.querySelector(selector);
+            var incoming = doc.querySelector(selector);
+            return current && incoming && current.textContent === incoming.textContent;
+          });
+          if (!compatible) {
+            if (isPopstate) location.reload();
+            else location.href = href + (hash || "");
+            return;
+          }
           var newWrap = doc.querySelector(".wrap");
           var curWrap = document.querySelector(".wrap");
           if (!newWrap || !curWrap) throw new Error("soft-nav: .wrap missing");
