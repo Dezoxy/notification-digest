@@ -969,7 +969,8 @@
       position: fixed; top: auto; left: 12px; right: 12px;
       bottom: calc(10px + env(safe-area-inset-bottom));
       gap: 6px; padding: 0 4px 0 4px;
-      background: color-mix(in srgb, var(--sheet) 75%, transparent);
+      --blur-chrome: 8px;
+      background: color-mix(in srgb, var(--sheet) 35%, transparent);
     }
     /* The on-screen keyboard must never push the dock over the field. */
     html.typing .bar { display: none; }
@@ -979,8 +980,9 @@
       width: 44px; height: 44px; border-radius: var(--r-pill);
       background: var(--track); color: var(--text); font-size: 20px; text-decoration: none;
     }
-    .viewtabs { flex: 1; margin-inline: 0; }
-    .viewtab { flex: 1; padding: 0 6px; }
+    .viewtabs { flex: 1; margin-inline: 0; background: transparent; }
+    .viewtab { flex: 1; padding: 0 6px; color: var(--text); }
+    .viewtab.active { background: color-mix(in srgb, var(--text) 16%, transparent); }
     /* Positioned against the bar, not the small toggle, and opens upward. */
     .searchpop { position: static; }
     summary.searchtoggle { padding: 0; }
