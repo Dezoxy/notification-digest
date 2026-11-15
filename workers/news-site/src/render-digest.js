@@ -4,7 +4,6 @@ import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import { formatDayHeader, formatShortDate, formatTime, tzAbbr } from "./dates.js";
 import {
-  addCiteTitles,
   buildSectionToc,
   findArcSectionAnchor,
   foldSections,
@@ -15,12 +14,42 @@ import { deltasRenderableIn, kindBadge, renderDeltaLine } from "./render-shared.
 import { pageChrome } from "./chrome.js";
 import {
   deriveHeadline,
-  deriveSubline,
-  renderDegradedBadge,
+  parseFailedSources,
   renderExcerpt,
   renderProvenance,
   renderSourceKey,
 } from "./render-index.js";
+
+// The publisher styles the first warning paragraph. A following warning may
+// still be plain HTML, including in translated editions. Stop at the first
+// non-warning so editorial content farther down stays in the article.
+function extractRunWarnings(html) {
+  const warnings = [];
+  let rest = html;
+  const paragraph = /^\s*(<p(?: class="([^"]*)")?>([\s\S]*?)<\/p>)/;
+  while (true) {
+    const match = rest.match(paragraph);
+    if (!match) break;
+    const banner = (match[2] ?? "").split(/\s+/).includes("banner");
+    if (banner) {
+      warnings.push(match[1]);
+    } else {
+      if (match[2] !== undefined) break;
+      const lines = match[3].trim().split(/<br\s*\/?>|\r?\n/);
+      const isWarning = warnings.length
+        ? lines.every((line) => /^⚠\s/.test(line.trim()))
+        : lines.every((line) =>
+            /^⚠ (?:verification unavailable this run|\S+ collection failed this run)$/.test(
+              line.trim(),
+            ),
+          );
+      if (!isWarning) break;
+      warnings.push(`<p class="banner">${lines.join("<br>")}</p>`);
+    }
+    rest = rest.slice(match[0].length);
+  }
+  return { warnings, html: rest };
+}
 
 // Inline per-section arc links (this feature): complements renderArcs' own
 // top-of-page "Story threads" chip line by putting a small link right at
@@ -93,21 +122,16 @@ export function renderToc(sections, strings) {
   const chips = sections
     .map(
       (s, i) =>
-        `<a href="#${s.id}" title="${esc(s.title)}"><span class="tocnum">${String(i + 1).padStart(2, "0")}</span><span class="toctitle">${esc(s.title)}</span></a>`,
+        `<a href="#${s.id}"><span class="tocnum" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="toctitle">${esc(s.title)}</span></a>`,
     )
     .join("\n");
-  // The expand/collapse-all button acts on the folded sections the pills point
-  // at, but sits NEXT to the nav, not inside it: inside the phone's scrolling
-  // row it had to be sticky and covered the pills running underneath it. The
-  // pill's `title` carries the full text for pointer users (the visible one
-  // is ellipsised by CSS; assistive tech reads the span in full).
-  // `hidden` until the client behaviour un-hides it: without JS a button that
-  // does nothing must not show.
-  return `<div class="tocrow"><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav>
+  // Keep Expand all outside the picker so it is available when closed.
+  // The client reveals the button only when it can control the folded sections.
+  return `<div class="tocrow"><details class="tocpicker" open><summary>${esc(strings.jumpToSection)} · ${sections.length}</summary><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav></details>
 <button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></div>\n`;
 }
 
-// Story-thread pills (ingest v3, roadmap 4 step 8; now the hero's pill row):
+// Story-thread disclosure (ingest v3, roadmap 4 step 8):
 // the digest page's per-topic thread summary, built from handleDigestPage's
 // topicArcs — null (no topics on this digest, query never ran), an empty
 // array, or no recurring topic all render "", same absent-data contract as
@@ -137,7 +161,7 @@ export function renderArcs(topicArcs, strings, token, lang) {
         `<a class="threadpill" href="${arcHref(token, lang, identity)}">${esc(label)} <span class="pillcount">${esc(strings.arcRepeat.replace("{n}", String(count)))}</span></a>`,
     )
     .join("");
-  return `<nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pills}</nav>`;
+  return `<details class="storythreads"><summary>${esc(strings.arcsLabel)} · ${recurring.length}</summary><nav class="heropills" aria-label="${esc(strings.arcsLabel)}">${pills}</nav></details>`;
 }
 
 export function renderDeltas(deltas, topicArcs, strings, token, lang) {
@@ -215,37 +239,15 @@ export function renderDigestPage(
       : digest.kind === "weekly"
         ? strings.weeklyBrief
         : "digest";
-  // Edition eyebrow (Front Page redesign): kind · time · items · sections —
-  // the full weekday/date is already visible in the phone head's own
-  // issue line above (see pageChrome), so it's dropped here rather
-  // than repeated twice on the same page.
-  // Spatial Glass: the hero chip carries the day too (the header's issue
-  // line sits in the bar, the chip is what a screenshot shows), and the
-  // "digest" placeholder kind is left out rather than printed as a label.
-  const chip = [
-    digest.kind === "daily" || digest.kind === "weekly" ? kindLabel : null,
-    formatShortDate(date, strings.locale),
-    `${formatTime(date, strings.locale)} ${tzAbbr(date)}`,
-    `${digest.item_count} ${strings.itemsWord}`,
-    `${digest.section_count} ${strings.sectionsWord}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  // Derived h1 headline (Front Page redesign): digest.tldr is an already-
-  // selected column that renderDigestPage never rendered directly before
-  // this — the article's own embedded TL;DR paragraph (body_html's
-  // `.tldr` div, restyled as the leader right below this headline, see the
-  // CSS) already carries the full text, so deriving a short title from the
-  // SAME source here adds a headline without duplicating any content.
+  // The headline comes from the stored TL;DR. The article keeps the full
+  // summary and any formatting supplied by the publisher.
   // HU page: the translated TL;DR when the app sent one, same choice the
   // body makes (a HU page that fell back to the English body keeps English).
   const tldrText = lang === "hu" && digest.tldr_hu ? digest.tldr_hu : digest.tldr;
   const headline = deriveHeadline(tldrText);
-  const subline = deriveSubline(tldrText);
-  // <title>: shorter than the stamp (formatShortDate, not formatDayHeader) —
-  // browser tab/history width is tight, and the token never appears here.
-  // pageChrome esc()s the whole composed string before inserting it.
-  const pageTitle = `${kindLabel} #${digest.id} · ${formatShortDate(date, strings.locale)} ${formatTime(date, strings.locale)}`;
+  const shortDate = formatShortDate(date, strings.locale);
+  const time = formatTime(date, strings.locale);
+  const pageTitle = `${kindLabel} #${digest.id} · ${shortDate} ${time}`;
 
   const navLinks = [
     `<a href="${indexHref(token, lang, view)}">${esc(strings.allDigests)}</a>`,
@@ -294,15 +296,9 @@ export function renderDigestPage(
   // and its citation chips went white-on-white. The classes (.tldr,
   // .attention, .banner, .cite, .tldr-label, …) arrive alongside the
   // styles, so stripping the attributes hands presentation fully to the
-  // site's own themed CSS. Order matters: the email's cite pills are
-  // `<a class="cite" style="…" href="…">`, and addCiteTitles' exact-shape
-  // regex below never matched that — hover domains (and the print
-  // stylesheet's cite[title] domains) were silently missing on real
-  // digests; stripping first restores the exact shape every downstream
-  // pass expects. The regex is safe here because this markup is
-  // nh3-normalized + emailer-generated: attributes are always
-  // double-quoted, never single-quoted or bare.
-  const articleHtmlThemed = stripInlineStyles(articleHtml);
+  // site's own themed CSS. The markup is nh3-normalized and its attributes
+  // are double-quoted.
+  const { warnings, html: articleHtmlThemed } = extractRunWarnings(stripInlineStyles(articleHtml));
 
   // TOC ids are injected into the themed html (see buildSectionToc), so
   // the <article> below renders the id-bearing version, not the original.
@@ -318,13 +314,9 @@ export function renderDigestPage(
     ? addInlineArcLinks(articleHtmlWithIds, sections, topicArcs, strings, token, lang)
     : articleHtmlWithIds;
 
-  // Separate pass, one job each (see addCiteTitles): citation chips gain a
-  // hover title naming their destination hostname.
-  const articleHtmlTitled = addCiteTitles(articleHtmlWithArcs);
-
   // Last: fold each section into a <details> (fail-safe, returns its input
   // untouched on any shape surprise — see foldSections).
-  const articleHtmlFinal = foldSections(articleHtmlTitled, sections.length, strings);
+  const articleHtmlFinal = foldSections(articleHtmlWithArcs, sections.length, strings);
 
   // Same links, top and bottom: after an ~900-word read the natural gesture
   // is older/next, not scroll-to-top (roadmap step 2) — mirror the nav below
@@ -346,20 +338,14 @@ export function renderDigestPage(
   // forever).
   const provenanceHtml = renderProvenance(digest.provenance, strings);
 
-  // Colophon wrapper (this feature): a divider between the article and its
-  // two record-keeping rows, only when at least one of them actually has
-  // something to say — an old digest with neither source_counts nor
-  // provenance must render no colophon div at all, exactly as it rendered
-  // nothing before this feature (see the .colophon CSS comment).
-  // Collapsed by default (owner request): the whole colophon sits behind one
-  // native <details> disclosure — same "no JS needed" contract as
-  // renderArcContext's primer — so the record-keeping rows are one tap away
-  // instead of always on screen. Both rows share ONE summary on purpose: they
-  // answer the same "how was this page made" question, so splitting them
-  // would cost a second tap for one kind of curiosity.
+  // Native disclosure keeps run warnings and provenance available without JS.
+  const hasRunWarning = warnings.length > 0 || Boolean(parseFailedSources(digest.failed_sources));
+  const warningMarker = hasRunWarning
+    ? ` <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, ${esc(strings.runWarning)}</span>`
+    : "";
   const colophonHtml =
-    sourceKeyHtml || provenanceHtml
-      ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}</summary><div class="colophonbody">${sourceKeyHtml}${provenanceHtml}</div></details>`
+    sourceKeyHtml || provenanceHtml || warnings.length
+      ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}${warningMarker}</summary><div class="colophonbody">${warnings.join("")}${sourceKeyHtml}${provenanceHtml}</div></details>`
       : "";
 
   // Story-thread pills (roadmap 4 step 8): "" on a digest with no recurring
@@ -387,24 +373,16 @@ export function renderDigestPage(
     ? `<section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">${esc(strings.earlierLabel)}</h2>${earlierRows}</section>`
     : "";
 
-  // The top nav and hero ride in pageChrome's `heroHtml` (full layout width,
-  // above .maincol); the rest stays in .maincol in this order.
-  // Order: nav pills -> hero (chip, h1, subline, thread pills) -> what-
-  // changed block -> en-only note -> section nav -> article (banner, TL;DR
-  // card, attention, folded sections) -> colophon -> bottom nav. The section
-  // nav can't sit inside the article, AFTER the TL;DR: that callout is itself
-  // the FIRST element of body_html (see the .tldr CSS comment), and
-  // repositioning it would mean rewriting arbitrary pre-sanitized HTML for a
-  // purely cosmetic win — so the nav keeps rendering above <article>.
+  // Keep the section picker above long summaries. The stored article owns
+  // the order of its callouts; related reading follows the article.
   const heroHtml = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <header class="hero hero-digest">
-  <span class="herochip">${esc(chip)}</span>
+  <p class="digest-dateline">${esc(kindLabel)} · <time datetime="${date.toISOString()}"><span class="digest-dateline-date">${esc(shortDate)} · </span>${esc(time)} ${esc(tzAbbr(date))}</time></p>
   <h1 class="herotitle">${esc(headline)}</h1>
-  ${subline ? `<p class="herosub">${esc(subline)}</p>` : ""}
-  ${arcsHtml}
 </header>`;
-  const body = `${deltasHtml}${enOnlyNoteHtml}${tocHtml}<article class="digest">
-${articleHtmlFinal}
+  const body = `<article class="digest">
+${enOnlyNoteHtml}${tocHtml}${articleHtmlFinal}
+${arcsHtml}${deltasHtml}
 </article>
 ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</nav>`;
 
@@ -429,8 +407,7 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     // The bar's .barback arrow replaces the old floating .backfab: same
     // target (this view's index), same label.
     backHref: indexHref(token, lang, view),
-    // Same issue-line slot the index fills — the digest's own edition
-    // number and full date (the hero chip repeats only the short date).
+    // The phone masthead carries the full date and edition number.
     issueLineText: `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
   });
 }

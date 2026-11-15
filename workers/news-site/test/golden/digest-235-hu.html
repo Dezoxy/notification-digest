@@ -469,6 +469,9 @@
   }
   section.hero .herotitle, .hero .headline-lead { font-size: var(--fs-hero); max-width: 20ch; }
   .hero-digest .herotitle, .archead .arctitle { max-width: 24ch; }
+  .digest-dateline { margin: 0; color: var(--muted); font-size: var(--fs-meta); line-height: 1.3; }
+  .digest-dateline::first-letter { text-transform: uppercase; }
+  .hero-digest .herotitle { margin-top: var(--sp-3); }
   .eyebrow-text { text-align: center; }
   .hero > .herotitle:first-child { margin-top: 0; }
   .herochip {
@@ -519,9 +522,9 @@
     border: 1px solid var(--border); border-radius: var(--r-card);
     background: var(--panel); color: var(--text); text-decoration: none;
   }
-  /* Daily and weekly briefs carry the amber trio, the one place amber means
-     "a different kind of edition" rather than "attention". */
-  .entry:has(.time-accent, .flag-daily) { background: var(--daily-soft); border-color: var(--daily-line); }
+  /* Daily and weekly entry cards carry the amber trio; the hero keeps its
+     transparent surface even when its badge marks a brief. */
+  .entry:not(:where(.herolink)):has(.time-accent, .flag-daily) { background: var(--daily-soft); border-color: var(--daily-line); }
   .maincol > .entry { margin-top: var(--sp-3); }
   .entry .meta {
     display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px;
@@ -630,41 +633,28 @@
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Section index: pills in .toc, "Expand all" beside it in .tocrow. The button
-     is a SIBLING of the scroller, not a sticky child: a sticky button inside
-     the scrolling row sat on top of the pills passing under it. */
-  .tocrow { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-4); }
-  .toc {
-    display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0;
-    margin: 0; padding: 4px; scroll-padding-inline: 4px;
-    overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity;
-  }
-  .toc::-webkit-scrollbar { display: none; }
-  .toc a {
-    display: inline-flex; align-items: center; gap: 8px; flex: none; scroll-snap-align: start;
-    max-width: min(72vw, 320px, 100%);
-    min-height: 40px; padding: 0 16px;
+  /* Native section picker remains usable without JavaScript. */
+  .tocrow { display: flex; align-items: flex-start; gap: var(--sp-2); }
+  .tocpicker { flex: 1; min-width: 0; }
+  .tocpicker > summary, .storythreads > summary {
+    display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
-    background: var(--panel); color: var(--text); font-size: var(--fs-ui); text-decoration: none; white-space: nowrap;
+    background: var(--panel); cursor: pointer; font-size: var(--fs-ui); font-weight: 600;
   }
-  .toc a:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+  .tocpicker > summary::after, .storythreads > summary::after { content: "+"; margin-left: auto; }
+  .tocpicker[open] > summary::after, .storythreads[open] > summary::after { content: "−"; }
+  .toc { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; }
+  .toc a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 16px; border-radius: var(--r-in); color: var(--text); text-decoration: none; }
+  .toc a:hover { background: var(--accent-soft); }
   .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
-  /* One long title must not fill the row (the 100% cap keeps a lone pill inside the scroller instead of clipped at its edge): it ellipsises, the number stays. */
-  .toctitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toctitle { overflow-wrap: anywhere; }
   .expandall {
-    flex: none; min-height: 40px; padding: 0 16px;
+    flex: none; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border-strong); border-radius: var(--r-pill);
     background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
   }
   .expandall:hover { border-color: var(--accent); }
-  /* From tablet width up the pills WRAP instead of scrolling: there is room.
-     The button stays at the end of the row, level with the first line of
-     pills. The width cap is a phone thing. */
-  @media (min-width: 700px) {
-    .tocrow { align-items: flex-start; }
-    .toc { flex-wrap: wrap; overflow: visible; }
-    .toc a { max-width: none; }
-  }
+  .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
 
   .digest { display: flex; flex-direction: column; gap: var(--sp-4); }
   .banner {
@@ -746,13 +736,6 @@
     font-size: 0.72em; font-weight: 700; text-decoration: none; vertical-align: super; line-height: 1;
   }
   .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--on-accent); }
-  /* No hover on touch, so the title attribute's domain never surfaces:
-     print it on the chip. A chip with no title (href failed to parse)
-     shows nothing extra. The domain must never be auto-hyphenated. */
-  @media (hover: none) {
-    .cite[title]::after { content: attr(title); margin-left: 0.35em; font-weight: 500; hyphens: none; -webkit-hyphens: none; }
-  }
-
   .arccontext { margin: 0 0 var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-in); background: var(--panel-2); }
   .arccontext summary {
     display: flex; align-items: center; min-height: 44px; padding: 0 18px; cursor: pointer;
@@ -766,6 +749,9 @@
   /* Colophon: record-keeping, collapsed by default, deliberately quiet. */
   .colophon { margin-top: var(--sp-5); padding-top: var(--sp-2); border-top: 1px solid var(--border); }
   .colophon summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: var(--fs-meta); color: var(--muted); }
+  .colophon-warning { color: var(--daily); font-weight: 700; margin-left: 6px; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .colophonbody .banner { margin-bottom: var(--sp-2); }
   .colophon summary:hover { color: var(--strong); }
   .colophonbody { padding: var(--sp-2) 0 var(--sp-3); }
   .sourcekey { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: var(--fs-meta); color: var(--muted); }
@@ -865,16 +851,6 @@
   html[data-fontsize="s"] { --read-scale: 0.94; }
   html[data-fontsize="l"] { --read-scale: 1.12; }
 
-  /* ── Compact density: the cards dissolve into a hairline list ─────── */
-  html[data-density="compact"] .ledger { gap: 0; }
-  html[data-density="compact"] .ledger .entry {
-    padding: 10px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none;
-  }
-  html[data-density="compact"] .ledger .entry:has(.time-accent, .flag-daily) { background: none; }
-  html[data-density="compact"] .ledger .entry .excerpt { -webkit-line-clamp: 2; }
-  html[data-density="compact"] .ledger .entry .excerpt-daily { -webkit-line-clamp: 3; }
-  html[data-density="compact"] .ledger > .dayhead { margin-top: var(--sp-5); }
-
   /* ── Motion: the only place anything animates ─────────────────────── */
   @media (prefers-reduced-motion: no-preference) {
     html { scroll-behavior: smooth; }
@@ -893,6 +869,8 @@
       animation: rise var(--dur-enter) var(--ease-out) both;
     }
     @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+    html.enter .layout > .hero, html.enter .maincol > .digest { animation-name: rise-visible; }
+    @keyframes rise-visible { from { transform: translateY(14px); } }
     html.enter :is(.hero, .maincol > :nth-child(1), .ledger > :nth-child(1), .side > :nth-child(1)) { animation-delay: 60ms; }
     html.enter :is(.maincol > :nth-child(2), .ledger > :nth-child(2), .side > :nth-child(2)) { animation-delay: 120ms; }
     html.enter :is(.maincol > :nth-child(3), .ledger > :nth-child(3)) { animation-delay: 180ms; }
@@ -1009,6 +987,8 @@
 
     .hero { padding: 36px 0 28px; }
     header.hero { padding: var(--sp-5) 0 var(--sp-4); }
+    header.hero-digest { padding: var(--sp-2) 0; }
+    .hero-digest .herotitle { margin: 8px auto 0; font-size: 28px; }
     .herosub, .hero .herosub.excerpt { font-size: calc(17px * var(--read-scale)); }
     .entry { padding: var(--sp-4); }
     .tldr, .attention, .aboutcard { padding: 18px var(--sp-4); }
@@ -1061,13 +1041,67 @@
     .bar, .settingspanel:popover-open, .cmdpalette { background: var(--sheet-solid); }
   }
 
+  /* Compact spacing is screen-only; reading text and touch targets retain their size. */
+  @media screen {
+    .colophon { border-top: 0; }
+    html[data-density="compact"] .ledger { gap: 0; }
+    html[data-density="compact"] :is(.ledger, .archiveresults) .entry,
+    html[data-density="compact"] .maincol > .entry {
+      padding: 10px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: none;
+    }
+    html[data-density="compact"] .ledger .entry:has(.time-accent, .flag-daily) { background: none; }
+    html[data-density="compact"] .ledger .entry .excerpt { -webkit-line-clamp: 2; }
+    html[data-density="compact"] .ledger .entry .excerpt-daily { -webkit-line-clamp: 3; }
+    html[data-density="compact"] .ledger > .dayhead { margin-top: var(--sp-5); }
+    html[data-density="compact"] .archiveresults { gap: 0; margin-top: var(--sp-3); }
+    html[data-density="compact"] .hero { padding: var(--sp-5) 0 var(--sp-4); }
+    html[data-density="compact"] .hero .heropills { margin-top: var(--sp-3); }
+    html[data-density="compact"] .digest { gap: var(--sp-2); }
+    html[data-density="compact"] .toc { gap: 0; padding: 4px 0; }
+    html[data-density="compact"] :is(.tldr, .attention, .aboutcard) { padding: 14px var(--sp-4); }
+    html[data-density="compact"] article.digest > .sec {
+      border: 0; border-radius: 0; background: none;
+    }
+    html[data-density="compact"] article.digest > .sec:has(+ .sec) {
+      border-bottom: 1px solid var(--border);
+    }
+    html[data-density="compact"] article.digest > .tldr {
+      padding: var(--sp-1) 0 var(--sp-1) var(--sp-3);
+      border: 0; border-inline-start: 3px solid var(--accent-line); border-radius: 0; background: none;
+    }
+    html[data-density="compact"] article.digest > .tldr .tldr-label { margin-bottom: var(--sp-1); }
+    html[data-density="compact"] .sechead { padding: 12px var(--sp-4); min-height: 44px; }
+    html[data-density="compact"] .secbody { padding: 0 var(--sp-4) var(--sp-4); }
+    html[data-density="compact"] article.digest .sechead { padding-inline: 0; border-radius: 0; }
+    html[data-density="compact"] article.digest .secbody { padding-inline: 0; }
+    html[data-density="compact"] .secbody > :is(p, ul, ol):not(:last-child) { margin-bottom: 0.7em; }
+    html[data-density="compact"] .secbody li { margin-bottom: 0.2em; }
+    html[data-density="compact"] .deltas { margin-bottom: var(--sp-3); }
+    html[data-density="compact"] .delta { padding: 10px 14px; }
+    html[data-density="compact"] .tlitem { margin-bottom: var(--sp-2); padding: 12px 16px; }
+    html[data-density="compact"] .tlitem::before { top: 18px; }
+    html[data-density="compact"] .searchform { margin-bottom: var(--sp-3); }
+  }
+
+  @media screen and (max-width: 699.98px) {
+    .digest-dateline-date { display: none; }
+    .toc a { padding-inline: var(--sp-2); font-size: var(--fs-meta); line-height: 1.35; }
+    /* Size the list to the whole row while the summary shares it with Collapse all. */
+    @supports (container-type: inline-size) and (width: 100cqi) {
+      .tocrow { container-type: inline-size; }
+      .toc { width: 100cqi; }
+    }
+    html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
+    html[data-density="compact"] header.hero-digest { padding: var(--sp-1) 0; }
+  }
+
   /* ── Print: a briefing as a plain black-on-white document ─────────── */
   @media print {
     :root, :root[data-theme] { color-scheme: light; }
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .toc, .expandall, .heropills, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
@@ -1076,7 +1110,7 @@
       background: none; box-shadow: none; border-color: #999; color: #000;
     }
     .herotitle, .headline, .sechead h2, .secbody, .secbody p, .tldr, .attention, .deltatext, .deltaprev,
-    .deltanow, .deltalabel, .arccontextbody, .sourcekey, .provenance, .herosub, .excerpt { color: #000; }
+    .deltanow, .deltalabel, .arccontextbody, .sourcekey, .provenance, .herosub, .excerpt, .digest-dateline { color: #000; }
     h2 { break-after: avoid; }
     .sec { break-inside: auto; }
     /* A closed details hides its body through ::details-content; print forces
@@ -1085,7 +1119,6 @@
     details.sec::details-content, .colophon::details-content { content-visibility: visible; }
     .colophon summary { display: none; }
     .cite { background: none; color: #000; }
-    .cite[title]::after { content: " (" attr(title) ")"; font-size: 0.85em; color: #333; }
   }
 </style>
 </head>
@@ -1123,41 +1156,40 @@
 <span class="spacer"></span>
 <a class="nav-older" href="/t/goldentesttoken/hu/d/234">← 10:00</a></nav>
 <header class="hero hero-digest">
-  <span class="herochip">aug. 25., K · 16:00 CEST · 12 elem · 3 szakasz</span>
+  <p class="digest-dateline">digest · <time datetime="2026-08-25T14:00:00.000Z"><span class="digest-dateline-date">aug. 25., K · </span>16:00 CEST</time></p>
   <h1 class="herotitle">A piacok második napja estek, az EU-csomag megszületett.</h1>
-  
-  <nav class="heropills" aria-label="Történetszálak"><a class="threadpill" href="/t/goldentesttoken/hu/a/markets-slide">Markets slide continues <span class="pillcount">×2 ezen a héten</span></a></nav>
 </header>
-    <div class="maincol"><div class="tocrow"><nav class="toc" aria-label="Fejezetek"><a href="#s1" title="Folytatódik a piaci esés"><span class="tocnum">01</span><span class="toctitle">Folytatódik a piaci esés</span></a>
-<a href="#s2" title="Az EU új csomagot fogadott el"><span class="tocnum">02</span><span class="toctitle">Az EU új csomagot fogadott el</span></a>
-<a href="#s3" title="Szigorodnak a chipexport-szabályok"><span class="tocnum">03</span><span class="toctitle">Szigorodnak a chipexport-szabályok</span></a></nav>
+    <div class="maincol"><article class="digest">
+<div class="tocrow"><details class="tocpicker" open><summary>Ugrás a fejezethez · 3</summary><nav class="toc" aria-label="Fejezetek"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Folytatódik a piaci esés</span></a>
+<a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">Az EU új csomagot fogadott el</span></a>
+<a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Szigorodnak a chipexport-szabályok</span></a></nav></details>
 <button type="button" class="expandall" hidden data-expand="Összes kinyitása" data-collapse="Összes összecsukása">Összes kinyitása</button></div>
-<article class="digest">
-<p class="banner">⚠ polymarket collection failed this run</p>
+
 <div class="tldr"><span class="tldr-label">Röviden</span>A piacok második napja estek, az EU-csomag megszületett.</div>
-<div class="attention"><span class="attention-label">⚑ Figyelmet igényel</span><p>A reformhatáridő pénteken jár le, ezért előtte ellenőrizd a benyújtási időszakot<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer" title="example.com">¹</a>.</p></div>
+<div class="attention"><span class="attention-label">⚑ Figyelmet igényel</span><p>A reformhatáridő pénteken jár le, ezért előtte ellenőrizd a benyújtási időszakot<a class="cite" href="https://example.com/deadline" rel="noopener noreferrer">¹</a>.</p></div>
 <details class="sec" open><summary class="sechead"><h2 id="s1">Folytatódik a piaci esés</h2><span class="secpreview" aria-hidden="true">A részvények tovább estek. Reuters négy százalékra teszi a visszaesést.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
 <p>A részvények tovább estek. <a href="https://example.com/markets-report">Reuters</a> négy százalékra teszi a visszaesést.</p>
-<p>A kereskedők a szűk likviditásra és az erősebb dollárra mutattak. Egy elemzői jegyzet a hétvégére is ingadozást vár<a class="cite" href="https://example.com/liquidity-note" rel="noopener noreferrer" title="example.com">²</a>.</p>
+<p>A kereskedők a szűk likviditásra és az erősebb dollárra mutattak. Egy elemzői jegyzet a hétvégére is ingadozást vár<a class="cite" href="https://example.com/liquidity-note" rel="noopener noreferrer">²</a>.</p>
 <ul>
 <li>Az indexfutures ismét lejjebb nyitott.</li>
 <li>A kötvényhozamok csökkentek, mert a befektetők biztonságot kerestek.</li>
 <li>A devizapultoknál e hónapban a legnagyobb a felár.</li>
 </ul>
 </div></details>
-<details class="sec"><summary class="sechead"><h2 id="s2">Az EU új csomagot fogadott el</h2><span class="secpreview" aria-hidden="true">A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
+<details class="sec" open><summary class="sechead"><h2 id="s2">Az EU új csomagot fogadott el</h2><span class="secpreview" aria-hidden="true">A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
 <p>A tanács éjjel írta alá, a folyósítás reformokhoz kötött.</p>
-<p>Több tag felülvizsgálati záradékot kért. A tanácsi közlemény tavaszra tűzi ki az első ellenőrzési pontot<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer" title="example.com">³</a>.</p>
+<p>Több tag felülvizsgálati záradékot kért. A tanácsi közlemény tavaszra tűzi ki az első ellenőrzési pontot<a class="cite" href="https://example.com/council-statement" rel="noopener noreferrer">³</a>.</p>
 </div></details>
-<details class="sec"><summary class="sechead"><h2 id="s3">Szigorodnak a chipexport-szabályok</h2><span class="secpreview" aria-hidden="true">Az új engedélyezési követelmények a következő negyedévtől élnek.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
+<details class="sec" open><summary class="sechead"><h2 id="s3">Szigorodnak a chipexport-szabályok</h2><span class="secpreview" aria-hidden="true">Az új engedélyezési követelmények a következő negyedévtől élnek.</span><span class="seccount">1 forrás</span></summary><div class="secbody">
 <p>Az új engedélyezési követelmények a következő negyedévtől élnek.</p>
-<p>Az exportőröknek kilencven napjuk van a bejelentésre. A minisztériumi közlemény felsorolja az érintett termékcsoportokat<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer" title="example.com">⁴</a>.</p></div></details>
+<p>Az exportőröknek kilencven napjuk van a bejelentésre. A minisztériumi közlemény felsorolja az érintett termékcsoportokat<a class="cite" href="https://example.com/export-rules" rel="noopener noreferrer">⁴</a>.</p></div></details>
 <p class="foot"><em>12 elemből 5 formálta ezt az összefoglalót, 4 pedig háttérzaj volt.</em></p>
+<details class="storythreads"><summary>Történetszálak · 1</summary><nav class="heropills" aria-label="Történetszálak"><a class="threadpill" href="/t/goldentesttoken/hu/a/markets-slide">Markets slide continues <span class="pillcount">×2 ezen a héten</span></a></nav></details>
 </article>
-<details class="colophon"><summary>Hogyan készült</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Források</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Írta</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Fordította</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div></details><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/hu/">← Minden hírlevél</a>
+<details class="colophon"><summary>Hogyan készült <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, Futtatási figyelmeztetések</span></summary><div class="colophonbody"><p class="banner">⚠ polymarket collection failed this run</p><div class="sourcekey"><span class="sklabel">Források</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Írta</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Fordította</span><span class="sk sk-fallback" title="openai/gpt-5.6-terra">↻ GPT-5.6 Terra · high</span></div></div></div></details><nav class="digestnav digestnav-bottom"><a href="/t/goldentesttoken/hu/">← Minden hírlevél</a>
 <span class="spacer"></span>
 <a class="nav-older" href="/t/goldentesttoken/hu/d/234">← 10:00</a></nav></div>
-    <aside class="side" aria-label="Oldalsáv"><section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">Korábban</h2><a class="earlierrow" href="/t/goldentesttoken/hu/d/234"><span class="earliermeta">aug. 25., K 10:00 · 9 elem</span><span class="earliertitle">The sell-off began; two sections follow.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/233"><span class="earliermeta">aug. 24., H 22:00 · 6 elem<span class="flag flag-daily">napi összefoglaló</span></span><span class="earliertitle">Hétfői napi összefoglaló.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/232"><span class="earliermeta">aug. 23., V 21:00 · 40 elem<span class="flag flag-daily">heti összefoglaló</span></span><span class="earliertitle">A hét egy oldalon.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/231"><span class="earliermeta">aug. 18., K 12:00 · 7 elem</span><span class="earliertitle">From the previous week.</span></a></section><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Beállítások</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Beállítások bezárása">×</button></div><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/d/235">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow pushrow" hidden
+    <aside class="side" aria-label="Oldalsáv"><section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">Korábban</h2><a class="earlierrow" href="/t/goldentesttoken/hu/d/234"><span class="earliermeta">aug. 25., K 10:00 · 9 elem</span><span class="earliertitle">The sell-off began; two sections follow.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/233"><span class="earliermeta">aug. 24., H 22:00 · 6 elem<span class="flag flag-daily">napi összefoglaló</span></span><span class="earliertitle">Hétfői napi összefoglaló.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/232"><span class="earliermeta">aug. 23., V 21:00 · 40 elem<span class="flag flag-daily">heti összefoglaló</span></span><span class="earliertitle">A hét egy oldalon.</span></a><a class="earlierrow" href="/t/goldentesttoken/hu/d/231"><span class="earliermeta">aug. 18., K 12:00 · 7 elem</span><span class="earliertitle">From the previous week.</span></a></section><section id="settings" class="settingspanel" popover aria-labelledby="settingstitle"><div class="settingshead"><h2 id="settingstitle" class="settingstitle">Beállítások</h2><button type="button" class="settingsclose" popovertarget="settings" popovertargetaction="hide" aria-label="Beállítások bezárása">×</button></div><div class="settingsrow"><span class="settingslabel">Nyelv</span><span class="langswitch"><a href="/t/goldentesttoken/d/235">EN</a> | <strong>HU</strong></span></div><div class="settingsrow"><span class="settingslabel">Téma</span><span class="miniseg miniseg-theme" role="group" aria-label="Világos/sötét váltás"><button class="minisegbtn" data-set="light" hidden>Világos</button><button class="minisegbtn" data-set="auto" hidden>Auto</button><button class="minisegbtn" data-set="dark" hidden>Sötét</button></span></div><div class="settingsrow"><span class="settingslabel">Betűméret</span><span class="miniseg miniseg-size" role="group" aria-label="Betűméret"><button class="minisegbtn" data-set="xs" hidden>XS</button><button class="minisegbtn" data-set="s" hidden>S</button><button class="minisegbtn" data-set="m" hidden>M</button><button class="minisegbtn" data-set="l" hidden>L</button></span></div><div class="settingsrow"><span class="settingslabel">Sűrűség</span><span class="miniseg miniseg-density" role="group" aria-label="Sűrűség"><button class="minisegbtn" data-set="cards" hidden>Kártyák</button><button class="minisegbtn" data-set="compact" hidden>Kompakt</button></span></div><div class="settingsrow pushrow" hidden
     data-label="Értesítések"
     data-enable="Bekapcsolás"
     data-enabled="Bekapcsolva"
@@ -1636,7 +1668,7 @@
       },
     );
 
-    // Ledger density miniseg (Cards / Compact): same shape as the theme and
+    // Site density miniseg (Cards / Compact): same shape as the theme and
     // size minisegs above. Cards is the default and is expressed as the
     // ABSENCE of data-density (see setPref); only "compact" touches storage.
     // The head script already applied any stored choice before first paint.

@@ -372,7 +372,7 @@ test("deriveSubline: text after the first sentence, clamped at a word boundary",
   assert.ok(!out.slice(0, -1).endsWith("wor"), "clipped on a word boundary");
 });
 
-test("digest 235 EN: thread pills, what-changed block, source key, stripped styles, cite titles", async () => {
+test("digest 235 EN: thread pills, what-changed block, source key, stripped styles, citations", async () => {
   const { html } = await page("d/235");
   assert.match(html, /class="threadpill"/, "story-thread pill (recurring topic)");
   assert.match(html, /class="deltas"/, "what-changed block from deltas");
@@ -397,7 +397,7 @@ test("digest 235 EN: thread pills, what-changed block, source key, stripped styl
   // ONE collapsed details.colophon, in source-key-then-provenance order.
   assert.match(
     html,
-    /<details class="colophon"><summary>How this was made<\/summary><div class="colophonbody"><div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
+    /<details class="colophon"><summary>How this was made[\s\S]*?<\/summary><div class="colophonbody">[\s\S]*?<div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
     "colophon wraps both the source key and the provenance row",
   );
   // Model provenance (ingest v5): "Written by"/"Translated with" rows
@@ -432,7 +432,7 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
     const { html } = await page(path);
     assert.match(
       html,
-      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>\s*<\/div><\/details>\s*<details class="sec"><summary class="sechead"><h2 id="s2">/,
+      /<h2 id="s1">[^<]*<\/h2>[\s\S]*?<div class="secbody">(?:<a class="secarc"[^>]*>[^<]*<\/a>)?\s*<p>[\s\S]*?<\/p>\s*<p>[\s\S]*?<\/p>\s*<ul>\s*<li>[\s\S]*?<\/ul>[\s\S]*?<\/div><\/details>\s*<details class="sec" open><summary class="sechead"><h2 id="s2">/,
       `${path}: section 1 has two paragraphs then a list`,
     );
     assert.match(
@@ -446,10 +446,10 @@ test("digest 235: multi-paragraph sections, list and attention callout render in
       `${path}: failure banner`,
     );
     assert.match(html, /<span class="tldr-label">[^<]+<\/span>/, `${path}: tldr-label span`);
-    // Production shape: nh3 puts `rel` AFTER `href`; addCiteTitles must still title it.
+    // Production shape: nh3 puts `rel` AFTER `href`.
     assert.match(
       html,
-      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer" title="example\.com">²<\/a>/,
+      /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer">²<\/a>/,
       `${path}: cite chip rendered, inline style stripped`,
     );
     assert.ok(!/<h2 id="s4"/.test(html), `${path}: callout is not numbered as a section`);
@@ -634,6 +634,58 @@ test("colophon: absent from both fields renders no wrapper div at all", async ()
   assert.ok(!html.includes('class="colophon"'), "no colophon wrapper when neither row has data");
   assert.ok(!html.includes('class="sourcekey"'), "no source key either");
   assert.ok(!html.includes('class="provenance"'), "no provenance row either");
+});
+
+test("run warnings belong in the colophon", async () => {
+  const { renderDigestPage } = await import("../src/render-digest.js");
+  const digest = {
+    id: 999,
+    created_at: "2026-08-25T12:00:00Z",
+    kind: "window",
+    item_count: 1,
+    section_count: 1,
+    tldr: "Test",
+    source_counts: null,
+    failed_sources: null,
+    provenance: null,
+    body_html:
+      '<p class="banner" style="color:red">⚠ verification unavailable this run</p>\n<p>⚠ telegram collection failed this run\n⚠ x collection failed this run</p><div class="attention"><p>Needs attention</p></div><h2>One</h2><p>⚠ editorial warning</p>',
+  };
+  const render = (row, lang = "en") =>
+    renderDigestPage(row, null, null, "tok", "example.com", lang, "all", [], null);
+  const html = render(digest);
+  const article = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
+  assert.doesNotMatch(article, /verification unavailable|collection failed/);
+  assert.match(article, /Needs attention/);
+  assert.match(article, /<h2 id="s1">One<\/h2>/);
+  assert.match(article, /⚠ editorial warning/);
+  assert.match(
+    html,
+    /<details class="colophon"><summary>How this was made[\s\S]*?Run warnings[\s\S]*?<div class="colophonbody"><p class="banner">⚠ verification unavailable this run<\/p><p class="banner">⚠ telegram collection failed this run<br>⚠ x collection failed this run<\/p>/,
+  );
+  const translated = render(
+    {
+      ...digest,
+      body_html_hu:
+        '<p class="banner">⚠ Az ellenőrzés nem érhető el</p><p>⚠ Az RSS begyűjtése sikertelen</p><h2>Hír</h2>',
+    },
+    "hu",
+  );
+  assert.match(
+    translated,
+    /class="colophonbody"><p class="banner">⚠ Az ellenőrzés nem érhető el<\/p><p class="banner">⚠ Az RSS begyűjtése sikertelen<\/p>/,
+  );
+  const metadata = render({ ...digest, body_html: "<p>Body</p>", failed_sources: '["rss"]' }, "hu");
+  assert.match(metadata, /Hogyan készült[\s\S]*?Futtatási figyelmeztetések/);
+  assert.match(metadata, /class="sk sk-failed">⚠ rss/);
+  assert.doesNotMatch(
+    render({ ...digest, body_html: "<p>Body</p>", source_counts: '{"rss":1}' }),
+    /class="colophon-warning"/,
+  );
+  assert.match(
+    render({ ...digest, body_html: "<p>Intro</p><p>⚠ verification unavailable this run</p>" }),
+    /<article class="digest">[\s\S]*?⚠ verification unavailable this run/,
+  );
 });
 
 test("digest 234 HU: falls back to EN body with the note", async () => {
@@ -1688,11 +1740,10 @@ test("the size miniseg offers xs/s/m/l in that order and the client accepts xs",
   );
 });
 
-test("the density miniseg is index-only and replaces the old toggle", async () => {
+test("the density miniseg appears on every page and replaces the old toggle", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const html = markupOf((await page(path)).html);
-    const isIndex = ["index-en", "index-hu", "daily-en", "weekly-en"].includes(name);
-    assert.equal(count(html, /miniseg-density/g), isIndex ? 1 : 0, `${name}: density miniseg`);
+    assert.equal(count(html, /miniseg-density/g), 1, `${name}: density miniseg`);
     assert.ok(!html.includes("densitytoggle"), `${name}: no densitytoggle`);
   }
 });
@@ -1701,16 +1752,21 @@ test("the density miniseg is index-only and replaces the old toggle", async () =
 
 const stripTags = (h) => h.replace(/<[^>]*>/g, "");
 
-test("digest hero: chip, headline, thread pills; subline differs from the headline", async () => {
+test("digest hero: dateline and headline, followed by summary and thread disclosure", async () => {
   const { html } = await page("d/235");
   const hero = html.match(/<header class="hero hero-digest">[\s\S]*?<\/header>/)?.[0];
   assert.ok(hero, "hero header present");
   assert.ok(!html.includes('class="edhead"'), "old edhead is gone");
   assert.ok(!html.includes('<nav class="arcs"'), "old arcs line is gone");
-  assert.match(hero, /<span class="herochip">[^<]*12 items · 3 sections<\/span>/, "chip counts");
-  assert.match(hero, /<h1 class="herotitle">[^<]+<\/h1>/, "headline");
   assert.match(
     hero,
+    /<p class="digest-dateline">digest · <time datetime="[^"]+"><span class="digest-dateline-date">[^<]+ · <\/span>[^<]+<\/time><\/p>/,
+    "semantic dateline",
+  );
+  assert.doesNotMatch(hero, /items|sections|herochip/, "counts and capsule stay out of the hero");
+  assert.match(hero, /<h1 class="herotitle">[^<]+<\/h1>/, "headline");
+  assert.match(
+    html,
     /<a class="threadpill" href="\/t\/goldentesttoken\/a\/markets-slide">[^<]*<span class="pillcount">×2 this week<\/span><\/a>/,
     "thread pill links to the arc page and keeps the repeat count",
   );
@@ -1723,31 +1779,45 @@ test("digest hero: chip, headline, thread pills; subline differs from the headli
   assert.equal(deriveSubline(tldr), "The EU package landed overnight, gated on reforms.");
 });
 
+test("digest dateline labels daily and weekly editions in both languages", async () => {
+  for (const [path, label] of [
+    ["d/233", "daily brief"],
+    ["d/232", "weekly report"],
+    ["hu/d/233", "napi összefoglaló"],
+    ["hu/d/232", "heti összefoglaló"],
+  ]) {
+    const { html } = await page(path);
+    assert.ok(html.includes(`<p class="digest-dateline">${label} · <time datetime=`), path);
+  }
+});
+
 test("digest sections: section nav, expand-all button, folded details", async () => {
   for (const path of ["d/235", "hu/d/235"]) {
     const { html } = await page(path);
     assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
     assert.match(
       html,
-      /<div class="tocrow"><nav class="toc"[^>]*>[\s\S]*?<\/nav>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
-      `${path}: expand-all is a sibling of nav.toc inside div.tocrow`,
+      /<div class="tocrow"><details class="tocpicker" open><summary>[^<]*<\/summary><nav class="toc"[^>]*>[\s\S]*?<\/nav><\/details>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
+      `${path}: expand-all remains available when the picker is closed`,
     );
     const toc = html.match(/<nav class="toc"[^>]*>([\s\S]*?)<\/nav>/)[1];
-    assert.ok(!toc.includes("expandall"), `${path}: button is not inside the scrolling nav`);
-    const pills = [
+    const links = [
       ...toc.matchAll(
-        /<a href="#s\d+" title="([^"]+)"><span class="tocnum">\d\d<\/span><span class="toctitle">([^<]+)<\/span><\/a>/g,
+        /<a href="#(s\d+)"><span class="tocnum" aria-hidden="true">\d\d<\/span><span class="toctitle">([^<]+)<\/span><\/a>/g,
       ),
     ];
-    assert.equal(pills.length, 3, `${path}: three pills with title + .toctitle`);
-    for (const [, title, text] of pills)
-      assert.equal(title, text, `${path}: pill title is the full heading`);
+    assert.equal(links.length, 3, `${path}: one link per section`);
+    for (const [, id, title] of links)
+      assert.ok(
+        html.includes(`<h2 id="${id}">${title}</h2>`),
+        `${path}: each link has the full heading and targets its anchor`,
+      );
     assert.equal(
       (html.match(/<details class="sec"/g) ?? []).length,
       3,
       `${path}: 3 folded sections`,
     );
-    assert.equal((html.match(/<details class="sec" open>/g) ?? []).length, 1, `${path}: one open`);
+    assert.equal((html.match(/<details class="sec" open>/g) ?? []).length, 3, `${path}: all open`);
     assert.match(
       html,
       /<details class="sec" open><summary class="sechead"><h2 id="s1">/,
@@ -1759,7 +1829,6 @@ test("digest sections: section nav, expand-all button, folded details", async ()
         new RegExp(`<summary class="sechead"><h2 id="s${n}">`),
         `${path}: s${n} in summary`,
       );
-      assert.match(html, new RegExp(`<a href="#s${n}" title=`), `${path}: toc link s${n}`);
     }
     const summaries = html.match(/<summary class="sechead">[\s\S]*?<\/summary>/g);
     assert.ok(
@@ -1770,11 +1839,11 @@ test("digest sections: section nav, expand-all button, folded details", async ()
       !html.includes('<summary class="sechead"><h2 id="s1">Markets slide continues</h2><a'),
       "secarc not adjacent",
     );
-    // Outside the folds: banner, tldr, attention before the first <details>; foot after the last.
+    // Outside the folds: tldr and attention precede the first section; foot follows the last.
     const art = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
     const firstFold = art.indexOf('<details class="sec"');
-    const lastFold = art.lastIndexOf("</details>");
-    for (const marker of ['class="banner"', 'class="tldr"', 'class="attention"']) {
+    const lastFold = art.lastIndexOf("</div></details>");
+    for (const marker of ['class="tldr"', 'class="attention"']) {
       const at = art.indexOf(marker);
       assert.ok(at > -1 && at < firstFold, `${path}: ${marker} before the folds`);
     }
@@ -1793,22 +1862,6 @@ test("digest sections: section nav, expand-all button, folded details", async ()
   assert.ok(secarc, "secarc leads the section body");
 });
 
-test("addCiteTitles: production shape (rel after href) gets a title; bad href untouched", async () => {
-  const { addCiteTitles } = await import("../src/sections.js");
-  assert.equal(
-    addCiteTitles(
-      '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer">¹</a>',
-    ),
-    '<a class="cite" href="https://www.example.com/x" rel="noopener noreferrer" title="example.com">¹</a>',
-  );
-  assert.equal(
-    addCiteTitles('<a class="cite" href="https://example.org/y">²</a>'),
-    '<a class="cite" href="https://example.org/y" title="example.org">²</a>',
-  );
-  const bad = '<a class="cite" href="not a url" rel="noopener">³</a>';
-  assert.equal(addCiteTitles(bad), bad, "unparseable href fails safe");
-});
-
 test("foldSections: folds a normal body, refuses unbalanced or miscounted ones", async () => {
   const { foldSections, buildSectionToc } = await import("../src/sections.js");
   const { STRINGS } = await import("../src/strings.js");
@@ -1820,8 +1873,7 @@ test("foldSections: folds a normal body, refuses unbalanced or miscounted ones",
   const { html, sections } = buildSectionToc(body);
   const folded = foldSections(html, sections.length, strings);
   assert.notEqual(folded, html);
-  assert.equal(folded.match(/<details class="sec" open>/g).length, 1);
-  assert.equal(folded.match(/<details class="sec">/g).length, 1);
+  assert.equal(folded.match(/<details class="sec" open>/g).length, 2);
   assert.deepEqual(
     folded.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
     html.match(/<h2 id="s\d+">[^<]*<\/h2>/g),
@@ -1873,9 +1925,9 @@ test("hero is a direct child of main.layout on index and digest; digest body sta
   );
   const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
   assert.ok(!main.includes("hero-digest"), "hero left the column");
-  const toc = main.indexOf('<div class="tocrow"><nav class="toc"');
+  const toc = main.indexOf('<div class="tocrow"><details class="tocpicker"');
   assert.ok(toc > -1, ".tocrow (nav.toc + expand-all) stays in .maincol");
-  assert.ok(toc < main.indexOf('<article class="digest">'), ".toc precedes the article");
+  assert.ok(toc < main.indexOf('class="tldr"'), "section picker precedes the summary");
   assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
   assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");
 });
@@ -1914,4 +1966,21 @@ test("exactly one h1 on every golden page and on an archive-week index", async (
   assert.match(week, /<h2 class="headline">/, "archive entries are h2");
   const empty = markupOf((await page("w/2026-W20/")).html);
   assert.equal(count(empty, /<h1[\s>]/g), 1, "empty archive week: one h1");
+});
+
+test("digest reading controls and sources preserve their contracts", async () => {
+  const html = (await page("d/235")).html;
+  const article = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
+  assert.match(article, /<details class="tocpicker" open><summary>Jump to section · 3<\/summary>/);
+  assert.ok(article.indexOf('class="tocpicker"') < article.indexOf('class="tldr"'));
+  assert.ok(article.indexOf('class="tldr"') < article.indexOf('class="storythreads"'));
+  assert.equal((article.match(/class="tldr"/g) ?? []).length, 1);
+  assert.doesNotMatch(article, /class="banner"/);
+  assert.ok(!markupOf(html).includes('class="herosub"'), "digest omits the truncated preview");
+  assert.doesNotMatch(article, /class="storysources"/);
+  assert.match(
+    article,
+    /<a class="cite" href="https:\/\/example\.com\/liquidity-note" rel="noopener noreferrer">²<\/a>/,
+  );
+  assert.doesNotMatch(article, /<a class="cite"[^>]* title=/);
 });

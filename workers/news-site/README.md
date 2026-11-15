@@ -15,6 +15,19 @@ Live at: `https://news.toomhorvath.com/t/<SITE_TOKEN>/` and
 D1 database via Cloudflare Workers Custom Domains — see `news_site.tf` at the
 repo root).
 
+Digest pages show an open native section picker before the complete summary.
+Stories are expanded by default and retain numbered inline citation links.
+Verification and collection warnings appear under **How this was made**.
+An exclamation mark next to that label signals a warning.
+Related story threads are available after the article when relevant. The picker
+and story disclosures work without JavaScript; Expand all / Collapse all is
+available when JavaScript is enabled.
+
+The Density setting applies throughout the site. Compact digest stories
+use dividers between sections and a simple accent rule beside the TL;DR.
+Compact also tightens spacing in archives, story timelines, search results,
+and About. The browser remembers the selection as readers move between pages.
+
 ## Source layout
 
 One deployed script, several source files, plus a small `public/` directory
@@ -734,6 +747,7 @@ so this pass contains no motion/lang work.
   reusing the `title` attribute addCiteTitles already sets — the hover
   affordance doesn't exist on the phone the site is mostly read on (print
   already does exactly this with `.cite[title]::after`).
+  Later, destination names were removed from citation chips; numbered links remain.
 - [x] **Resume chip** — the unread fence is passive; a small floating "↓
   new since your last visit" chip appears when the fence exists below the
   viewport and scrolls to it on tap. Progressive enhancement like the
@@ -827,9 +841,9 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   map does not recognise renders unchanged. The colophon (source key and
   provenance together) is collapsed by default behind one native `<details>`
   disclosure, "How this was made" / "Hogyan készült", and print forces it
-  open. It sits under one hairline rule. The article's closing coverage
-  line (`p.foot`, "From N items; …" / "Synthesized from …") is hidden on the
-  site: the source key already carries those numbers per source.
+  open. On screen, spacing separates it from the article. The site's source
+  key shows the counts by source and supersedes the article's hidden closing
+  coverage line (`p.foot`, "From N items; …" / "Synthesized from …").
 - **Catch-up banner and follow list** (§11.2) — client-side, reusing the unread
   fence's `localStorage` stamp.
 - **Navigation** — soft navigation (internal steps swap in place), a ⌘K command
@@ -837,7 +851,7 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
 - **Settings and reading** — a settings panel (a popover opened from the bar's
   sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
   language, the three-state theme, text size (XS/S/M/L) and a Cards | Compact
-  ledger density; a plain black-on-white print stylesheet; an About page for
+  density setting; a plain black-on-white print stylesheet; an About page for
   anyone the capability link gets shared with. The Sans | Serif body-font
   toggle was retired by the Spatial Glass redesign (below).
 - **Spatial Glass redesign** (2026-11) — a ground-up visual pass with the same

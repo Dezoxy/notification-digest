@@ -703,7 +703,7 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 **Shape.** Cards are \`r-card\` (24px); inner rows and notes \`r-in\` (14px); every control is a pill (\`r-pill\`). Nothing is square.
 
-**Rules and borders.** 1px \`border\` on cards, \`border-strong\` on floating surfaces and controls. No left-border accent bars; the timeline rail is the one exception and it is a separate element.
+**Rules and borders.** Use a 1px \`border\` on cards and \`border-strong\` on floating surfaces and controls. In Compact digest view, a rule separates stories and an accent marks the TL;DR. The timeline rail is a separate element.
 
 **Glass and shadow.** Blur exists on exactly three surfaces: the bar, an open settings popover and the command palette (\`blur-chrome\`, \`blur-sheet\`, with \`sheet\` as their fill). Everything else is a flat \`panel\`; stacked blurs are expensive and nested ones do not composite. Only floating things cast the \`shadow\` token. Reduced transparency or a browser without backdrop-filter swaps those surfaces to \`sheet-solid\`.
 
@@ -844,20 +844,19 @@ Source: \`render-index.js\`; styles \`.hero\`, \`.herotitle\`, \`.herochip\`, \`
     330,
     stage(`<nav class="digestnav"><a href="#">← All digests</a><span class="spacer"></span><a class="nav-older" href="#">← 10:00</a></nav>
 <header class="hero hero-digest">
-  <span class="herochip">Digest · Tue 25 Aug · 16:00 CEST · 12 items · 3 sections</span>
+  <p class="digest-dateline">Daily brief · <time datetime="2026-08-25T14:00:00Z"><span class="digest-dateline-date">Tue 25 Aug · </span>16:00 CEST</time></p>
   <h1 class="herotitle">Markets slid for a second day while the EU package landed.</h1>
-  <p class="herosub">Equities extended losses into the close.</p>
 </header>`),
     `# DigestHero
 
-The top of a digest page: the back and older/newer links, then a centred hero with a chip (kind, date, time, counts), the derived headline as the page's h1, and a subline.
+The top of a digest page has back and older/newer links, a headline, and a plain dateline with the edition type and local time. The dateline also shows a short date on desktop and in print. On phones the masthead shows the date.
 
-**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`span.herochip\`, \`h1.herotitle\` and an optional \`p.herosub\`. The headline and subline are derived from the TL;DR.
+**Provide** a \`nav.digestnav\` (back link, \`.spacer\`, \`.nav-older\` / \`.nav-newer\`) and \`header.hero.hero-digest\` with \`p.digest-dateline\` and \`h1.herotitle\`. The headline is derived from the TL;DR.
 
 - Do repeat \`nav.digestnav.digestnav-bottom\` after the colophon.
 - Do omit the older or newer link at either end instead of showing a disabled one.
 
-Source: \`render-digest.js\`; styles \`.digestnav\`, \`.hero-digest\`, \`.herochip\`.
+Source: \`render-digest.js\`; styles \`.digestnav\`, \`.hero-digest\`, \`.digest-dateline\`.
 `,
   );
 
@@ -886,7 +885,7 @@ One briefing in the ledger, a glass card: a time and count line, a headline, a c
 **Provide** an \`a.entry\` (the whole card is the link) with a \`span.meta\` (\`.time\`, \`.count\`, optional \`.flag\`s), an \`h2.headline\` and a \`p.excerpt\`, inside \`section.ledger\`, grouped under a \`.dayhead\` per local day (Europe/Budapest).
 
 - Do add \`.time-accent\` to the latest edition of a day and \`.flag-daily\` + \`.excerpt-daily\` to a daily or weekly brief; the amber tint follows from those.
-- Do let \`data-density="compact"\` dissolve the cards into a hairline list: two-line excerpts, the time never hidden.
+- Do let \`data-density="compact"\` dissolve ledger cards into a hairline list: two-line excerpts, the time never hidden. On other pages tighten content spacing without shrinking reading text or touch targets; print retains its own layout.
 - Don't nest a card inside a card.
 
 The same card, with search hits wrapped in \`mark\`, is the search result; a thread's appearance is the same row inside a \`.tlitem\`.
@@ -1014,17 +1013,16 @@ Source: \`render-index.js\`; styles \`.weekrail\`, \`.railspark\`.
     stage(`<article class="digest">
   <div class="tldr"><span class="tldr-label">TL;DR</span>Markets slid for a second day while the EU package landed.</div>
   <div class="attention"><span class="attention-label">⚑ Needs attention</span><p>The council vote on the package closes at 18:00 CEST; two of your groups are organising around it.</p></div>
-  <p class="banner">⚠ Polymarket could not be collected this run; its items are missing.</p>
 </article>`),
     `# Callouts
 
-The digest's three blocks above the sections: the TL;DR card (a \`panel\` with an \`accent-line\` border), the attention callout and the collection-failed banner (both amber).
+The digest's blocks above the sections are the TL;DR and the attention callout. The TL;DR uses a card in Cards mode and an accent rule in Compact mode. Run warnings appear in the colophon.
 
-**Provide** them inside \`article.digest\`: \`div.tldr\` first with a \`.tldr-label\`, an optional \`div.attention\` with \`.attention-label\` and a \`p\`, and \`p.banner\` when a source failed. These arrive in the summarizer's HTML; the site strips its inline email styles and these classes take over.
+**Provide** them inside \`article.digest\` using \`div.tldr\` with a \`.tldr-label\` and an optional \`div.attention\` with \`.attention-label\` and a paragraph. The site strips the inline email styles and applies its own theme.
 
 - Do keep exactly one TL;DR per digest; it is also the headline's source.
 - Do reserve \`attention\` for something the reader may act on.
-- Don't add a left border or icon; the label carries the meaning.
+- Use the TL;DR label in both density modes.
 
 Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`, \`.banner\`.
 `,
@@ -1035,13 +1033,14 @@ Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`,
     "Article",
     170,
     stage(
-      `<div class="tocrow"><nav class="toc"><a href="#s1" title="Markets slide continues"><span class="tocnum">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2" title="EU agrees new package"><span class="tocnum">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3" title="Chip export rules tighten"><span class="tocnum">03</span><span class="toctitle">Chip export rules tighten</span></a></nav><button type="button" class="expandall">Expand all</button></div>`,
+      `<div class="tocrow"><details class="tocpicker" open><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details><button type="button" class="expandall">Collapse all</button></div>`,
     ),
     `# Toc
 
-The section index above a digest: one pill per section with its two-digit number, and an Expand all / Collapse all button. On phones it is one scrolling row with a fading edge and a sticky button; from 700px the pills wrap.
+The section index starts as an open disclosure with full section titles and a Collapse all button for the stories. It sits before the complete summary.
+On phones, the list uses 13px text and can extend below both controls. Each link has a minimum height of 44px.
 
-**Provide** \`div.tocrow\` holding \`nav.toc\` (one \`a\` per section with the full title in \`title\`: a \`span.tocnum\` and a \`span.toctitle\`, linking to \`#sN\`) and, beside the nav, \`button.expandall\` carrying \`data-expand\` / \`data-collapse\` labels, rendered \`hidden\`; the client reveals it.
+**Provide** \`div.tocrow\` holding \`details.tocpicker\`, its summary and \`nav.toc\` with numbered \`#sN\` links. The sibling \`button.expandall\` carries \`data-expand\` / \`data-collapse\` labels and is rendered \`hidden\`; the client reveals it.
 
 - Do generate it from the sections; never write it by hand.
 - Don't include the attention callout's heading.
@@ -1057,15 +1056,15 @@ Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.to
     stage(`<article class="digest">
   <details class="sec" open><summary class="sechead"><h2 id="s1">Markets slide continues</h2><span class="seccount">2 sources</span></summary><div class="secbody">
     <a class="secarc" href="#">story so far ×2</a>
-    <p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#" title="reuters.com">1</a></p>
+    <p>Equities extended losses. <a href="#">Reuters</a> puts the drawdown at <strong>four percent</strong>.<a class="cite" href="#">¹</a></p>
   </div></details>
   <details class="sec"><summary class="sechead"><h2 id="s2">EU agrees new package</h2><span class="secpreview">The council signed off overnight, with disbursement gated on reforms.</span><span class="seccount">1 source</span></summary><div class="secbody"><p>The council signed off overnight.</p></div></details>
 </article>`),
     `# Section
 
-One story in a digest, a native \`details\` card: a heading with a two-line preview and a source count when closed, a chevron, and the \`body\`-coloured article text when open. The first section ships open.
+One story in a digest uses native \`details\`. It has a card surface in Cards mode and a divider in Compact mode. It starts open, with a heading, a chevron, and the article text. When closed, it shows a two-line preview and a source count.
 
-**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` chips.
+**Provide** \`details.sec\` containing \`summary.sechead\` (the \`h2\` with \`id="sN"\`, an optional \`span.secpreview\`, an optional \`span.seccount\`) and \`div.secbody\`. Inside the body: paragraphs, \`a.secarc\` for a thread the section belongs to, \`a.cite\` numbered links.
 
 - Do keep it a native \`details\`: it works without JavaScript, and print forces every section open.
 - Do bold the figure that matters; \`strong\` snaps to \`strong\` ink against \`body\`.
@@ -1080,13 +1079,13 @@ Source: \`sections.js\`; styles \`.sec\`, \`.sechead\`, \`.secbody\`, \`.secarc\
     "Article",
     90,
     stage(
-      `<p style="font-size:17px;margin:0">Drawdown at four percent<a class="cite" href="#" title="reuters.com">1</a> and widening<a class="cite" href="#" title="ft.com">2</a>. Hits: <mark>Markets</mark> extended losses.</p>`,
+      `<p style="font-size:17px;margin:0">Drawdown at four percent<a class="cite" href="#">¹</a> and widening<a class="cite" href="#">²</a>. Hits: <mark>Markets</mark> extended losses.</p>`,
     ),
     `# Cite
 
 A superscript citation chip: an \`accent-soft\` rounded chip with the source number in \`accent-text\`, filling solid \`accent\` on hover or focus.
 
-**Provide** \`a.cite\` linking to the source with the source domain in \`title\` (\`sections.js\` adds it); on touch screens CSS prints the domain after the number.
+**Provide** \`a.cite\` linking to the source, with the superscript number as its label.
 
 - Do place it directly after the claim, with no space.
 - Don't use it for anything but sources; search hits use plain \`mark\`.
@@ -1099,14 +1098,14 @@ Source: \`sections.js\`; styles \`.cite\`, \`mark\`.
     "ThreadPills",
     "Article",
     250,
-    stage(`<nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues <span class="pillcount">×2 this week</span></a><a class="threadpill" href="#">Chip export rules <span class="pillcount">×3 this week</span></a></nav>
+    stage(`<details class="storythreads" open><summary>Story threads · 2</summary><nav class="heropills" aria-label="Story threads"><a class="threadpill" href="#">Markets slide continues <span class="pillcount">×2 this week</span></a><a class="threadpill" href="#">Chip export rules <span class="pillcount">×3 this week</span></a></nav></details>
 <div class="archivelabel" style="margin-top:24px">What changed</div>
 <nav class="deltas" aria-label="What changed"><a class="delta" href="#"><span class="deltalabel">Markets slide continues</span><p class="deltatext"><span class="deltaprev">Down two percent</span><span class="deltaarrow">→</span><span class="deltanow">Down four percent</span></p></a></nav>`),
     `# ThreadPills
 
-Story threads ("arcs") on a digest: tinted pills naming each thread with its weekly count, and a "What changed" list showing a previous → current value.
+The related-reading controls after a digest article pair recurring story threads with a "What changed" list when a previous and current value are available.
 
-**Provide** \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the same pills sit in the hero.
+**Provide** a \`details.storythreads\` disclosure containing \`nav.heropills\` of \`a.threadpill\` (title plus \`span.pillcount\`) and, when a thread's key fact moved, \`nav.deltas\` of \`a.delta\` with \`.deltalabel\` and a \`p.deltatext\` (\`.deltaprev\`, \`.deltaarrow\`, \`.deltanow\`). On the index the same pills sit in the hero.
 
 - Do show a delta only when both values are known.
 - Don't colour deltas red or green; the previous value is \`muted\`, the current one \`strong\`.
@@ -1162,11 +1161,11 @@ Source: \`render-arc.js\`; styles \`.timeline\`, \`.tlitem\`.
     "Article",
     230,
     stage(
-      `<details class="colophon" open><summary>How this was made</summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
+      `<details class="colophon" open><summary>How this was made <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, Run warnings</span></summary><div class="colophonbody"><p class="banner">⚠ polymarket collection failed this run</p><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
     ),
     `# Colophon
 
-The collapsible "How this was made" footer of a digest: per-source item counts with colour keys, failed sources, and which model wrote and translated it.
+The collapsible "How this was made" footer of a digest holds run warnings, per-source item counts, and which model wrote and translated it. Add an amber \`!\` beside the label when an edition has run warnings or recorded collector failures.
 
 **Provide** \`details.colophon\` with a \`.sourcekey\` (\`.sklabel\`, then \`.sk\` per source with an \`i\` swatch; \`.sk-failed\` for a source that failed) and a \`.provenance\` of \`.provline\`s; \`.sk-fallback\` with ↻ marks a fallback model.
 

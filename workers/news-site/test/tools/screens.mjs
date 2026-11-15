@@ -349,16 +349,13 @@ for (const vp of [PHONE, DESKTOP]) {
       { storage: SEEN },
     );
 
-    // Digest, folded sections: "expand all" clicked, and a hash load that
-    // must open section 2 (the first section is open by default).
+    // Digest sections start open; exercise collapse/expand and hash navigation.
     await state(vp, theme, `digest-expanded-${sfx}`, async (page) => {
       await page.goto(T + "d/235");
       await settle(page);
       await page.waitForSelector("button.expandall:not([hidden])");
-      await shot(page, `state-digest-folded-${sfx}`, { fullPage: false });
-      // The section-pill row at the top of the digest, with one pill given a
-      // worst-case title: it must ellipsise, keep its number, and leave
-      // "Expand all" fully visible beside the row.
+      await shot(page, `state-digest-default-${sfx}`, { fullPage: false });
+      // A long section title should wrap beside the Collapse all control.
       await page.evaluate(() => {
         const t = document.querySelector(".toc a .toctitle");
         if (t) t.textContent = "The ground stop ends, and Duffy wants $" + "9 billion more for the air traffic system";
@@ -367,6 +364,8 @@ for (const vp of [PHONE, DESKTOP]) {
       await page.waitForTimeout(200);
       await shot(page, `state-digest-tocrow-${sfx}`, { fullPage: false });
       await page.evaluate(() => window.scrollTo(0, 0));
+      await page.click("button.expandall");
+      await page.waitForTimeout(500);
       await page.click("button.expandall");
       await page.waitForTimeout(500);
       const open = await page.evaluate(
@@ -441,7 +440,8 @@ await state(
   attach(page, "print");
   await page.goto(T + "d/235");
   await settle(page);
-  // Section 3 starts folded; the print handler must open it for the PDF.
+  // Collapse sections first; the print handler must open them for the PDF.
+  await page.click("button.expandall");
   const closedBefore = await page.evaluate(() => document.querySelectorAll("details.sec:not([open])").length);
   const file = join(OUT, "print-digest-235.pdf");
   await page.pdf({ path: file, format: "A4", printBackground: true });
@@ -550,13 +550,16 @@ console.log("\nbehaviour checks");
     const after1 = await page.evaluate(() => document.querySelectorAll("details.sec[open]").length);
     await page.click("button.expandall");
     const after2 = await page.evaluate(() => document.querySelectorAll("details.sec[open]").length);
-    check("expand-all opens everything on click 1", after1 === total && before < total, `${before} -> ${after1}/${total}`);
-    check("expand-all closes everything on click 2 (one listener, not two)", after2 === 0, `after2=${after2}`);
+    check("collapse-all closes everything on click 1", before === total && after1 === 0, `${before} -> ${after1}/${total}`);
+    check("expand-all opens everything on click 2 (one listener, not two)", after2 === total, `after2=${after2}`);
     const label = await page.evaluate(() => document.querySelector("button.expandall").textContent);
-    const expandLabel = await page.evaluate(() => document.querySelector("button.expandall").dataset.expand);
-    check("expand-all label back to its expand text", label === expandLabel, label);
+    const collapseLabel = await page.evaluate(() => document.querySelector("button.expandall").dataset.collapse);
+    check("expand-all label back to its collapse text", label === collapseLabel, label);
 
     // Hand-toggling keeps the label honest.
+    await page.locator("summary.sechead").first().click();
+    await page.waitForSelector('button.expandall[aria-expanded="false"]');
+    check("label follows a manually collapsed story", await page.locator("button.expandall").evaluate((button) => button.textContent === button.dataset.expand));
     await page.evaluate(() => document.querySelectorAll("details.sec").forEach((d) => (d.open = true)));
     await page.waitForTimeout(100);
     check(
