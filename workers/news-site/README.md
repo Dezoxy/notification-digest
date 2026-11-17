@@ -15,6 +15,10 @@ Live at: `https://news.toomhorvath.com/t/<SITE_TOKEN>/` and
 D1 database via Cloudflare Workers Custom Domains — see `news_site.tf` at the
 repo root).
 
+On phones, the masthead shows the lead digest's localized date on the
+homepage and list views, and the edition's own date on digest pages.
+Digest browser titles show the kind, date, and time.
+
 Digest pages show an open native section picker before the complete summary.
 Stories are expanded by default and retain numbered inline citation links.
 **How this was made** holds the total and per-source item counts, plus

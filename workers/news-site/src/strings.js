@@ -211,17 +211,6 @@ export const STRINGS = {
     // design guidance's "evidence over certainty" / "calm urgency" register
     // applies to interface labels too, not just status text.
     arcContextLabel: "Background",
-    // Issue line (shown in the phone head under Spatial Glass, and on
-    // pages that pass pageChrome a non-empty issueLineText; see
-    // renderIndexPage's buildIssueLine): "No. {n}" reuses the digest's own numeric `id` as
-    // the edition number (an existing column, not new plumbing) — a
-    // placeholder template, same {n} convention as arcRepeat/weekLabel
-    // above. issueEditionsToday(One) is the "{n} editions today" segment,
-    // ALL view only (see buildIssueLine) — plural/singular split for the
-    // same reason arcAppearances/catchupBriefings above split.
-    issueEdition: "No. {n}",
-    issueEditionsToday: "{n} editions today",
-    issueEditionsTodayOne: "{n} edition today",
     // About page: a short static page explaining what the site is, for the
     // friends the owner shares a capability link with (see
     // renderAboutPage). aboutLabel does double duty as the page <title> and
@@ -408,14 +397,6 @@ export const STRINGS = {
     // (PLAN.md §11.6 context mode), mirrors the EN block's pattern. "Háttér"
     // ("Background/context") — a plain, calm noun, no verb/CTA framing.
     arcContextLabel: "Háttér",
-    // Owner: please review — new HU strings, the issue line
-    // (Front Page redesign), mirror the EN block's pattern. Hungarian
-    // does not pluralize a noun after a numeral (same reasoning as
-    // searchResultsOne above), so issueEditionsTodayOne is deliberately
-    // identical to its plural twin.
-    issueEdition: "{n}. szám",
-    issueEditionsToday: "{n} kiadás ma",
-    issueEditionsTodayOne: "{n} kiadás ma",
     // Owner: please review — new HU strings, about page (this feature),
     // mirror the EN block's pattern. Machine-drafted translation, not yet
     // read by a native speaker.

@@ -72,7 +72,7 @@ export function appName(host) {
 // The shell is ONE layout on every page: a single header.bar (brand, view
 // tabs, search, settings button) that CSS renders as the desktop top bar AND
 // the phone bottom dock — never a second nav in the markup — a phone-only
-// .phonehead row (brand + issue line), and a <main class="layout"> holding an
+// .phonehead row (brand + date), and a <main class="layout"> holding an
 // optional full-width `heroHtml`, then .maincol and an optional .side column.
 // The hero is a layout child rather than part of .maincol so it can span both
 // columns; the page's h1 must still sit inside <main>, hence <main> IS the
@@ -82,7 +82,7 @@ export function appName(host) {
 // in `bodyHtml`.
 // The phone brand is a real link (CSS shows one of the two brands per
 // breakpoint), so the hidden one is display:none, not aria-hidden.
-// `issueLineText` is the RAW (unescaped) issue-line string, shown in
+// `issueLineText` is the RAW (unescaped) masthead date, shown in
 // .phonehead; pageChrome esc()s it once here, same convention as `title`.
 // `backHref` is the digest page's "back to index" href: it adds the bar's
 // .barback arrow (the phone's way back now that the floating back button is

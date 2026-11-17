@@ -279,7 +279,7 @@ const PLAIN_USAGE = {
   ],
   "lh-read": ["type", "Article reading line height."],
   "fs-ui": ["type", "Controls, nav, settings rows, search."],
-  "fs-meta": ["type", "Counts, chips, the issue line, the catch-up strip."],
+  "fs-meta": ["type", "Counts, chips, the phone masthead date, the catch-up strip."],
   "fs-micro": ["type", "Smallest labels: section counts, tags, uppercase eyebrows."],
   "read-scale": [
     "type",
@@ -713,7 +713,7 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 **Themes.** Light, dark, or the OS preference, chosen in Settings and pinned through \`data-theme\` on \`<html>\`, which only switches \`color-scheme\`; \`light-dark()\` does the rest.
 
-**Phone.** Below 700px the bar becomes a floating bottom dock (a back arrow replaces the wordmark on digest pages), a quiet brand and issue line sit at the top, and Settings opens as a bottom sheet.
+**Phone.** Below 700px the bar becomes a floating bottom dock (a back arrow replaces the wordmark on digest pages), the brand and localized date sit at the top, and Settings opens as a bottom sheet.
 
 ## Iconography
 
