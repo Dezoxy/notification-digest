@@ -1746,6 +1746,14 @@ test("no floating FABs: .backfab is gone and .barback is digest-only", async () 
     assert.ok(!html.includes("<noscript>"), `${name}: no noscript block`);
     const isDigest = name.startsWith("digest-");
     assert.equal(count(html, /class="barback"/g), isDigest ? 1 : 0, `${name}: barback`);
+    if (isDigest) {
+      const actions = html.match(/<div class="baractions">([\s\S]*?)<\/div>\s*<\/header>/)[1];
+      assert.match(
+        actions,
+        /class="searchpop"[\s\S]*class="settingsbtn"[\s\S]*class="barback"[^>]*>←<\/a>\s*$/,
+        `${name}: search, settings, then back in focus order`,
+      );
+    }
   }
 });
 

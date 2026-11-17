@@ -131,7 +131,8 @@ export function pageChrome({
     ? renderSearchBubble(token, lang, strings)
     : renderSearchButton(token, lang, strings);
   const backHtml = backHref
-    ? `<a class="barback" href="${backHref}" aria-label="${esc(strings.backFabLabel)}">←</a>`
+    ? `
+      <a class="barback" href="${backHref}" aria-label="${esc(strings.backFabLabel)}">←</a>`
     : "";
   // Sliders icon (not a gear: it reads as "preferences" at 18px without the
   // cog's busy teeth). Inline SVG for the same cross-platform reason as the
@@ -242,11 +243,10 @@ ${prefetchScriptHtml}
 <div class="wrap">
   <header class="bar">
     <a class="brand" href="${homeHref}">${esc(first)}<span class="brandmark" aria-hidden="true">.</span></a>
-    ${backHtml}
     ${viewTabsHtml}
     <div class="baractions">
       ${searchHtml}
-      <button type="button" class="settingsbtn" popovertarget="settings" aria-label="${esc(strings.settingsLabel)}">${settingsIcon}</button>
+      <button type="button" class="settingsbtn" popovertarget="settings" aria-label="${esc(strings.settingsLabel)}">${settingsIcon}</button>${backHtml}
     </div>
   </header>
   <div class="phonehead">
