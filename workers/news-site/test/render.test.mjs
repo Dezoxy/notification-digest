@@ -295,6 +295,14 @@ test("index EN: NOW section, week rail, degraded badge, kind badges", async () =
   const { html } = await page("");
   assert.match(html, /class="sidecard now"/, "NOW card (2-appearance arc via stable key)");
   assert.match(html, /class="weekrail"/, "week rail");
+  assert.doesNotMatch(
+    html.match(/<nav class="weekrail"[\s\S]*?<\/nav>/)[0],
+    /railspark|title=/,
+    "week rail has no item-volume chart or tooltips",
+  );
+  for (const entry of html.matchAll(/<a class="entry(?: entry-lead herolink)?"[\s\S]*?<\/a>/g)) {
+    assert.doesNotMatch(entry[0], /\d+ items/, "entry does not show a digest item count");
+  }
   assert.match(html, /flag-degraded/, "degraded badge from failed_sources");
   assert.match(html, /flag-daily/, "daily/weekly kind badge");
 });
@@ -326,7 +334,7 @@ test("index hero: lead entry, subline, CTA, thread pills, sidebar NOW, rail afte
   );
   const sub = hero.match(/<p class="herosub[^"]*">([^<]*)<\/p>/)?.[1];
   assert.ok(sub && !sub.startsWith("Markets slid"), "subline is present and not the headline");
-  assert.equal(sub, "12 items · 3 sections", "single-sentence TL;DR falls back to the counts");
+  assert.equal(sub, "3 sections", "single-sentence TL;DR falls back to the section count");
   assert.ok(!html.includes('class="leadfacts"'), "old facts column is gone");
   assert.match(hero, /class="livedot" aria-hidden="true"/, "live dot");
   assert.match(hero, /<a class="herocta" href="[^"]*\/d\/235[^"]*">Read the edition →<\/a>/, "CTA");
@@ -387,7 +395,7 @@ test("index hero: daily view fetches the lead's threads; HU hero uses HU text", 
 
   const hu = (await page("hu/")).html;
   assert.match(hu, /<h1 class="herotitle headline-lead">A piacok második napja estek/);
-  assert.match(hu, /<p class="herosub[^"]*">12 elem · 3 szakasz<\/p>/, "HU subline");
+  assert.match(hu, /<p class="herosub[^"]*">3 szakasz<\/p>/, "HU subline");
   assert.match(hu, /class="herocta"[^>]*>A kiadás elolvasása →/);
 });
 
@@ -423,7 +431,11 @@ test("digest 235 EN: thread pills, what-changed block, source key, stripped styl
     "closing line's inline style attribute is stripped",
   );
   // Colophon wrapper (this feature): both record-keeping rows sit inside
-  // ONE collapsed details.colophon, in source-key-then-provenance order.
+  // ONE collapsed details.colophon, with total before source key and provenance.
+  assert.match(
+    html,
+    /<span class="sklabel">Total items<\/span><span class="sk">12<\/span><\/div><div class="sourcekey"><span class="sklabel">Sources/,
+  );
   assert.match(
     html,
     /<details class="colophon"><summary>How this was made[\s\S]*?<\/summary><div class="colophonbody">[\s\S]*?<div class="sourcekey">[\s\S]*?<div class="provenance">[\s\S]*?<\/div><\/div><\/details>/,
@@ -639,7 +651,7 @@ test("renderProvenance: a hostile model id is escaped in both the chip text and 
   );
 });
 
-test("colophon: absent from both fields renders no wrapper div at all", async () => {
+test("colophon: historical digest retains its total without source counts or provenance", async () => {
   // No fixture digest has BOTH source_counts and provenance absent (every
   // DIGESTS row carries source_counts — see the fixtures.mjs comment), so
   // this isn't reachable through a golden page. renderDigestPage is a pure
@@ -651,7 +663,7 @@ test("colophon: absent from both fields renders no wrapper div at all", async ()
     id: 999,
     created_at: "2026-08-25T12:00:00Z",
     kind: "window",
-    item_count: 1,
+    item_count: 0,
     section_count: 1,
     tldr: "A minimal digest with no colophon data at all.",
     body_html: "<h2>Only section</h2><p>Body.</p>",
@@ -660,8 +672,12 @@ test("colophon: absent from both fields renders no wrapper div at all", async ()
     provenance: null,
   };
   const html = renderDigestPage(digest, null, null, "tok", "example.com", "en", "all", [], null);
-  assert.ok(!html.includes('class="colophon"'), "no colophon wrapper when neither row has data");
-  assert.ok(!html.includes('class="sourcekey"'), "no source key either");
+  assert.match(
+    html,
+    /<details class="colophon"><summary>How this was made<\/summary><div class="colophonbody"><div class="sourcekey"><span class="sklabel">Total items<\/span><span class="sk">0<\/span><\/div>/,
+  );
+  const hu = renderDigestPage(digest, null, null, "tok", "example.com", "hu", "all", [], null);
+  assert.match(hu, /<span class="sklabel">Összes elem<\/span><span class="sk">0<\/span>/);
   assert.ok(!html.includes('class="provenance"'), "no provenance row either");
 });
 
@@ -1934,7 +1950,8 @@ test("digest sidebar: Earlier card from the widened older query; nav link unchan
   assert.match(card, /<h2 id="earlierhead" class="sidehead">Earlier<\/h2>/);
   const rows = card.match(/<a class="earlierrow"/g);
   assert.ok(rows.length >= 1 && rows.length <= 4, "1..4 rows");
-  assert.match(card, /<span class="earliermeta">[^<]*items/, "meta line");
+  assert.match(card, /<span class="earliermeta">[^<]+/, "meta line");
+  assert.doesNotMatch(card, /\d+ items/, "item counts stay out of Earlier");
   assert.match(card, /<span class="earliertitle">[^<]+<\/span>/, "derived headline");
   const older = html.match(/<a class="nav-older" href="([^"]+)"/)[1];
   assert.ok(card.includes(`href="${older}"`), "row 0 is the same edition the older link targets");
@@ -1987,6 +2004,15 @@ test("exactly one h1 on every golden page and on an archive-week index", async (
     assert.equal(count(mainHtml, /<h1[\s>]/g), 1, `${name}: h1 inside main`);
   }
   const week = markupOf((await page("w/2026-W34/")).html);
+  const rail = week.match(/<nav class="weekrail"[\s\S]*?<\/nav>/)?.[0];
+  assert.ok(rail, "archive retains week navigation");
+  assert.match(rail, /class="rail-older"/);
+  assert.match(rail, /class="rail-newer"/);
+  assert.doesNotMatch(
+    rail,
+    /railspark|title=|\d+ items/,
+    "archive rail has no volume chart or tooltip",
+  );
   assert.equal(count(week, /<h1[\s>]/g), 1, "archive week: one h1");
   assert.ok(
     week.includes('<header class="hero"><h1 class="herotitle">Week 34 · 17–23 Aug</h1></header>'),

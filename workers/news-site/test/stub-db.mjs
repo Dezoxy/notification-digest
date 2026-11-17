@@ -18,7 +18,6 @@ const LIST_COLUMNS = [
   "created_at",
   "tldr",
   "tldr_hu",
-  "item_count",
   "section_count",
   "has_attention",
   "kind",
@@ -304,7 +303,7 @@ export function makeDb({ writes, pushSubs, pushSentIds, pushSentAt = {}, version
       if (older) {
         // Widened older query: DIGEST_LIST_COLUMNS rows, newest-first, LIMIT 5.
         // Strict on the contract: the handler must ask for the list columns.
-        assert.match(s, /SELECT id, created_at, tldr, tldr_hu, item_count,/);
+        assert.match(s, /SELECT id, created_at, tldr, tldr_hu, section_count,/);
         assert.match(s, /LIMIT 5\s*$/);
         return {
           all: async () => ({ results: candidates.slice(0, 5).map((r) => pick(r, LIST_COLUMNS)) }),

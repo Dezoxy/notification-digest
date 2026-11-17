@@ -13,7 +13,6 @@
 export const STRINGS = {
   en: {
     locale: "en-GB",
-    itemsWord: "items",
     sectionsWord: "sections",
     allDigests: "← All digests",
     noDigests:
@@ -86,6 +85,7 @@ export const STRINGS = {
     // Summary of the collapsed colophon disclosure wrapping the two rows
     // above (source key + provenance) — see colophonHtml in renderDigestPage.
     colophonLabel: "How this was made",
+    totalItemsLabel: "Total items",
     runWarning: "Run warnings",
     // Search (roadmap 4 step 7). searchResults is a placeholder template
     // ({n} = result count), same convention as weekLabel above.
@@ -278,7 +278,6 @@ export const STRINGS = {
   },
   hu: {
     locale: "hu-HU",
-    itemsWord: "elem",
     sectionsWord: "szakasz",
     allDigests: "← Minden hírlevél",
     noDigests:
@@ -339,6 +338,7 @@ export const STRINGS = {
     // Owner: please review
     provenanceTranslateLabel: "Fordította",
     colophonLabel: "Hogyan készült",
+    totalItemsLabel: "Összes elem",
     runWarning: "Futtatási figyelmeztetések",
     // Search (roadmap 4 step 7) — owner: please review these, flagged HU
     // strings same as everywhere else in this file.
