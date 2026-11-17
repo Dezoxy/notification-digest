@@ -1033,19 +1033,19 @@ Source: \`render-digest.js\`, \`sections.js\`; styles \`.tldr\`, \`.attention\`,
     "Article",
     170,
     stage(
-      `<div class="tocrow"><details class="tocpicker" open><summary>Jump to section · 3</summary><nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav></details><button type="button" class="expandall">Collapse all</button></div>`,
+      `<nav class="toc" aria-label="Sections"><a href="#s1"><span class="tocnum" aria-hidden="true">01</span><span class="toctitle">Markets slide continues</span></a><a href="#s2"><span class="tocnum" aria-hidden="true">02</span><span class="toctitle">EU agrees new package</span></a><a href="#s3"><span class="tocnum" aria-hidden="true">03</span><span class="toctitle">Chip export rules tighten</span></a></nav>`,
     ),
     `# Toc
 
-The section index starts as an open disclosure with full section titles and a Collapse all button for the stories. It sits before the complete summary.
-On phones, the list uses 13px text and can extend below both controls. Each link has a minimum height of 44px.
+The section index is always visible with full section titles when there are at least two sections. It sits before the complete summary.
+On phones, the list uses 13px text. Each link has a minimum height of 44px.
 
-**Provide** \`div.tocrow\` holding \`details.tocpicker\`, its summary and \`nav.toc\` with numbered \`#sN\` links. The sibling \`button.expandall\` carries \`data-expand\` / \`data-collapse\` labels and is rendered \`hidden\`; the client reveals it.
+**Provide** \`nav.toc\` with numbered \`#sN\` links.
 
 - Do generate it from the sections; never write it by hand.
 - Don't include the attention callout's heading.
 
-Source: \`render-digest.js\`, \`client.js\`; styles \`.tocrow\`, \`.toc\`, \`.tocnum\`, \`.toctitle\`, \`.expandall\`.
+Source: \`render-digest.js\`; styles \`.toc\`, \`.tocnum\`, \`.toctitle\`.
 `,
   );
 

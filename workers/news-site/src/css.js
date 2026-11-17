@@ -593,27 +593,18 @@ export const CSS = `
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Native section picker remains usable without JavaScript. */
-  .tocrow { display: flex; align-items: flex-start; gap: var(--sp-2); }
-  .tocpicker { flex: 1; min-width: 0; }
-  .tocpicker > summary, .storythreads > summary {
+  .storythreads > summary {
     display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
     background: var(--panel); cursor: pointer; font-size: var(--fs-ui); font-weight: 600;
   }
-  .tocpicker > summary::after, .storythreads > summary::after { content: "+"; margin-left: auto; }
-  .tocpicker[open] > summary::after, .storythreads[open] > summary::after { content: "−"; }
+  .storythreads > summary::after { content: "+"; margin-left: auto; }
+  .storythreads[open] > summary::after { content: "−"; }
   .toc { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; }
   .toc a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 16px; border-radius: var(--r-in); color: var(--text); text-decoration: none; }
   .toc a:hover { background: var(--accent-soft); }
   .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
   .toctitle { overflow-wrap: anywhere; }
-  .expandall {
-    flex: none; min-height: 44px; padding: 0 16px;
-    border: 1px solid var(--border-strong); border-radius: var(--r-pill);
-    background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
-  }
-  .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
   .hero-actions { display: flex; justify-content: center; margin-top: 26px; }
   .hero-actions:has(> .hero-threads) {
@@ -1076,11 +1067,7 @@ export const CSS = `
   @media screen and (max-width: 699.98px) {
     .digest-dateline-date { display: none; }
     .toc a { padding-inline: var(--sp-2); font-size: var(--fs-meta); line-height: 1.35; }
-    /* Size the list to the whole row while the summary shares it with Collapse all. */
-    @supports (container-type: inline-size) and (width: 100cqi) {
-      .tocrow { container-type: inline-size; }
-      .toc { width: 100cqi; }
-    }
+
     html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
     header.hero-digest, html[data-density="compact"] header.hero-digest { padding: var(--sp-4) 0; }
     .hero-digest .herotitle { margin-top: var(--sp-3); }
@@ -1092,7 +1079,7 @@ export const CSS = `
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .hero-actions, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .toc, .storythreads, .heropills, .hero-actions, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }

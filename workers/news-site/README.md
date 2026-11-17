@@ -19,15 +19,15 @@ On phones, the masthead shows the lead digest's localized date on the
 homepage and list views, and the edition's own date on digest pages.
 Digest browser titles show the kind, date, and time.
 
-Digest pages show an open native section picker before the complete summary.
+Digest pages show always-visible section links before the complete summary
+when there are at least two sections.
 Stories are expanded by default and retain numbered inline citation links.
 **How this was made** holds the total and per-source item counts, plus
 verification and collection warnings. An exclamation mark signals a warning.
 On the homepage, the edition link sits beside the collapsed Story threads
 disclosure when threads are present. On digest pages, related story threads
-are available after the article when relevant. The picker and story disclosures
-work without JavaScript; Expand all / Collapse all is available when JavaScript
-is enabled.
+are available after the article when relevant. The section links and
+individual story disclosures work without JavaScript.
 
 The Density setting applies throughout the site. Compact digest stories
 use dividers between sections and a simple accent rule beside the TL;DR.
