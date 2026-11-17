@@ -17,8 +17,8 @@ repo root).
 
 Digest pages show an open native section picker before the complete summary.
 Stories are expanded by default and retain numbered inline citation links.
-Verification and collection warnings appear under **How this was made**.
-An exclamation mark next to that label signals a warning.
+**How this was made** holds the total and per-source item counts, plus
+verification and collection warnings. An exclamation mark signals a warning.
 On the homepage, the edition link sits beside the collapsed Story threads
 disclosure when threads are present. On digest pages, related story threads
 are available after the article when relevant. The picker and story disclosures
@@ -772,7 +772,7 @@ so this pass contains no motion/lang work.
   by design (roadmap 3 gated it to the current week); the week rail's
   center gains seven per-day micro-bars for the rendered week, from rows
   the week query already returns — the pulse visual language, sized for
-  the rail.
+  the rail. The sparkline was later removed; the week rail remains.
 - [x] **D1 FTS5 search** — the deferral finally comes due: the client-side
   filter only sees the rendered week since roadmap 3. A numbered migration
   adds an FTS5 table over `tldr`/`body_md` (+ their `_hu` twins) with sync
@@ -840,8 +840,8 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   failed-source pills. Model ids are shown by short name (`claude-opus-5` as
   "Opus 5", `openai/gpt-5.6-terra` as "GPT-5.6 Terra" — see
   `modelDisplayName`), with the exact id kept as a hover tooltip; an id the
-  map does not recognise renders unchanged. The colophon (source key and
-  provenance together) is collapsed by default behind one native `<details>`
+  map does not recognise renders unchanged. The colophon holds the recorded
+  total, source key, and provenance. It is collapsed by default in one native `<details>`
   disclosure, "How this was made" / "Hogyan készült", and print forces it
   open. On screen, spacing separates it from the article. The site's source
   key shows the counts by source and supersedes the article's hidden closing

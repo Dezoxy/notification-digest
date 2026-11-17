@@ -11,7 +11,6 @@ import {
   formatTime,
   formatWeekRangeLabel,
   isoWeekOf,
-  mondayOfIsoWeek,
   tzAbbr,
 } from "./dates.js";
 import { arcHref, digestHref, indexHref, searchHref, weekHref } from "./hrefs.js";
@@ -400,7 +399,7 @@ export function renderIndexEntry(row, token, lang, view) {
   // time+count meta row being the card's only "title".
   const headline = deriveHeadline(rawText);
 
-  const counts = `${esc(row.item_count)} ${esc(strings.itemsWord)} · ${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
+  const counts = `${esc(row.section_count)} ${esc(strings.sectionsWord)}`;
   const timeClass = isSynthesis ? "time time-accent" : "time";
   const excerptClass = isSynthesis ? "excerpt excerpt-daily" : "excerpt";
 
@@ -459,11 +458,9 @@ export function renderLeadCard(row, token, lang, view, threads = []) {
   const headline = deriveHeadline(rawText);
   // The counts stand in when the TL;DR is a single sentence, so the line is
   // never a repeat of the headline and never blank.
-  const subline =
-    deriveSubline(rawText) ||
-    `${row.item_count} ${strings.itemsWord} · ${row.section_count} ${strings.sectionsWord}`;
+  const subline = deriveSubline(rawText) || `${row.section_count} ${strings.sectionsWord}`;
 
-  const chipText = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)} · ${row.item_count} ${strings.itemsWord}`;
+  const chipText = `${strings.latest} · ${formatShortDate(date, strings.locale)} · ${formatTime(date, strings.locale)} ${tzAbbr(date)}`;
 
   // Degraded-run badge: same contract as renderIndexEntry's.
   const degradedHtml = renderDegradedBadge(row.failed_sources, strings);
@@ -504,11 +501,7 @@ export function renderLeadCard(row, token, lang, view, threads = []) {
 // The search control no longer rides in the rail: pageChrome renders it
 // once, in the bar's .baractions, on every page.
 //
-// Archive sparkline (roadmap 4 step 6): `rows` is null on every page except
-// an archive week (see the call site in renderIndexPage, which passes null
-// on the current week so its rail stays byte-identical to before this
-// step).
-export function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
+export function renderWeekRail(token, lang, weekInfo, strings) {
   const olderLink = weekInfo.older
     ? `<a href="${weekHref(token, lang, "all", weekInfo.older.year, weekInfo.older.week)}">← W${esc(String(weekInfo.older.week).padStart(2, "0"))}</a>`
     : "";
@@ -534,63 +527,7 @@ export function renderWeekRail(token, lang, weekInfo, strings, rows = null) {
     .replace("{w}", String(weekInfo.week))
     .replace("{range}", formatWeekRangeLabel(weekInfo.year, weekInfo.week, strings.locale));
 
-  // Archive sparkline (roadmap 4 step 6): seven per-day micro-bars for THIS
-  // week only, built when (and only when) the caller handed us rows — see
-  // the function comment above. Window digests only (kind === "window" — a
-  // daily brief re-synthesizes the same day's items, so counting it too
-  // would double the day), summed by budapestDateParts key, then read back
-  // per day of the week's own Mon..Sun span off a FRESH per-day proxy copy
-  // each iteration —
-  // mondayOfIsoWeek's proxy must never be mutated in place across
-  // iterations, or every day would collapse onto the same Monday.
-  let sparkHtml = "";
-  if (Array.isArray(rows)) {
-    const daySums = new Map();
-    for (const row of rows) {
-      if (row.kind !== "window") continue;
-      const { y, m, d } = budapestDateParts(new Date(row.created_at));
-      const key = `${y}-${m}-${d}`;
-      daySums.set(key, (daySums.get(key) ?? 0) + row.item_count);
-    }
-
-    const monday = mondayOfIsoWeek(weekInfo.year, weekInfo.week);
-    const days = [];
-    for (let offset = 0; offset < 7; offset += 1) {
-      const day = new Date(monday);
-      day.setUTCDate(day.getUTCDate() + offset);
-      days.push(day);
-    }
-    const counts = days.map((day) => {
-      const { y, m, d } = budapestDateParts(day);
-      return daySums.get(`${y}-${m}-${d}`) ?? 0;
-    });
-
-    // Normalized against the WEEK'S OWN max day-sum — this bar cluster only
-    // ever shows one week at a time, so there's no wider window to be
-    // comparable against. An empty week (every day zero) renders no sparkline
-    // at all rather than seven identical hairline bars — noise, not signal.
-    const max = Math.max(0, ...counts);
-    if (max > 0) {
-      const bars = days
-        .map((day, i) => {
-          const count = counts[i];
-          const title = `${formatShortDate(day, strings.locale)} · ${count} ${strings.itemsWord}`;
-          // Zero-count days still render a bar (class "sd0", no inline
-          // height — .railspark's CSS gives sd0 a fixed 15% so there's no
-          // specificity fight with the inline height below) so the week
-          // always reads as seven days, not a gappy row.
-          if (count === 0) {
-            return `<i class="sd0" title="${esc(title)}"></i>`;
-          }
-          const pct = Math.max(15, Math.round((count / max) * 100));
-          return `<i style="height:${pct}%" title="${esc(title)}"></i>`;
-        })
-        .join("\n");
-      sparkHtml = `<span class="railspark" aria-hidden="true">${bars}</span>`;
-    }
-  }
-
-  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}${sparkHtml}</span><span class="rail-newer">${newerLink}</span></nav>`;
+  return `<nav class="weekrail" aria-label="${esc(strings.weekRailLabel)}"><span class="rail-older">${olderLink}</span><span class="rail-center">${esc(centerLabel)}</span><span class="rail-newer">${newerLink}</span></nav>`;
 }
 
 // NOW section ranking (§11.1 PR B, "decide + implement the NOW ranking
@@ -864,18 +801,7 @@ export function renderIndexPage(
   // lead/prefetch below) — the rail IS the archive navigation, so it stays
   // regardless of isCurrent.
   //
-  // Archive sparkline (roadmap 4 step 6): `rows` is only handed to the rail
-  // on an archive week (isCurrent false) — the current week's rail stays
-  // sparkline-less (null), the same "nothing to show yet, the ledger below
-  // is the current week's own record" posture the day-pulse strip this
-  // sparkline was originally paired against used to carry (that strip was
-  // removed in the owner-requested index cleanup; the current-week rail was
-  // deliberately left as-is rather than backfilling a sparkline onto it —
-  // out of scope for that pass).
-  const railHtml =
-    view === "all" && weekInfo
-      ? renderWeekRail(token, lang, weekInfo, strings, isCurrent ? null : rows)
-      : "";
+  const railHtml = view === "all" && weekInfo ? renderWeekRail(token, lang, weekInfo, strings) : "";
 
   // The search control is not rendered here: pageChrome puts the one search
   // popover in the bar's .baractions (which also keeps the ⌘K palette's

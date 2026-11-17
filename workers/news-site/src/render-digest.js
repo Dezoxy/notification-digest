@@ -343,10 +343,7 @@ export function renderDigestPage(
   const warningMarker = hasRunWarning
     ? ` <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, ${esc(strings.runWarning)}</span>`
     : "";
-  const colophonHtml =
-    sourceKeyHtml || provenanceHtml || warnings.length
-      ? `<details class="colophon"><summary>${esc(strings.colophonLabel)}${warningMarker}</summary><div class="colophonbody">${warnings.join("")}${sourceKeyHtml}${provenanceHtml}</div></details>`
-      : "";
+  const colophonHtml = `<details class="colophon"><summary>${esc(strings.colophonLabel)}${warningMarker}</summary><div class="colophonbody">${warnings.join("")}<div class="sourcekey"><span class="sklabel">${esc(strings.totalItemsLabel)}</span><span class="sk">${esc(digest.item_count)}</span></div>${sourceKeyHtml}${provenanceHtml}</div></details>`;
 
   // Story-thread pills (roadmap 4 step 8): "" on a digest with no recurring
   // topics — see renderArcs and the topicArcs computation in
@@ -365,7 +362,7 @@ export function renderDigestPage(
     .map((row) => {
       const { rawText } = renderExcerpt(row, lang);
       const d = new Date(row.created_at);
-      const meta = `${formatShortDate(d, strings.locale)} ${formatTime(d, strings.locale)} · ${row.item_count} ${strings.itemsWord}`;
+      const meta = `${formatShortDate(d, strings.locale)} ${formatTime(d, strings.locale)}`;
       return `<a class="earlierrow" href="${digestHref(token, lang, view, row.id)}"><span class="earliermeta">${esc(meta)}${kindBadge(row, view, strings)}</span><span class="earliertitle">${esc(deriveHeadline(rawText))}</span></a>`;
     })
     .join("");

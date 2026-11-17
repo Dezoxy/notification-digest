@@ -36,7 +36,7 @@ import { handleIngest } from "./ingest.js";
 // WHERE clauses. The digest PAGE query deliberately stays separate: it
 // fetches the body/topics/deltas/provenance columns this list never needs.
 export const DIGEST_LIST_COLUMNS =
-  "id, created_at, tldr, tldr_hu, item_count, section_count, has_attention, kind, source_counts, failed_sources";
+  "id, created_at, tldr, tldr_hu, section_count, has_attention, kind, source_counts, failed_sources";
 
 // Deployed digest-app version for the settings panel's About row. The app
 // stamps `provenance.app_version` ("X.Y.Z", from the image's baked release

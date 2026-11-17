@@ -637,7 +637,7 @@ Every other glyph is a text character in the font stack, never an icon file: ←
               fontSize: T("fs-meta"),
               lineHeight: 1.5,
               fontWeight: 500,
-              sample: "9 items · 2 sections",
+              sample: "2 sections",
               usage: "Counts, hero chip, catch-up strip, colophon.",
             },
             {
@@ -686,8 +686,8 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 - **Time leads.** Every entry opens with its time in the display face; every page carries a dated chip. Counts and metadata are small, \`muted\`, tabular.
 - **Headlines are sentences.** A briefing's headline is its TL;DR's first sentence, in sentence case, ending with a full stop: "Markets slid for a second day while the EU package landed." Never title case, never a teaser.
-- **Labels are short.** Small uppercase labels are written in normal case in the markup and uppercased by CSS. The middle dot \`·\` separates facts: "Latest · Tue 25 Aug · 16:00 CEST · 12 items".
-- **Plain, factual voice.** No exclamation marks, no "breaking", no emoji. State counts honestly ("6 items · 1 sections" is a known plural gap, not a style).
+- **Labels are short.** Small uppercase labels are written in normal case in the markup and uppercased by CSS. The middle dot \`·\` separates facts: "Latest · Tue 25 Aug · 16:00 CEST".
+- **Plain, factual voice.** No exclamation marks, no "breaking", no emoji. State counts honestly ("1 sections" is a known plural gap, not a style).
 - **Every string has a Hungarian twin.** Copy lives in \`strings.js\`; leave room for Hungarian's longer compounds (prose is hyphenated with \`hyphens: auto\`; chrome is not).
 - **Arrows and symbols are text.** ← → ↑ ↓ × ⚠ ↻ ☆ ★ come from the font. See Iconography.
 
@@ -818,7 +818,7 @@ The preview shows the open popover. Source: \`hrefs.js\`, \`client.js\`; styles 
     440,
     stage(`<section class="hero">
   <a class="entry entry-lead herolink" href="#">
-    <span class="herochip"><span class="livedot" aria-hidden="true"></span><span class="eyebrow-text">Latest · Tue 25 Aug · 16:00 CEST · 12 items</span><span class="flag flag-degraded" title="polymarket">⚠ partial</span></span>
+    <span class="herochip"><span class="livedot" aria-hidden="true"></span><span class="eyebrow-text">Latest · Tue 25 Aug · 16:00 CEST</span><span class="flag flag-degraded" title="polymarket">⚠ partial</span></span>
     <h1 class="herotitle headline-lead">Markets slid for a second day while the EU package landed.</h1>
     <p class="herosub excerpt">Equities extended losses into the close; two sections follow on the council vote and chip export rules.</p>
   </a>
@@ -868,13 +868,13 @@ Source: \`render-digest.js\`; styles \`.digestnav\`, \`.hero-digest\`, \`.digest
     stage(`<section class="ledger">
   <div class="dayhead">Tuesday, 25 August 2026</div>
   <a class="entry" href="#">
-    <span class="meta"><span class="time">10:00</span><span class="count">9 items · 2 sections</span></span>
+    <span class="meta"><span class="time">10:00</span><span class="count">2 sections</span></span>
     <h2 class="headline">The sell-off began; two sections follow.</h2>
     <p class="excerpt"><strong>TL;DR:</strong> Equities extended losses into the close, with the drawdown at four percent and two sections on the council vote and chip export rules.</p>
   </a>
   <div class="dayhead">Monday, 24 August 2026</div>
   <a class="entry" href="#">
-    <span class="meta"><span class="time time-accent">22:00</span><span class="count">6 items · 1 sections</span><span class="flag flag-daily">daily brief</span></span>
+    <span class="meta"><span class="time time-accent">22:00</span><span class="count">1 sections</span><span class="flag flag-daily">daily brief</span></span>
     <h2 class="headline">Daily brief for Monday.</h2>
     <p class="excerpt excerpt-daily"><strong>TL;DR:</strong> A quieter day: the council vote slipped to Tuesday and exporters have ninety days to file.</p>
   </a>
@@ -951,8 +951,8 @@ Source: \`render-index.js\`, \`client.js\`; styles \`.dayhead\`, \`.unreadfence\
     <a class="nowrow" href="#"><span class="nowarrow" aria-hidden="true">↑</span><span class="nowarclabel">EU agrees new package</span><span class="nowmeta">yesterday</span></a>
   </nav></section>
   <section class="sidecard earlier"><h2 class="sidehead">Earlier</h2>
-    <a class="earlierrow" href="#"><span class="earliermeta">10:00 · 9 items</span><span class="earliertitle">The sell-off began; two sections follow.</span></a>
-    <a class="earlierrow" href="#"><span class="earliermeta">06:00 · 7 items</span><span class="earliertitle">Overnight: Asian markets open lower.</span></a>
+    <a class="earlierrow" href="#"><span class="earliermeta">10:00</span><span class="earliertitle">The sell-off began; two sections follow.</span></a>
+    <a class="earlierrow" href="#"><span class="earliermeta">06:00</span><span class="earliertitle">Overnight: Asian markets open lower.</span></a>
   </section>
 </aside>`),
     `# SideCard
@@ -992,18 +992,17 @@ Source: \`render-index.js\`, \`client.js\`; styles \`.catchup\`, \`.resumechip\`
     "Ledger",
     130,
     stage(
-      `<nav class="weekrail" aria-label="Week navigation"><span class="rail-older"><a href="#">← W34</a></span><span class="rail-center">Week 35 · 24–30 Aug<span class="railspark" aria-hidden="true"><i style="height:40%"></i><i style="height:100%"></i><i style="height:65%"></i><i class="sd0"></i><i style="height:15%"></i><i class="sd0"></i><i class="sd0"></i></span></span><span class="rail-newer"><a href="#">W36 →</a></span></nav>`,
+      `<nav class="weekrail" aria-label="Week navigation"><span class="rail-older"><a href="#">← W34</a></span><span class="rail-center">Week 35 · 24–30 Aug</span><span class="rail-newer"><a href="#">W36 →</a></span></nav>`,
     ),
     `# WeekRail
 
-Week-by-week navigation under the weekly ledger: older and newer week pills either side of a centred week label with a seven-bar sparkline of items per day.
+Week-by-week navigation under the weekly ledger: older and newer week pills either side of a centred week label.
 
-**Provide** \`nav.weekrail\` with \`.rail-older\`, \`.rail-center\` and \`.rail-newer\`; the sparkline is a \`span.railspark\` of seven \`i\` bars, each \`height\` a percentage of the week's busiest day (minimum 15%), zero days as \`i.sd0\`.
+**Provide** \`nav.weekrail\` with \`.rail-older\`, \`.rail-center\` and \`.rail-newer\`.
 
-- Do omit the sparkline for an empty week.
 - Leave \`.rail-newer\` empty, not missing, on the current week so the label stays centred.
 
-Source: \`render-index.js\`; styles \`.weekrail\`, \`.railspark\`.
+Source: \`render-index.js\`; styles \`.weekrail\`.
 `,
   );
 
@@ -1162,11 +1161,11 @@ Source: \`render-arc.js\`; styles \`.timeline\`, \`.tlitem\`.
     "Article",
     230,
     stage(
-      `<details class="colophon" open><summary>How this was made <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, Run warnings</span></summary><div class="colophonbody"><p class="banner">⚠ polymarket collection failed this run</p><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
+      `<details class="colophon" open><summary>How this was made <span class="colophon-warning" aria-hidden="true">!</span><span class="visually-hidden">, Run warnings</span></summary><div class="colophonbody"><p class="banner">⚠ polymarket collection failed this run</p><div class="sourcekey"><span class="sklabel">Total items</span><span class="sk">12</span></div><div class="sourcekey"><span class="sklabel">Sources</span><span class="sk"><i style="background:#4f8fd9"></i>telegram 5</span><span class="sk"><i style="background:#8a8f9e"></i>x 4</span><span class="sk"><i style="background:#9aa0ab"></i>rss 3</span><span class="sk sk-failed">⚠ polymarket</span></div><div class="provenance"><div class="provline"><span class="sklabel">Written by</span><span class="sk" title="claude-opus-5">Opus 5 · high</span></div><div class="provline"><span class="sklabel">Translated with</span><span class="sk sk-fallback">↻ GPT-5.6 Terra · high</span></div></div></div></details>`,
     ),
     `# Colophon
 
-The collapsible "How this was made" footer of a digest holds run warnings, per-source item counts, and which model wrote and translated it. Add an amber \`!\` beside the label when an edition has run warnings or recorded collector failures.
+The collapsible "How this was made" footer of a digest holds run warnings, the total and per-source item counts, and which model wrote and translated it. Add an amber \`!\` beside the label when an edition has run warnings or recorded collector failures.
 
 **Provide** \`details.colophon\` with a \`.sourcekey\` (\`.sklabel\`, then \`.sk\` per source with an \`i\` swatch; \`.sk-failed\` for a source that failed) and a \`.provenance\` of \`.provline\`s; \`.sk-fallback\` with ↻ marks a fallback model.
 
