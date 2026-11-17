@@ -125,10 +125,7 @@ export function renderToc(sections, strings) {
         `<a href="#${s.id}"><span class="tocnum" aria-hidden="true">${String(i + 1).padStart(2, "0")}</span><span class="toctitle">${esc(s.title)}</span></a>`,
     )
     .join("\n");
-  // Keep Expand all outside the picker so it is available when closed.
-  // The client reveals the button only when it can control the folded sections.
-  return `<div class="tocrow"><details class="tocpicker" open><summary>${esc(strings.jumpToSection)} · ${sections.length}</summary><nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav></details>
-<button type="button" class="expandall" hidden data-expand="${esc(strings.expandAll)}" data-collapse="${esc(strings.collapseAll)}">${esc(strings.expandAll)}</button></div>\n`;
+  return `<nav class="toc" aria-label="${esc(strings.sectionsNavLabel)}">${chips}</nav>\n`;
 }
 
 // Story-thread disclosure (ingest v3, roadmap 4 step 8):
@@ -370,7 +367,7 @@ export function renderDigestPage(
     ? `<section class="sidecard earlier" aria-labelledby="earlierhead"><h2 id="earlierhead" class="sidehead">${esc(strings.earlierLabel)}</h2>${earlierRows}</section>`
     : "";
 
-  // Keep the section picker above long summaries. The stored article owns
+  // Keep section navigation above long summaries. The stored article owns
   // the order of its callouts; related reading follows the article.
   const heroHtml = `<nav class="digestnav">${digestNavLinksHtml}</nav>
 <header class="hero hero-digest">

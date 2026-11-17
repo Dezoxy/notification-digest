@@ -628,27 +628,18 @@
   .deltaarrow { margin: 0 8px; color: var(--accent); }
   .deltanow { color: var(--strong); font-weight: 500; }
 
-  /* Native section picker remains usable without JavaScript. */
-  .tocrow { display: flex; align-items: flex-start; gap: var(--sp-2); }
-  .tocpicker { flex: 1; min-width: 0; }
-  .tocpicker > summary, .storythreads > summary {
+  .storythreads > summary {
     display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
     border: 1px solid var(--border); border-radius: var(--r-pill);
     background: var(--panel); cursor: pointer; font-size: var(--fs-ui); font-weight: 600;
   }
-  .tocpicker > summary::after, .storythreads > summary::after { content: "+"; margin-left: auto; }
-  .tocpicker[open] > summary::after, .storythreads[open] > summary::after { content: "−"; }
+  .storythreads > summary::after { content: "+"; margin-left: auto; }
+  .storythreads[open] > summary::after { content: "−"; }
   .toc { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; }
   .toc a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 16px; border-radius: var(--r-in); color: var(--text); text-decoration: none; }
   .toc a:hover { background: var(--accent-soft); }
   .tocnum { flex: none; font-size: var(--fs-micro); font-weight: 600; color: var(--accent-text); font-variant-numeric: tabular-nums; }
   .toctitle { overflow-wrap: anywhere; }
-  .expandall {
-    flex: none; min-height: 44px; padding: 0 16px;
-    border: 1px solid var(--border-strong); border-radius: var(--r-pill);
-    background: var(--sheet-solid); color: var(--text); font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; cursor: pointer;
-  }
-  .expandall:hover { border-color: var(--accent); }
   .storythreads .heropills { justify-content: flex-start; margin-top: 8px; }
   .hero-actions { display: flex; justify-content: center; margin-top: 26px; }
   .hero-actions:has(> .hero-threads) {
@@ -1111,11 +1102,7 @@
   @media screen and (max-width: 699.98px) {
     .digest-dateline-date { display: none; }
     .toc a { padding-inline: var(--sp-2); font-size: var(--fs-meta); line-height: 1.35; }
-    /* Size the list to the whole row while the summary shares it with Collapse all. */
-    @supports (container-type: inline-size) and (width: 100cqi) {
-      .tocrow { container-type: inline-size; }
-      .toc { width: 100cqi; }
-    }
+
     html[data-density="compact"] header.hero { padding: var(--sp-4) 0 var(--sp-2); }
     header.hero-digest, html[data-density="compact"] header.hero-digest { padding: var(--sp-4) 0; }
     .hero-digest .herotitle { margin-top: var(--sp-3); }
@@ -1127,7 +1114,7 @@
     html, body { background: #fff; color: #000; }
     body::before, body::after { display: none; }
     .wrap { max-width: none; padding: 0; }
-    .bar, .phonehead, .side, .tocrow, .storythreads, .heropills, .hero-actions, .digestnav, .catchup, .secpreview, .seccount,
+    .bar, .phonehead, .side, .toc, .storythreads, .heropills, .hero-actions, .digestnav, .catchup, .secpreview, .seccount,
     .resumechip, .cmdpalette-backdrop, .settingspanel, .followtoggle, .archiveresults, .sechead::after {
       display: none;
     }
@@ -1777,20 +1764,14 @@
       },
     );
 
-    // Folded digest sections (details.sec). Three pieces, all per-pass:
-    //   1. An in-page link to a section (TOC chips, in-article #sN links)
+    // Folded digest sections (details.sec). Two handlers, both per-pass:
+    //   1. An in-page link to a section (section index, in-article #sN links)
     //      opens that section on click — synchronously, BEFORE the browser's
     //      default anchor jump, so the jump targets the final layout.
     //   2. hashchange (back/forward over a fragment, a hand-edited URL, a
     //      link the click handler never saw) does the same. A page that LOADS
     //      with #sN is handled once, at boot (see the end of this script),
     //      and a soft nav that lands on a hash in doSoftNav.
-    //   3. The "expand all" button in the TOC: server-rendered hidden (no
-    //      JS, no button), unhidden here only when there are sections to
-    //      fold. One click toggles every section; its label and
-    //      aria-expanded follow the ACTUAL state, so sections the reader
-    //      opens or closes by hand keep it honest. "toggle" does not bubble,
-    //      so it is caught in the capture phase on document.
     document.addEventListener(
       "click",
       function (e) {
@@ -1808,40 +1789,6 @@
       },
       { signal: signal },
     );
-    (function () {
-      var btn = document.querySelector("button.expandall");
-      if (!btn) return;
-      var secs = function () {
-        return Array.prototype.slice.call(document.querySelectorAll("details.sec"));
-      };
-      if (secs().length === 0) return;
-      btn.hidden = false;
-      var reflect = function () {
-        var all = secs().every(function (d) {
-          return d.open;
-        });
-        btn.textContent = all ? btn.dataset.collapse : btn.dataset.expand;
-        btn.setAttribute("aria-expanded", String(all));
-      };
-      reflect();
-      btn.addEventListener("click", function () {
-        var open = !secs().every(function (d) {
-          return d.open;
-        });
-        secs().forEach(function (d) {
-          d.open = open;
-        });
-        reflect();
-      }, { signal: signal });
-      document.addEventListener(
-        "toggle",
-        function (e) {
-          if (e.target && e.target.matches && e.target.matches("details.sec")) reflect();
-        },
-        { capture: true, signal: signal },
-      );
-    })();
-
     // Push notifications (PLAN.md §11.7, PR B). The row is server-rendered
     // HIDDEN — the whole row, not just its control, unlike every miniseg
     // above — because whether push is possible at all is a question only

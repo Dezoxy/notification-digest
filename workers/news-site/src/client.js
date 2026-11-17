@@ -581,20 +581,14 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       },
     );
 
-    // Folded digest sections (details.sec). Three pieces, all per-pass:
-    //   1. An in-page link to a section (TOC chips, in-article #sN links)
+    // Folded digest sections (details.sec). Two handlers, both per-pass:
+    //   1. An in-page link to a section (section index, in-article #sN links)
     //      opens that section on click — synchronously, BEFORE the browser's
     //      default anchor jump, so the jump targets the final layout.
     //   2. hashchange (back/forward over a fragment, a hand-edited URL, a
     //      link the click handler never saw) does the same. A page that LOADS
     //      with #sN is handled once, at boot (see the end of this script),
     //      and a soft nav that lands on a hash in doSoftNav.
-    //   3. The "expand all" button in the TOC: server-rendered hidden (no
-    //      JS, no button), unhidden here only when there are sections to
-    //      fold. One click toggles every section; its label and
-    //      aria-expanded follow the ACTUAL state, so sections the reader
-    //      opens or closes by hand keep it honest. "toggle" does not bubble,
-    //      so it is caught in the capture phase on document.
     document.addEventListener(
       "click",
       function (e) {
@@ -612,40 +606,6 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
       },
       { signal: signal },
     );
-    (function () {
-      var btn = document.querySelector("button.expandall");
-      if (!btn) return;
-      var secs = function () {
-        return Array.prototype.slice.call(document.querySelectorAll("details.sec"));
-      };
-      if (secs().length === 0) return;
-      btn.hidden = false;
-      var reflect = function () {
-        var all = secs().every(function (d) {
-          return d.open;
-        });
-        btn.textContent = all ? btn.dataset.collapse : btn.dataset.expand;
-        btn.setAttribute("aria-expanded", String(all));
-      };
-      reflect();
-      btn.addEventListener("click", function () {
-        var open = !secs().every(function (d) {
-          return d.open;
-        });
-        secs().forEach(function (d) {
-          d.open = open;
-        });
-        reflect();
-      }, { signal: signal });
-      document.addEventListener(
-        "toggle",
-        function (e) {
-          if (e.target && e.target.matches && e.target.matches("details.sec")) reflect();
-        },
-        { capture: true, signal: signal },
-      );
-    })();
-
     // Push notifications (PLAN.md §11.7, PR B). The row is server-rendered
     // HIDDEN — the whole row, not just its control, unlike every miniseg
     // above — because whether push is possible at all is a question only

@@ -9,7 +9,7 @@
 // (and one PDF) to test/tools/screens-out/<label>/. Compare two labels
 // (`before`, `after`) by eye. Exits non-zero on page errors, console errors or
 // failed requests. The state selectors below (button.settingsbtn, #settings,
-// summary.searchtoggle, .catchup, .cmdpalette-*, button.expandall, a.entry, …)
+// summary.searchtoggle, .catchup, .cmdpalette-*, a.entry, …)
 // are tied to the CURRENT markup. Section 5 also asserts client behaviours
 // (listener hygiene after two soft navigations, folded sections, the
 // settings popover); a failed assertion is reported as a problem and exits
@@ -353,26 +353,22 @@ for (const vp of [PHONE, DESKTOP]) {
     await state(vp, theme, `digest-expanded-${sfx}`, async (page) => {
       await page.goto(T + "d/235");
       await settle(page);
-      await page.waitForSelector("button.expandall:not([hidden])");
+      await page.waitForSelector("nav.toc");
       await shot(page, `state-digest-default-${sfx}`, { fullPage: false });
-      // A long section title should wrap beside the Collapse all control.
+      // A long section title should wrap within the full-width navigation.
       await page.evaluate(() => {
         const t = document.querySelector(".toc a .toctitle");
         if (t) t.textContent = "The ground stop ends, and Duffy wants $" + "9 billion more for the air traffic system";
-        document.querySelector(".tocrow").scrollIntoView({ block: "center" });
+        document.querySelector(".toc").scrollIntoView({ block: "center" });
       });
       await page.waitForTimeout(200);
-      await shot(page, `state-digest-tocrow-${sfx}`, { fullPage: false });
+      await shot(page, `state-digest-toc-${sfx}`, { fullPage: false });
       await page.evaluate(() => window.scrollTo(0, 0));
-      await page.click("button.expandall");
-      await page.waitForTimeout(500);
-      await page.click("button.expandall");
-      await page.waitForTimeout(500);
-      const open = await page.evaluate(
-        () => document.querySelectorAll("details.sec[open]").length === document.querySelectorAll("details.sec").length,
-      );
-      if (!open) notes.push(`expand all did not open every section at ${sfx}`);
-      await shot(page, `state-digest-expand-all-${sfx}`);
+      await page.locator("summary.sechead").first().click();
+      check("individual story collapses", await page.locator("details.sec").first().evaluate((d) => !d.open));
+      await page.locator("summary.sechead").first().click();
+      check("individual story reopens", await page.locator("details.sec").first().evaluate((d) => d.open));
+      await shot(page, `state-digest-reopened-${sfx}`);
     });
 
     await state(vp, theme, `digest-hash-${sfx}`, async (page) => {
@@ -441,7 +437,7 @@ await state(
   await page.goto(T + "d/235");
   await settle(page);
   // Collapse sections first; the print handler must open them for the PDF.
-  await page.click("button.expandall");
+  await page.locator("summary.sechead").last().click();
   const closedBefore = await page.evaluate(() => document.querySelectorAll("details.sec:not([open])").length);
   const file = join(OUT, "print-digest-235.pdf");
   await page.pdf({ path: file, format: "A4", printBackground: true });
@@ -543,29 +539,11 @@ console.log("\nbehaviour checks");
     await settle(page);
     check("hop 3 stayed in-document", await page.evaluate(() => window.__softnav === "alive"));
 
-    // One listener set: expand-all toggles ONCE per click.
-    const before = await page.evaluate(() => document.querySelectorAll("details.sec[open]").length);
-    const total = await page.evaluate(() => document.querySelectorAll("details.sec").length);
-    await page.click("button.expandall");
-    const after1 = await page.evaluate(() => document.querySelectorAll("details.sec[open]").length);
-    await page.click("button.expandall");
-    const after2 = await page.evaluate(() => document.querySelectorAll("details.sec[open]").length);
-    check("collapse-all closes everything on click 1", before === total && after1 === 0, `${before} -> ${after1}/${total}`);
-    check("expand-all opens everything on click 2 (one listener, not two)", after2 === total, `after2=${after2}`);
-    const label = await page.evaluate(() => document.querySelector("button.expandall").textContent);
-    const collapseLabel = await page.evaluate(() => document.querySelector("button.expandall").dataset.collapse);
-    check("expand-all label back to its collapse text", label === collapseLabel, label);
-
-    // Hand-toggling keeps the label honest.
+    // Individual story controls still work after repeated soft navigation.
     await page.locator("summary.sechead").first().click();
-    await page.waitForSelector('button.expandall[aria-expanded="false"]');
-    check("label follows a manually collapsed story", await page.locator("button.expandall").evaluate((button) => button.textContent === button.dataset.expand));
-    await page.evaluate(() => document.querySelectorAll("details.sec").forEach((d) => (d.open = true)));
-    await page.waitForTimeout(100);
-    check(
-      "label follows hand-opened sections (aria-expanded=true)",
-      await page.evaluate(() => document.querySelector("button.expandall").getAttribute("aria-expanded") === "true"),
-    );
+    check("story collapses after soft navigation", await page.locator("details.sec").first().evaluate((d) => !d.open));
+    await page.locator("summary.sechead").first().click();
+    check("story reopens after soft navigation", await page.locator("details.sec").first().evaluate((d) => d.open));
 
     // TOC click opens a folded section.
     await page.evaluate(() => document.querySelectorAll("details.sec").forEach((d) => (d.open = false)));

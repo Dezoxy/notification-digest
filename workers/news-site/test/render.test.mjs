@@ -233,7 +233,7 @@ test("client.js: settings popover is closed by hidePopover only, never opened", 
   assert.ok(!/\.showPopover\(/.test(CLIENT_SCRIPT), "the client never calls showPopover()");
 });
 
-test("client.js: folded sections, expand-all, print, entrance, typing state", async () => {
+test("client.js: folded sections, print, entrance, typing state", async () => {
   const { CLIENT_SCRIPT } = await import("../src/client.js");
   // Folded sections.
   assert.match(
@@ -243,7 +243,6 @@ test("client.js: folded sections, expand-all, print, entrance, typing state", as
   );
   assert.match(CLIENT_SCRIPT, /addEventListener\(\s*"hashchange"/, "hashchange reveals a section");
   assert.match(CLIENT_SCRIPT, /revealHash\(location\.hash\);\s*$/, "boot-time hash reveal");
-  assert.match(CLIENT_SCRIPT, /querySelector\("button\.expandall"\)/, "expand-all wired");
   // Phone dock auto-hide: phone-only, rAF-throttled, with every pin guard.
   assert.match(CLIENT_SCRIPT, /classList\.add\("dockhid"\)/, "dock hides via html.dockhid");
   assert.match(CLIENT_SCRIPT, /matchMedia\("\(max-width: 699\.98px\)"\)/, "phone media query only");
@@ -255,12 +254,6 @@ test("client.js: folded sections, expand-all, print, entrance, typing state", as
     "dock stays while palette open",
   );
   assert.match(CLIENT_SCRIPT, /requestAnimationFrame\(frame\)/, "rAF-throttled");
-  assert.match(CLIENT_SCRIPT, /setAttribute\("aria-expanded"/, "expand-all reflects aria-expanded");
-  assert.match(
-    CLIENT_SCRIPT,
-    /btn\.dataset\.collapse : btn\.dataset\.expand/,
-    "label from data-expand/data-collapse",
-  );
   // Print.
   assert.match(CLIENT_SCRIPT, /addEventListener\("beforeprint"/, "beforeprint");
   assert.match(CLIENT_SCRIPT, /addEventListener\("afterprint"/, "afterprint");
@@ -1852,14 +1845,14 @@ test("digest dateline labels daily and weekly editions in both languages", async
   }
 });
 
-test("digest sections: section nav, expand-all button, folded details", async () => {
+test("digest sections: section nav and collapsible details", async () => {
   for (const path of ["d/235", "hu/d/235"]) {
     const { html } = await page(path);
     assert.match(html, /<nav class="toc" aria-label="(Sections|Fejezetek)">/, `${path}: toc label`);
-    assert.match(
+    assert.doesNotMatch(
       html,
-      /<div class="tocrow"><details class="tocpicker" open><summary>[^<]*<\/summary><nav class="toc"[^>]*>[\s\S]*?<\/nav><\/details>\s*<button type="button" class="expandall" hidden data-expand="[^"]+" data-collapse="[^"]+">[^<]+<\/button><\/div>/,
-      `${path}: expand-all remains available when the picker is closed`,
+      /class="(?:tocpicker|tocrow|expandall)"/,
+      `${path}: no navigation controls`,
     );
     const toc = html.match(/<nav class="toc"[^>]*>([\s\S]*?)<\/nav>/)[1];
     const links = [
@@ -1987,9 +1980,9 @@ test("hero is a direct child of main.layout on index and digest; digest body sta
   );
   const main = dig.slice(dig.indexOf('<div class="maincol">'), dig.indexOf("</main>"));
   assert.ok(!main.includes("hero-digest"), "hero left the column");
-  const toc = main.indexOf('<div class="tocrow"><details class="tocpicker"');
-  assert.ok(toc > -1, ".tocrow (nav.toc + expand-all) stays in .maincol");
-  assert.ok(toc < main.indexOf('class="tldr"'), "section picker precedes the summary");
+  const toc = main.indexOf('<nav class="toc"');
+  assert.ok(toc > -1, "nav.toc stays in .maincol");
+  assert.ok(toc < main.indexOf('class="tldr"'), "section navigation precedes the summary");
   assert.ok(main.indexOf('<article class="digest">') > -1, "article in .maincol");
   assert.ok(main.includes("digestnav-bottom"), "bottom nav in .maincol");
 });
@@ -2042,8 +2035,8 @@ test("exactly one h1 on every golden page and on an archive-week index", async (
 test("digest reading controls and sources preserve their contracts", async () => {
   const html = (await page("d/235")).html;
   const article = html.match(/<article class="digest">[\s\S]*?<\/article>/)[0];
-  assert.match(article, /<details class="tocpicker" open><summary>Jump to section · 3<\/summary>/);
-  assert.ok(article.indexOf('class="tocpicker"') < article.indexOf('class="tldr"'));
+  assert.match(article, /<nav class="toc" aria-label="Sections">/);
+  assert.ok(article.indexOf('class="toc"') < article.indexOf('class="tldr"'));
   assert.ok(article.indexOf('class="tldr"') < article.indexOf('class="storythreads"'));
   assert.equal((article.match(/class="tldr"/g) ?? []).length, 1);
   assert.doesNotMatch(article, /class="banner"/);
