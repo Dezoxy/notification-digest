@@ -859,7 +859,8 @@ not here** — the `PLAN.md §11.x` citations in `schema.sql`, the worker source
   gain it. Phone switches between All, Daily, and Weekly animate the incoming
   content while the dock stays fixed. Reduced motion uses an instant swap.
   The site also provides a ⌘K command palette, j/k list navigation, and an
-  Archive nav link.
+  Archive nav link. On digest pages, the phone dock has an arrow to scroll
+  back to the top; the All digests links remain available for navigation.
 - **Settings and reading** — a settings panel (a popover opened from the bar's
   sliders button; a sidebar card on desktop, a bottom sheet on phones) holding
   language, the three-state theme, text size (XS/S/M/L) and a Cards | Compact

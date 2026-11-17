@@ -713,7 +713,7 @@ Load \`tokens.css\` then \`components/bundle.css\`: the bundle is the site's own
 
 **Themes.** Light, dark, or the OS preference, chosen in Settings and pinned through \`data-theme\` on \`<html>\`, which only switches \`color-scheme\`; \`light-dark()\` does the rest.
 
-**Phone.** Below 700px the bar becomes a floating bottom dock (digest pages put a back arrow after Settings), the brand and localized date sit at the top, and Settings opens as a bottom sheet.
+**Phone.** Below 700px the bar becomes a floating bottom dock (digest pages put a scroll-to-top arrow after Settings), the brand and localized date sit at the top, and Settings opens as a bottom sheet.
 
 ## Iconography
 
@@ -748,14 +748,14 @@ The mark is the "n." monogram, a white n and a periwinkle dot on a deep-ink tile
   <div class="baractions">
     <details class="searchpop"><summary class="searchtoggle" aria-label="Search">${searchIcon}<span class="searchlabel">Search</span></summary></details>
     <button type="button" class="settingsbtn" aria-label="Settings">${slidersIcon}</button>
-    <a class="barback" href="#" aria-label="Back to all digests">←</a>
+    <a class="bartop" href="#top" aria-label="Scroll to top">↑</a>
   </div>
 </header>`),
     `# Bar
 
 The one floating pill at the top of every page: wordmark, view tabs, Search and Settings. It is the same \`header.bar\` on every breakpoint; below 700px CSS turns it into a bottom dock with a more translucent fill and an opaque accessibility fallback.
 
-**Provide** \`header.bar\` with the brand link (\`news\` plus \`span.brandmark\` for the accent full stop), a \`nav.viewtabs\`, and \`.baractions\` holding the search control and \`button.settingsbtn\` (\`popovertarget\` the settings panel). A digest page adds \`a.barback\` after Settings inside \`.baractions\`; it is shown only on phones.
+**Provide** \`header.bar\` with the brand link (\`news\` plus \`span.brandmark\` for the accent full stop), a \`nav.viewtabs\`, and \`.baractions\` holding the search control and \`button.settingsbtn\` (\`popovertarget\` the settings panel). A digest page adds \`a.bartop\` after Settings inside \`.baractions\`; it is shown only on phones.
 
 - Do keep the bar sticky and never put a transform, filter or backdrop-filter on an ancestor: that breaks sticky and the fixed dock.
 - Do keep the search control a \`details.searchpop\` where the page has a ledger to filter, and a plain \`a.barsearch\` icon link elsewhere.

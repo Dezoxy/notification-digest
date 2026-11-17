@@ -398,9 +398,6 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     bodyHtml: body,
     sidebarHtml,
     title: pageTitle,
-    // The bar's .barback arrow replaces the old floating .backfab: same
-    // target (this view's index), same label.
-    backHref: indexHref(token, lang, view),
     // The phone masthead carries the full localized date.
     issueLineText: formatDayHeader(date, strings.locale),
   });
