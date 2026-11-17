@@ -225,7 +225,7 @@ export const CSS = `
     color: var(--strong); text-decoration: none; white-space: nowrap;
   }
   .brandmark { color: var(--accent); }
-  .bartop, .phonehead { display: none; }
+  .phonehead { display: none; }
 
   /* View tabs: a segmented pill on a track. The active tab is a span (the
      current page is not a link), the others are anchors. Labels may be 30%
@@ -932,11 +932,6 @@ export const CSS = `
     /* The on-screen keyboard must never push the dock over the field. */
     html.typing .bar { display: none; }
     .bar .brand, .searchlabel { display: none; }
-    .bartop {
-      display: inline-flex; align-items: center; justify-content: center; flex: none;
-      width: 44px; height: 44px; border-radius: var(--r-pill);
-      background: var(--track); color: var(--text); font-size: 20px; text-decoration: none;
-    }
     .viewtabs { flex: 1; margin-inline: 0; background: transparent; }
     .viewtab { flex: 1; padding: 0 6px; color: var(--text); }
     .viewtab.active { background: color-mix(in srgb, var(--text) 16%, transparent); }
