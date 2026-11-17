@@ -60,6 +60,22 @@ test("every golden page renders 200 with trust headers", async () => {
   }
 });
 
+test("phone mastheads show only localized dates and digest titles omit IDs", async () => {
+  const cases = [
+    ["", "Tuesday, 25 August 2026"],
+    ["hu/", "2026. augusztus 25., kedd"],
+    ["daily/", "Monday, 24 August 2026"],
+    ["weekly/", "Sunday, 23 August 2026"],
+    ["d/235", "Tuesday, 25 August 2026", "digest · Tue 25 Aug 16:00"],
+    ["hu/d/235", "2026. augusztus 25., kedd", "digest · aug. 25., K 16:00"],
+  ];
+  for (const [path, date, title] of cases) {
+    const { html } = await page(path);
+    assert.ok(html.includes(`<div class="issueline">${date}</div>`), path);
+    if (title) assert.ok(html.includes(`<title>${title}</title>`), path);
+  }
+});
+
 test("wrong token is byte-identical to an unknown path (no existence hint)", async () => {
   const wrongToken = await fetchPath("/t/definitely-not-the-token/");
   const unknownPath = await fetchPath("/no/such/path");

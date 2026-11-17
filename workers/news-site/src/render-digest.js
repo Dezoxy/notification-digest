@@ -247,7 +247,7 @@ export function renderDigestPage(
   const headline = deriveHeadline(tldrText);
   const shortDate = formatShortDate(date, strings.locale);
   const time = formatTime(date, strings.locale);
-  const pageTitle = `${kindLabel} #${digest.id} · ${shortDate} ${time}`;
+  const pageTitle = `${kindLabel} · ${shortDate} ${time}`;
 
   const navLinks = [
     `<a href="${indexHref(token, lang, view)}">${esc(strings.allDigests)}</a>`,
@@ -404,7 +404,7 @@ ${colophonHtml}<nav class="digestnav digestnav-bottom">${digestNavLinksHtml}</na
     // The bar's .barback arrow replaces the old floating .backfab: same
     // target (this view's index), same label.
     backHref: indexHref(token, lang, view),
-    // The phone masthead carries the full date and edition number.
-    issueLineText: `${strings.issueEdition.replace("{n}", String(digest.id))} · ${formatDayHeader(date, strings.locale)}`,
+    // The phone masthead carries the full localized date.
+    issueLineText: formatDayHeader(date, strings.locale),
   });
 }

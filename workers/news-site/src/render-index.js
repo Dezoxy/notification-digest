@@ -3,7 +3,6 @@ import { STRINGS } from "./strings.js";
 import { CSS } from "./css.js";
 import { esc } from "./http.js";
 import {
-  budapestDateParts,
   compareIsoWeek,
   formatDayHeader,
   formatRelativeTime,
@@ -672,43 +671,6 @@ export function renderNowSection(nowArcs, strings, token, lang, nowMs) {
   return `<section class="sidecard now" aria-labelledby="nowhead"><h2 id="nowhead" class="sidehead">${esc(strings.nowLabel)}</h2><nav class="nowlist" aria-label="${esc(strings.nowLabel)}">${rowsHtml}</nav></section>`;
 }
 
-// Issue line (shown in pageChrome's .phonehead) (Front Page redesign, index pages only): "No.
-// {n} · {full date} · {n} editions today" — every piece is derived from
-// data the page already has, no new plumbing (per the task spec):
-//   - edition number: the lead digest's own `id` (an existing, already-
-//     unique, monotonically-issued column — not invented for this).
-//   - date: formatDayHeader on the lead's created_at, same formatter the
-//     digest page's own eyebrow used before this redesign.
-//   - editions today: how many of the ALREADY-FETCHED `rows` (the same
-//     array renderIndexPage received — the current week for the all view,
-//     up to 1000 rows for daily/weekly) share the lead's Budapest calendar
-//     day. ALL view only — a daily/weekly view's "editions" are, by
-//     definition, at most one a day, so the count would only ever read 1
-//     and add nothing.
-// Returns "" when there's no lead row at all (empty index, or an archive
-// week — see renderIndexPage's own isCurrent gate), same "absent data
-// renders as absence" contract as this file's other optional-fragment
-// helpers.
-export function buildIssueLine(leadRow, rows, view, strings) {
-  if (!leadRow) return "";
-  const parts = [
-    strings.issueEdition.replace("{n}", String(leadRow.id)),
-    formatDayHeader(new Date(leadRow.created_at), strings.locale),
-  ];
-  if (view === "all") {
-    const leadDay = budapestDateParts(new Date(leadRow.created_at));
-    const editionsToday = rows.filter((row) => {
-      const day = budapestDateParts(new Date(row.created_at));
-      return day.y === leadDay.y && day.m === leadDay.m && day.d === leadDay.d;
-    }).length;
-    if (editionsToday > 0) {
-      const tmpl = editionsToday === 1 ? strings.issueEditionsTodayOne : strings.issueEditionsToday;
-      parts.push(tmpl.replace("{n}", String(editionsToday)));
-    }
-  }
-  return parts.join(" · ");
-}
-
 export function renderIndexPage(
   rows,
   token,
@@ -870,6 +832,6 @@ export function renderIndexPage(
     bodyHtml: `${catchupHtml}<section class="ledger" data-unread-label="${esc(strings.unreadFence)}" data-empty-filtered="${esc(strings.emptyFiltered)}"${archiveAttr}>${body}</section>${archiveResultsHtml}${railHtml}`,
     sidebarHtml: nowHtml || "",
     prefetchHref,
-    issueLineText: buildIssueLine(leadRow, rows, view, strings),
+    issueLineText: leadRow ? formatDayHeader(new Date(leadRow.created_at), strings.locale) : "",
   });
 }
