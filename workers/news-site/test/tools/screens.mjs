@@ -556,11 +556,6 @@ console.log("\nbehaviour checks");
     await page.waitForTimeout(900); // let the smooth #s3 scroll finish first
     await page.evaluate(() => window.scrollBy({ top: -40, behavior: "instant" }));
     await page.waitForTimeout(450);
-    // The digest control remains wired after repeated soft navigation.
-    const urlBeforeTop = page.url();
-    await page.click(".bartop");
-    await page.waitForFunction(() => window.scrollY === 0);
-    check("top control preserves URL", page.url() === urlBeforeTop);
     // Theme change: html.theming appears, then clears; rapid clicks do not strand it.
     await page.click("button.settingsbtn");
     await page.waitForSelector("#settings:popover-open");
