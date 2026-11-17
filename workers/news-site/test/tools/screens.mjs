@@ -531,7 +531,7 @@ console.log("\nbehaviour checks");
     check("hop 2 stayed in-document", await page.evaluate(() => window.__softnav === "alive"));
     check("html.enter not re-added by hop 2", await page.evaluate(() => !document.documentElement.classList.contains("enter")));
     // Hop 3 so the digest page has been wired by the SECOND soft swap.
-    await page.click(".barback");
+    await page.click(".digestnav a");
     await page.waitForURL(new RegExp(`/t/${SITE_TOKEN}/hu/$`));
     await settle(page);
     await page.click("a.entry[href*='/d/235']");
@@ -556,6 +556,11 @@ console.log("\nbehaviour checks");
     await page.waitForTimeout(900); // let the smooth #s3 scroll finish first
     await page.evaluate(() => window.scrollBy({ top: -40, behavior: "instant" }));
     await page.waitForTimeout(450);
+    // The digest control remains wired after repeated soft navigation.
+    const urlBeforeTop = page.url();
+    await page.click(".bartop");
+    await page.waitForFunction(() => window.scrollY === 0);
+    check("top control preserves URL", page.url() === urlBeforeTop);
     // Theme change: html.theming appears, then clears; rapid clicks do not strand it.
     await page.click("button.settingsbtn");
     await page.waitForSelector("#settings:popover-open");

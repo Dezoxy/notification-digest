@@ -84,9 +84,7 @@ export function appName(host) {
 // breakpoint), so the hidden one is display:none, not aria-hidden.
 // `issueLineText` is the RAW (unescaped) masthead date, shown in
 // .phonehead; pageChrome esc()s it once here, same convention as `title`.
-// `backHref` is the digest page's "back to index" href: it adds the bar's
-// .barback arrow (the phone's way back now that the floating back button is
-// gone); every other page passes null.
+// Digest pages add a phone-only scroll-to-top control to the bar.
 export function pageChrome({
   host,
   token,
@@ -103,7 +101,6 @@ export function pageChrome({
   title = null,
   prefetchHref = null,
   issueLineText = "",
-  backHref = null,
 }) {
   const viewTabsHtml = renderViewTabs(token, lang, view);
   // Only the first host label renders — the brand is just "news" (owner
@@ -130,10 +127,11 @@ export function pageChrome({
   const searchHtml = showSearch
     ? renderSearchBubble(token, lang, strings)
     : renderSearchButton(token, lang, strings);
-  const backHtml = backHref
-    ? `
-      <a class="barback" href="${backHref}" aria-label="${esc(strings.backFabLabel)}">←</a>`
-    : "";
+  const topHtml =
+    pageKind === "digest"
+      ? `
+      <a class="bartop" href="#top" aria-label="${esc(strings.scrollTopLabel)}">↑</a>`
+      : "";
   // Sliders icon (not a gear: it reads as "preferences" at 18px without the
   // cog's busy teeth). Inline SVG for the same cross-platform reason as the
   // search magnifier; currentColor keeps it theme-aware.
@@ -246,7 +244,7 @@ ${prefetchScriptHtml}
     ${viewTabsHtml}
     <div class="baractions">
       ${searchHtml}
-      <button type="button" class="settingsbtn" popovertarget="settings" aria-label="${esc(strings.settingsLabel)}">${settingsIcon}</button>${backHtml}
+      <button type="button" class="settingsbtn" popovertarget="settings" aria-label="${esc(strings.settingsLabel)}">${settingsIcon}</button>${topHtml}
     </div>
   </header>
   <div class="phonehead">

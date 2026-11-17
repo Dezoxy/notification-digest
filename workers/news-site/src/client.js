@@ -447,6 +447,16 @@ export const CLIENT_SCRIPT = `  // Animated preference swap (owner-requested), s
     // <html class="typing"> behind (a removed element fires no focusout).
     syncTyping();
 
+    // Keep the URL and history intact while retaining a native anchor fallback.
+    var topLink = document.querySelector(".bartop");
+    if (topLink) {
+      topLink.addEventListener("click", function (event) {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        window.scrollTo({ top: 0 });
+      }, { signal: signal });
+    }
+
     // Phone dock auto-hide: the fixed bottom bar slides away while the
     // reader scrolls down and returns on any upward scroll (html.dockhid, see
     // the phone block in css.js). A soft nav starts with the dock shown.

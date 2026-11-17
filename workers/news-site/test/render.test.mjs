@@ -1739,19 +1739,19 @@ test("the search control renders exactly once, in .baractions", async () => {
   }
 });
 
-test("no floating FABs: .backfab is gone and .barback is digest-only", async () => {
+test("no floating FABs: .backfab is gone and .bartop is digest-only", async () => {
   for (const { name, path } of GOLDEN_PAGES) {
     const html = markupOf((await page(path)).html);
     assert.ok(!html.includes("backfab"), `${name}: no backfab`);
     assert.ok(!html.includes("<noscript>"), `${name}: no noscript block`);
     const isDigest = name.startsWith("digest-");
-    assert.equal(count(html, /class="barback"/g), isDigest ? 1 : 0, `${name}: barback`);
+    assert.equal(count(html, /class="bartop"/g), isDigest ? 1 : 0, `${name}: bartop`);
     if (isDigest) {
       const actions = html.match(/<div class="baractions">([\s\S]*?)<\/div>\s*<\/header>/)[1];
       assert.match(
         actions,
-        /class="searchpop"[\s\S]*class="settingsbtn"[\s\S]*class="barback"[^>]*>←<\/a>\s*$/,
-        `${name}: search, settings, then back in focus order`,
+        /class="searchpop"[\s\S]*class="settingsbtn"[\s\S]*class="bartop" href="#top" aria-label="[^"]+">↑<\/a>\s*$/,
+        `${name}: search, settings, then top in focus order`,
       );
     }
   }

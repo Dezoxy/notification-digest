@@ -20,8 +20,7 @@ export const STRINGS = {
     noDailyBriefs: "No daily briefs yet — the first one lands at 20:00.",
     noWeeklyBriefs: "No weekly briefs yet — the first one lands Sunday at 21:00.",
     tldrLabel: "TL;DR:",
-    backFabLabel: "Back to all digests",
-    // Accessible name of the bar's back arrow (.barback), digest pages only.
+    scrollTopLabel: "Scroll to top",
     enOnlyNote: null,
     dailyBrief: "daily brief",
     weeklyBrief: "weekly report",
@@ -272,7 +271,7 @@ export const STRINGS = {
     // Owner: please review — new HU string, mirrors noDailyBriefs's pattern.
     noWeeklyBriefs: "Még nincs heti összefoglaló — az első vasárnap 21:00-kor érkezik.",
     tldrLabel: "Röviden:",
-    backFabLabel: "Vissza a hírlevelekhez",
+    scrollTopLabel: "Görgetés az oldal tetejére",
     enOnlyNote: "Csak angolul elérhető",
     dailyBrief: "napi összefoglaló",
     // Owner: please review — new HU string, mirrors dailyBrief's pattern.

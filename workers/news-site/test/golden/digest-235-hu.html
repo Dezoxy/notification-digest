@@ -262,7 +262,7 @@
     color: var(--strong); text-decoration: none; white-space: nowrap;
   }
   .brandmark { color: var(--accent); }
-  .barback, .phonehead { display: none; }
+  .bartop, .phonehead { display: none; }
 
   /* View tabs: a segmented pill on a track. The active tab is a span (the
      current page is not a link), the others are anchors. Labels may be 30%
@@ -969,7 +969,7 @@
     /* The on-screen keyboard must never push the dock over the field. */
     html.typing .bar { display: none; }
     .bar .brand, .searchlabel { display: none; }
-    .barback {
+    .bartop {
       display: inline-flex; align-items: center; justify-content: center; flex: none;
       width: 44px; height: 44px; border-radius: var(--r-pill);
       background: var(--track); color: var(--text); font-size: 20px; text-decoration: none;
@@ -1146,7 +1146,7 @@
     <div class="baractions">
       <details class="searchpop"><summary class="searchtoggle" aria-label="Keresés" title="Keresés"><svg class="searchicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="searchlabel">Keresés</span></summary><div class="searchpanel"><div class="searchfield"><svg class="fieldicon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 L14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input class="filter" type="search" placeholder="Szűrés…" aria-label="Szűrés…" hidden></div><a class="searchlink" href="/t/goldentesttoken/hu/search">Keresés ↗</a></div></details>
       <button type="button" class="settingsbtn" popovertarget="settings" aria-label="Beállítások"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 6h9M16 6h1M3 14h1M8 14h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="14" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
-      <a class="barback" href="/t/goldentesttoken/hu/" aria-label="Vissza a hírlevelekhez">←</a>
+      <a class="bartop" href="#top" aria-label="Görgetés az oldal tetejére">↑</a>
     </div>
   </header>
   <div class="phonehead">
@@ -1658,6 +1658,16 @@
     // A focused field the swap just removed would otherwise leave
     // <html class="typing"> behind (a removed element fires no focusout).
     syncTyping();
+
+    // Keep the URL and history intact while retaining a native anchor fallback.
+    var topLink = document.querySelector(".bartop");
+    if (topLink) {
+      topLink.addEventListener("click", function (event) {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        window.scrollTo({ top: 0 });
+      }, { signal: signal });
+    }
 
     // Phone dock auto-hide: the fixed bottom bar slides away while the
     // reader scrolls down and returns on any upward scroll (html.dockhid, see
