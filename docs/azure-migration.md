@@ -446,8 +446,9 @@ make docs
 
 Backend-free init above downloads providers for validation only; it creates no
 state and performs no plan/apply. Review and merge application changes; a merge
-that touches shipped files is released as the next patch version by
-`auto-release.yml`, and an explicit `vX.Y.Z` tag can still be pushed by hand.
+that touches shipped files is released as the next calendar version
+(`vYYYY.M.N`) by `auto-release.yml`, and an explicit `vX.Y.Z` tag can still be
+pushed by hand.
 Set the tracked image pin to its `X.Y.Z` GHCR tag or digest in a reviewed PR
 (Renovate normally opens it; see [Image upgrades](#image-upgrades)). Run
 `azure-deploy` with `operation=plan`. Inspect resource ownership, RBAC, cost,
@@ -482,13 +483,14 @@ The whole chain is automatic once jobs exist:
 
 1. A merge to `main` that changes shipped files (`Dockerfile`, `digest/`,
    `prompts/`, `pyproject.toml`, `uv.lock`) starts `auto-release.yml`. It runs
-   `ruff` and `pytest`, then tags the next patch version after the highest
-   `vX.Y.Z` tag, creates the GitHub release and calls `release.yml` to build the
+   `ruff` and `pytest`, then tags the next calendar version (`vYYYY.M.N`: UTC
+   year, unpadded month, per-month counter from 0, e.g. `v2026.11.0` then
+   `v2026.11.1`), creates the GitHub release and calls `release.yml` to build the
    image. (A tag created with the built-in token does not trigger the tag-push
    workflow, hence the direct call.) Docs-only, workflow-only and infra-only
    merges release nothing, and the pin file is deliberately outside the path
-   filter, so a pin bump can never cut a release. Minor and major versions stay
-   manual: push `vX.Y.0` and later releases continue from it.
+   filter, so a pin bump can never cut a release. A tag pushed by hand is
+   respected: later releases continue from the highest tag.
    If the build fails after the tag exists, re-run the failed job: the tag
    stays, no image means no pin PR, and the next release continues from it.
 2. Renovate opens a PR that bumps the pin and merges it once CI passes. Every

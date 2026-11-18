@@ -98,7 +98,7 @@ notification-digest/
 ├── .github/
 │   └── workflows/
 │       ├── release.yml           # build + push digest image to GHCR on git tag (or called by auto-release)
-│       ├── auto-release.yml      # gate + next patch tag + release for merges touching shipped files
+│       ├── auto-release.yml      # gate + next CalVer tag + release for merges touching shipped files
 │       ├── gitleaks.yml          # secret scan (gitleaks, pinned + sha256-verified) on every PR and push to main
 │       ├── news-site.yml         # npm ci + npm test for workers/news-site on every PR and push to main
 │       ├── architecture-pdf.yml  # operator-run: architecture PDF -> a GitHub release
@@ -159,7 +159,7 @@ notification-digest/
 ├── scripts/
 │   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
 │   ├── azure_release_guard.py     # image-bump plan check and idle wait for the auto-apply job
-│   ├── next_release_version.py    # next patch tag from `git tag --list`, for auto-release
+│   ├── next_release_version.py    # next CalVer tag from `git tag --list`, for auto-release
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
 │   ├── list_telegram_topics.py   # one-off: print a forum group's topics + thread ids for TELEGRAM_*_THREAD_ID
 │   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
@@ -173,7 +173,7 @@ notification-digest/
 ├── tests/
 │   ├── conftest.py                # opt-in local Blob protocol test option
 │   ├── test_azure_release_guard.py # image-only plan check, cron evaluator and idle wait (no network)
-│   ├── test_next_release_version.py # patch-bump ordering and invalid-tag handling
+│   ├── test_next_release_version.py # CalVer ordering and invalid-tag handling
 │   ├── test_cloud_runtime.py      # scheduling, failure fencing and publication recovery
 │   ├── test_cloud_state.py        # snapshots, integrity, conditional manifests and retention
 │   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite
@@ -627,7 +627,7 @@ Cost: a fallback call bills the chosen model's API price for one digest's tokens
 
 Not part of this repo — tracked here for continuity into `~/developer/homelab`.
 
-**Release pipeline:** this repo is a versioned, released artifact, same as the owner's other self-made apps. `.github/workflows/release.yml` builds the Docker image on git tag push and publishes it to GHCR as `ghcr.io/dezoxy/notification-digest:<tag>`, published from the repo `Dezoxy/notification-digest` (public since 2026-10-09; the image itself stays private). No image is ever built on the VM. Renovate, already running in the `~/developer/homelab` repo, opens a PR bumping the pinned `digest` tag whenever a new release lands in GHCR; deploy after that is a separate, manual step — either the homelab repo's Makefile/Ansible invocation by hand, or its own GitHub Actions. Historically, changing code in this repo shipped nothing until a tag was cut **and** the homelab repo bumped and deployed. Since the Azure migration, `.github/workflows/auto-release.yml` cuts the next patch tag for merges touching shipped files and the Azure pin follows through Renovate and the guarded `azure-deploy`; the homelab bump/deploy remains its own step until cutover.
+**Release pipeline:** this repo is a versioned, released artifact, same as the owner's other self-made apps. `.github/workflows/release.yml` builds the Docker image on git tag push and publishes it to GHCR as `ghcr.io/dezoxy/notification-digest:<tag>`, published from the repo `Dezoxy/notification-digest` (public since 2026-10-09; the image itself stays private). No image is ever built on the VM. Renovate, already running in the `~/developer/homelab` repo, opens a PR bumping the pinned `digest` tag whenever a new release lands in GHCR; deploy after that is a separate, manual step — either the homelab repo's Makefile/Ansible invocation by hand, or its own GitHub Actions. Historically, changing code in this repo shipped nothing until a tag was cut **and** the homelab repo bumped and deployed. Since the Azure migration, `.github/workflows/auto-release.yml` cuts the next CalVer tag for merges touching shipped files and the Azure pin follows through Renovate and the guarded `azure-deploy`; the homelab bump/deploy remains its own step until cutover.
 
 **Ansible `myapps` role additions:**
 - New compose service block for `digest` (pulls the pinned `ghcr.io/dezoxy/notification-digest` image tag — never built on the VM, same pattern as `netcheck` pinned to `ghcr.io/dezoxy/netcheck:2.9.0` in the role defaults — env from Key Vault-sourced vars, volumes for `/srv/appdata/digest`).

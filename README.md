@@ -240,8 +240,9 @@ breaking the container. `compose.yml` here is for local dev only — production
 runs as Azure Container Apps jobs (see Deployment below). Releases are git tags
 (`vX.Y.Z`); a merge to `main` that
 changes shipped files (`Dockerfile`, `digest/`, `prompts/`, `pyproject.toml`,
-`uv.lock`) is tagged as the next patch version by
-`.github/workflows/auto-release.yml`, and minor/major tags are pushed by hand.
+`uv.lock`) is tagged as the next calendar version (`vYYYY.M.N`: UTC year,
+unpadded month, per-month counter) by `.github/workflows/auto-release.yml`; a
+hand-pushed tag is still respected.
 `.github/workflows/release.yml` builds and pushes the image to GHCR, baking
 the release version into it (`APP_VERSION` build-arg -> `DIGEST_APP_VERSION`),
 which the app stamps into each digest's `provenance.app_version`.
