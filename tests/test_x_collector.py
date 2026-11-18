@@ -24,9 +24,11 @@ tests) deliberately give them different values.
 over the network. The `build_client` tests are the one exception: they
 exercise the real (installed, local-only) twifork `Client`'s
 `load_cookies`/`set_cookies`, which are pure local file/dict operations with
-no network I/O -- the strongest available check that this module calls the
-package's actual cookie-loading API correctly (twifork imports as `twikit`,
-same public surface as upstream for this).
+no network I/O (the transaction-id fallback tests additionally drive a real
+client over an httpx MockTransport, still with no network) -- the strongest
+available check that this module calls the package's actual cookie-loading
+API correctly (twifork imports as `twikit`, same public surface as upstream
+for this).
 """
 
 from __future__ import annotations
@@ -1391,6 +1393,114 @@ def test_build_client_does_not_warn_on_a_fresh_jar(tmp_path, caplog):
         build_client(str(seed), None)
 
     assert "last refreshed" not in caplog.text
+
+
+# --- transaction-id handshake fallback (real client, httpx MockTransport) ---
+
+_EMPTY_NOTIFICATIONS = {
+    "globalObjects": {"notifications": {}, "tweets": {}, "users": {}},
+    "timeline": {"instructions": []},
+}
+_FALLBACK_WARNING = (
+    "x transaction-id handshake unavailable (InvalidSession); continuing without the header"
+)
+
+
+def _mock_client(handler):
+    import httpx
+
+    client = build_client(None, '{"ct0": "abc", "auth_token": "def"}')
+    # Carry the cookie jar over: swapping `http` alone would drop the cookies.
+    client.http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), cookies=client.http.cookies
+    )
+    return client
+
+
+def _new_web_client_handler(api_requests, home_requests):
+    import httpx
+
+    def handler(request):
+        if request.url.path == "/i/api/2/notifications/all.json":
+            api_requests.append(request)
+            return httpx.Response(200, json=_EMPTY_NOTIFICATIONS)
+        home_requests.append(request)
+        return httpx.Response(
+            307, headers={"location": "/home", "set-cookie": "twid=u%3D1; Path=/"}
+        )
+
+    return handler
+
+
+async def test_handshake_failure_falls_back_to_headerless_requests(caplog):
+    api, home = [], []
+    client = _mock_client(_new_web_client_handler(api, home))
+
+    with caplog.at_level(logging.WARNING, logger="digest.collectors.x"):
+        await client.v11.notifications_all(20, None)
+        await client.v11.notifications_all(20, None)
+
+    assert len(api) == 2
+    assert all("x-client-transaction-id" not in r.headers for r in api)
+    assert len(home) == 1
+    warnings = [r.getMessage() for r in caplog.records if "handshake" in r.getMessage()]
+    assert warnings == [_FALLBACK_WARNING]
+
+
+async def test_failed_handshake_does_not_leak_cookies_into_the_jar():
+    client = _mock_client(_new_web_client_handler([], []))
+
+    await client.v11.notifications_all(20, None)
+
+    assert client.get_cookies() == {"ct0": "abc", "auth_token": "def"}
+
+
+async def test_account_locked_propagates_without_bypass(caplog):
+    import httpx
+    from twikit.errors import AccountLocked
+
+    def handler(request):
+        return httpx.Response(200, text="<html><a href='/account/access'>locked</a></html>")
+
+    client = _mock_client(handler)
+
+    with caplog.at_level(logging.WARNING, logger="digest.collectors.x"):
+        with pytest.raises(AccountLocked):
+            await client.v11.notifications_all(20, None)
+
+    assert "handshake unavailable" not in caplog.text
+    assert not client.client_transaction.is_inited()
+
+
+async def test_reset_clears_the_bypass():
+    client = _mock_client(_new_web_client_handler([], []))
+    await client.v11.notifications_all(20, None)
+    assert client.client_transaction.is_inited()
+
+    client.client_transaction.reset()
+
+    assert not client.client_transaction.is_inited()
+
+
+async def test_successful_handshake_still_sends_the_header(monkeypatch, caplog):
+    from twikit.x_client_transaction import ClientTransaction
+
+    async def fake_init(self, session, headers):
+        self._inited = True
+
+    monkeypatch.setattr(ClientTransaction, "init", fake_init)
+    monkeypatch.setattr(
+        ClientTransaction, "generate_transaction_id", lambda self, *a, **k: "tid-123"
+    )
+    api, home = [], []
+    client = _mock_client(_new_web_client_handler(api, home))
+
+    with caplog.at_level(logging.WARNING, logger="digest.collectors.x"):
+        await client.v11.notifications_all(20, None)
+
+    assert api[0].headers["x-client-transaction-id"] == "tid-123"
+    assert "handshake unavailable" not in caplog.text
+    assert home == []
 
 
 # --- X_ENABLED=false: zero twikit import side effects (Phase 3 acceptance)

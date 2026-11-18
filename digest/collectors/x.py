@@ -88,16 +88,19 @@ call):
   ``InvalidSession`` -- all auth/cookie-failure signals per PLAN §4.3
   ("account may be locked/challenged"). ``InvalidSession`` is the one that
   does NOT come back as an HTTP status: it is raised from twikit's
-  X-Client-Transaction-Id handshake when x.com serves the logged-out page
-  shell, and its own docstring says outright that "the cookies are missing,
-  expired or rejected". It sits under ``ClientTransactionError``, NOT under
-  ``Unauthorized``/``Forbidden``, so it has to be named explicitly -- it was
-  missed in the original enumeration here, and the 2026-09-06 cookie
-  expiry consequently alerted as the generic "collection failed" catch-all
-  instead of as the cookie death it was. ``LoginRetired`` is deliberately
-  NOT in that set: it fires only when password login is attempted, and
-  `build_client` never logs in (see its docstring). ``TooManyRequests``
-  (429) is the rate-limit signal. Neither
+  X-Client-Transaction-Id handshake and sits under ``ClientTransactionError``,
+  NOT under ``Unauthorized``/``Forbidden``, so it has to be named explicitly.
+  Since 2026-11-17 X's new web client (x.com answers a logged-in cookie with
+  307 -> /home, which has no ``ondemand.s`` chunk map) breaks that handshake
+  for VALID cookies. `build_client` therefore installs a fallback that
+  degrades to header-less requests (X's own new client gates the header
+  behind the ``rweb_client_transaction_id_enabled`` feature switch), so a
+  genuinely dead cookie now surfaces as ``Unauthorized`` (401) from the API
+  call itself. ``InvalidSession`` stays in the auth tuple because a client
+  not built by `build_client` (or a future twifork) can still raise it.
+  ``LoginRetired`` is deliberately NOT in that set: it fires only when
+  password login is attempted, and `build_client` never logs in (see its
+  docstring). ``TooManyRequests`` (429) is the rate-limit signal. Neither
   twikit nor twifork retries these internally when no ``captcha_solver`` is
   configured, which this module never configures -- so a single failed
   call here really is a single network round trip, matching the "no retry
@@ -335,6 +338,81 @@ def persist_cookies(client: Any, cookies_path: str | None) -> None:
             pass
 
 
+_OMIT_TRANSACTION_ID = "__digest_omit_transaction_id__"
+_TRANSACTION_HEADER = "X-Client-Transaction-Id"
+_fallback_transaction_cls: type | None = None
+
+
+def _fallback_transaction_class() -> type:
+    """Return (defining once) the ClientTransaction subclass that can bypass.
+
+    Defined lazily because twikit must only be imported inside functions
+    (module docstring). When the handshake raises ``ClientTransactionError``
+    the instance flips to bypass mode for the rest of the process and hands
+    out `_OMIT_TRANSACTION_ID` instead of a real id; `_install_transaction_
+    fallback`'s `_send` wrapper turns that into an absent header.
+    ``AccountLocked`` is not a ``ClientTransactionError`` and keeps propagating.
+    """
+    global _fallback_transaction_cls
+    if _fallback_transaction_cls is not None:
+        return _fallback_transaction_cls
+
+    from twikit.errors import ClientTransactionError
+    from twikit.x_client_transaction import ClientTransaction
+
+    class _FallbackClientTransaction(ClientTransaction):
+        def __init__(self) -> None:
+            super().__init__()
+            self._bypass = False
+
+        async def init(self, session: Any, headers: Any) -> None:
+            try:
+                await super().init(session, headers)
+            except ClientTransactionError as exc:
+                # Type name only: the message could embed page content.
+                logger.warning(
+                    "x transaction-id handshake unavailable (%s); continuing without the header",
+                    type(exc).__name__,
+                )
+                self._bypass = True
+
+        def is_inited(self) -> bool:
+            return self._bypass or super().is_inited()
+
+        def generate_transaction_id(self, method: str, path: str, *args: Any, **kwargs: Any) -> str:
+            if self._bypass:
+                return _OMIT_TRANSACTION_ID
+            return super().generate_transaction_id(method, path, *args, **kwargs)
+
+        def reset(self) -> None:
+            self._bypass = False
+            super().reset()
+
+    _fallback_transaction_cls = _FallbackClientTransaction
+    return _fallback_transaction_cls
+
+
+def _install_transaction_fallback(client: Any) -> None:
+    """Make `client` survive a broken X-Client-Transaction-Id handshake.
+
+    Swaps in the bypass-capable transaction object and wraps the instance's
+    ``_send`` so the sentinel id is dropped from the outgoing headers. Every
+    other call (including the handshake's own fetches) passes through
+    untouched, and the caller's headers dict is never mutated. Per-process
+    only; nothing is persisted.
+    """
+    client.client_transaction = _fallback_transaction_class()()
+    original_send = client._send
+
+    async def _send(method: Any, url: Any, **kwargs: Any) -> Any:
+        headers = kwargs.get("headers")
+        if headers is not None and headers.get(_TRANSACTION_HEADER) == _OMIT_TRANSACTION_ID:
+            kwargs["headers"] = {k: v for k, v in headers.items() if k != _TRANSACTION_HEADER}
+        return await original_send(method, url, **kwargs)
+
+    client._send = _send
+
+
 def build_client(cookies_path: str | None, cookies_inline: str | None) -> Any:
     """Build a twifork Client authenticated via persisted cookies.
 
@@ -355,6 +433,10 @@ def build_client(cookies_path: str | None, cookies_inline: str | None) -> Any:
     dependency is the `twifork` package) is imported here, not at module
     level -- see this module's docstring for why that matters for
     X_ENABLED=false runs.
+
+    The client gets a fallback for twifork's X-Client-Transaction-Id
+    handshake (`_install_transaction_fallback`): if the handshake fails the
+    client keeps going without the header, for this process only.
     """
     from twikit import Client
 
@@ -362,6 +444,7 @@ def build_client(cookies_path: str | None, cookies_inline: str | None) -> Any:
         raise ValueError("either cookies_path or cookies_inline must be provided")
 
     client = Client()
+    _install_transaction_fallback(client)
     if cookies_path:
         effective = resolve_cookie_path(cookies_path)
         _warn_if_stale(effective)

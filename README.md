@@ -328,13 +328,16 @@ touch it, and vice versa.
 The X collector authenticates with a browser session cookie jar, never a
 login (`build_client` deliberately never performs anything login-shaped —
 see its docstring). Sessions die eventually, and when one does the collector
-fails with `x auth/cookie error: InvalidSession` and X contributes zero items
+fails with `x auth/cookie error: Unauthorized` (HTTP 401) and X contributes zero items
 until the jar is replaced. Since 0.26.3 the rotated jar is persisted after
 every clean collect, so this should be rare — but it is still the recovery
 procedure when it happens.
 
-**Symptom:** `x auth/cookie error: InvalidSession` in the run logs, `"x": "failed"`
-in `run_summary`, and `failed_sources: ["x"]` on the digest.
+**Symptom:** `x auth/cookie error: Unauthorized` in the run logs, `"x": "failed"`
+in `run_summary`, and `failed_sources: ["x"]` on the digest. Since 2026-11-17 it is
+usually preceded by `x transaction-id handshake unavailable (InvalidSession)`; that
+warning on its own (with `"x": "ok"`) is X's new web client, not a dead cookie, and
+needs no rotation.
 
 ### 1. Use a dedicated browser session
 
@@ -347,7 +350,7 @@ sessions" afterwards, which revokes it.
 ### 2. Read the cookies from DevTools
 
 `auth_token` is **HttpOnly**, so `document.cookie` in the Console returns only
-`ct0` — a jar built that way looks plausible and fails with `InvalidSession`.
+`ct0` — a jar built that way looks plausible and fails with `Unauthorized`.
 Use the Application panel, which reads the cookie store below that boundary:
 
 1. On `https://x.com`, logged in → `F12` → **Application**
