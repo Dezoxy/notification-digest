@@ -52,9 +52,10 @@ exact, pinned image; what changed is who does each step. The
 
 1. **Tag.** A merge to `main` that touches shipped files (`Dockerfile`,
    `digest/`, `prompts/`, `pyproject.toml`, `uv.lock`) is gated by lint and
-   tests and then tagged as the next patch version by
-   `.github/workflows/auto-release.yml`. Docs-, workflow- and infra-only merges
-   release nothing. Minor and major tags are still pushed by hand.
+   tests and then tagged as the next calendar version (`vYYYY.M.N`: UTC year,
+   unpadded month, per-month counter) by `.github/workflows/auto-release.yml`.
+   Docs-, workflow- and infra-only merges release nothing. A hand-pushed tag is
+   still respected.
 2. **Build.** The release workflow (`.github/workflows/release.yml`) builds the
    image from `Dockerfile` and pushes it to the private
    `ghcr.io/dezoxy/notification-digest`. `docker/metadata-action`'s

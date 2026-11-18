@@ -246,9 +246,10 @@ Releases are git tags (`vX.Y.Z` is the only version source; `pyproject.toml`
 stays 0.1.0), built by `.github/workflows/release.yml` and published as
 `ghcr.io/dezoxy/notification-digest:<version>`. A merge to `main` that touches
 shipped files (`Dockerfile`, `digest/`, `prompts/`, `pyproject.toml`, `uv.lock`)
-is gated by lint and tests, tagged as the next patch version by
+is gated by lint and tests, tagged as the next calendar version (`vYYYY.M.N`:
+UTC year, unpadded month, per-month counter) by
 `.github/workflows/auto-release.yml` and built; docs-, workflow- and infra-only
-merges release nothing, and minor/major tags are still pushed by hand. Azure pins
+merges release nothing, and a hand-pushed tag is still respected. Azure pins
 the image in the tracked `infra/azure/image.auto.tfvars.json` (not in
 `AZURE_TERRAFORM_VARS_JSON`). Renovate bumps it after each release, and a merged
 bump DOES deploy the image: `azure-deploy` runs on the push and its

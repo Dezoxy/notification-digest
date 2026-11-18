@@ -9,10 +9,11 @@ when it breaks. Five stops.
 
 A merge to `main` that touches shipped files (`Dockerfile`, `digest/`,
 `prompts/`, `pyproject.toml`, `uv.lock`) is gated by lint and tests, tagged as
-the next patch version by `.github/workflows/auto-release.yml`, and built and
-pushed to GHCR by `.github/workflows/release.yml` with no floating `latest`
-tag. Docs-, workflow- and infrastructure-only merges release nothing; minor and
-major tags are pushed by hand. The image is private and pulled with a read-only
+the next calendar version (`vYYYY.M.N`) by
+`.github/workflows/auto-release.yml`, and built and pushed to GHCR by
+`.github/workflows/release.yml` with no floating `latest` tag. Docs-, workflow-
+and infrastructure-only merges release nothing; a hand-pushed tag is still
+respected. The image is private and pulled with a read-only
 token held in the digest Key Vault.
 
 The running version is the pin in `infra/azure/image.auto.tfvars.json`. Renovate
