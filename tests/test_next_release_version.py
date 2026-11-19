@@ -84,3 +84,21 @@ def test_main_fails_closed_without_tags(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("noise\n"))
     assert release.main(["--date", "2026-11-18"]) == 1
     assert "Cannot compute" in capsys.readouterr().err
+
+
+def test_current_is_the_highest_valid_tag():
+    assert (
+        release.current_release_tag(["v0.29.25", "v2026.9.5", "v2026.10.0", "junk"]) == "v2026.10.0"
+    )
+
+
+def test_main_current_prints_current_tag(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO("v0.2.0\nv2026.11.3\nnoise\n"))
+    assert release.main(["--current"]) == 0
+    assert capsys.readouterr().out == "v2026.11.3\n"
+
+
+def test_main_current_fails_closed_without_tags(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO("noise\n"))
+    assert release.main(["--current"]) == 1
+    assert "Cannot compute" in capsys.readouterr().err

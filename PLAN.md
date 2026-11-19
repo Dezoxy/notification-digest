@@ -160,6 +160,7 @@ notification-digest/
 │   ├── migrate_azure_secrets.py   # metadata preview and explicit verified digest-only vault copy
 │   ├── azure_release_guard.py     # image-bump plan check and idle wait for the auto-apply job
 │   ├── next_release_version.py    # next CalVer tag from `git tag --list`, for auto-release
+│   ├── release_dependency_notes.py # "Dependency changes" section of each auto-release
 │   ├── telegram_login.py         # one-time interactive Telethon login → prints StringSession for Key Vault
 │   ├── list_telegram_topics.py   # one-off: print a forum group's topics + thread ids for TELEGRAM_*_THREAD_ID
 │   ├── backfill_daily.py         # one-shot: synthesize+publish daily briefs for past days
@@ -174,6 +175,7 @@ notification-digest/
 │   ├── conftest.py                # opt-in local Blob protocol test option
 │   ├── test_azure_release_guard.py # image-only plan check, cron evaluator and idle wait (no network)
 │   ├── test_next_release_version.py # CalVer ordering and invalid-tag handling
+│   ├── test_release_dependency_notes.py # pin/lock diffs, runtime-closure classification, bad refs
 │   ├── test_cloud_runtime.py      # scheduling, failure fencing and publication recovery
 │   ├── test_cloud_state.py        # snapshots, integrity, conditional manifests and retention
 │   ├── test_cloud_state_azurite.py # real SDK protocol smoke; requires --azurite

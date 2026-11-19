@@ -486,7 +486,10 @@ The whole chain is automatic once jobs exist:
    `ruff` and `pytest`, then tags the next calendar version (`vYYYY.M.N`: UTC
    year, unpadded month, per-month counter from 0, e.g. `v2026.11.0` then
    `v2026.11.1`), creates the GitHub release and calls `release.yml` to build the
-   image. (A tag created with the built-in token does not trigger the tag-push
+   image. The release body opens with a "Dependency changes" section from
+   `scripts/release_dependency_notes.py`: Dockerfile pins and shipped Python
+   packages (direct or transitive) changed since the previous tag; if it cannot
+   be computed the release goes out without it. (A tag created with the built-in token does not trigger the tag-push
    workflow, hence the direct call.) Docs-only, workflow-only and infra-only
    merges release nothing, and the pin file is deliberately outside the path
    filter, so a pin bump can never cut a release. A tag pushed by hand is

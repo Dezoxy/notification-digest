@@ -28,8 +28,8 @@ from datetime import UTC, date, datetime
 TAG_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
 
-def next_release_tag(tags: Iterable[str], today: date) -> str:
-    """Return the next `vYYYY.M.N` tag for `today` (UTC), continuing from `tags`."""
+def highest_release(tags: Iterable[str]) -> tuple[int, int, int]:
+    """Return the highest valid `vX.Y.Z` among `tags` as numbers; fail when none is valid."""
     versions = [
         tuple(int(part) for part in match.groups())
         for tag in tags
@@ -37,8 +37,18 @@ def next_release_tag(tags: Iterable[str], today: date) -> str:
     ]
     if not versions:
         raise ValueError("no existing vX.Y.Z tag to continue from")
+    return max(versions)
+
+
+def current_release_tag(tags: Iterable[str]) -> str:
+    """Return the highest existing valid release tag in `tags`."""
+    return "v{}.{}.{}".format(*highest_release(tags))
+
+
+def next_release_tag(tags: Iterable[str], today: date) -> str:
+    """Return the next `vYYYY.M.N` tag for `today` (UTC), continuing from `tags`."""
     candidate = (today.year, today.month, 0)
-    highest = max(versions)
+    highest = highest_release(tags)
     if highest >= candidate:
         year, month, patch = highest
         return f"v{year}.{month}.{patch + 1}"
@@ -46,17 +56,23 @@ def next_release_tag(tags: Iterable[str], today: date) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Read tags from stdin and print the next one; exit 1 on failure."""
+    """Read tags from stdin and print the next (or `--current`) one; exit 1 on failure."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--date",
         type=date.fromisoformat,
         help="override today's date (YYYY-MM-DD, UTC); for tests and ops",
     )
+    parser.add_argument(
+        "--current",
+        action="store_true",
+        help="print the highest existing release tag instead of the next one",
+    )
     args = parser.parse_args(argv)
     today = args.date or datetime.now(UTC).date()
+    tags = sys.stdin.read().splitlines()
     try:
-        print(next_release_tag(sys.stdin.read().splitlines(), today))
+        print(current_release_tag(tags) if args.current else next_release_tag(tags, today))
     except ValueError as exc:
         print(f"Cannot compute the next release: {exc}", file=sys.stderr)
         return 1
