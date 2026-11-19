@@ -489,8 +489,9 @@ The whole chain is automatic once jobs exist:
    image. The release body opens with a "Dependency changes" section from
    `scripts/release_dependency_notes.py`: Dockerfile pins and shipped Python
    packages (direct or transitive) changed since the previous tag; if it cannot
-   be computed the release goes out without it. (A tag created with the built-in token does not trigger the tag-push
-   workflow, hence the direct call.) Docs-only, workflow-only and infra-only
+   be computed the release goes out without it. (A tag created with the
+   built-in token does not trigger the tag-push workflow, hence the direct
+   call.) Docs-only, workflow-only and infra-only
    merges release nothing, and the pin file is deliberately outside the path
    filter, so a pin bump can never cut a release. A tag pushed by hand is
    respected: later releases continue from the highest tag.
