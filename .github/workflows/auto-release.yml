@@ -12,6 +12,10 @@ name: auto-release
 # docs files (docs/pr-summaries/ and the rest of docs/) are NOT in it, so neither
 # can cut a release. Workflow-only, docs-only and infra-only merges release nothing.
 #
+# Each release body starts with a "Dependency changes" section (image pins and
+# locked Python packages that changed since the previous release tag), followed by
+# the generated PR notes; see scripts/release_dependency_notes.py.
+#
 # A tag pushed by hand (release.yml builds it) is respected: later automatic
 # releases continue from the highest tag.
 on:
@@ -68,7 +72,12 @@ jobs:
           fi
           tag=$(git tag --list 'v*' | python3 scripts/next_release_version.py)
           printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          prev=$(git tag --list 'v*' | python3 scripts/next_release_version.py --current)
+          if ! python3 scripts/release_dependency_notes.py "$prev" "$GITHUB_SHA" > "$RUNNER_TEMP/dependency-notes.md"; then
+            echo "::warning::dependency notes failed; releasing without them"
+            : > "$RUNNER_TEMP/dependency-notes.md"
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes --notes-file "$RUNNER_TEMP/dependency-notes.md"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
