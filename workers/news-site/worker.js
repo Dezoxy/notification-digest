@@ -11,13 +11,15 @@
  *   Anyone who has the URL can read; anyone who doesn't gets an
  *   indistinguishable 404, same as any other wrong path.
  *
- * Two separate secrets, two separate audiences:
+ * Three separate secrets, three separate audiences:
  *   - SITE_TOKEN — the reader-facing capability token, part of the URL path.
  *   - INGEST_KEY — a machine credential the digest VM sends as `x-ingest-key`
  *     to push new digests. Never exposed to readers.
- *   Both are compared timing-safely (hash-then-timingSafeEqual — see
+ *   - API_TOKEN — a read-only machine credential in the path of /api/v1/...,
+ *     scoped to the daily-edition JSON. Optional: the API is off when unset.
+ *   All are compared timing-safely (hash-then-timingSafeEqual — see
  *   keyMatches in src/auth.js), the same pattern as the sibling polymarket-proxy
- *   Worker. Neither secret lives in source or wrangler.jsonc; both are set
+ *   Worker. No secret lives in source or wrangler.jsonc; all are set
  *   with `wrangler secret put`.
  *
  * Routes: URL grammar is /t/:token/(hu/)?(daily/|weekly/)?( | d/:id) plus
@@ -67,6 +69,10 @@
  *   POST /t/:token/push/subscribe -> store/refresh one device's push subscription
  *   POST /t/:token/push/unsubscribe -> forget one device
  *   POST /t/:token/push/latest    -> what the service worker should show, localized (the token root)
+ *   GET  /api/v1/:token/digests/daily/latest      -> JSON API (API_TOKEN, not SITE_TOKEN): newest daily
+ *   GET  /api/v1/:token/digests/daily/YYYY-MM-DD  -> JSON API: daily edition for that Budapest date
+ *   GET  /api/v1/:token/digests/daily?limit=N     -> JSON API: newest N daily editions (1-14, default 7)
+ *   GET  /api/v1/:token/health                    -> JSON API: status + latest daily edition
  *   anything else                 -> plain 404, wrong token included
  *
  * Story-arc pages (PLAN.md §11.1 PR A, this feature): a slug is the digest
@@ -153,7 +159,7 @@
  * wrangler's bundler folds back into one deployed script (no build config):
  *
  *   config.js     tunable caps, shape regexes, the arc-identity fold
- *   auth.js       keyMatches/tokenMatches (timing-safe secret compare)
+ *   auth.js       keyMatches/tokenMatches/apiTokenMatches (timing-safe secret compare)
  *   http.js       response constructors + esc()
  *   dates.js      Europe/Budapest formatting, ISO-week arithmetic
  *   strings.js    the EN/HU chrome vocabulary
@@ -168,6 +174,7 @@
  *   vapid.js      ES256 JWT signing for the push services (RFC 8292)
  *   notify.js     the fan-out: claim-once, newest-only, prune
  *   ingest.js     PUT /ingest: handler + every validator
+ *   api.js        read-only JSON API (/api/v1, API_TOKEN)
  *   handlers.js   the GET page handlers
  *   render-*.js   per-page renderers (shared helpers in render-shared.js)
  *
@@ -188,6 +195,7 @@ import {
   handlePushUnsubscribe,
 } from "./src/push.js";
 import { tokenMatches } from "./src/auth.js";
+import { handleApiHealth, handleDailyApi } from "./src/api.js";
 import { handleIngest } from "./src/ingest.js";
 import {
   handleAboutPage,
@@ -251,6 +259,11 @@ const ROUTE_SW = /^\/t\/([^/]+)\/sw\.js$/;
 // segment — a /hu/ page subscribes through this same path and says
 // {"lang":"hu"} in the body. See src/push.js.
 const ROUTE_PUSH = /^\/t\/([^/]+)\/push\/(key|subscribe|unsubscribe|latest)$/;
+
+// Read-only JSON API, authenticated by API_TOKEN (not SITE_TOKEN). See src/api.js.
+const ROUTE_API_DAILY = /^\/api\/v1\/([^/]+)\/digests\/daily(?:\/(latest|\d{4}-\d{2}-\d{2}))?$/;
+
+const ROUTE_API_HEALTH = /^\/api\/v1\/([^/]+)\/health$/;
 
 const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
 
@@ -434,6 +447,16 @@ export default {
         weekParam = { year, week };
       }
       return handleIndexPage(env, indexMatch[1], url, lang, view, weekParam);
+    }
+
+    const apiDailyMatch = path.match(ROUTE_API_DAILY);
+    if (apiDailyMatch && request.method === "GET") {
+      return handleDailyApi(env, apiDailyMatch[1], apiDailyMatch[2], url);
+    }
+
+    const apiHealthMatch = path.match(ROUTE_API_HEALTH);
+    if (apiHealthMatch && request.method === "GET") {
+      return handleApiHealth(env, apiHealthMatch[1]);
     }
 
     // Unknown path, or a token-gated route hit with the wrong method — same
