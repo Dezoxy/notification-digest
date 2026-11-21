@@ -47,7 +47,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
 | | |
 | --- | --- |
 | `src/config.js` | tunable caps, shape regexes, the arc-identity fold |
-| `src/auth.js` | `keyMatches`/`tokenMatches` — timing-safe secret compare |
+| `src/auth.js` | `keyMatches`/`tokenMatches`/`apiTokenMatches` — timing-safe secret compare |
 | `src/http.js` | response constructors and `esc()` |
 | `src/dates.js` | Europe/Budapest formatting, ISO-week arithmetic |
 | `src/strings.js` | the EN/HU chrome vocabulary (key-for-key parity, tested) |
@@ -62,6 +62,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
 | `src/vapid.js` | ES256 JWT signing for the push services (RFC 8292) |
 | `src/notify.js` | the fan-out: claim-once, newest-only, delivery, pruning |
 | `src/ingest.js` | `PUT /ingest`: handler plus every validator |
+| `src/api.js` | the read-only JSON API: `/api/v1/:token/...` daily editions + health |
 | `src/handlers.js` | the GET page handlers |
 | `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
 
@@ -208,18 +209,28 @@ suspenders against a crawler that ignores `robots.txt`) and
 `Content-Type: text/html; charset=utf-8`. `GET /robots.txt` itself needs no
 token and disallows everything.
 
-Two independent secrets, two independent audiences — a leaked reader link
+Three independent secrets, three independent audiences — a leaked reader link
 must never grant write access, and vice versa:
 
 - `SITE_TOKEN` — the reader capability token, embedded in the URL path.
 - `INGEST_KEY` — a machine credential the digest VM sends as the
   `x-ingest-key` header on every `PUT /ingest/:id`. Never shown to readers.
+- `API_TOKEN` — a read-only machine credential in the path of
+  `/api/v1/<API_TOKEN>/...`, scoped to the daily-edition JSON (no site pages,
+  no push, no ingest). It is in the path because ChatGPT-style URL fetchers
+  cannot send auth headers. It is separate from `SITE_TOKEN` so it can be
+  revoked without re-sharing the Telegram link or reinstalling the Home Screen
+  app, and a leaked reader link does not unlock the API, nor the other way
+  round. JSON responses carry `Content-Type: application/json; charset=utf-8`,
+  `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`,
+  `X-Robots-Tag: noindex, nofollow` and `X-Content-Type-Options: nosniff`.
 
-Both are compared with a hash-then-`timingSafeEqual` helper (same pattern as
-the sibling `workers/polymarket-proxy` Worker), so neither can be recovered
-byte-by-byte via response-time measurement. The Worker fails closed if either
+All three are compared with a hash-then-`timingSafeEqual` helper (same pattern
+as the sibling `workers/polymarket-proxy` Worker), so none can be recovered
+byte-by-byte via response-time measurement. The Worker fails closed if any
 secret is unset — an unauthenticated ingest endpoint or reader path is worse
-than a broken one.
+than a broken one. With `API_TOKEN` unset the API simply does not exist: every
+`/api/v1/...` path returns the uniform `404`.
 
 `body_html` in the digest payload arrives **pre-sanitized by the app**
 (Python `nh3`) and is stored and served verbatim inside the article — it is
@@ -306,7 +317,63 @@ only in the two `<link>` hrefs.
 | `POST /t/:token/push/subscribe` | Store or refresh one device's push subscription. |
 | `POST /t/:token/push/unsubscribe` | Forget one device. |
 | `POST /t/:token/push/latest` | What the service worker should show, in the subscription's language. |
+| `GET /api/v1/:token/digests/daily/latest` | JSON: the newest daily edition. `:token` is `API_TOKEN`. |
+| `GET /api/v1/:token/digests/daily/YYYY-MM-DD` | JSON: the daily edition for that Europe/Budapest date. |
+| `GET /api/v1/:token/digests/daily?limit=N` | JSON: the newest `N` daily editions (1-14, default 7). |
+| `GET /api/v1/:token/health` | JSON: today's date, whether today's daily is published, the latest daily. |
 | anything else | Plain `404`, wrong token included. |
+
+## JSON API (daily editions)
+
+A stable, machine-readable source for the completed evening daily brief, for
+example a scheduled ChatGPT task. Read-only, `GET` only, authenticated by
+`API_TOKEN` in the path (see "Trust model"). The evening daily is normally
+published about 20:35 Europe/Budapest, so a fetch at 21:30 with a retry at
+22:30 on `not_published_yet` fits.
+
+Edition semantics:
+
+- Only `kind = 'daily'` rows. `date` is the Europe/Budapest calendar date of
+  `created_at`, DST-correct. `edition_id` is `daily-YYYY-MM-DD` and stable: use
+  it for duplicate prevention.
+- Several rows on one date: newest `created_at` wins, then highest `id`.
+- `status` is always `"complete"`: a row only exists after a full ingest.
+  `content_hash` (`sha256:` of the Markdown body) changes if an edition is
+  re-ingested.
+
+Edition object: `schema_version`, `edition_id`, `digest_id`, `edition_type`,
+`status`, `date`, `timezone`, `published_at` (Budapest offset),
+`published_at_utc`, `title`, `tldr`, `content` (`format: "markdown"`, `body`),
+`sources` (`label` + `url`, de-duplicated links from the body), `topics`,
+`deltas`, `stats` (`item_count`, `section_count`, `source_counts`),
+`failed_sources`, `content_hash`. The list endpoint wraps these in
+`{schema_version, timezone, count, editions}`.
+
+Deliberately absent: `canonical_url` (the site URL needs `SITE_TOKEN`, which
+this scope must never emit), and provenance, `body_html` and the Hungarian
+columns (internal or site-only).
+
+| Status | When |
+| --- | --- |
+| `200` | Edition, list or health. |
+| `400` | `invalid_date` (not a real calendar date), `invalid_limit` (not an integer 1-14). |
+| `404` | `not_published_yet` + `Retry-After: 3600`: today before publication, or a future date. |
+| `404` | `not_found`: a past date with no edition, or an empty archive. |
+| `500` | `internal_error`, generic; the detail stays in the Worker log. |
+| `404` (plain text) | Wrong or missing token, `API_TOKEN` unset, or a non-`GET` method: the uniform site `404`. |
+
+Errors are JSON, `{schema_version, error: {code, message}}`. Health returns
+`status`, `timezone`, `today`, `today_published` and `latest_daily`
+(`edition_id`, `digest_id`, `date`, `published_at`, or `null`).
+
+Logging: one JSON line per request with `event`, `route`, `status` and, where
+known, `digest_id`/`date`/`count`. Never the token, URL or headers.
+
+```bash
+curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/digests/daily/latest"
+curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/digests/daily?limit=3"
+curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/health"
+```
 
 ## Deploy
 
@@ -324,9 +391,10 @@ wrangler d1 execute news-digests --remote --file schema.sql
 # 3. Deploy the Worker
 wrangler deploy
 
-# 4. Set both secrets (paste when prompted)
+# 4. Set the secrets (paste when prompted)
 wrangler secret put SITE_TOKEN
 wrangler secret put INGEST_KEY
+wrangler secret put API_TOKEN   # optional: enables /api/v1, see "JSON API"
 ```
 
 ### How a notification actually happens
@@ -440,7 +508,7 @@ database, apply the schema, deploy the script, or set secrets. Those steps
 above are run by hand (or by whatever deploy tooling wraps `wrangler`) after
 `terraform apply`.
 
-Generate the two secret values with, e.g.:
+Generate the secret values (two, or three with `API_TOKEN`) with, e.g.:
 
 ```bash
 openssl rand -hex 32
@@ -450,7 +518,8 @@ openssl rand -hex 32
 full URL (`https://news.toomhorvath.com/t/<value>/`). `INGEST_KEY` goes into
 the digest service's own secret path (Azure Key Vault → homelab deploy) as
 whatever env var its `emailer`/archive client reads — see that repo's
-`config.py` for the exact name.
+`config.py` for the exact name. `API_TOKEN` is kept in the gitignored
+`.api-token.local` and given only to the machine client.
 
 ## Schema migrations
 
@@ -480,7 +549,9 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 Rotate `SITE_TOKEN` if the Telegram group membership changes or the link is
 suspected to have leaked outside it; rotate `INGEST_KEY` on a normal
 credential-hygiene schedule or if the digest VM's secret store is suspected
-compromised. They're independent — rotating one never affects the other.
+compromised. Rotate `API_TOKEN` when the client that holds it changes or it
+is suspected leaked. They're independent — rotating one never affects the
+others.
 
 1. Generate a new value: `openssl rand -hex 32`
 2. `wrangler secret put SITE_TOKEN` (or `INGEST_KEY`)
@@ -489,6 +560,10 @@ compromised. They're independent — rotating one never affects the other.
    For `INGEST_KEY`: update the digest service's secret (Key Vault → homelab
    deploy). Until both sides match, ingest calls fail closed with 401 — no
    silent window where old or new key both work.
+   For `API_TOKEN`: `wrangler secret put API_TOKEN`, then update the client;
+   the old URL 404s immediately.
+
+To disable the API entirely: `wrangler secret delete API_TOKEN`.
 
 ## Smoke test
 

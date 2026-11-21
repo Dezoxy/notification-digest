@@ -22,3 +22,10 @@ export async function keyMatches(provided, expected) {
   ]);
   return crypto.subtle.timingSafeEqual(a, b);
 }
+
+// The read-only JSON API has its own credential, separate from SITE_TOKEN:
+// a leaked reader link must not unlock machine access, and vice versa.
+// Fails closed when API_TOKEN is unset, so an unconfigured deploy has no API.
+export async function apiTokenMatches(env, token) {
+  return Boolean(env.API_TOKEN) && (await keyMatches(token, env.API_TOKEN));
+}
