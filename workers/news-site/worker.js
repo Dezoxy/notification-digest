@@ -11,12 +11,15 @@
  *   Anyone who has the URL can read; anyone who doesn't gets an
  *   indistinguishable 404, same as any other wrong path.
  *
- * Three separate secrets, three separate audiences:
+ * Four separate secrets, four separate audiences:
  *   - SITE_TOKEN — the reader-facing capability token, part of the URL path.
  *   - INGEST_KEY — a machine credential the digest VM sends as `x-ingest-key`
  *     to push new digests. Never exposed to readers.
  *   - API_TOKEN — a read-only machine credential in the path of /api/v1/...,
  *     scoped to the daily-edition JSON. Optional: the API is off when unset.
+ *   - MCP_TOKEN — a read-only credential in the path of /mcp/<MCP_TOKEN>, the
+ *     MCP (Model Context Protocol) endpoint for chat clients such as ChatGPT.
+ *     Optional: the endpoint is off when unset.
  *   All are compared timing-safely (hash-then-timingSafeEqual — see
  *   keyMatches in src/auth.js), the same pattern as the sibling polymarket-proxy
  *   Worker. No secret lives in source or wrangler.jsonc; all are set
@@ -73,6 +76,8 @@
  *   GET  /api/v1/:token/digests/daily/YYYY-MM-DD  -> JSON API: daily edition for that Budapest date
  *   GET  /api/v1/:token/digests/daily?limit=N     -> JSON API: newest N daily editions (1-14, default 7)
  *   GET  /api/v1/:token/health                    -> JSON API: status + latest daily edition
+ *   POST /mcp/:token              -> MCP server (MCP_TOKEN, Streamable HTTP, stateless): two read-only tools
+ *   other methods on /mcp/:token  -> 405 (allow: POST), only with a valid token
  *   anything else                 -> plain 404, wrong token included
  *
  * Story-arc pages (PLAN.md §11.1 PR A, this feature): a slug is the digest
@@ -159,7 +164,7 @@
  * wrangler's bundler folds back into one deployed script (no build config):
  *
  *   config.js     tunable caps, shape regexes, the arc-identity fold
- *   auth.js       keyMatches/tokenMatches/apiTokenMatches (timing-safe secret compare)
+ *   auth.js       keyMatches/tokenMatches/apiTokenMatches/mcpTokenMatches (timing-safe secret compare)
  *   http.js       response constructors + esc()
  *   dates.js      Europe/Budapest formatting, ISO-week arithmetic
  *   strings.js    the EN/HU chrome vocabulary
@@ -175,6 +180,7 @@
  *   notify.js     the fan-out: claim-once, newest-only, prune
  *   ingest.js     PUT /ingest: handler + every validator
  *   api.js        read-only JSON API (/api/v1, API_TOKEN)
+ *   mcp.js        MCP server probe (/mcp, MCP_TOKEN): JSON-RPC, two read-only tools
  *   handlers.js   the GET page handlers
  *   render-*.js   per-page renderers (shared helpers in render-shared.js)
  *
@@ -194,8 +200,9 @@ import {
   handlePushSubscribe,
   handlePushUnsubscribe,
 } from "./src/push.js";
-import { tokenMatches } from "./src/auth.js";
+import { mcpTokenMatches, tokenMatches } from "./src/auth.js";
 import { handleApiHealth, handleDailyApi } from "./src/api.js";
+import { handleMcp } from "./src/mcp.js";
 import { handleIngest } from "./src/ingest.js";
 import {
   handleAboutPage,
@@ -264,6 +271,9 @@ const ROUTE_PUSH = /^\/t\/([^/]+)\/push\/(key|subscribe|unsubscribe|latest)$/;
 const ROUTE_API_DAILY = /^\/api\/v1\/([^/]+)\/digests\/daily(?:\/(latest|\d{4}-\d{2}-\d{2}))?$/;
 
 const ROUTE_API_HEALTH = /^\/api\/v1\/([^/]+)\/health$/;
+
+// MCP endpoint, authenticated by MCP_TOKEN (not API_TOKEN). See src/mcp.js.
+const ROUTE_MCP = /^\/mcp\/([^/]+)$/;
 
 const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
 
@@ -474,6 +484,27 @@ export default {
     const apiHealthMatch = path.match(ROUTE_API_HEALTH);
     if (apiHealthMatch && request.method === "GET") {
       return handleApiHealth(env, apiHealthMatch[1]);
+    }
+
+    // Token first, for every method: a wrong token (or no MCP_TOKEN) is the
+    // uniform 404, so only a valid-token caller ever sees the 405.
+    const mcpMatch = path.match(ROUTE_MCP);
+    if (mcpMatch) {
+      if (!(await mcpTokenMatches(env, mcpMatch[1]))) return notFound();
+      if (request.method !== "POST") {
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: {
+            allow: "POST",
+            "content-type": "text/plain; charset=utf-8",
+            "cache-control": "private, no-store",
+            "referrer-policy": "no-referrer",
+            "x-content-type-options": "nosniff",
+            "x-robots-tag": "noindex, nofollow",
+          },
+        });
+      }
+      return handleMcp(request, env);
     }
 
     // Unknown path, or a token-gated route hit with the wrong method — same

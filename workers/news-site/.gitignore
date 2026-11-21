@@ -7,6 +7,7 @@
 .site-token.local
 .ingest-key.local
 .api-token.local
+.mcp-token.local
 node_modules/
 dist/
 

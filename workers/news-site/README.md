@@ -47,7 +47,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
 | | |
 | --- | --- |
 | `src/config.js` | tunable caps, shape regexes, the arc-identity fold |
-| `src/auth.js` | `keyMatches`/`tokenMatches`/`apiTokenMatches` — timing-safe secret compare |
+| `src/auth.js` | `keyMatches`/`tokenMatches`/`apiTokenMatches`/`mcpTokenMatches` — timing-safe secret compare |
 | `src/http.js` | response constructors and `esc()` |
 | `src/dates.js` | Europe/Budapest formatting, ISO-week arithmetic |
 | `src/strings.js` | the EN/HU chrome vocabulary (key-for-key parity, tested) |
@@ -63,6 +63,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
 | `src/notify.js` | the fan-out: claim-once, newest-only, delivery, pruning |
 | `src/ingest.js` | `PUT /ingest`: handler plus every validator |
 | `src/api.js` | the read-only JSON API: `/api/v1/:token/...` daily editions + health |
+| `src/mcp.js` | the MCP server probe: `POST /mcp/:token`, stateless JSON-RPC, two read-only tools |
 | `src/handlers.js` | the GET page handlers |
 | `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
 
@@ -212,7 +213,7 @@ token. On the custom domains, Cloudflare's managed robots block prepends
 to stay deterministic: `ChatGPT-User` may fetch only `/api/v1/` (still
 token-gated and `noindex`), `OAI-SearchBot` and everyone else are disallowed.
 
-Three independent secrets, three independent audiences — a leaked reader link
+Four independent secrets, four independent audiences — a leaked reader link
 must never grant write access, and vice versa:
 
 - `SITE_TOKEN` — the reader capability token, embedded in the URL path.
@@ -227,13 +228,18 @@ must never grant write access, and vice versa:
   round. JSON responses carry `Content-Type: application/json; charset=utf-8`,
   `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`,
   `X-Robots-Tag: noindex, nofollow` and `X-Content-Type-Options: nosniff`.
+- `MCP_TOKEN` — a read-only credential in the path of `/mcp/<MCP_TOKEN>`,
+  for the MCP endpoint a chat client (ChatGPT) connects to. Separate from
+  `API_TOKEN` so the connector can be revoked without touching the API
+  client, and vice versa.
 
-All three are compared with a hash-then-`timingSafeEqual` helper (same pattern
+All four are compared with a hash-then-`timingSafeEqual` helper (same pattern
 as the sibling `workers/polymarket-proxy` Worker), so none can be recovered
 byte-by-byte via response-time measurement. The Worker fails closed if any
 secret is unset — an unauthenticated ingest endpoint or reader path is worse
 than a broken one. With `API_TOKEN` unset the API simply does not exist: every
-`/api/v1/...` path returns the uniform `404`.
+`/api/v1/...` path returns the uniform `404`; likewise `/mcp/...` with
+`MCP_TOKEN` unset.
 
 `body_html` in the digest payload arrives **pre-sanitized by the app**
 (Python `nh3`) and is stored and served verbatim inside the article — it is
@@ -324,6 +330,8 @@ only in the two `<link>` hrefs.
 | `GET /api/v1/:token/digests/daily/YYYY-MM-DD` | JSON: the daily edition for that Europe/Budapest date. |
 | `GET /api/v1/:token/digests/daily?limit=N` | JSON: the newest `N` daily editions (1-14, default 7). |
 | `GET /api/v1/:token/health` | JSON: today's date, whether today's daily is published, the latest daily. |
+| `POST /mcp/:token` | MCP (JSON-RPC 2.0, Streamable HTTP, stateless). `:token` is `MCP_TOKEN`. |
+| other methods on `/mcp/:token` | `405` with `Allow: POST`, only with a valid token; a wrong token is the uniform `404`. |
 | anything else | Plain `404`, wrong token included. |
 
 ## JSON API (daily editions)
@@ -378,6 +386,38 @@ curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/digests/daily?limit=3"
 curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/health"
 ```
 
+## MCP endpoint (ChatGPT connector probe)
+
+A minimal [Model Context Protocol](https://modelcontextprotocol.io) server so
+ChatGPT can be pointed at the digest as a custom connector. It is a probe,
+with two read-only tools sharing code with the JSON API (`src/api.js`):
+
+- `health` — the same JSON as `/api/v1/<API_TOKEN>/health`.
+- `get_daily_latest` — the same edition object as
+  `/api/v1/<API_TOKEN>/digests/daily/latest`. It is the newest published
+  edition, which may be from a previous day: check `date`/`edition_id`. With
+  no edition at all it returns a tool error (`isError: true`), not a JSON-RPC
+  error.
+
+- Transport: Streamable HTTP, stateless. `POST /mcp/<MCP_TOKEN>` carries one
+  JSON-RPC 2.0 message and gets one JSON response. No sessions, no SSE, no
+  batching (`-32600`), no writes. Notifications get `202`; bodies over 64 KiB
+  get `413`; other methods on the path get `405`.
+- Methods: `initialize`, `ping`, `tools/list`, `tools/call`.
+- Auth: `MCP_TOKEN` in the path, checked first. Wrong token or `MCP_TOKEN`
+  unset is the uniform `404`, for every method. `Accept`, `Origin` and
+  `MCP-Protocol-Version` are deliberately not checked.
+- Logging: `{event: "mcp", method, status}` per request; never the token,
+  URL or body.
+
+Add it in ChatGPT: Settings → Apps & Connectors → Developer mode → create
+connector, URL `https://news-site.toomhorvath.workers.dev/mcp/<MCP_TOKEN>`,
+authentication "No authentication" (the capability is in the path). Use the
+workers.dev hostname: it sits outside the `tomhorvath.me` zone, so that zone's
+Bot Fight Mode / AI-bot blocking (which challenge the cloud-provider ASNs
+ChatGPT's connector calls originate from) and AI Labyrinth logging do not
+apply. Keep the value in the gitignored `.mcp-token.local`.
+
 ## Deploy
 
 ```bash
@@ -398,6 +438,7 @@ wrangler deploy
 wrangler secret put SITE_TOKEN
 wrangler secret put INGEST_KEY
 wrangler secret put API_TOKEN   # optional: enables /api/v1, see "JSON API"
+wrangler secret put MCP_TOKEN   # optional: enables /mcp, see "MCP endpoint"
 ```
 
 ### How a notification actually happens
@@ -511,7 +552,7 @@ database, apply the schema, deploy the script, or set secrets. Those steps
 above are run by hand (or by whatever deploy tooling wraps `wrangler`) after
 `terraform apply`.
 
-Generate the secret values (two, or three with `API_TOKEN`) with, e.g.:
+Generate the secret values (two, or up to four with `API_TOKEN` and `MCP_TOKEN`) with, e.g.:
 
 ```bash
 openssl rand -hex 32
@@ -522,7 +563,8 @@ full URL (`https://news.toomhorvath.com/t/<value>/`). `INGEST_KEY` goes into
 the digest service's own secret path (Azure Key Vault → homelab deploy) as
 whatever env var its `emailer`/archive client reads — see that repo's
 `config.py` for the exact name. `API_TOKEN` is kept in the gitignored
-`.api-token.local` and given only to the machine client.
+`.api-token.local` and given only to the machine client; `MCP_TOKEN` likewise
+in `.mcp-token.local`, used only in the ChatGPT connector URL.
 
 ## Schema migrations
 
@@ -552,8 +594,8 @@ wrangler d1 execute news-digests --remote --file migrations/0002-hu-columns.sql
 Rotate `SITE_TOKEN` if the Telegram group membership changes or the link is
 suspected to have leaked outside it; rotate `INGEST_KEY` on a normal
 credential-hygiene schedule or if the digest VM's secret store is suspected
-compromised. Rotate `API_TOKEN` when the client that holds it changes or it
-is suspected leaked. They're independent — rotating one never affects the
+compromised. Rotate `API_TOKEN` or `MCP_TOKEN` when the client that holds it
+changes or it is suspected leaked. They're independent — rotating one never affects the
 others.
 
 1. Generate a new value: `openssl rand -hex 32`
@@ -565,8 +607,11 @@ others.
    silent window where old or new key both work.
    For `API_TOKEN`: `wrangler secret put API_TOKEN`, then update the client;
    the old URL 404s immediately.
+   For `MCP_TOKEN`: `wrangler secret put MCP_TOKEN`, then update the ChatGPT
+   connector URL; the old URL 404s immediately.
 
-To disable the API entirely: `wrangler secret delete API_TOKEN`.
+To disable the API entirely: `wrangler secret delete API_TOKEN`. To disable
+the MCP endpoint: `wrangler secret delete MCP_TOKEN`.
 
 ## Smoke test
 
