@@ -19,7 +19,7 @@ const MAX_LIMIT = 14;
 const EDITION_COLUMNS =
   "id, created_at, tldr, item_count, section_count, body_md, source_counts, failed_sources, topics, deltas";
 
-const API_HEADERS = {
+export const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "private, no-store",
   "referrer-policy": "no-referrer",
@@ -177,21 +177,27 @@ function internalError(route, err) {
   return apiError(500, "internal_error", "Internal error.");
 }
 
+// The newest daily edition object, or null when none exists. Shared by the
+// /api/v1 latest route and the MCP `get_daily_latest` tool (src/mcp.js).
+export async function latestDailyEdition(env) {
+  const row = await env.DB.prepare(
+    `SELECT ${EDITION_COLUMNS} FROM digests WHERE kind = 'daily'
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+  ).first();
+  return row ? buildEdition(row) : null;
+}
+
 export async function handleDailyApi(env, token, which, url) {
   if (!(await apiTokenMatches(env, token))) return notFound();
 
   const route = which === "latest" ? "daily_latest" : which ? "daily_date" : "daily_list";
   try {
     if (which === "latest") {
-      const row = await env.DB.prepare(
-        `SELECT ${EDITION_COLUMNS} FROM digests WHERE kind = 'daily'
-         ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).first();
-      if (!row) {
+      const edition = await latestDailyEdition(env);
+      if (!edition) {
         logApi(route, 404);
         return apiError(404, "not_found", "No daily edition exists.");
       }
-      const edition = await buildEdition(row);
       logApi(route, 200, { digest_id: edition.digest_id, date: edition.date });
       return apiJson(edition);
     }
@@ -246,34 +252,41 @@ export async function handleDailyApi(env, token, which, url) {
   }
 }
 
+// The health document, shared by the /api/v1 route and the MCP `health` tool
+// (src/mcp.js) so the two can never drift apart.
+export async function healthPayload(env) {
+  const row = await env.DB.prepare(
+    `SELECT id, created_at FROM digests WHERE kind = 'daily'
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+  ).first();
+  const today = todayYmd();
+  let latest = null;
+  if (row) {
+    const created = new Date(row.created_at);
+    const date = ymdString(budapestDateParts(created));
+    latest = {
+      edition_id: `daily-${date}`,
+      digest_id: row.id,
+      date,
+      published_at: budapestIso(created),
+    };
+  }
+  return {
+    schema_version: SCHEMA_VERSION,
+    status: "ok",
+    timezone: TIMEZONE,
+    today,
+    today_published: latest?.date === today,
+    latest_daily: latest,
+  };
+}
+
 export async function handleApiHealth(env, token) {
   if (!(await apiTokenMatches(env, token))) return notFound();
   try {
-    const row = await env.DB.prepare(
-      `SELECT id, created_at FROM digests WHERE kind = 'daily'
-       ORDER BY created_at DESC, id DESC LIMIT 1`,
-    ).first();
-    const today = todayYmd();
-    let latest = null;
-    if (row) {
-      const created = new Date(row.created_at);
-      const date = ymdString(budapestDateParts(created));
-      latest = {
-        edition_id: `daily-${date}`,
-        digest_id: row.id,
-        date,
-        published_at: budapestIso(created),
-      };
-    }
+    const payload = await healthPayload(env);
     logApi("health", 200);
-    return apiJson({
-      schema_version: SCHEMA_VERSION,
-      status: "ok",
-      timezone: TIMEZONE,
-      today,
-      today_published: latest?.date === today,
-      latest_daily: latest,
-    });
+    return apiJson(payload);
   } catch (err) {
     return internalError("health", err);
   }

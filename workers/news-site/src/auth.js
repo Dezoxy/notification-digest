@@ -29,3 +29,10 @@ export async function keyMatches(provided, expected) {
 export async function apiTokenMatches(env, token) {
   return Boolean(env.API_TOKEN) && (await keyMatches(token, env.API_TOKEN));
 }
+
+// The MCP endpoint (/mcp/:token) has its own credential too, so connecting a
+// chat client never shares a secret with the JSON API or the reader link.
+// Fails closed when MCP_TOKEN is unset.
+export async function mcpTokenMatches(env, token) {
+  return Boolean(env.MCP_TOKEN) && (await keyMatches(token, env.MCP_TOKEN));
+}
