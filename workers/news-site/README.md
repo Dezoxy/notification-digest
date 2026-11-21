@@ -207,7 +207,10 @@ the still-deferred one.
 Also set on every HTML response: `X-Robots-Tag: noindex, nofollow` (belt and
 suspenders against a crawler that ignores `robots.txt`) and
 `Content-Type: text/html; charset=utf-8`. `GET /robots.txt` itself needs no
-token and disallows everything.
+token. On the custom domains, Cloudflare's managed robots block prepends
+`User-agent: *` / `Allow: /` in front of it, so the body uses named groups (which override every `*` group)
+to stay deterministic: `ChatGPT-User` may fetch only `/api/v1/` (still
+token-gated and `noindex`), `OAI-SearchBot` and everyone else are disallowed.
 
 Three independent secrets, three independent audiences — a leaked reader link
 must never grant write access, and vice versa:
@@ -299,7 +302,7 @@ only in the two `<link>` hrefs.
 
 | Route | Serves |
 | --- | --- |
-| `GET /robots.txt` | Disallow-everything. |
+| `GET /robots.txt` | Named groups: `ChatGPT-User` allowed on `/api/v1/` only; `OAI-SearchBot` and `*` disallowed. |
 | `GET /favicon.v2.svg`, `/favicon.svg` | Tab icon (the "n." monogram, rounded ground). The versioned path is what pages reference (`immutable`, 1 year); the unversioned one serves the same bytes with `max-age=86400`. |
 | `GET /icon-512.v2.png`, `/icon-maskable-512.v2.png`, `/apple-touch-icon.v2.png` (and the unversioned `/icon-512.png` etc.) | PWA icons, same split: pages, the manifest and the notification icon reference only the `.v2` paths; the unversioned ones stay for installed apps and old manifests. |
 | `GET /fonts/*` | Self-hosted font files from `public/`, served by Cloudflare before the Worker runs; tokenless. |

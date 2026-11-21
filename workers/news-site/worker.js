@@ -31,7 +31,7 @@
  * have no daily/weekly/week variant of their own — each spans, or stands
  * outside, the whole archive rather than belonging to one view). No view
  * segment is the ALL view (every digest, mixed).
- *   GET  /robots.txt              -> disallow everything, no token needed
+ *   GET  /robots.txt              -> disallow all except ChatGPT-User on /api/v1/, no token
  *   GET  /favicon.svg             -> tab icon, no token needed (legacy path, 1 day)
  *   GET  /favicon.v2.svg          -> same bytes, versioned + immutable (ICON_VERSION)
  *   GET  /fonts/*                 -> NOT this Worker: Workers Static Assets serves
@@ -267,13 +267,30 @@ const ROUTE_API_HEALTH = /^\/api\/v1\/([^/]+)\/health$/;
 
 const ROUTE_INDEX = /^\/t\/([^/]+)\/(hu\/)?(daily\/|weekly\/)?(?:w\/(\d{4})-W(\d{2})\/)?$/;
 
+// Named groups override every `*` group (RFC 9309), including the managed
+// `User-agent: * / Allow: /` block Cloudflare prepends. ChatGPT-User
+// (user-initiated fetches) may read only the token-gated /api/v1/ prefix,
+// which reveals no token; OAI-SearchBot and everyone else stay disallowed.
+export const ROBOTS_TXT =
+  [
+    "User-agent: ChatGPT-User",
+    "Allow: /api/v1/",
+    "Disallow: /",
+    "",
+    "User-agent: OAI-SearchBot",
+    "Disallow: /",
+    "",
+    "User-agent: *",
+    "Disallow: /",
+  ].join("\n") + "\n";
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
     if (request.method === "GET" && path === "/robots.txt") {
-      return new Response("User-agent: *\nDisallow: /", {
+      return new Response(ROBOTS_TXT, {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
