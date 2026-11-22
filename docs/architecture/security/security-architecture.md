@@ -48,14 +48,17 @@ to what" below.
 | Digest Runner | News Site | `SITE_INGEST_KEY` sent as the `x-ingest-key` header on `PUT /ingest/:id` | Write-only: upsert one digest by id. Compared with hash-then-`timingSafeEqual`; the Worker fails closed (401) if the key is unset |
 | Digest Runner | SMTP relay | `SMTP_USER` / `SMTP_PASSWORD` | Sends the digest as e-mail. Implemented and still the default, but disabled in production |
 | Digest Runner | Azure Blob state, digest Key Vault | The runner's user-assigned managed identity (`notification-digest-runner`); Entra RBAC on the runtime container and on the digest Key Vault. Shared-key access to the storage accounts is disabled | Reads and writes the runtime state bundle and holds the Blob lease; resolves the Key Vault references that become job secrets. A separate backup-writer identity, attached only to the `backup` job, writes the independent backup account ([ADR 8](../decisions/0008-isolate-digest-azure-state-and-secrets.md)) |
+| ChatGPT (owner's account, on request) | News Site MCP endpoint | `MCP_TOKEN` in the path of `POST /mcp/<MCP_TOKEN>`, set in the connector as "No authentication" ([ADR 13](../decisions/0013-serve-the-digest-to-chatgpt-through-an-mcp-connector.md)) | Read access to the daily editions through four read-only tools; no write. OpenAI stores the connector URL, so it holds the token |
 | Reader (owner) | News Site | Possession of the full URL, `https://…/t/<SITE_TOKEN>/…` | Read access to the whole digest archive. No account, no password — the token in the path **is** the authorization |
 | GitHub Actions deploy workflows | Azure (Terraform plan and apply) | Azure OIDC federation from the `azure-plan` and `azure-production` environments, both restricted to `main`; no stored cloud credential and no SSH path | Plans and applies the app-owned stack in `infra/azure/`; cannot read secret values, which are never Terraform inputs ([ADR 7](../decisions/0007-run-digest-as-azure-jobs.md)) |
 | Azure Container Apps | GHCR | A read-only pull token held in the digest Key Vault | Pulls the pinned, versioned runtime image |
 
-Two secrets on the News Site are deliberately independent, so that a leak of
-one grants nothing over the other: `SITE_TOKEN` (reader capability, embedded
-in the URL) and `INGEST_KEY` (write credential, sent only by the Digest
-Runner, never shown to a reader). Both are compared with the same
+Four secrets on the News Site are deliberately independent, so that a leak of
+one grants nothing over another: `SITE_TOKEN` (reader capability, embedded
+in the URL), `INGEST_KEY` (write credential, sent only by the Digest
+Runner, never shown to a reader), `API_TOKEN` (read-only JSON API, currently
+without a consumer) and `MCP_TOKEN` (read-only MCP endpoint, held by
+ChatGPT's connector). The path tokens are compared with the same
 hash-then-`timingSafeEqual` pattern in `workers/news-site/src/auth.js`.
 
 ### Secret flow
@@ -81,7 +84,8 @@ Secrets in play, by where they end up:
   this system — see "What is deliberately absent" below. The Telegram session
   is a Key Vault secret; the X cookie jar lives in the runtime Blob state
   instead (see below).
-- **The News Site's own secrets** (`SITE_TOKEN`, `INGEST_KEY`): set with
+- **The News Site's own secrets** (`SITE_TOKEN`, `INGEST_KEY`, `API_TOKEN`,
+  `MCP_TOKEN`): set with
   `wrangler secret put`, never in `wrangler.jsonc` or source.
 - **The `claude -p` OAuth token, the SMTP password, the GHCR pull token**:
   standard service-style credentials, all Key Vault-sourced.

@@ -33,7 +33,8 @@ and "Cloudflare edge (internet-facing)".
         | (4) publish: outbound HTTPS, shared-secret ingest
         v
   ============ Cloudflare edge boundary ==============================
-  News Site (Worker)  <-- (5) reader traffic, capability-token auth
+  News Site (Worker)  <-- (5) reader, JSON API and MCP traffic,
+        |                  capability-token auth (ChatGPT reads via MCP)
         |
         v
   Site Database (D1) — disposable rendering copy
@@ -51,7 +52,7 @@ digest data — see "Delivery tooling" below.
 | 2 | Digest Runner ↔ State Database | Within the subscription, between the job and the runtime storage account | Collected items, cursors, digests, delivery flags, the live X cookie jar, as one immutable state bundle restored to the job's local disk and checkpointed back | The runner's user-assigned managed identity holds Blob Data Contributor on the runtime container only; shared-key access is disabled, so no key opens the account. An exclusive Blob lease on the manifest admits one run at a time, and a run that cannot prove it still holds the lease is killed. `state.db` itself is opened on the job's local disk, never over a network share |
 | 3 | Digest Runner → internet (summarization/delivery) | Outbound only, from the job | The window's collected text, sent to `claude -p` (and, on failure, to the Claude API through a federated, short-lived token that the managed identity obtains by trading its own token with Entra, with no stored key); the rendered digest, sent to the News Site, Telegram, and (if enabled) SMTP | TLS on every leg; `SITE_INGEST_KEY` / `TELEGRAM_NOTIFY_BOT_TOKEN` / SMTP credentials authenticate the Runner to each destination |
 | 4 | Digest Runner → News Site | Outbound only, from the job | One digest per `PUT /ingest/:id` call: `tldr`, `body_html`/`body_md` (pre-sanitized), counts, optional Hungarian fields, topics, deltas, provenance, arc-context primers | `x-ingest-key` header, hash-then-`timingSafeEqual` compare, fails closed if unset. The News Site has no corresponding path back into the subscription or `state.db` |
-| 5 | Public internet ↔ News Site | Inbound to Cloudflare, outbound response | Reader HTTP requests and rendered HTML/JSON pages | Capability token in the URL path (`/t/<SITE_TOKEN>/…`); `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store`, `X-Robots-Tag: noindex, nofollow` on every HTML response; a wrong token 404s indistinguishably from any other unknown path (`workers/news-site/README.md`, "Trust model") |
+| 5 | Public internet ↔ News Site | Inbound to Cloudflare, outbound response | Three surfaces, each behind its own path token: reader HTTP requests and rendered HTML pages (`/t/<SITE_TOKEN>/…`); a read-only JSON API for daily editions (`/api/v1/<API_TOKEN>/…`), currently without a consumer; and a read-only MCP endpoint (`POST /mcp/<MCP_TOKEN>`), which the owner's ChatGPT reaches on the workers.dev hostname so the zone's bot challenges and path-logging firewall events do not apply ([ADR 13](../decisions/0013-serve-the-digest-to-chatgpt-through-an-mcp-connector.md)). Daily-edition content therefore also reaches OpenAI, on request | A capability token in the URL path on each surface; a wrong token 404s indistinguishably from any other unknown path, for every method. `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store`, `X-Robots-Tag: noindex, nofollow` on every HTML response (`workers/news-site/README.md`, "Trust model", "JSON API" and "MCP endpoint"). The MCP tools only read; logs carry method and status, never the token |
 | 6 | News Site ↔ Site Database (D1) | Local to Cloudflare's platform | Digest rows, arc-context primers, push subscriptions | Cloudflare D1 binding; no external access path. D1 is a disposable rendering copy — the `state.db` bundle in Azure Blob Storage is the system of record ([`../data/data-architecture.md`](../data/data-architecture.md)) |
 
 ### What never crosses a boundary
@@ -78,6 +79,11 @@ digest data — see "Delivery tooling" below.
   scope. This is accepted, not overlooked: the account has one operator, and
   `Referrer-Policy: no-referrer` is what stops the token leaking onward to a
   third-party site through an outbound citation link.
+- **The MCP token is held by a third party.** OpenAI stores the connector URL,
+  so it holds `MCP_TOKEN`, and the digest text it fetches is untrusted
+  content in ChatGPT's context ([RISK-015](../risks/architecture-risks.md)).
+  Rotation is the only cut-off. `API_TOKEN` also appeared once in a Cloudflare
+  firewall-log request path on the custom domain; its rotation is pending.
 - **The Polymarket proxy is internet-reachable.** The Worker answers on
   workers.dev and is guarded by a shared key, a hardcoded upstream, GET only and
   a path allowlist. The Reddit Worker and homelab proxy are gone
@@ -109,9 +115,9 @@ digest data — see "Delivery tooling" below.
 - No component outside the Digest Runner and the State Database reads
   `state.db` directly; every other consumer of digest content goes through
   the News Site, Telegram, or e-mail.
-- The News Site's two secrets (`SITE_TOKEN`, `INGEST_KEY`) stay independent:
-  compromising the reader-facing token must never grant ingest write access,
-  and vice versa.
+- The News Site's four secrets (`SITE_TOKEN`, `INGEST_KEY`, `API_TOKEN`,
+  `MCP_TOKEN`) stay independent: compromising a reader-facing token must never
+  grant ingest write access or another surface, and vice versa.
 - Support for a new collection source only ever adds an outbound
   relationship from the Digest Runner; it must never require ingress on the
   job.

@@ -38,6 +38,16 @@ earlier keep source `reddit` in the state database and on the published site.
 | Telegram Bot API (`sendMessage`, `digest/publish.py`) — separate from the Telethon collector above | Digest Runner → Telegram | High — official Bot API | `TELEGRAM_NOTIFY_BOT_TOKEN` + `TELEGRAM_NOTIFY_CHAT_ID`, routed to per-kind forum topics via `TELEGRAM_*_THREAD_ID` | Raises on failure; retried on the next run via the digest's own `telegram_sent` pending flag; a per-run 429 breaker exists after the [2026-08-06 Telegram flood incident](../../incidents/2026-08-06-telegram-flood.md) |
 | News-site ingest (`PUT /ingest/:id`, `workers/news-site/src/ingest.js`) | Digest Runner → News Site (Cloudflare Worker) | Owner-controlled on both ends — this repository owns the publisher and the Worker, so the contract only breaks on a deliberate mismatch between the two ([ADR 4](../decisions/0004-multi-channel-delivery.md)) | `x-ingest-key` header, compared against `SITE_INGEST_KEY`/`INGEST_KEY`; the Worker fails closed (401) if the secret was never set | Raises on failure in `publish.py`; retried on the next run via the digest's own `site_published` pending flag. The Worker itself rejects an oversized or malformed payload outright (400) rather than partially applying it |
 
+### Consumers (inbound — a system that reads this system's News Site)
+
+| Consumer | Contract | Stability | Authentication | On breakage |
+|---|---|---|---|---|
+| ChatGPT (OpenAI), the owner's custom MCP connector | Model Context Protocol over Streamable HTTP, `POST /mcp/<MCP_TOKEN>` on the News Site's workers.dev hostname: stateless JSON-RPC, four read-only tools (`health`, `get_daily_latest`, `get_daily_by_date`, `list_daily_editions`), built from the same functions as the JSON API ([ADR 13](../decisions/0013-serve-the-digest-to-chatgpt-through-an-mcp-connector.md)) | Owner-controlled on the server end; the client end (ChatGPT developer mode) is OpenAI's and can change. Whether a scheduled ChatGPT task can call the connector is unverified | `MCP_TOKEN` in the path, configured as "No authentication"; a wrong token is the uniform 404 for every method | Tool failures are tool errors, not transport errors: `not_published_yet` (today's edition is out about 20:30 Budapest, so a briefing retries later), `not_found`, `invalid_date`, `invalid_limit`. Nothing in the runner depends on it, so a broken connector affects only the owner's briefing. Detail: `workers/news-site/README.md`, "MCP endpoint" |
+
+The News Site also serves a read-only JSON API (`/api/v1/<API_TOKEN>/…`) from
+the same code. It currently has no consumer, because ChatGPT's browsing tool
+refuses the site's hostnames.
+
 ### What is deliberately not here
 
 API contracts this repository does not own are not restated as OpenAPI or an

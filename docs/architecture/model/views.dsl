@@ -15,7 +15,7 @@ systemLandscape "Landscape" "Which systems does the digest sit between?" {
 }
 
 systemContext notificationDigest "Context" "Who reads the digest, what writes it, and where does it come out?" {
-    include owner notificationDigest anthropic telegram smtpRelay
+    include owner notificationDigest anthropic telegram smtpRelay chatgpt
     autoLayout lr
 }
 
@@ -38,7 +38,7 @@ container notificationDigest "Containers" "What are the building blocks, and whi
 
 container notificationDigest "Security" "What is reachable from the internet, where do secrets and identity come from, and what stays private?" {
     include notificationDigest.runner notificationDigest.state notificationDigest.site notificationDigest.siteDb
-    include owner keyVault entra githubActions
+    include owner keyVault entra githubActions chatgpt
     autoLayout tb 300 150
 }
 

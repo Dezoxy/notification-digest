@@ -86,6 +86,10 @@ Twelve ADRs, each naming its trade-off:
   evasion, anonymous RSS ends on 2026-11-13, a third-party scraping API is
   opaque, and the owner's coverage comes from other sources. The collector, its
   configuration, both proxies and their credentials are removed.
+- **ADR 13** lets ChatGPT read the daily editions through a read-only MCP
+  endpoint on the news site (2026-11-22). ChatGPT's browsing tool refuses the
+  site's hostnames before sending a request, so a custom connector is the only
+  path; its own token in the URL path gives it access to nothing else.
 
 ### The contracts you do not control
 
