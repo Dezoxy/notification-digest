@@ -1,16 +1,28 @@
 // Minimal MCP server (Model Context Protocol, Streamable HTTP, stateless):
 // POST /mcp/:token, JSON-RPC 2.0 over a single request/response. Auth is
 // MCP_TOKEN in the path (mcpTokenMatches, checked in worker.js before this
-// module runs). This is a probe: two read-only tools, `health` and
-// `get_daily_latest`. No sessions, no SSE, no batching, no writes. Accept,
-// Origin and MCP-Protocol-Version are deliberately not checked: the path
-// token is the only gate.
+// module runs). Four read-only tools over the daily editions: `health`,
+// `get_daily_latest`, `get_daily_by_date` and `list_daily_editions`, all built
+// from the shared functions in api.js so MCP and /api/v1 cannot drift. No
+// sessions, no SSE, no batching, no writes. Accept, Origin and
+// MCP-Protocol-Version are deliberately not checked: the path token is the
+// only gate.
 
-import { API_HEADERS, healthPayload, latestDailyEdition } from "./api.js";
+import {
+  API_HEADERS,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+  SCHEMA_VERSION,
+  dailyEditionForDate,
+  healthPayload,
+  latestDailyEdition,
+  listDailyEditions,
+} from "./api.js";
+import { TIMEZONE } from "./config.js";
 
-const SERVER_INFO = { name: "news-digest", version: "0.1.0" };
+const SERVER_INFO = { name: "news-digest", version: "0.2.0" };
 const INSTRUCTIONS =
-  "Read-only access to the owner's daily news digest; probe build with two tools: health and get_daily_latest.";
+  "Read-only access to the owner's daily news digest. Use health to check whether today's edition is out, get_daily_latest for the newest edition, list_daily_editions for recent summaries and get_daily_by_date for one full edition. Dates are Europe/Budapest calendar dates (YYYY-MM-DD); today's edition appears around 20:30 Budapest time.";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const MAX_BODY_BYTES = 65536;
@@ -33,11 +45,102 @@ const LATEST_TOOL = {
   annotations: { readOnlyHint: true, openWorldHint: false },
 };
 
+const DATE_TOOL = {
+  name: "get_daily_by_date",
+  title: "Daily edition by date",
+  description:
+    "Returns the full daily edition for a Europe/Budapest calendar date (the same object as the JSON API's digests/daily/<date>). Today's edition appears around 20:30 Budapest time; use list_daily_editions to see which dates exist.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      date: {
+        type: "string",
+        pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+        description: "Europe/Budapest calendar date, YYYY-MM-DD",
+      },
+    },
+    required: ["date"],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, openWorldHint: false },
+};
+
+const LIST_TOOL = {
+  name: "list_daily_editions",
+  title: "List daily editions",
+  description:
+    "Lists the newest daily editions, newest first, as summaries without the article body (`content`) and `sources`; call get_daily_by_date to fetch a full edition.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: MAX_LIMIT,
+        default: DEFAULT_LIMIT,
+        description: "How many of the newest daily editions to list",
+      },
+    },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, openWorldHint: false },
+};
+
+const TOOL_NAMES = ["health", "get_daily_latest", "get_daily_by_date", "list_daily_editions"];
+
 const toolResult = (payload) => ({
   content: [{ type: "text", text: JSON.stringify(payload) }],
   structuredContent: payload,
   isError: false,
 });
+
+// A tool-level failure: HTTP 200 JSON-RPC result with isError, not a JSON-RPC error.
+const toolError = (error, message) => ({
+  content: [{ type: "text", text: message }],
+  structuredContent: { error, message },
+  isError: true,
+});
+
+const DATE_MESSAGES = {
+  invalid_date: () => "Date must be a real calendar date, YYYY-MM-DD.",
+  not_published_yet: (date) =>
+    `No daily edition for ${date} yet; it is published around 20:30 Europe/Budapest. Check again later.`,
+  not_found: (date) => `No daily edition exists for ${date}.`,
+};
+
+async function getDailyByDate(env, args) {
+  const date = args?.date;
+  const { edition, error } = await dailyEditionForDate(env, typeof date === "string" ? date : "");
+  return edition ? toolResult(edition) : toolError(error, DATE_MESSAGES[error](date));
+}
+
+// absent -> default; an integer number or a string of digits, 1..MAX_LIMIT.
+function parseLimit(raw) {
+  if (raw === undefined) return DEFAULT_LIMIT;
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && /^\d+$/.test(raw)
+        ? Number(raw)
+        : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= MAX_LIMIT ? n : null;
+}
+
+async function listEditions(env, args) {
+  const limit = parseLimit(args?.limit);
+  if (limit === null) {
+    return toolError("invalid_limit", `limit must be an integer from 1 to ${MAX_LIMIT}.`);
+  }
+  const editions = (await listDailyEditions(env, limit)).map(
+    ({ content: _content, sources: _sources, ...summary }) => summary,
+  );
+  return toolResult({
+    schema_version: SCHEMA_VERSION,
+    timezone: TIMEZONE,
+    count: editions.length,
+    editions,
+  });
+}
 
 // Same header set as the JSON API: every response is as private as the URL.
 function rpc(body, method, status = 200) {
@@ -100,16 +203,23 @@ export async function handleMcp(request, env) {
     case "ping":
       return rpc({ jsonrpc: "2.0", id, result: {} }, method);
     case "tools/list":
-      return rpc({ jsonrpc: "2.0", id, result: { tools: [HEALTH_TOOL, LATEST_TOOL] } }, method);
+      return rpc(
+        { jsonrpc: "2.0", id, result: { tools: [HEALTH_TOOL, LATEST_TOOL, DATE_TOOL, LIST_TOOL] } },
+        method,
+      );
     case "tools/call": {
       const name = params?.name;
-      if (name !== "health" && name !== "get_daily_latest") {
+      if (!TOOL_NAMES.includes(name)) {
         return rpcError(id, -32602, "Unknown tool", method);
       }
       try {
         let result;
         if (name === "health") {
           result = toolResult(await healthPayload(env));
+        } else if (name === "get_daily_by_date") {
+          result = await getDailyByDate(env, params.arguments);
+        } else if (name === "list_daily_editions") {
+          result = await listEditions(env, params.arguments);
         } else {
           const edition = await latestDailyEdition(env);
           result = edition
