@@ -63,7 +63,7 @@ configuration**: `wrangler.jsonc` still just names `worker.js` as `main` (and
 | `src/notify.js` | the fan-out: claim-once, newest-only, delivery, pruning |
 | `src/ingest.js` | `PUT /ingest`: handler plus every validator |
 | `src/api.js` | the read-only JSON API: `/api/v1/:token/...` daily editions + health |
-| `src/mcp.js` | the MCP server probe: `POST /mcp/:token`, stateless JSON-RPC, two read-only tools |
+| `src/mcp.js` | the MCP server: `POST /mcp/:token`, stateless JSON-RPC, four read-only tools |
 | `src/handlers.js` | the GET page handlers |
 | `src/render-*.js` | per-page renderers; shared helpers in `render-shared.js` |
 
@@ -386,11 +386,11 @@ curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/digests/daily?limit=3"
 curl -s "https://news.tomhorvath.me/api/v1/<API_TOKEN>/health"
 ```
 
-## MCP endpoint (ChatGPT connector probe)
+## MCP endpoint (ChatGPT connector)
 
 A minimal [Model Context Protocol](https://modelcontextprotocol.io) server so
-ChatGPT can be pointed at the digest as a custom connector. It is a probe,
-with two read-only tools sharing code with the JSON API (`src/api.js`):
+ChatGPT can be pointed at the digest as a custom connector. It has four
+read-only tools sharing code with the JSON API (`src/api.js`):
 
 - `health` — the same JSON as `/api/v1/<API_TOKEN>/health`.
 - `get_daily_latest` — the same edition object as
@@ -398,6 +398,14 @@ with two read-only tools sharing code with the JSON API (`src/api.js`):
   edition, which may be from a previous day: check `date`/`edition_id`. With
   no edition at all it returns a tool error (`isError: true`), not a JSON-RPC
   error.
+- `get_daily_by_date` — `{date: "YYYY-MM-DD"}`, the same edition object as
+  `/api/v1/<API_TOKEN>/digests/daily/<date>`. `invalid_date`,
+  `not_published_yet` and `not_found` are tool errors carrying
+  `structuredContent: {error, message}`.
+- `list_daily_editions` — `{limit?: 1-14, default 7}`, newest first. Returns
+  summaries: each edition without `content` and `sources` (about 1.6 KB
+  instead of 28 KB); `get_daily_by_date` fetches a full one. A bad `limit` is
+  an `invalid_limit` tool error.
 
 - Transport: Streamable HTTP, stateless. `POST /mcp/<MCP_TOKEN>` carries one
   JSON-RPC 2.0 message and gets one JSON response. No sessions, no SSE, no

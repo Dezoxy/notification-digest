@@ -11,9 +11,10 @@ import { notFound } from "./http.js";
 import { TIMEZONE } from "./config.js";
 import { budapestDateParts, budapestOffsetMinutes } from "./dates.js";
 
-const SCHEMA_VERSION = "1.0";
-const DEFAULT_LIMIT = 7;
-const MAX_LIMIT = 14;
+export const SCHEMA_VERSION = "1.0";
+export const DEFAULT_LIMIT = 7;
+export const MAX_LIMIT = 14;
+const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Never select provenance (internal), body_html or the *_hu columns.
 const EDITION_COLUMNS =
@@ -187,6 +188,34 @@ export async function latestDailyEdition(env) {
   return row ? buildEdition(row) : null;
 }
 
+// The daily edition for a Budapest calendar date: { edition } or
+// { error: "invalid_date" | "not_published_yet" | "not_found" }. Validates the
+// shape itself because the MCP `get_daily_by_date` input is free-form. Shared
+// by the /api/v1 date route and that tool (src/mcp.js).
+export async function dailyEditionForDate(env, dateStr) {
+  const parts = DATE_SHAPE.test(dateStr) ? parseDateParam(dateStr) : null;
+  if (!parts) return { error: "invalid_date" };
+  const date = ymdString(parts);
+  const today = todayYmd();
+  // A future date can have no row; skip the query. Same answer as today
+  // before the 20:00 run, so a poller treats both as "check back later".
+  const row = date > today ? null : await dailyForDate(parts, env);
+  if (!row) return { error: date >= today ? "not_published_yet" : "not_found" };
+  return { edition: await buildEdition(row) };
+}
+
+// The newest `limit` daily editions (full objects), newest first. Shared by
+// the /api/v1 list route and the MCP `list_daily_editions` tool.
+export async function listDailyEditions(env, limit) {
+  const { results } = await env.DB.prepare(
+    `SELECT ${EDITION_COLUMNS} FROM digests WHERE kind = 'daily'
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+  )
+    .bind(limit)
+    .all();
+  return Promise.all((results ?? []).map(buildEdition));
+}
+
 export async function handleDailyApi(env, token, which, url) {
   if (!(await apiTokenMatches(env, token))) return notFound();
 
@@ -203,23 +232,17 @@ export async function handleDailyApi(env, token, which, url) {
     }
 
     if (which) {
-      const parts = parseDateParam(which);
-      if (!parts) {
+      const { edition, error } = await dailyEditionForDate(env, which);
+      if (error === "invalid_date") {
         logApi(route, 400);
         return apiError(400, "invalid_date", "Date must be a real calendar date, YYYY-MM-DD.");
       }
-      const date = ymdString(parts);
-      const today = todayYmd();
-      // A future date can have no row; skip the query. Same answer as today
-      // before the 20:00 run, so a poller treats both as "check back later".
-      const row = date > today ? null : await dailyForDate(parts, env);
-      if (!row) {
-        logApi(route, 404, { date });
-        return date >= today
+      if (error) {
+        logApi(route, 404, { date: which });
+        return error === "not_published_yet"
           ? notPublishedYet()
           : apiError(404, "not_found", "No daily edition exists for this date.");
       }
-      const edition = await buildEdition(row);
       logApi(route, 200, { digest_id: edition.digest_id, date: edition.date });
       return apiJson(edition);
     }
@@ -233,13 +256,7 @@ export async function handleDailyApi(env, token, which, url) {
         return apiError(400, "invalid_limit", `limit must be an integer from 1 to ${MAX_LIMIT}.`);
       }
     }
-    const { results } = await env.DB.prepare(
-      `SELECT ${EDITION_COLUMNS} FROM digests WHERE kind = 'daily'
-       ORDER BY created_at DESC, id DESC LIMIT ?`,
-    )
-      .bind(limit)
-      .all();
-    const editions = await Promise.all((results ?? []).map(buildEdition));
+    const editions = await listDailyEditions(env, limit);
     logApi(route, 200, { count: editions.length });
     return apiJson({
       schema_version: SCHEMA_VERSION,

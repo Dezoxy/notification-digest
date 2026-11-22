@@ -76,7 +76,7 @@
  *   GET  /api/v1/:token/digests/daily/YYYY-MM-DD  -> JSON API: daily edition for that Budapest date
  *   GET  /api/v1/:token/digests/daily?limit=N     -> JSON API: newest N daily editions (1-14, default 7)
  *   GET  /api/v1/:token/health                    -> JSON API: status + latest daily edition
- *   POST /mcp/:token              -> MCP server (MCP_TOKEN, Streamable HTTP, stateless): two read-only tools
+ *   POST /mcp/:token              -> MCP server (MCP_TOKEN, Streamable HTTP, stateless): four read-only tools
  *   other methods on /mcp/:token  -> 405 (allow: POST), only with a valid token
  *   anything else                 -> plain 404, wrong token included
  *
@@ -180,7 +180,7 @@
  *   notify.js     the fan-out: claim-once, newest-only, prune
  *   ingest.js     PUT /ingest: handler + every validator
  *   api.js        read-only JSON API (/api/v1, API_TOKEN)
- *   mcp.js        MCP server probe (/mcp, MCP_TOKEN): JSON-RPC, two read-only tools
+ *   mcp.js        MCP server (/mcp, MCP_TOKEN): JSON-RPC, four read-only tools
  *   handlers.js   the GET page handlers
  *   render-*.js   per-page renderers (shared helpers in render-shared.js)
  *
