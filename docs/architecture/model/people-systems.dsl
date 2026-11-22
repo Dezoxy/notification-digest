@@ -6,7 +6,7 @@
 // answers "how does a change reach the jobs". Both are tagged "External" so the
 // shared palette keeps its meaning; the separation is made by the views.
 
-owner = person "Owner" "Single owner, operator and only reader. Reads the digest in Telegram and on the news site."
+owner = person "Owner" "Single owner, operator and only reader. Reads the digest in Telegram and on the news site, and asks ChatGPT about it."
 
 // ── Collection sources ───────────────────────────────────────────────────────
 // Telegram appears once, deliberately: it is both a source (MTProto user
@@ -32,6 +32,12 @@ entra = softwareSystem "Microsoft Entra ID" "Issues the short-lived token the ru
 // ── Delivery channels ────────────────────────────────────────────────────────
 smtpRelay = softwareSystem "SMTP Relay" "Accepts the digest as e-mail. Implemented and still the application default, but disabled in production." "External"
 
+// ── Consumers (pull from the site; the runner never pushes to them) ──────────
+// ChatGPT is a reader, not a delivery channel: it calls the News Site's MCP
+// endpoint when the owner asks (ADR 13). Nothing in a run sends to it, so it
+// sits beside the site, not beside Telegram and SMTP.
+chatgpt = softwareSystem "ChatGPT" "The owner's AI assistant. Reads daily editions through a custom MCP connector, on request. Operated by OpenAI." "External"
+
 // ── Delivery tooling (how a change reaches the jobs, not part of a run) ──────
 githubActions = softwareSystem "GitHub Actions" "Tests each merge, releases and publishes the runtime image, and applies the Azure deployment." "External"
 imageRegistry = softwareSystem "GHCR" "Stores the versioned runtime image. Private; pulled with a read-only token." "External"
@@ -40,6 +46,7 @@ keyVault = softwareSystem "Azure Key Vault" "Holds every runtime secret. The job
 
 // ── Relationships that do not involve the system in scope ────────────────────
 owner -> telegram "Reads the delivered digest in" "Telegram app" "Person"
+owner -> chatgpt "Asks for analysis of the digest in" "ChatGPT app, web" "Person"
 owner -> githubActions "Merges a change that is released by" "Git, pull request" "Person"
 githubActions -> imageRegistry "Publishes the versioned runtime image to" "OCI over HTTPS"
 renovate -> imageRegistry "Detects each new image release in" "OCI over HTTPS"

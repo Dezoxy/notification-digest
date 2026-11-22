@@ -13,7 +13,7 @@ notificationDigest = softwareSystem "Notification Digest" "Collects the owner's 
     }
 
     group "Cloudflare edge (internet-facing)" {
-        site = container "News Site" "Serves the public digest archive and accepts authenticated ingest from the runner." "Cloudflare Worker, JavaScript" "Layer Deliver,Internet-exposed"
+        site = container "News Site" "Serves the digest archive to the owner, a read-only JSON API and MCP endpoint for daily editions, and authenticated ingest from the runner." "Cloudflare Worker, JavaScript" "Layer Deliver,Internet-exposed"
         siteDb = container "Site Database" "Rendering copy of published digests, serving the site. Disposable: rebuilt from the runner." "Cloudflare D1" "Layer Data,Database"
     }
 }
@@ -44,6 +44,7 @@ notificationDigest.runner -> smtpRelay "Sends the digest as e-mail through" "SMT
 // ── Site ─────────────────────────────────────────────────────────────────────
 notificationDigest.site -> notificationDigest.siteDb "Reads published digests from and applies ingest to" "D1 binding" "Layer Deliver"
 owner -> notificationDigest.site "Browses the digest archive on" "HTTPS, web browser" "Person"
+chatgpt -> notificationDigest.site "Reads daily editions from" "HTTPS, MCP (JSON-RPC), path capability token"
 
 // ── Secrets and delivery tooling ─────────────────────────────────────────────
 notificationDigest.runner -> keyVault "Resolves its runtime secrets from" "Key Vault references, managed identity" "Layer Run"

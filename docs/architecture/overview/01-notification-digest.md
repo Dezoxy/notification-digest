@@ -21,8 +21,11 @@ reliability, risks — stay in the repository as the detail behind each claim.
 ## Context
 
 The system sits between accounts the owner already holds and the two places the
-owner actually reads. Collection is always outbound: nothing the system runs
-accepts an inbound connection from a source.
+owner actually reads, Telegram and the news site. ChatGPT reads the site too,
+on the owner's request, through a read-only connector
+([ADR 13](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0013-serve-the-digest-to-chatgpt-through-an-mcp-connector.md)).
+Collection is always outbound: nothing the system runs accepts an inbound
+connection from a source.
 
 ![Context view: who reads the digest, what writes it, and where it comes out](embed:Context)
 
