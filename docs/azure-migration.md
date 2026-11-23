@@ -497,10 +497,13 @@ The whole chain is automatic once jobs exist:
    respected: later releases continue from the highest tag.
    If the build fails after the tag exists, re-run the failed job: the tag
    stays, no image means no pin PR, and the next release continues from it.
-2. Renovate opens a PR that bumps the pin and merges it once CI passes. Every
-   other update opens one PR at a time, but the pin rule in `renovate.json` is
-   exempt from those limits (`prConcurrentLimit: 0`, `prHourlyLimit: 0`), so the
-   pin PR opens on Renovate's next run even while other Renovate PRs are open.
+2. Renovate opens a PR that bumps the pin, and GitHub auto-merge (a repository
+   setting) merges it once the required checks pass. Renovate wakes on the merge
+   to `main`, before the image exists, so after the image push `auto-release`
+   ticks the Dependency Dashboard's run-again box to make Renovate run again.
+   Every other update opens one PR at a time, but the pin rule in `renovate.json`
+   is exempt from those limits (`prConcurrentLimit: 0`, `prHourlyLimit: 0`), so
+   the pin PR opens on that run even while other Renovate PRs are open.
    If no pin PR appears, check the Dependency Dashboard issue and Renovate's
    run log before bumping the pin by hand.
 3. The merge deploys the image through the guarded apply below.

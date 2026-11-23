@@ -89,3 +89,36 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
+
+  trigger-renovate:
+    # Renovate wakes on the merge to main, about 90 seconds before the image is
+    # pushed, so it finds no new version and the pin PR would wait hours for an
+    # unrelated run. Ticking the Dependency Dashboard's run-again box after the
+    # push makes Renovate run again now. A red job here means Renovate was not
+    # triggered; the release and image already exist.
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Tick the Dependency Dashboard run-again box
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          number=$(gh issue list --author 'app/renovate' --state open --search 'Dependency Dashboard in:title' --json number --jq '.[0].number')
+          if [ -z "$number" ]; then
+            echo "::error::Dependency Dashboard issue not found"
+            exit 1
+          fi
+          gh issue view "$number" --json body --jq .body > "$RUNNER_TEMP/dashboard.md"
+          if grep -q '^- \[x\] <!-- manual job -->' "$RUNNER_TEMP/dashboard.md"; then
+            echo "Renovate run-again box is already ticked; nothing to do."
+            exit 0
+          fi
+          if ! grep -q '^- \[ \] <!-- manual job -->' "$RUNNER_TEMP/dashboard.md"; then
+            echo "::error::run-again box not found in Dependency Dashboard #$number"
+            exit 1
+          fi
+          sed 's/^- \[ \] <!-- manual job -->/- [x] <!-- manual job -->/' "$RUNNER_TEMP/dashboard.md" > "$RUNNER_TEMP/ticked.md"
+          gh issue edit "$number" --body-file "$RUNNER_TEMP/ticked.md"
