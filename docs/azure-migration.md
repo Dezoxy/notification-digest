@@ -1047,6 +1047,22 @@ without first returning to a bundle-only manifest (step 3, then wait up to seven
 days). The exported backups stay in the legacy format, so a restore from the
 backup account (below) works with an older image.
 
+**Verifying the switch.** None of these needs a data-plane role on the state
+account:
+
+1. The plan changes only the jobs, in place, adding this one variable. Any
+   replace, or any other resource, means stop.
+2. The next executions of every job succeed. Restore and checkpoint fail
+   closed, so a success means the snapshot was written, published and read
+   back by the following run.
+3. The console logs show no `failed verification` warning and no
+   `event=failure`.
+4. The next 04:15 `backup` succeeds. It is the first run that reassembles a
+   snapshot into the exported bundle, copies it and prunes chunk objects.
+5. Over the next days the state account's daily `Ingress` metric falls from
+   about 4.6 GB towards 0.2 GB and `UsedCapacity` falls as the deleted bundles
+   leave soft delete (3 days). Transactions rise; that is expected.
+
 ## Interrupted runs and recovery
 
 Platform retries are disabled. A job waits at most ten minutes for the shared
