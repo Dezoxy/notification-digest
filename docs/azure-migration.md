@@ -1160,7 +1160,8 @@ compress and hash locally; fast compression trades CPU for larger stored bytes.
 A changed checkpoint still uploads the
 full approximately 50 MB database bundle; **real storage and execution cost has
 not been measured**. Blob soft deletion retains removed
-objects for 14 extra days; reference-aware pruning and seven daily backups bound
+runtime objects for 3 extra days (cut from 14 on 2026-11-26, when deleted
+bundles reached about 60 GB); reference-aware pruning and seven daily backups bound
 ordinary live history. Recalculate transfers, writes, retained bytes, boot time
 and logs after the pilot. The monthly budget defaults to 5 **billing-currency
 units** for the **app resource group only**, sends alerts at 80/100%, and does
