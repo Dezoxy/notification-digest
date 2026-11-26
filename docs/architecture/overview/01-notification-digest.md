@@ -44,7 +44,7 @@ Reddit was a source until 2026-10-23 and is retired
 | Container | Responsibility | Technology |
 |---|---|---|
 | Digest Runner | Collects new items per source, summarizes the window, delivers the result. One short-lived process per scheduled run | Python 3.14, one-shot container started by an Azure Container Apps job |
-| State Database | System of record: items, per-source cursors, digests, delivery state | SQLite file, kept as a bundle in private Azure Blob Storage |
+| State Database | System of record: items, per-source cursors, digests, delivery state | SQLite file, kept as immutable generations in private Azure Blob Storage |
 | News Site | Serves the public digest archive; accepts authenticated ingest from the runner | Cloudflare Worker, JavaScript |
 | Site Database | Rendering copy of published digests. Disposable | Cloudflare D1 |
 

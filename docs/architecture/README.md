@@ -128,6 +128,7 @@ collector line).
 | 11 | [Move Reddit to a homelab proxy behind Cloudflare Access](decisions/0011-move-reddit-to-a-homelab-proxy.md) | Superseded by ADR 12 (accepted 2026-10-22; built, then its premise was disproved on 2026-10-23) |
 | 12 | [Retire Reddit collection](decisions/0012-retire-reddit-collection.md) | Accepted 2026-10-23; code removal and operator teardown follow |
 | 13 | [Serve the digest to ChatGPT through an MCP connector](decisions/0013-serve-the-digest-to-chatgpt-through-an-mcp-connector.md) | Accepted 2026-11-22; connector live, scheduled-task use unverified |
+| 14 | [Checkpoint changed chunks instead of full bundles](decisions/0014-checkpoint-changed-chunks-instead-of-full-bundles.md) | Accepted 2026-11-26; released with the default (`bundle`), switching to `objects` is a separate infra change |
 
 New ADRs use [the template](templates/adr.md) and keep the `NNNN-short-title.md`
 numbering without gaps.

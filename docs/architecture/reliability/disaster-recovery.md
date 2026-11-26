@@ -25,7 +25,7 @@ and returning execution to it is outside the approved migration
 
 #### 1. The runtime state is lost or damaged, the region is fine
 
-The state bundle or its manifest in the runtime storage account is corrupt,
+The state generation or its manifest in the runtime storage account is corrupt,
 deleted by mistake, or left unusable by a bad release that migrated it. The jobs
 fail closed rather than create an empty database to make startup succeed.
 

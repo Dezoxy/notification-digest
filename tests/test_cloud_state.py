@@ -1,11 +1,15 @@
 """Offline failure injection for the authoritative cloud state contract."""
 
+import hashlib
 import io
 import json
 import os
+import random
 import sqlite3
 import tarfile
 import tempfile
+import zlib
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -83,7 +87,14 @@ class FakeBlob:
         return FakeDownload(payload if length is None else payload[:length], etag)
 
     def upload_blob(self, payload, *, overwrite: bool, lease=None, etag=None, **kwargs):
-        failure = "manifest" if self.name.endswith("manifest.json") else "bundle"
+        if self.name.endswith("manifest.json"):
+            failure = "manifest"
+        elif "/snapshots/" in self.name:
+            failure = "index"
+        elif "/objects/" in self.name:
+            failure = "object"
+        else:
+            failure = "bundle"
         self.container.fail(failure)
         if not overwrite and self.name in self.container.data:
             raise StorageError(409)
@@ -99,11 +110,32 @@ class FakeBlob:
         self.container.counter += 1
         new_etag = f"etag-{self.container.counter}"
         self.container.data[self.name] = (payload, new_etag)
-        self.container.fail("after_manifest" if failure == "manifest" else "after_bundle")
+        self.container.fail(f"after_{failure}")
         return {"etag": new_etag}
 
-    def delete_blob(self) -> None:
+    def get_blob_properties(self):
+        if self.name not in self.container.data:
+            raise StorageError(404)
+        return SimpleNamespace(size=len(self.container.data[self.name][0]))
+
+    def set_blob_metadata(self, metadata: dict) -> None:
+        self.container.fail("metadata")
+        if self.name not in self.container.data:
+            raise StorageError(404)
+        self.container.counter += 1
+        self.container.data[self.name] = (
+            self.container.data[self.name][0],
+            f"etag-{self.container.counter}",
+        )
+
+    def delete_blob(self, *, etag=None, match_condition=None) -> None:
         self.container.fail("delete")
+        if etag is not None:
+            assert match_condition.name == "IfNotModified"
+            if self.name not in self.container.data:
+                raise StorageError(404)
+            if self.container.data[self.name][1] != etag:
+                raise StorageError(412)
         del self.container.data[self.name]
 
 
@@ -133,7 +165,9 @@ class FakeContainer:
     def list_blobs(self, *, name_starts_with: str):
         self.fail("list")
         return [
-            SimpleNamespace(name=name) for name in self.data if name.startswith(name_starts_with)
+            SimpleNamespace(name=name, etag=etag)
+            for name, (_, etag) in self.data.items()
+            if name.startswith(name_starts_with)
         ]
 
 
@@ -506,7 +540,7 @@ def test_invalid_export_hash_cannot_bootstrap_namespace(tmp_path, source):
     assert "restore-test/manifest.json" not in container.data
 
 
-def run_azurite_smoke() -> None:
+def run_azurite_smoke(state_format: str = "bundle") -> None:
     """SDK protocol smoke invoked by test_cloud_state_azurite with --azurite.
 
     Requires Azurite bound only to 127.0.0.1:10000. Its documented public
@@ -530,7 +564,7 @@ def run_azurite_smoke() -> None:
         with tempfile.TemporaryDirectory(prefix="digest-azurite-test-") as directory:
             root = Path(directory)
             imported = source.__wrapped__(root)
-            state = CloudState(client, data_dir=root / "data")
+            state = CloudState(client, data_dir=root / "data", state_format=state_format)
             initial = bootstrap(state, imported)
             state.acquire()
             state.restore()
@@ -565,12 +599,42 @@ def run_azurite_smoke() -> None:
             state.release()
             state.acquire()
             state.restore()
+            touched = None
+            if state_format == "objects":
+                # Real-SDK check of reuse (409, verify, metadata touch) and of
+                # prune's conditional delete skipping an object touched after
+                # it was listed.
+                raws = {b"reused orphan": None, b"stale orphan": None}
+                for raw in raws:
+                    digest = hashlib.sha256(raw).hexdigest()
+                    raws[raw] = f"production/objects/{digest}"
+                    client.upload_blob(raws[raw], zlib.compress(raw, 1))
+                reused, stale = raws.values()
+                before = client.get_blob_client(reused).get_blob_properties().etag
+                state._upload_object(reused.rsplit("/", 1)[1], b"reused orphan")
+                assert client.get_blob_client(reused).get_blob_properties().etag != before
+                real_list, touched = client.list_blobs, stale
+
+                def list_then_touch(**kwargs):
+                    listed = list(real_list(**kwargs))
+                    if any(blob.name == stale for blob in listed):
+                        client.get_blob_client(stale).set_blob_metadata({"reused": "1"})
+                    return listed
+
+                client.list_blobs = list_then_touch
             assert state.prune() >= 1
+            if touched is not None:
+                client.list_blobs = real_list
+                names_left = {
+                    blob.name for blob in client.list_blobs(name_starts_with="production/")
+                }
+                assert touched in names_left
+                assert reused not in names_left
             state.release()
     finally:
         client.delete_container()
         client.close()
-    print("Azurite SDK protocol smoke passed: lease exclusion, renew, ETag, snapshot, restore, GC")
+    print(f"Azurite SDK protocol smoke ({state_format}): lease, renew, ETag, snapshot, restore, GC")
 
 
 @pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
@@ -789,3 +853,592 @@ def test_restore_live_only_cookie_state_normalizes_seed_for_collector(tmp_path, 
     assert seed.read_bytes() == live.read_bytes()
     assert resolve_cookie_path(str(seed)) == str(live)
     state.release()
+
+
+# --- Incremental content-addressed (objects) format ---------------------------
+
+
+def objects_state(container, directory, **kwargs) -> CloudState:
+    return make_state(container, directory, state_format="objects", **kwargs)
+
+
+def names(container, kind: str, namespace: str = "production") -> set[str]:
+    return {name for name in container.data if name.startswith(f"{namespace}/{kind}/")}
+
+
+def add_junk(path: Path, megabytes: float, seed: int = 1) -> None:
+    """Add incompressible rows so the database spans several 1 MiB chunks."""
+    rng = random.Random(seed)
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS junk(id INTEGER PRIMARY KEY, b BLOB)")
+        for _ in range(int(megabytes * 4)):
+            connection.execute("INSERT INTO junk(b) VALUES (?)", (rng.randbytes(256 * 1024),))
+
+
+def fingerprint(path: Path) -> str:
+    digest = hashlib.sha256()
+    with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as connection:
+        for table in ("cursors", "junk"):
+            try:
+                rows = connection.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            digest.update(repr(rows).encode())
+    return digest.hexdigest()
+
+
+def tree(directory: Path) -> dict[str, tuple[bytes, int]]:
+    return {
+        path.relative_to(directory).as_posix(): (path.read_bytes(), int(path.stat().st_mtime))
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and not path.name.startswith((".", "state.db"))
+    }
+
+
+@pytest.fixture(params=[0, 3.5], ids=["small", "multi-chunk"])
+def big_source(request, source: Path) -> Path:
+    if request.param:
+        add_junk(source / "state.db", request.param)
+    return source
+
+
+def test_objects_round_trip_preserves_content_cookies_and_archive_mtimes(tmp_path, big_source):
+    container = FakeContainer()
+    state = objects_state(container, tmp_path / "data")
+    bootstrap(state, big_source)
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
+        manifest = state.checkpoint(connection)
+    expected, expected_files = fingerprint(state.data_dir / "state.db"), tree(state.data_dir)
+    state.release()
+    assert manifest["schema"] == 2 and manifest["bundle"]["kind"] == "snapshot"
+    assert manifest["previous_bundle"]["kind"] == "bundle"
+    other = objects_state(container, tmp_path / "other")
+    other.acquire()
+    other.restore()
+    assert fingerprint(other.data_dir / "state.db") == expected
+    assert tree(other.data_dir) == expected_files
+    assert (other.data_dir / "x-cookies.json.live").stat().st_mtime == 200
+    for path in other.data_dir.rglob("*"):
+        assert path.stat().st_mode & 0o077 == 0
+
+
+def test_small_change_uploads_few_objects_and_unchanged_uploads_nothing(tmp_path, source):
+    add_junk(source / "state.db", 3.5)
+    container = FakeContainer()
+    state = objects_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        first = state.checkpoint(connection)
+        assert len(names(container, "objects")) >= 4
+        before, writes = names(container, "objects"), container.counter
+        assert state.checkpoint(connection) is first
+        assert container.counter == writes
+        connection.execute("INSERT INTO junk(b) VALUES (x'00112233')")
+        connection.commit()
+        state.checkpoint(connection)
+        assert len(names(container, "objects") - before) <= 3
+        writes = container.counter
+        state.checkpoint(connection, daily_backup=True)
+        assert container.counter > writes
+    state.release()
+    # A restored, unchanged snapshot generation is recognised from its index.
+    again = objects_state(container, tmp_path / "again")
+    again.acquire()
+    again.restore()
+    with sqlite3.connect(again.data_dir / "state.db") as connection:
+        writes = container.counter
+        again.checkpoint(connection)
+        assert container.counter == writes
+
+
+def test_aux_tar_is_deterministic(tmp_path, source):
+    from digest.cloud_state import _write_aux_tar
+
+    state = make_state(FakeContainer(), tmp_path / "data")
+    files = state._aux_files(source / "archive", source / "x-cookies.json.live", 0)
+    assert [name for name, _ in files][0] == "x-cookies.json"
+    _write_aux_tar(tmp_path / "one.tar", files)
+    _write_aux_tar(tmp_path / "two.tar", list(reversed(files)))
+    assert (tmp_path / "one.tar").read_bytes() == (tmp_path / "two.tar").read_bytes()
+    with tarfile.open(tmp_path / "one.tar") as tar:
+        members = tar.getmembers()
+    assert [m.name for m in members] == sorted(m.name for m in members)
+    assert all((m.uid, m.gid, m.uname, m.gname, m.mode) == (0, 0, "", "", 0o600) for m in members)
+
+
+def test_migration_between_formats_and_mixed_dailies(tmp_path, source):
+    container = FakeContainer()
+    today = datetime.now(UTC).replace(hour=4, minute=15)
+    date = [today]
+    state = objects_state(container, tmp_path / "data", utc_now=lambda: date[0])
+    initial = bootstrap(state, source)
+    assert initial["schema"] == 1
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='92'")
+        connection.commit()
+        manifest = state.checkpoint(connection)
+        assert manifest["schema"] == 2
+        assert manifest["previous_bundle"]["kind"] == "bundle"
+        assert manifest["daily_backups"][0]["bundle"]["kind"] == "bundle"
+        date[0] = today + timedelta(days=1)
+        connection.execute("UPDATE cursors SET last_seen_id='93'")
+        connection.commit()
+        state.checkpoint(connection, daily_backup=True)
+    state.release()
+    reader = objects_state(container, tmp_path / "reader")
+    reader.acquire()
+    manifest = reader.restore()
+    kinds = {backup["date"]: backup["bundle"]["kind"] for backup in manifest["daily_backups"]}
+    assert sorted(kinds.values()) == ["bundle", "snapshot"]
+    for backup_date, kind in kinds.items():
+        reader.export(tmp_path / f"export-{kind}", backup_date=backup_date)
+        exported = json.loads((tmp_path / f"export-{kind}" / "manifest.json").read_text())
+        assert exported["backup_date"] == backup_date
+        assert ("source" in exported) == (kind == "snapshot")
+    reader.release()
+    # Rollback: a bundle-format writer reads the snapshot and writes a bundle.
+    rollback = make_state(container, tmp_path / "rollback", utc_now=lambda: date[0])
+    rollback.acquire()
+    rollback.restore()
+    with sqlite3.connect(rollback.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "93"
+        connection.execute("UPDATE cursors SET last_seen_id='94'")
+        connection.commit()
+        manifest = rollback.checkpoint(connection)
+    assert manifest["schema"] == 2
+    assert manifest["bundle"]["kind"] == "bundle"
+    assert manifest["previous_bundle"]["kind"] == "snapshot"
+    rollback.release()
+    final = objects_state(container, tmp_path / "final")
+    final.acquire()
+    final.restore()
+    with sqlite3.connect(final.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "94"
+    assert final.prune() >= 0
+    final.release()
+
+
+def test_snapshot_export_bootstraps_a_fresh_namespace(tmp_path, big_source):
+    container = FakeContainer()
+    state = objects_state(container, tmp_path / "data")
+    bootstrap(state, big_source)
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("UPDATE cursors SET last_seen_id='95'")
+        connection.commit()
+        state.checkpoint(connection)
+    expected = fingerprint(state.data_dir / "state.db")
+    exported = state.export(tmp_path / "export")
+    assert exported["bundle"]["name"].startswith("production/bundles/")
+    assert exported["source"]["kind"] == "snapshot"
+    state.release()
+    recovered = objects_state(container, tmp_path / "restored", namespace="restore-test")
+    recovered.bootstrap_export(tmp_path / "export")
+    recovered.acquire()
+    recovered.restore()
+    assert fingerprint(recovered.data_dir / "state.db") == expected
+    assert (recovered.data_dir / "x-cookies.json.live").read_bytes() == (
+        big_source / "x-cookies.json.live"
+    ).read_bytes()
+    assert (recovered.data_dir / "x-cookies.json.live").stat().st_mtime == 200
+    assert (recovered.data_dir / "archive" / "2026" / "digest.md").exists()
+
+
+def read_generation(state: CloudState, reference: dict, directory: Path) -> str:
+    """Fingerprint a retained generation of either kind without installing it."""
+    from digest.cloud_state import _extract_bundle
+
+    directory.mkdir()
+    if reference.get("kind") == "snapshot":
+        state._fetch_snapshot(reference, directory, directory)
+    else:
+        bundle = directory / "bundle.tar.gz"
+        state._download_bundle(reference, bundle)
+        _extract_bundle(bundle, directory)
+    return fingerprint(directory / "state.db")
+
+
+def test_prune_keeps_every_retained_generation_restorable_and_drops_orphans(tmp_path, source):
+    rng = random.Random(20261126)
+    container = FakeContainer()
+    today = datetime.now(UTC).replace(hour=4, minute=15)
+    date = [today]
+    state = objects_state(container, tmp_path / "data", utc_now=lambda: date[0])
+    bootstrap(state, source)
+    state.acquire()
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        connection.execute("CREATE TABLE junk(id INTEGER PRIMARY KEY, b BLOB)")
+        connection.commit()
+        expected = {state._manifest["bundle"]["name"]: fingerprint(state.data_dir / "state.db")}
+        scratch = 0
+        for step in range(60):
+            action = rng.choice(["write", "write", "write", "daily", "prune", "format"])
+            if action == "format":
+                state.state_format = rng.choice(["bundle", "objects"])
+                continue
+            if action in ("write", "daily"):
+                if action == "daily":
+                    date[0] += timedelta(days=1)
+                connection.execute(
+                    "INSERT INTO junk(b) VALUES (?)", (rng.randbytes(rng.randrange(1, 400_000)),)
+                )
+                connection.execute("UPDATE cursors SET last_seen_id=?", (str(step),))
+                connection.commit()
+                manifest = state.checkpoint(connection, daily_backup=action == "daily")
+                expected[manifest["bundle"]["name"]] = fingerprint(state.data_dir / "state.db")
+                continue
+            container.data[f"production/objects/{rng.randbytes(32).hex()}"] = b"orphan", "o"
+            container.data[f"production/snapshots/{uuid4().hex}.json"] = b"{}", "o"
+            container.data[f"production/bundles/{uuid4().hex}.tar.gz"] = b"orphan", "o"
+            assert state.prune() >= 3
+            manifest = json.loads(container.data["production/manifest.json"][0])
+            references = [manifest["bundle"], manifest["previous_bundle"]]
+            references += [backup["bundle"] for backup in manifest["daily_backups"]]
+            keep_objects: set[str] = set()
+            for reference in references:
+                scratch += 1
+                assert (
+                    read_generation(state, reference, tmp_path / f"scratch-{scratch}")
+                    == (expected[reference["name"]])
+                )
+                if reference.get("kind") == "snapshot":
+                    index = json.loads(container.data[reference["name"]][0])
+                    keep_objects |= {
+                        f"production/objects/{chunk['sha256']}"
+                        for stream in index["streams"].values()
+                        for chunk in stream["chunks"]
+                    }
+            assert names(container, "objects") == keep_objects
+            kept = {reference["name"] for reference in references}
+            assert names(container, "bundles") | names(container, "snapshots") == kept
+    state.release()
+
+
+def make_snapshot_state(tmp_path, container, source, megabytes=3.5):
+    add_junk(source / "state.db", megabytes)
+    state = objects_state(container, tmp_path / "data")
+    bootstrap(state, source)
+    state.acquire()
+    state.restore()
+    return state
+
+
+def change(state: CloudState, value: str = "92") -> dict:
+    # Closed on exit so WAL contents are folded into state.db deterministically.
+    with closing(sqlite3.connect(state.data_dir / "state.db")) as connection:
+        connection.execute("UPDATE cursors SET last_seen_id=?", (value,))
+        connection.commit()
+        return state.checkpoint(connection)
+
+
+def test_failed_object_upload_keeps_old_generation_and_prune_removes_orphans(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    original = json.loads(container.data["production/manifest.json"][0])
+    count = 0
+    real_fail = container.fail
+
+    def fail(point):
+        nonlocal count
+        if point == "object":
+            count += 1
+            if count == 3:
+                raise StorageError(403)
+        real_fail(point)
+
+    container.fail = fail
+    with pytest.raises(CloudStateError, match="object upload failed"):
+        change(state)
+    container.fail = real_fail
+    assert json.loads(container.data["production/manifest.json"][0]) == original
+    assert len(names(container, "objects")) == 2
+    state.restore()
+    assert state.prune() == 2
+    assert not names(container, "objects")
+
+
+def test_lost_object_upload_response_retries_into_409_with_content_check(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    real_fail = container.fail
+    lost = []
+
+    def fail(point):
+        if point == "after_object" and not lost:
+            lost.append(point)
+            raise StorageError(503)
+        real_fail(point)
+
+    container.fail = fail
+    manifest = change(state)
+    assert lost == ["after_object"]
+    assert json.loads(container.data["production/manifest.json"][0]) == manifest
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "92"
+
+
+def test_existing_object_with_wrong_content_is_healed(tmp_path, source, caplog):
+    # A wrong blob under a content-addressed name would otherwise fail every
+    # checkpoint forever; it is rewritten from local bytes under the lease.
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    original = state._upload_object
+    poisoned_names = []
+
+    def poisoned(digest, raw):
+        name = f"production/objects/{digest}"
+        poisoned_names.append(name)
+        container.data[name] = b"not what we would write", "x"
+        original(digest, raw)
+
+    state._upload_object = poisoned
+    manifest = change(state)
+    assert poisoned_names
+    assert "failed verification" in caplog.text
+    for name in poisoned_names:
+        payload = zlib.decompress(container.data[name][0])
+        assert hashlib.sha256(payload).hexdigest() == name.rsplit("/", 1)[1]
+    assert json.loads(container.data["production/manifest.json"][0]) == manifest
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "92"
+
+
+def test_reused_object_gets_a_new_etag(tmp_path, source):
+    # A prune that listed this object as an orphan must not delete it after a
+    # live writer has started relying on it again.
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    original = state._upload_object
+    reused = []
+
+    def preexisting(digest, raw):
+        name = f"production/objects/{digest}"
+        if name not in container.data:
+            reused.append(name)
+            container.data[name] = zlib.compress(raw, 6), "listed-etag"
+        original(digest, raw)
+
+    state._upload_object = preexisting
+    change(state)
+    assert reused
+    assert all(container.data[name][1] != "listed-etag" for name in reused)
+
+
+def test_prune_skips_objects_changed_since_listing(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    change(state)
+    orphans = ["production/objects/" + "a" * 64, "production/objects/" + "b" * 64]
+    for name in orphans:
+        container.data[name] = b"orphan", "etag-orphan"
+    real_list = container.list_blobs
+
+    def list_then_touch(*, name_starts_with):
+        listed = real_list(name_starts_with=name_starts_with)
+        if orphans[0] in container.data:
+            # A successor re-verified this object between listing and delete.
+            container.get_blob_client(orphans[0]).set_blob_metadata({"reused": "1"})
+        return listed
+
+    container.list_blobs = list_then_touch
+    state.prune()
+    assert orphans[0] in container.data
+    assert orphans[1] not in container.data
+    state.restore()
+
+
+def test_checkpoint_refuses_state_the_export_cannot_carry(tmp_path, source, monkeypatch):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    before = container.data["production/manifest.json"]
+    monkeypatch.setattr("digest.cloud_state.MAX_BUNDLE_BYTES", 1024 * 1024)
+    with pytest.raises(CloudStateError, match="exceeds the supported size"):
+        change(state)
+    assert container.data["production/manifest.json"] == before
+
+
+def test_existing_object_compressed_differently_is_accepted(tmp_path, source):
+    # Another zlib build may compress identical bytes differently; an orphan it
+    # left must not block checkpoints when its content matches its name.
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    original = state._upload_object
+    differing = []
+
+    def foreign(digest, raw):
+        foreign_bytes = zlib.compress(raw, 1)
+        if foreign_bytes != zlib.compress(raw, 6):
+            differing.append(digest)
+        container.data[f"production/objects/{digest}"] = foreign_bytes, "x"
+        original(digest, raw)
+
+    state._upload_object = foreign
+    manifest = change(state)
+    # Random junk pages may deflate identically; the aux tar and schema pages do not.
+    assert differing
+    assert json.loads(container.data["production/manifest.json"][0]) == manifest
+    state.restore()
+    with sqlite3.connect(state.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "92"
+
+
+def test_objects_round_trip_keeps_sub_second_cookie_mtimes(tmp_path, source):
+    # Cookie precedence is live >= seed; whole seconds would turn a later
+    # seed write within the same second into a tie the live jar wins.
+    os.utime(source / "x-cookies.json", (200.75, 200.75))
+    os.utime(source / "x-cookies.json.live", (200.25, 200.25))
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    change(state)
+    state.release()
+    other = objects_state(container, tmp_path / "other")
+    other.acquire()
+    other.restore()
+    assert (other.data_dir / "x-cookies.json").stat().st_mtime == 200.75
+    assert (other.data_dir / "x-cookies.json.live").stat().st_mtime == 200.25
+
+
+def test_snapshot_checkpoint_manifest_conflict_is_fenced(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    payload, _ = container.data["production/manifest.json"]
+    container.data["production/manifest.json"] = payload, "unexpected-etag"
+    with pytest.raises(CloudStateError, match="commit failed"):
+        change(state)
+    with pytest.raises(CloudStateError):
+        state.check_lease()
+
+
+def test_lease_expiry_before_manifest_keeps_previous_generation(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    original = json.loads(container.data["production/manifest.json"][0])
+    real_fail = container.fail
+
+    def fail(point):
+        if point == "index":
+            container.seconds = 100
+        real_fail(point)
+
+    container.fail = fail
+    with pytest.raises(CloudStateError):
+        change(state)
+    container.fail = real_fail
+    assert json.loads(container.data["production/manifest.json"][0]) == original
+    successor = objects_state(container, tmp_path / "successor")
+    successor.acquire()
+    successor.restore()
+    with sqlite3.connect(successor.data_dir / "state.db") as connection:
+        assert connection.execute("SELECT last_seen_id FROM cursors").fetchone()[0] == "91"
+    assert successor.prune() >= 2
+    assert not names(container, "objects")
+
+
+def tamper_object(container, manifest, mode: str) -> None:
+    index = json.loads(container.data[manifest["bundle"]["name"]][0])
+    chunk = index["streams"]["state.db"]["chunks"][0]
+    name = f"production/objects/{chunk['sha256']}"
+    if mode == "corrupt":
+        container.data[name] = zlib.compress(b"\0" * chunk["size"]), "x"
+    elif mode == "missing":
+        del container.data[name]
+    else:
+        container.data[name] = zlib.compress(b"\0" * (chunk["size"] * 4)), "x"
+
+
+def tamper_index(container, manifest) -> None:
+    reference = manifest["bundle"]
+    index = json.loads(container.data[reference["name"]][0])
+    index["streams"]["state.db"]["chunks"][0]["size"] -= 1
+    raw = json.dumps(index, sort_keys=True).encode()
+    container.data[reference["name"]] = raw, "x"
+    reference["sha256"], reference["size"] = hashlib.sha256(raw).hexdigest(), len(raw)
+    container.data["production/manifest.json"] = json.dumps(manifest).encode(), "etag-t"
+
+
+@pytest.mark.parametrize("mode", ["corrupt", "missing", "oversized", "index", "index_blob"])
+def test_tampered_snapshot_never_replaces_local_files(tmp_path, source, mode):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    manifest = change(state)
+    before, database = tree(state.data_dir), (state.data_dir / "state.db").read_bytes()
+    if mode == "index":
+        tamper_index(container, manifest)
+    elif mode == "index_blob":
+        container.data[manifest["bundle"]["name"]] = b"{}", "x"
+    else:
+        tamper_object(container, manifest, mode)
+    with pytest.raises(CloudStateError):
+        state.restore()
+    assert tree(state.data_dir) == before
+    assert (state.data_dir / "state.db").read_bytes() == database
+
+
+def test_manifest_schema_two_validation_is_strict(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    manifest = change(state)
+    good = json.dumps(manifest).encode()
+    bad_references = []
+    for key, value in (
+        ("name", "production/snapshots/a/b.json"),
+        ("name", "production/snapshots/a.tar.gz"),
+        ("name", "other/snapshots/a.json"),
+        ("sha256", "0x" + "1" * 62),
+        ("sha256", "A" * 64),
+        ("size", 1024 * 1024 + 1),
+        ("size", True),
+        ("kind", "mystery"),
+    ):
+        mutated = json.loads(good)
+        mutated["bundle"][key] = value
+        bad_references.append(mutated)
+    schema_one = json.loads(good)
+    schema_one["schema"] = 1
+    bad_references.append(schema_one)
+    for mutated in bad_references:
+        container.data["production/manifest.json"] = json.dumps(mutated).encode(), "etag-m"
+        with pytest.raises(CloudStateError, match="manifest"):
+            state._read_manifest()
+
+
+def test_prune_with_unreadable_index_deletes_nothing(tmp_path, source):
+    container = FakeContainer()
+    state = make_snapshot_state(tmp_path, container, source)
+    manifest = change(state)
+    container.data["production/objects/" + "ab" * 32] = b"orphan", "o"
+    del container.data[manifest["previous_bundle"]["name"]]
+    del container.data[manifest["bundle"]["name"]]
+    before = dict(container.data)
+    with pytest.raises(CloudStateError):
+        state.prune()
+    assert container.data == before
+
+
+def test_cloud_state_format_config(monkeypatch):
+    from digest.config import CloudConfig, ConfigError
+
+    monkeypatch.setenv("DIGEST_CLOUD_ACCOUNT_URL", "https://digeststore.blob.core.windows.net")
+    monkeypatch.setenv("DIGEST_CLOUD_CONTAINER", "digest-state")
+    monkeypatch.delenv("DIGEST_CLOUD_STATE_FORMAT", raising=False)
+    assert CloudConfig.from_env().state_format == "bundle"
+    for value in ("bundle", "objects"):
+        monkeypatch.setenv("DIGEST_CLOUD_STATE_FORMAT", value)
+        assert CloudConfig.from_env().state_format == value
+    monkeypatch.setenv("DIGEST_CLOUD_STATE_FORMAT", "tarball")
+    with pytest.raises(ConfigError, match="DIGEST_CLOUD_STATE_FORMAT"):
+        CloudConfig.from_env()
+    with pytest.raises(ValueError, match="format"):
+        CloudState(FakeContainer(), state_format="tarball")

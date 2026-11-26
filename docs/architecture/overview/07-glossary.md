@@ -14,7 +14,7 @@ overloaded elsewhere, the row says what it does **not** mean here.
 | **NO-SIGNAL** | The positions lane's contract for "nothing worth sending". It produces silence, not an empty message |
 | **Arc context** | A short background primer attached to a running story so a digest entry makes sense without its history |
 | **Provenance** | The record of which model produced a given digest, written alongside it because the fallback chain means it is not always the same one |
-| **state.db** | The SQLite file. The system of record. In production it is kept as a bundle in private Azure Blob Storage, restored to local disk by each run and checkpointed back |
+| **state.db** | The SQLite file. The system of record. In production it is kept as immutable generations (bundles or chunked snapshots) in private Azure Blob Storage, restored to local disk by each run and checkpointed back |
 | **Lease** | The Blob lease on the state manifest. Each run holds it for its whole duration, so two runs never overlap or share the Telegram session. It replaced the VM's host lock ([ADR 7](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0007-run-digest-as-azure-jobs.md)) |
 | **D1** | Cloudflare's database behind the news site. A rendering copy with the same table names as `state.db`, and disposable ([ADR 3](https://github.com/Dezoxy/notification-digest/blob/main/docs/architecture/decisions/0003-sqlite-is-the-source-of-truth.md)) |
 | **TL;DR ping** | The short Telegram message announcing a digest, with deep links. One of the two live delivery channels |
