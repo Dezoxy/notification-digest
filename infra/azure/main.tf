@@ -24,6 +24,9 @@ locals {
     STATE_DB_PATH                   = "/data/state.db"
     ARCHIVE_DIR                     = "/data/archive"
     X_COOKIES_PATH                  = "/data/x-cookies.json"
+    # Checkpoint only changed chunks (ADR 14). Rollback: "bundle"; never roll
+    # the image back past the release that reads snapshots while one is retained.
+    DIGEST_CLOUD_STATE_FORMAT = "objects"
   }
   backup_env = {
     DIGEST_CLOUD_BACKUP_ACCOUNT_URL        = azurerm_storage_account.backup.primary_blob_endpoint

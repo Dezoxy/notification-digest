@@ -10,10 +10,11 @@ Amends [7. Run digest as Azure jobs](0007-run-digest-as-azure-jobs.md): the
 state is still checkpointed under the lease and published by a conditional
 manifest update, but a checkpoint no longer has to upload the whole state.
 
-Decided on 2026-11-26. The release that reads and writes the new format ships
-with `DIGEST_CLOUD_STATE_FORMAT=bundle`, so it changes no behaviour on its own.
-Switching the jobs to `objects` is a separate, later infrastructure change; until
-it is applied, production still writes full bundles.
+Decided on 2026-11-26. The release that reads and writes the new format
+(v2026.11.5) shipped with the default `DIGEST_CLOUD_STATE_FORMAT=bundle`, so it
+changed no behaviour on its own. The production jobs were switched to `objects`
+the same day by a separate infrastructure change (`cloud_env` in
+`infra/azure/main.tf`), applied through the manual plan/apply.
 
 ## Context
 
@@ -28,6 +29,11 @@ archive). Measured over seven days in November 2026:
   checkpoint. The `positions` job spends about 55% of its runtime checkpointing.
 - Two consecutive checkpoints differed in 2 of the 69 1-MiB chunks of
   `state.db`: 0.74 MB instead of 32.4 MB. Day over day, 64 of 69 chunks differ.
+- Over 30 consecutive checkpoint pairs on 2026-11-26 (13:25 to 18:26 UTC,
+  including the evening digest), 1 MiB chunks would have uploaded 0.74 MB at
+  the median and 1.48 MB on average. The evening digest was the peak: 55 of 69
+  chunks, 20 MB. No archive file changed in any pair. 256 KiB chunks would have
+  averaged 0.54 MB but need 274 objects per restore; 4 MiB averaged 3.76 MB.
 
 Almost all of that traffic re-uploads bytes the previous generation already
 holds. It also drove the retained-bytes cost: deleted bundles reached about
