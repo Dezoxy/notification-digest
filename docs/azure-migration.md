@@ -1033,7 +1033,9 @@ The decision and the alternatives that were rejected are in
    written.
 2. A separate infrastructure change sets `DIGEST_CLOUD_STATE_FORMAT=objects`
    on the jobs. It is not an image change, so it goes through the manual
-   `azure-deploy` plan/apply, not the image-pin fast path.
+   `azure-deploy` plan/apply, not the image-pin fast path. Production has set
+   it in `cloud_env` of `infra/azure/main.tf` since 2026-11-26, so `app_env`
+   cannot override it.
 3. Rollback of the setting: set it back to `bundle`. The release still reads
    every snapshot, and the manifest returns to schema 1 once no reference is a
    snapshot any more: after the last snapshot daily ages out, up to seven days.
@@ -1236,9 +1238,10 @@ unchanged checkpoints still snapshot, compress and hash locally, and fast
 compression trades CPU for larger stored bytes, and a changed checkpoint uploads
 the full bundle (about 32 MB each in the November 2026 measurement: 144 uploads,
 about 4.6 GB a day). With `DIGEST_CLOUD_STATE_FORMAT=objects` a changed
-checkpoint uploads only the changed 1 MiB chunks plus a small index (0.74 MB
-instead of 32.4 MB for two consecutive checkpoints), at the price of more blob
-operations; the effect on the bill has not been measured. **Real storage and
+checkpoint uploads only the changed 1 MiB chunks plus a small index (measured
+over 30 checkpoint pairs: 0.74 MB median, 1.48 MB mean, 20 MB at the evening
+digest, instead of 32.4 MB each), at the price of more blob operations; the
+effect on the bill has not been measured. **Real storage and
 execution cost has not been measured** after either format. Blob soft
 deletion retains removed runtime objects for 3 extra days (cut from 14 on
 2026-11-26, when deleted bundles reached about 60 GB); reference-aware pruning
