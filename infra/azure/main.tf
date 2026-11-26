@@ -50,7 +50,10 @@ resource "azurerm_storage_account" "state" {
   allow_nested_items_to_be_public = false
   tags                            = local.tags
   blob_properties {
-    delete_retention_policy { days = 14 }
+    # Every pruned 32 MB bundle bills as live data for the whole window, so
+    # 14 days held ~60 GB of deleted bundles. Three days still covers a bad
+    # prune; the backup account keeps the independent 30-day copies.
+    delete_retention_policy { days = 3 }
     container_delete_retention_policy { days = 7 }
   }
   # The runner prunes immutable checkpoints by reference under the shared
