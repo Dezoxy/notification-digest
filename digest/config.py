@@ -33,6 +33,8 @@ class CloudConfig:
     backup_account_url: str | None = None
     backup_container: str | None = None
     backup_identity_client_id: str | None = None
+    # What NEW checkpoints write; both formats are always readable.
+    state_format: str = "bundle"
 
     @classmethod
     def from_env(cls) -> CloudConfig:
@@ -80,6 +82,9 @@ class CloudConfig:
             backup_url,
             backup_container,
             backup_identity,
+            _optional_choice(
+                "DIGEST_CLOUD_STATE_FORMAT", default="bundle", choices=("bundle", "objects")
+            ),
         )
 
 

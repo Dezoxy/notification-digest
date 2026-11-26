@@ -43,13 +43,13 @@ container notificationDigest "Security" "What is reachable from the internet, wh
 }
 
 dynamic notificationDigest "DigestRun" "What happens during one scheduled digest run?" {
-    notificationDigest.runner -> notificationDigest.state "Restores the state and reads the last-seen cursor per source" "SQLite bundle, Blob lease"
+    notificationDigest.runner -> notificationDigest.state "Restores the state and reads the last-seen cursor per source" "SQLite state, Blob lease"
     notificationDigest.runner -> telegram "Fetches messages newer than the cursor" "MTProto, user session"
-    notificationDigest.runner -> notificationDigest.state "Records the new items" "SQLite bundle, Blob lease"
+    notificationDigest.runner -> notificationDigest.state "Records the new items" "SQLite state, Blob lease"
     notificationDigest.runner -> anthropic "Summarizes the window" "Claude CLI, headless subprocess"
     notificationDigest.runner -> notificationDigest.site "Publishes the rendered digest" "HTTPS/JSON, shared-secret ingest"
     notificationDigest.runner -> telegram "Sends the summary and deep links" "HTTPS, Telegram Bot API"
-    notificationDigest.runner -> notificationDigest.state "Marks the digest delivered and checkpoints the state" "SQLite bundle, Blob lease"
+    notificationDigest.runner -> notificationDigest.state "Marks the digest delivered and checkpoints the state" "SQLite state, Blob lease"
     autoLayout lr
 }
 

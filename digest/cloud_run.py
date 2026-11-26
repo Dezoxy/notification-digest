@@ -231,10 +231,12 @@ def run_job(job: str, cloud: CloudConfig, cfg: Config, slot: str, state: CloudSt
                 return True
             if job == "backup":
                 state.checkpoint(conn, daily_backup=True)
-                state.prune()
                 from digest.cloud_backup import copy_daily_backup
 
+                # Copy first: prune refuses to delete when any retained index is
+                # unreadable, and that must not cost the independent backup.
                 copy_daily_backup(state, cloud)
+                state.prune()
                 ok = True
             else:
                 ok = _dispatch(job, cfg)
@@ -281,6 +283,7 @@ def main() -> None:
             namespace=cloud.namespace,
             data_dir=cloud.data_dir,
             managed_identity_client_id=cloud.identity_client_id,
+            state_format=cloud.state_format,
         )
         if not run_job(args.job, cloud, cfg, slot, state):
             raise SystemExit(1)

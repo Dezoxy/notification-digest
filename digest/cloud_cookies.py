@@ -112,6 +112,7 @@ def main() -> None:
                 data_dir=temp,
                 managed_identity_client_id=cfg.identity_client_id,
                 operator_login=args.operator_login,
+                state_format=cfg.state_format,
             )
             rotate_cookies(state, args.cookie_file)
     except (Exception, cloud_context.CloudSafetyError) as exc:

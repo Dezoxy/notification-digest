@@ -64,7 +64,7 @@ Everything the runner needs fails together with the region: the jobs, the
 runtime state and, in the same region but a separate account, the recovery
 copy. A Blob lease on the state manifest replaces the old host lock. It is
 taken for 60 seconds and renewed every 15 by a watchdog; a run restores the
-state bundle to local disk, works on it and checkpoints a new bundle. The lease
+state to local disk, works on it and checkpoints a new generation. The lease
 exists because every run shares one Telegram user session, and two concurrent
 connections on that session previously produced `AuthKeyDuplicatedError`
 during a boot storm on the VM. If the lease cannot be proven, the watchdog
@@ -91,8 +91,9 @@ later in this document.
 ### Backups and restore
 
 The only store worth backing up is `state.db` — the SQLite system of record,
-which lives in the runtime storage account as an immutable bundle behind one
-manifest. The `backup` job runs daily at 04:15 UTC and copies a recovery bundle
+which lives in the runtime storage account as immutable generations (a bundle,
+or a snapshot of content-addressed chunks) behind one manifest. The `backup`
+job runs daily at 04:15 UTC and copies a recovery bundle
 to the separate backup storage account, written by a separate identity attached
 only to that job; a lifecycle rule deletes copies after 30 days. Shared-key
 access to both accounts is disabled. No restore from the backup account has

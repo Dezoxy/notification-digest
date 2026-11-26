@@ -111,8 +111,9 @@ Secrets in play, by where they end up:
 At rest, one secret persists as a plain file rather than only living in
 process memory: the X cookie jar. The collector rewrites it as the session
 refreshes (`digest/collectors/x.py`, `persist_cookies`) on the job's ephemeral
-local disk, and each run checkpoints it, with `state.db`, into the immutable
-state bundle in the runtime storage account's private Blob container. That
+local disk, and each run checkpoints it, with `state.db`, as an immutable
+state generation (a bundle, or the aux stream of a chunked snapshot) in the
+runtime storage account's private Blob container. That
 container is the canonical copy; there is no second seed in the vault. The
 storage accounts have shared-key access disabled, so the only way in is a role
 assignment on the runner or backup-writer identity. A daily backup copy of the

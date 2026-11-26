@@ -15,7 +15,7 @@ production = deploymentEnvironment "Production" {
             runnerInstance = containerInstance notificationDigest.runner
         }
 
-        deploymentNode "Runtime storage account" "Holds the SQLite bundle every run restores and checkpoints. Shared-key access is disabled." "Azure Blob Storage" {
+        deploymentNode "Runtime storage account" "Holds the SQLite state generations (bundles or chunked snapshots) every run restores and checkpoints. Shared-key access is disabled." "Azure Blob Storage" {
             containerInstance notificationDigest.state
         }
 

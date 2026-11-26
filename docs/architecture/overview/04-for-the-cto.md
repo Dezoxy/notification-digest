@@ -81,7 +81,7 @@ separate storage account, in a separate resource group, by a separate identity
 state, not against losing the region. Restoring is a manual operator procedure
 (the Azure migration runbook in the repository), no restore from that account
 has been exercised yet, and it has a sharper problem than slow recovery:
-because delivery flags travel with the bundle, restoring to a point before a
+because delivery flags travel with the state, restoring to a point before a
 digest was marked delivered lets the normal retry pass resend it (TD-006) — a
 direct contradiction of QA-01, the one absolute guarantee this system makes.
 There is no automated safeguard against this today. See **Backup Strategy** and

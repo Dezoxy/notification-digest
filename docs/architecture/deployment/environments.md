@@ -15,13 +15,13 @@ and a manual deploy from a separate repository; it is Azure now.
 | Image | Pinned exact tag from GHCR, built by `.github/workflows/release.yml`, pinned in `infra/azure/image.auto.tfvars.json` | Built locally from `Dockerfile` (`docker compose build`) |
 | Config | Real secrets from the digest Key Vault, resolved by the runner's managed identity; non-secret settings as job environment variables from reviewed Terraform input | A local `.env` file (see `.env.example`), never committed |
 | Telegram / X sessions | The owner's real, long-lived personal sessions. The Telegram session string is a Key Vault secret; X cookies live in the runtime Blob state | Whatever session the developer supplies — typically the same owner's credentials, since there is no synthetic Telegram/X sandbox |
-| State | The SQLite file stored as an immutable bundle in private Blob Storage, restored to local disk by each run and checkpointed back — the system of record | A throwaway file inside the named Docker volume `digest-data` (`compose.yml`); reset per README's inspection/reset instructions, never touching production data |
+| State | The SQLite file stored as immutable generations (bundle or chunked snapshot) in private Blob Storage, restored to local disk by each run and checkpointed back — the system of record | A throwaway file inside the named Docker volume `digest-data` (`compose.yml`); reset per README's inspection/reset instructions, never touching production data |
 | Delivery channels | Telegram TL;DR ping + news site live; email implemented but disabled (`EMAIL_ENABLED=false` in the job settings) | Whatever the developer's `.env` enables — typically a subset, or `hide:` flags, to avoid posting test digests to the real Telegram topic |
 | External calls | Real Telegram, X, Claude CLI, the Claude API (only if the federation variables are set; otherwise no fallback), news site | Also real, unless the developer disables a collector — this is not a mocked sandbox. Automated tests are the only place a hard rule applies: CLAUDE.md requires tests to never call the real Telegram or X APIs, or send real email; that mocking happens at the collector/emailer boundary in `tests/`, not in a local `docker compose run` |
 
 ### Rules
 
-- Production data (the state bundle, archived digests, session secrets) is never
+- Production data (the state generations, archived digests, session secrets) is never
   copied into local development. A local run starts from an empty volume.
 - Secrets never appear in this repository, in a Terraform input or in a plan
   log. Production secrets live in the digest Key Vault and are referenced by the

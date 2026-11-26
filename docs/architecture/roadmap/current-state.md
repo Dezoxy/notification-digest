@@ -18,7 +18,7 @@ is retried against the Claude API with no stored key, through a federated
 managed identity ([ADR
 0009](../decisions/0009-fall-back-to-the-claude-api-over-workload-identity-federation.md)).
 
-The state is the same SQLite file, now stored as an immutable bundle in private
+The state is the same SQLite file, now stored as immutable generations in private
 Blob Storage and restored, used and checkpointed by every run under a Blob
 lease. Recovery copies go daily to a separate storage account and resource group
 in the same region. One region is the whole failure domain

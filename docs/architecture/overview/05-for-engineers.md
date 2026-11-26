@@ -40,9 +40,9 @@ receives already-summarized content.
 ![Runtime view: what happens during one scheduled digest run](embed:DigestRun)
 
 A run first takes a lease on the state in Blob Storage and restores the
-SQLite bundle to local disk; it then reads the last-seen cursor per source
+SQLite state to local disk; it then reads the last-seen cursor per source
 before fetching anything, and advances it only after the new items are
-committed, checkpointing the bundle back as it goes. The lease, not the
+committed, checkpointing the state back as it goes. The lease, not the
 cursor, is what keeps two runs from overlapping and from sharing the one
 Telegram session (ADR 7). That ordering is what
 makes a crashed or re-run process harmless: it collects nothing already
@@ -90,6 +90,10 @@ Twelve ADRs, each naming its trade-off:
   endpoint on the news site (2026-11-22). ChatGPT's browsing tool refuses the
   site's hostnames before sending a request, so a custom connector is the only
   path; its own token in the URL path gives it access to nothing else.
+- **ADR 14** lets a checkpoint upload only the changed 1 MiB chunks of the state
+  instead of a full bundle (2026-11-26), trading more blob operations and an
+  image-rollback limit for far less upload volume. The daily recovery copy keeps
+  its format.
 
 ### The contracts you do not control
 

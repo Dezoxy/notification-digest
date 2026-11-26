@@ -270,11 +270,15 @@ def test_job_resume_skips_completed_slot_and_backup_prunes(tmp_path, monkeypatch
     assert run_job("relay", cloud, _config(), "2026-07-05T19:40:00+00:00", state)
     dispatch.assert_called_once()
     assert state.release.call_count == 2
-    copy = Mock()
+    order = Mock()
+    copy = order.copy
+    state.prune = order.prune
     monkeypatch.setattr("digest.cloud_backup.copy_daily_backup", copy)
     assert run_job("backup", cloud, _config(), "2026-07-05T04:15:00+00:00", state)
     copy.assert_called_once_with(state, cloud)
     state.prune.assert_called_once()
+    # The independent copy must not depend on prune succeeding.
+    assert [call[0] for call in order.mock_calls] == ["copy", "prune"]
     assert any(call.kwargs.get("daily_backup") for call in state.checkpoint.call_args_list)
 
 

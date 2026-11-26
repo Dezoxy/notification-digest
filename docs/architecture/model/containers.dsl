@@ -9,7 +9,7 @@ notificationDigest = softwareSystem "Notification Digest" "Collects the owner's 
 
     group "Azure subscription (private)" {
         runner = container "Digest Runner" "Collects new items per source, summarizes the window and delivers the result. One short-lived process per scheduled run." "Python 3.14, Azure Container Apps job" "Layer Run"
-        state = container "State Database" "System of record: collected items, per-source cursors, digests and delivery state. Keeps re-runs idempotent. One lease admits one run at a time." "SQLite bundle in Azure Blob Storage" "Layer Data,Database"
+        state = container "State Database" "System of record: collected items, per-source cursors, digests and delivery state. Keeps re-runs idempotent. One lease admits one run at a time." "SQLite state in Azure Blob Storage" "Layer Data,Database"
     }
 
     group "Cloudflare edge (internet-facing)" {
@@ -29,7 +29,7 @@ notificationDigest.runner -> hackerNews "Fetches the front page from" "HTTPS/JSO
 notificationDigest.runner -> newsFeeds "Fetches feed entries from" "HTTPS, RSS/Atom" "Layer Run"
 
 // ── State ────────────────────────────────────────────────────────────────────
-notificationDigest.runner -> notificationDigest.state "Restores, reads cursors from and checkpoints items, digests and delivery state to" "SQLite bundle, Blob lease" "Layer Run"
+notificationDigest.runner -> notificationDigest.state "Restores, reads cursors from and checkpoints items, digests and delivery state to" "SQLite state, Blob lease" "Layer Run"
 
 // ── Summarization, with the fallback chain ──────────────────────────────────
 notificationDigest.runner -> anthropic "Summarizes the window with" "Claude CLI, headless subprocess" "Layer Run"

@@ -5,5 +5,6 @@ from test_cloud_state import run_azurite_smoke
 
 
 @pytest.mark.usefixtures("azurite_enabled")
-def test_cloud_state_azurite_protocol() -> None:
-    run_azurite_smoke()
+@pytest.mark.parametrize("state_format", ["bundle", "objects"])
+def test_cloud_state_azurite_protocol(state_format: str) -> None:
+    run_azurite_smoke(state_format)

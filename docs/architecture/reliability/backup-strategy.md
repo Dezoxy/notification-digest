@@ -1,9 +1,11 @@
 ## Backup Strategy
 
 The only store this system needs to back up is the SQLite system of record
-(`state.db`), which lives as an immutable bundle in the runtime storage account
+(`state.db`), which lives as immutable generations in the runtime storage
+account: a legacy bundle, or a snapshot of content-addressed chunks
 ([ADR 0003](../decisions/0003-sqlite-is-the-source-of-truth.md),
-[ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md)). Everything else is
+[ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md),
+[ADR 0014](../decisions/0014-checkpoint-changed-chunks-instead-of-full-bundles.md)). Everything else is
 either disposable, replaceable from that file, or out of this repo's scope.
 
 Until 2026-10-08 the state was `/srv/appdata/digest/state.db` on the homelab VM,
@@ -16,19 +18,22 @@ running system, and nothing below depends on them.
 | What | Method | Schedule | Retention | Where | Verified |
 |---|---|---|---|---|---|
 | State bundle: `state.db` (items, cursors, digests, delivery state, arc context), the live X cookie jar and the Markdown archive | The `backup` job copies a validated recovery bundle and its manifest | Daily, 04:15 UTC | 30 days (storage lifecycle rule) | Backup storage account, in a separate resource group, same region as the runtime | The copy is size- and SHA-256-checked by readback before the slot can complete. **A restore from this account has not been exercised** |
-| Checkpoint generations | Every run checkpoints a new immutable bundle; the runner prunes by reference under the lease | Per run | Seven daily referenced generations in the runtime account | Runtime storage account | Useful local history, but not an independent backup: same account as the live state |
+| Checkpoint generations | Every run checkpoints a new immutable generation: a full bundle, or, with `DIGEST_CLOUD_STATE_FORMAT=objects`, an index over content-addressed chunks of which only the changed ones are uploaded. Per-checkpoint cleanup drops old bundles and indexes; the daily `backup` job, after its independent copy, prunes unreferenced chunk objects, keeping every object a retained generation lists | Per run | Current, previous and up to seven daily referenced generations in the runtime account | Runtime storage account | Useful local history, but not an independent backup: same account as the live state |
 | Site Database (Cloudflare D1) | None. Deliberately not backed up | — | — | — | Disposable rendering copy, rebuildable from the state — but see the gap noted below |
 | Runtime secrets (digest Key Vault) | Azure's own soft-delete and purge protection; secret values are copied by a reviewed migration tool, not held in Terraform | — | — | — | Out of scope for this document |
 | Infrastructure (Terraform in `infra/azure/`, workflows) | Git history in this repository; Terraform state in Azure Blob Storage in a separate backend resource group | Per change | Repository history | — | Out of scope for this document |
 
-The bundle is self-contained: the Markdown archive and the X cookie jar travel
+The recovery bundle is self-contained: the Markdown archive and the X cookie jar travel
 with the database, so the broader archive backup that PLAN.md records for the VM
-era is not a separate Azure concern. The archive inside the bundle keeps
+era is not a separate Azure concern. The archive inside it keeps
 365 days, which is distinct from the 90-day item pruning of the database.
 
 The backup job runs under its own managed identity, attached only to that job,
 and writes to a private container in the backup account. Shared-key access to
-both storage accounts is disabled. It uploads the bundle first, verifies its
+both storage accounts is disabled. The daily copy has the same format whichever
+generation format the runtime uses: a snapshot generation is reassembled into a
+self-contained `bundle.tar.gz` and `manifest.json`. The job uploads the bundle
+first, verifies its
 stored size and SHA-256 by streaming readback, then uploads and verifies the
 manifest as the completion marker; a copy without a manifest is not a backup. A
 final failed copy fails the job, and the `failures` alert e-mails the owner

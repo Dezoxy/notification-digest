@@ -19,7 +19,7 @@ describes Azure; where the VM matters it is named as history.
 | Component | Runs on | Technology | Notes |
 |---|---|---|---|
 | Digest Runner | Azure Container Apps jobs, West Europe | Python 3.14, one short-lived container per execution, non-root (`uid 1000`) | Nine scheduled jobs, 0.5 vCPU / 1 GiB each, parallelism 1, no platform retries. A job restores the state, does one piece of work and exits. Never long-running |
-| State Database | Runtime storage account (private Azure Blob Storage) | SQLite file, stored as an immutable bundle pointed to by one `manifest.json` | System of record. Each run restores the bundle to local disk, works on it and checkpoints a new bundle ([ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md)). Shared-key access is disabled; access is by managed identity |
+| State Database | Runtime storage account (private Azure Blob Storage) | SQLite file, stored as immutable generations (a bundle, or a snapshot of content-addressed chunks) pointed to by one `manifest.json` | System of record. Each run restores the bundle to local disk, works on it and checkpoints a new generation ([ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md)). Shared-key access is disabled; access is by managed identity |
 | Recovery copies | Backup storage account in a separate resource group, same region | Azure Blob Storage | Written daily by the `backup` job under a separate identity ([backup-strategy.md](../reliability/backup-strategy.md)) |
 | Secrets | A dedicated digest Key Vault | Azure Key Vault | Resolved at job start through Key Vault references and the runner's managed identity. No secret value is a Terraform input |
 | News Site | Cloudflare Workers | Cloudflare Worker, JavaScript (`workers/news-site/`) | Deployed independently with `wrangler`, not from this repo's release pipeline |
@@ -111,8 +111,9 @@ What guarantees that two runs never overlap:
 
 - Every job takes a **Blob lease** on the state's `manifest.json` (60 seconds,
   renewed every 15 seconds by a watchdog) before it touches the state, and
-  checkpoints a new bundle with a conditional manifest update
-  ([ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md)). The lease
+  checkpoints a new generation with a conditional manifest update
+  ([ADR 0007](../decisions/0007-run-digest-as-azure-jobs.md),
+  [ADR 0014](../decisions/0014-checkpoint-changed-chunks-instead-of-full-bundles.md)). The lease
   replaces the `flock` wrapper the VM used, and is stronger: it is held in
   storage, so it spans any number of containers, not one host.
 - The reason it exists is unchanged: every job shares one Telegram user session

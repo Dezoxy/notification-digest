@@ -57,7 +57,7 @@ Both kinds of state live in Azure:
 
 | Store | Purpose | Ownership and access |
 |---|---|---|
-| Runtime Blob Storage in the app resource group | Canonical SQLite/cookie/archive bundles and retained backups | Terraform manages resources; runner has Blob Data Contributor on `digest-state` only |
+| Runtime Blob Storage in the app resource group | Canonical SQLite/cookie/archive state generations (legacy bundles or chunked snapshots, see [State formats and rollout](#state-formats-and-rollout)) and retained backups | Terraform manages resources; runner has Blob Data Contributor on `digest-state` only |
 | Separate Blob Storage in a backend resource group | Terraform state and Blob-lease locking | Bootstrapped outside the app stack; deployment identity has access to `terraform-state`; runner has none |
 | Separate backup account/resource group | Daily independent runtime bundle/manifest copies | App Terraform creates the resources; only the backup job has the backup-writer identity; ordinary runner/pruner cannot access it |
 | Dedicated digest Key Vault in the app resource group | Subscription OAuth, sessions, publication/collector credentials and GHCR pull token | Terraform manages the vault and roles, never secret values; runner has Secrets User on this vault only |
@@ -980,6 +980,71 @@ Blob commit fails closed: inspect/export the canonical generation before decidin
 whether to repeat the operation. Never seed an empty cloud database or replace a
 newer live jar with the historical homelab vault seed.
 
+## State formats and rollout
+
+Runtime state is a sequence of immutable generations behind one mutable
+`manifest.json` (the lease and etag live on it). Two generation formats exist.
+This release reads both, always; `DIGEST_CLOUD_STATE_FORMAT` only decides what
+**new** checkpoints write. It is read in `CloudConfig` and used by the jobs
+(`cloud_run`) and the operator commands (`cloud_state`, `cloud_cookies`,
+`cloud_reconcile`).
+
+| `DIGEST_CLOUD_STATE_FORMAT` | New checkpoints write | Blobs |
+|---|---|---|
+| `bundle` (default) | One gzip bundle per checkpoint: `state.db`, cookies and archive | `bundles/<uuid>.tar.gz` |
+| `objects` | An immutable index per checkpoint plus the chunks it needs | `snapshots/<uuid>.json`, `objects/<sha256>` |
+
+The decision and the alternatives that were rejected are in
+[ADR 14](architecture/decisions/0014-checkpoint-changed-chunks-instead-of-full-bundles.md).
+
+### Objects layout
+
+- The index lists two streams: the SQLite `backup()` snapshot (`state.db`) and
+  a deterministic uncompressed tar of the cookie jars and the archive
+  (`aux.tar`: sorted members, fixed ownership and mode, exact mtimes). Two
+  streams keep archive changes from shifting the database's chunk boundaries.
+- Each stream is cut into fixed 1 MiB chunks. A chunk is stored once as
+  `objects/<sha256 of the raw chunk>`, zlib-compressed.
+- Only chunks not listed by a currently published generation are uploaded. An
+  existing object (HTTP 409) is accepted only after it is downloaded and its
+  content hash verified; accepting it changes its etag. An existing object
+  with the wrong content is deleted and rewritten from the local bytes under
+  the lease (logged as a warning; soft delete keeps the bad copy).
+- A checkpoint refuses state larger than the export limit (512 MiB).
+- The manifest is schema 1 while every reference is a legacy bundle, and
+  schema 2 (each reference typed `kind: bundle|snapshot`) as soon as any
+  reference is a snapshot. Retention is unchanged: current, previous and up to
+  seven dailies.
+- Restore reads the index, downloads the chunks in parallel (8 workers),
+  verifies each chunk and both streams by hash, runs SQLite `quick_check`,
+  extracts the aux tar with the same allow-list as a bundle, then replaces the
+  local files. Any mismatch fails closed.
+- Per-checkpoint cleanup deletes only dropped legacy bundles and snapshot index
+  blobs. Chunk objects are removed only by the daily prune in the backup job,
+  which keeps every object any retained generation's index lists and deletes
+  nothing if any referenced index cannot be read. Its deletes are conditional
+  on the listed etag, so an object reused since the listing is kept.
+- Operator export, the daily backup copy and `bootstrap_export` are unchanged
+  in format: see [Independent daily backup account](#independent-daily-backup-account).
+
+### Rollout and rollback
+
+1. Deploy this release with the default (`bundle`). Nothing changes in what is
+   written.
+2. A separate infrastructure change sets `DIGEST_CLOUD_STATE_FORMAT=objects`
+   on the jobs. It is not an image change, so it goes through the manual
+   `azure-deploy` plan/apply, not the image-pin fast path.
+3. Rollback of the setting: set it back to `bundle`. The release still reads
+   every snapshot, and the manifest returns to schema 1 once no reference is a
+   snapshot any more: after the last snapshot daily ages out, up to seven days.
+
+**Image rollback limit.** An image older than this release cannot read a
+schema-2 manifest and fails closed with "Unsupported state manifest". Once
+`objects` has written a snapshot, do not roll the image back past this release
+without first returning to a bundle-only manifest (step 3, then wait up to seven
+days). The exported backups stay in the legacy format, so a restore from the
+backup account (below) works with an older image.
+
 ## Interrupted runs and recovery
 
 Platform retries are disabled. A job waits at most ten minutes for the shared
@@ -990,9 +1055,13 @@ collect missed input. Investigate repeated skips and verify freshness alerts
 still detect missing successful work. Daily, weekly and backup remain hard
 failures for these conditions and require an explicit catch-up slot.
 
-Lease acquisition, idempotent Blob reads and immutable bundle uploads allow
-three total attempts with 0.5/1-second backoff. Upload retries use fresh names:
-a lost acknowledgement can leave an orphan for guarded garbage collection.
+Lease acquisition, idempotent Blob reads and immutable bundle, index and chunk
+uploads allow three total attempts with 0.5/1-second backoff. Bundle and index
+upload retries use fresh names: a lost acknowledgement can leave an orphan for
+guarded garbage collection. A chunk object is content-addressed, so its retry
+reuses the name and an existing object (HTTP 409) is accepted only after its
+content hash is downloaded and verified; one with the wrong content is
+rewritten under the lease.
 Transient lease renewals retry with 0.5/1/2-second capped backoff while the original
 proven lease has more than the safety margin remaining. They never extend the
 known deadline without a successful renewal response. The independent
@@ -1074,13 +1143,20 @@ cursors/delivery intent before resuming publication.
 Do not create an empty database to make startup succeed. Test export/restore
 into a separate namespace before calling backup complete. Seven daily backups
 and 365 days of archives are distinct from 90-day item pruning. Checkpoint
-garbage collection must protect the current manifest and retained backups;
+garbage collection must protect the current manifest and retained backups, and
+every chunk object any retained snapshot index lists;
 ordinary age-only Blob lifecycle deletion is unsafe for referenced objects.
 
 ### Independent daily backup account
 
 The backup job must copy a validated `bundle.tar.gz` and `manifest.json` to the
 separate private `digest-backups` container/account before its slot can complete.
+It checkpoints, copies, and only then prunes the runtime account, so a prune
+failure never prevents the independent copy.
+The format of this copy does not depend on `DIGEST_CLOUD_STATE_FORMAT`: for a
+snapshot generation the export reassembles the same self-contained bundle (the
+exported manifest's `bundle` describes the produced file and carries a `source`
+reference), so `bootstrap_export` and the restore steps below are unchanged.
 It uploads the bundle first, verifies its stored size and SHA-256 by streaming
 readback, then uploads and verifies the manifest as the completion marker.
 Transient storage failures allow up to three attempts with 0.5/1-second
@@ -1155,13 +1231,18 @@ and tune before accepting the alerting evidence.
 The pre-migration estimate was approximately $1–2/month including alerts with
 available Container Apps grants; reserve $5 for a pilot. Durability checkpoints
 skip uploads when the database/cookie/archive content is
-unchanged and use fast gzip compression. Unchanged checkpoints still snapshot,
-compress and hash locally; fast compression trades CPU for larger stored bytes.
-A changed checkpoint still uploads the
-full approximately 50 MB database bundle; **real storage and execution cost has
-not been measured**. Blob soft deletion retains removed
-runtime objects for 3 extra days (cut from 14 on 2026-11-26, when deleted
-bundles reached about 60 GB); reference-aware pruning and seven daily backups bound
+unchanged. In the default `bundle` format they use fast gzip compression;
+unchanged checkpoints still snapshot, compress and hash locally, and fast
+compression trades CPU for larger stored bytes, and a changed checkpoint uploads
+the full bundle (about 32 MB each in the November 2026 measurement: 144 uploads,
+about 4.6 GB a day). With `DIGEST_CLOUD_STATE_FORMAT=objects` a changed
+checkpoint uploads only the changed 1 MiB chunks plus a small index (0.74 MB
+instead of 32.4 MB for two consecutive checkpoints), at the price of more blob
+operations; the effect on the bill has not been measured. **Real storage and
+execution cost has not been measured** after either format. Blob soft
+deletion retains removed runtime objects for 3 extra days (cut from 14 on
+2026-11-26, when deleted bundles reached about 60 GB); reference-aware pruning
+and seven daily backups bound
 ordinary live history. Recalculate transfers, writes, retained bytes, boot time
 and logs after the pilot. The monthly budget defaults to 5 **billing-currency
 units** for the **app resource group only**, sends alerts at 80/100%, and does
