@@ -4,7 +4,7 @@
 # The existing VM uses Ansible; Azure Jobs use the app-owned infrastructure.
 # `docker build .` / `docker compose build` here are for local dev only.
 
-FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS node-runtime
+FROM node:26-bookworm-slim@sha256:0042e17d232a87a2cd485be1da7900fca4d10a4ad11b29e9285da1d2e54798c9 AS node-runtime
 
 FROM python:3.14-slim-bookworm
 
